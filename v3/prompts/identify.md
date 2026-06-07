@@ -1,0 +1,118 @@
+# IDENTIFY — v3, Function 1
+
+Obeys [`_shared.md`](_shared.md) (style, confidence, fresh-investigation,
+unit_type, char limits, persistence, gate contract). Read it first.
+
+**Output:** `<shoot-dir>/identify.txt` (overwrite).
+
+Enumerate the distinct items across a shoot's photos and write one
+structured record each. Speculative-upward: surface best-case identity so
+the user can see upside, with the verification path attached.
+
+## Shoot mode
+
+One mode per shoot. Source: CLI flag → profile default → auto-detect.
+State the active mode + its source in the SHOOT SUMMARY.
+
+- **wide** — mixed-item scene (estate/yard sale). Enumerate each item;
+  order top-to-bottom, left-to-right across the primary photo.
+- **single** — one item, many angles/states. Produce ONE record using all
+  angles for maximum confidence. Multiple configs (lid on/off, open/shut)
+  are still one item. Resolve `[BEST-CASE]` markers outright when an angle
+  confirms them — drop the marker when the proof is in a photo.
+- **group** — many items of one category laid out. One record each; do
+  NOT cross-dedup unless they're identical duplicates (then collapse to
+  `duplicate, qty=N`).
+- **multi-angle** — mixed scene from multiple angles. Dedup the same
+  physical item across angles, then enumerate.
+- **auto** (default) — pick the best-fit mode from the photos and say so.
+
+## Best-case identification
+
+When brand/maker/era/material can be reasonably inferred from real visual
+cues but not confirmed without inspection: use the **best-case inference
+as the value** + `[BEST-CASE]` marker (e.g. `Brand: Hudson's Bay
+[BEST-CASE]`, not a generic hedge). Attach a Scenario bracket.
+
+Marker discipline (per _shared confidence rule):
+- `[BEST-CASE]` — inference changes value tier. Pair with a Scenario
+  bracket. Cap 3 scenarios; drop sub-15% tails; bracket only on material
+  value swing.
+- `[ASSUMPTION]` — approximate but same value tier (e.g. "1970s,
+  mid-to-late"). No bracket.
+- `Unknown` — no real basis. Not a license to invent the priciest identity.
+
+## Output format
+
+    SHOOT SUMMARY
+    Photos processed: <N>
+    Shoot mode:       <mode> (<source>)
+    Distinct items:   <N>
+    Photo caveats:    <one line, or "none">
+    Needs user confirmation:
+      <one line per grouping question, or "none". Records are written as
+      single defaults; the question is also appended to NEEDS_REVIEW.md —
+      this never blocks (SOFT gate).>
+
+Then one block per item, `--- Item <N> ---`, fields in this order:
+
+- **Unit type** — `single`/`pair`/`set`/`lot`/`duplicate`. Default
+  `single` (see _shared). Only a user instruction/answer changes it.
+- **Quantity** — integer. 1 for single, 2 for pair, piece count for
+  set/lot, copy count for duplicate.
+- **Category** — general bucket (bike, magazine, chess set). Uncapped.
+- **Brand** — visible mark → write it; inferred → `value [BEST-CASE]`;
+  none → `Unknown`. ≤65.
+- **Type** — specific descriptor. Same marker convention. ≤65.
+- **Era** — date/range. `[ASSUMPTION]` if inferred from styling. ≤65.
+- **Collectability** — collectable / vintage / antique / modern /
+  `none (not for sale)`.
+- **Condition** — per [`condition-rubric.md`](condition-rubric.md):
+  bullet defects with location + severity; one line on what can't be
+  assessed. Not prose.
+- **Estimated weight** — item weight (not packed). `~X lb (tier — N–N
+  lb)`; tiers: light <5 / medium 5–15 / heavy 15–25 / oversized 25–50 /
+  freight 50+ / requires-movers. Range when unsure. Set/pair → total.
+  `unknown — needs full view` if not estimable.
+- **Estimated dimensions** — item size (not packed). Box `~L×W×H in`;
+  cylinder `~dia×h in`; furniture `~W×D×H in`; flat `~L×W in`; irregular
+  free-text w/ key measurements. Range when unsure.
+- **Distinguishing marks** — free-text, uncapped catch-all: cover text,
+  dated copyright, photographer credit, model number, materials, the rich
+  context that does NOT fit the capped fields above.
+- **needs_followup_photo** — yes/no; if yes, what shot is needed.
+- **Scenario bracket** — ONLY when a field carries `[BEST-CASE]`. Omit
+  entirely otherwise. Format:
+
+      Scenarios (best → worst): [max 3, material swing only]
+        1. <id>: <value-tier note>
+        2. <id>: <note>
+      How to distinguish:
+        - <observable/test>: <which scenarios it resolves>
+      Price-tier swing: low / moderate / significant
+
+## Grouping (informs questions; never auto-groups)
+
+Default every record to `single`. When photos suggest a grouping,
+surface a question in "Needs user confirmation" AND append it to
+NEEDS_REVIEW.md — then keep going. Patterns worth surfacing: functional
+unit (chess board+pieces), mounted/cased/framed (lean toward `set`),
+matched pair (2 identical), matched set (3+ identical), provisional group
+(alike but not cleanly enumerable → set `needs_followup_photo: yes`),
+identical duplicates (N copies). Different brands never merge.
+
+When the user later confirms, re-run or update the affected records in
+place with the new `unit_type` + `quantity`.
+
+## Honesty
+
+- Never invent. Every value is observed, `[BEST-CASE]`+bracket,
+  `[ASSUMPTION]`+reason, or `Unknown`.
+- Mark `needs_followup_photo: yes` instead of guessing a shaky ID.
+- Items not for sale (notes, packaging, background furniture) are still
+  enumerated, marked `none (not for sale)` so CURATE filters them.
+
+## Closing
+
+Per _shared house style: output path + item count + any NEEDS_REVIEW
+count. Don't restate the file.
