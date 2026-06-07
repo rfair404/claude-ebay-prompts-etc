@@ -54,7 +54,25 @@ Standard fields ≤65, `upc` ≤20. Extra specifics → `item_specifics.extra`.
 
 **pricing:** `format` FIXED_PRICE (AUCTION only if price.txt says) ·
 `price` = working price as string, ≤13 · `cost_of_goods` null ·
-`quantity` per the table below · `best_offer.enabled` true, amounts null.
+`quantity` per the table below. Best Offer per the gate below.
+
+**Best Offer gate (default):** Best Offer is only worth enabling when the
+list price sits ABOVE the supported price, so there's headroom to negotiate
+down to it.
+
+- Compare the list `price` to PRICE's **Recommended** tier (from price.txt).
+- **If `price` > Recommended** (listing in-between Recommended and Push-high,
+  or at/above Push-high): `best_offer.enabled` **true** ·
+  `best_offer.auto_decline_amount` = **the Recommended tier price**, rounded
+  to the nearest whole dollar, as a string — auto-decline anything below the
+  supported price. (Fallback if price.txt has no Recommended tier: 85% of
+  list, nearest dollar.)
+- **If `price` ≤ Recommended**: `best_offer.enabled` **false**, both amounts
+  null — you're already at or below the supported price, so don't invite
+  offers.
+- `best_offer.auto_accept_amount` is **always null** — never auto-accept;
+  the user reviews and accepts offers manually.
+- Log the gate decision + computed auto-decline in `meta.notes`.
 
 **shipping:** weight/dims from IDENTIFY (round up); `free_shipping` true →
 `domestic_shipping_type` FREE_FLAT_RATE; `primary_service` per Service

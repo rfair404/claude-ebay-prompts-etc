@@ -92,6 +92,17 @@ Load each prompt when you reach its phase.
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
 | DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` |
 
+**Post-pipeline (manual trigger only, NOT in the automated run):**
+
+| Step | Prompt | Reads | Effect |
+|---|---|---|---|
+| LIST/EDIT | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** listing (never published) |
+
+Function 6 pushes an approved `draft.md` into an eBay draft via Chrome.
+It runs ONLY when the user explicitly asks ("push to eBay draft"), one
+item at a time — never as part of `full`. The no-publish firewall applies:
+terminal action is "Save for later", never "List it".
+
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
   [prompts/condition-rubric.md](prompts/condition-rubric.md).
@@ -121,3 +132,6 @@ is unchanged and shared from `v2/lib/` — v3 does not duplicate code.
    pass, write `draft.md`.
 7. Closing line: outputs written + NEEDS_REVIEW count + the one headline
    fact per artifact. Nothing is published; LIST/EDIT remains manual.
+8. (Optional, on user request) LIST/EDIT → eBay draft via
+   [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md). Still a
+   draft; the user publishes manually in Seller Hub.

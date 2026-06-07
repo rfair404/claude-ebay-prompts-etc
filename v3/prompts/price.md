@@ -37,6 +37,10 @@ exhausted.
 3. **Source B — Chrome → eBay sold** (free, ~30–60s). SOLD URL with
    `LH_Sold=1&LH_Complete=1&_sop=3`. Extract rows prefixed "Sold
    <date>"; skip Sponsored/"Shop on eBay" house ads. Tag `[B — Chrome]`.
+   `get_page_text` gives titles/prices/dates but not per-item URLs; when
+   you can't capture each item's href (via `read_page`/`find`), cite the
+   SOLD-search URL as the verifiable source and say so — every comp stays
+   one click from verification.
 4. **If no exact match yet, broaden the query** and re-run A+B: drop the
    least-load-bearing keyword (5→3 words), then try a synonym for Type.
    Iterate 2–3 formulations. This is autonomous — no approval needed.

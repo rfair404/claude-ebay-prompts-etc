@@ -51,8 +51,19 @@ era-peer, and reports how hard it looked.
         _shared.md                rules every phase obeys
         condition-rubric.md       condition depth (Goal 3)
         identify.md  price.md  curate.md  investigate.md  draft.md
+        list_edit_chrome.md       Function 6 — push draft.md to an eBay DRAFT (manual trigger)
       templates/
         listing-v1.md             YAML frontmatter + body (copied from v2)
+
+**Function 6 — LIST/EDIT.** [`prompts/list_edit_chrome.md`](prompts/list_edit_chrome.md)
+pushes an approved `draft.md` into an eBay **draft** via Chrome (never
+publishes; "Save for later" only). It runs on explicit user request, not
+in the automated pipeline. The prompt encodes the lessons from the first
+live run: trust JS DOM state over (lagging) screenshots, click by
+JS label-matching rather than coordinates, never open the variations
+editor, drop inaccurate AI-suggested specifics, and flag photos for
+manual upload when `file_upload` rejects out-of-session paths. The
+eventual eBay Sell API path (`v2/lib/list_edit.py`) supersedes it.
 
 Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
 `list_edit`, `photo_prep`) is unchanged and shared from `v2/lib/` — v3
