@@ -1,0 +1,63 @@
+SHOOT SUMMARY
+Photos processed: 3
+Shoot mode:       single (auto-detected — 3 photos of one physical item: front cover,
+                  back cover, interior spread)
+Distinct items:   1
+Photo caveats:    All 3 photos usable. Back cover has visible surface scratches.
+                  Interior spread text is small and partially legible. Store logo
+                  on front cover is in script and requires close read to confirm.
+
+--- Item 1 ---
+
+Category:           Fashion catalog / illustrated lookbook
+Brand:              Polo Ralph Lauren (confirmed — text + polo player logo visible
+                    on front cover and back cover)
+Type:               Store-co-branded illustrated fashion catalog, Vol. IV Fall 1984
+                    [BEST-CASE: Muse's Atlanta co-branding — see Scenario bracket]
+Era:                Fall 1984 (confirmed — "Vol. IV Fall 1984" legible on back cover)
+Collectability:     collectable [ASSUMPTION — early-era numbered-volume PRL catalog;
+                    comp data to validate]
+Condition:          Back cover shows visible surface scratches and light scuffs
+                    consistent with age; cover imagery remains intact. Front cover
+                    polo action photography clean and bright. Interior pages appear
+                    clean — no tears or writing observed. Not a mailer — no mailing
+                    address panel present on back cover.
+Estimated weight:   ~3–4 oz (light — <5 lb)
+Estimated dimensions: ~11 × 8.5 in flat (standard catalog format, estimated)
+Distinguishing marks:
+  - "Vol. IV Fall 1984" printed in small text at lower left of back cover —
+    confirms volume number and season/year directly
+  - "We believe in style, not fashion." tagline + polo player logo on back cover
+    right side (vertical orientation)
+  - Front cover: action polo match photography, "Polo Ralph Lauren" text left side
+    (vertical), store script logo in right-side green/teal vertical band with
+    "ATLANTA" in block caps beneath it
+  - Interior: portrait editorial of older man in denim layered casualwear with
+    decorative belt; editorial text block in bordered box (text not fully legible
+    at photo resolution)
+  - Teal/dark green back cover — solid color, no mailing panel
+  - NOT a store mailer — no address, postal stamp, or mailing panel visible
+needs_followup_photo: yes — close-up of front-cover store script logo needed to
+                       confirm retailer name; interior spread text block legibility
+                       would improve (additional interior spreads if present)
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Polo Ralph Lauren × Muse's Atlanta, Vol. IV Fall 1984 illustrated catalog:
+       Muse's Men's Store was a landmark Atlanta upscale menswear retailer
+       (est. 1892, closed late 1980s) — co-branding with Polo RL in 1984 would
+       be highly collectible to both PRL and Atlanta retail ephemera collectors.
+    2. Polo Ralph Lauren × unknown Atlanta department store, Vol. IV Fall 1984:
+       Store name unconfirmed from photos — value tier slightly lower if retailer
+       is less recognizable, but "Vol. IV Fall 1984" numbering and early era
+       still anchor collectability independently.
+    3. Polo Ralph Lauren standalone Vol. IV Fall 1984 (store logo misread —
+       no retailer co-branding): Value anchored entirely on PRL early-era
+       numbered catalog collectability alone.
+  How to distinguish:
+    - Close-up photo of front-cover script logo: confirms or rules out Muse's
+      (scenarios 1 vs. 2/3); Muse's used a distinctive flowing script
+    - Interior pages: any additional store branding, address, or retailer
+      reference would confirm scenario 1 or 2
+  Price-tier swing: moderate (store identity adds collector niche but Vol. IV
+                    Fall 1984 date is the primary value driver regardless)

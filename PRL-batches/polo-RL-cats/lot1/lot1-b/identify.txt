@@ -1,0 +1,71 @@
+SHOOT SUMMARY
+Photos processed: 3
+Shoot mode:       single (auto-detected — 3 angles of same physical item:
+                  front cover, interior open spread, back cover)
+Distinct items:   1
+Photo caveats:    Interior spread photographed rotated ~90° CCW; text on
+                  wood-grain page partially legible at capture resolution.
+                  No title page, colophon, or store-attribution page visible
+                  in these 3 photos.
+
+--- Item 1 ---
+
+Category:           Catalog / lookbook (fashion)
+Brand:              Polo Ralph Lauren
+                    (confirmed visible: "Polo Ralph Lauren" logotype on
+                    interior wood-grain page; gold polo player logo on
+                    both covers)
+Type:               Polo Ralph Lauren fashion catalog — wide-format landscape
+                    orientation, minimalist cover design
+Era:                Early-to-mid 1980s [ASSUMPTION] — interior editorial
+                    photography aesthetic, wood-grain philosophy-statement
+                    opening spread, and Big Pony cover treatment consistent
+                    with c.1978–1985 RL catalog production. No confirmed date
+                    page visible in these 3 photos.
+Collectability:     collectable [ASSUMPTION]
+Condition:          Cover (front): dark navy ground with visible surface
+                    scuffing and light handling marks across the field;
+                    minor sheen loss consistent with age; no tears or deep
+                    scratches observed.
+                    Cover (back): same navy ground; more pronounced corner
+                    creasing at top-right edge; slight warping/curvature
+                    (catalog no longer lies fully flat); small white mark
+                    at top-right edge (adhesive residue or label remnant).
+                    Interior (one spread visible): full-page portrait photo
+                    — no visible tears, staining, or foxing on visible
+                    pages. Binding appears intact; pages flat. Overall: Good
+                    with typical age wear.
+Estimated weight:   ~0.5 lb (light — <5 lb)
+Estimated dims:     ~13 × 10 in flat (landscape format) [ASSUMPTION —
+                    visual scale relative to typical RL catalog format;
+                    no ruler in frame]
+Distinguishing
+marks:              - Gold polo player (Big Pony) logo centered on both
+                      front and back covers — sole mark on cover; NO text
+                      title, season, or year on cover
+                    - Interior opening spread (visible):
+                        Left page: full-page editorial portrait of a
+                          silver-haired man in a brown/tan tweed sport coat,
+                          leaning on a wooden surface — consistent with
+                          a Ralph Lauren portrait
+                        Right page: dark wood-grain background with gold
+                          cursive script text (philosophy statement —
+                          partially legible at this resolution) + "Polo
+                          Ralph Lauren" logotype and polo player logo at
+                          lower right
+                    - No season, year, volume number, or store attribution
+                      visible in these 3 photos
+
+needs_followup_photo: yes — photos of interior title page, back interior
+                      page, or any page carrying season/year/volume/store
+                      attribution are needed to confirm specific edition.
+                      A close-up of the wood-grain text page would also
+                      confirm the philosophy statement text in full.
+
+Scenario bracket:   N/A — brand is confirmed by visible mark; no
+                    [BEST-CASE] inference required for brand. Era
+                    confirmation is marked [ASSUMPTION], not [BEST-CASE],
+                    as the value tier does not shift materially across
+                    c.1978–1987 for this catalog format. If interior pages
+                    surface a confirmed date, re-run IDENTIFY with that
+                    information.

@@ -1,0 +1,125 @@
+=== PRICE OUTPUT — Shoot: single-test-iron, 2026-05-26 ===
+
+Mode: single. ONE item being comped.
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 1 (Antique cast iron sad iron, fluted handle) ===
+══════════════════════════════════════════════════════════════════════
+Comps refreshed:   2026-05-26
+Scenario bracket:  YES — 2 viable scenarios + 1 ruled-out (single-mode
+                   shoot collapsed the original 4-scenario bracket to
+                   2 viable + 1 effectively-excluded)
+Data quality:      MODERATE — collector-community pricing references
+                   and adjacent eBay listings surfaced; specific
+                   weight-5 fluted-handle sold prices not directly
+                   surfaced but bracket is well-bounded.
+
+
+─── SCENARIO 1: Late 19th C. named-maker fluted-handle sad iron ───
+Query: antique cast iron sad iron twisted handle fluted vintage named maker
+
+Tier A: Confirmed eBay adjacent comps include "Antique 19th Cent. Cast
+   Iron Flat / Sad Iron w Twisted Handle - 12 lb. 9.75"" — larger
+   format example confirming the category market is active. Named-maker
+   fluted-handle examples from Enterprise Mfg (Philadelphia, 1864–),
+   Colebrook Dale, A.C. Williams, etc. sell $60–$200+ depending on
+   maker rarity and condition. Natural-finish (brown / gray / bronze
+   patina) examples like this one command the top of this range per
+   collector guidance.
+
+Tier B (ceiling): Rare named patents (e.g. specific Enterprise patent
+   dates, Sensible irons in mint condition) can reach $300–$350 per
+   collector guides.
+
+Scenario 1 price guidance: $60–$200 realistic for confirmed
+   named-maker fluted-handle in natural finish; $200–$350 for premium
+   sub-categories (rare patents, mint examples, original boxes).
+
+
+─── SCENARIO 2: Late 19th to early 20th C. unmarked fluted-handle ───
+Query: antique cast iron sad iron twisted handle unmarked vintage
+
+Tier A: Generic unmarked fluted-handle sad irons trend $30–$80 on
+   eBay second-hand market. Note: market-wide reference of "$6–$24
+   typical" applies to PLAIN-handle and modern-looking sad irons, not
+   to fluted/twisted handle examples — those carry a craftsmanship
+   premium.
+
+Scenario 2 price guidance: $30–$80 realistic for unmarked fluted-
+   handle in natural patina condition.
+
+
+─── SCENARIO 3: Modern decorative reproduction ───
+EXCLUDED — multi-angle inspection (photos 1, 3, 4) rules out
+modern reproduction with high confidence. Surface patina, sand-cast
+texture, and authentic soleplate use-wear are not reproducible at
+decor-retail price points. This scenario is listed in IDENTIFY for
+completeness but is effectively not in play for this item.
+
+
+─── PRICE BRACKET SUMMARY (Item 1) ───
+  Scenario 1 (named maker, natural finish):     $60–$200+ (up to $350 premium)
+  Scenario 2 (unmarked, natural finish):        $30–$80
+
+  Verification BEFORE buying (only one question remains):
+    1. Flip the iron and photograph the bottom of the soleplate.
+       Maker stamp determines scenario 1 vs. 2 — likely a 2× or 3×
+       value swing.
+
+
+─── RESEARCH NOTES — Item 1 ───
+
+Authenticity & fakes:
+  Modern reproductions of cast iron sad irons exist in country-decor
+  retail (Cracker Barrel, Hobby Lobby, etc.) but are generally
+  visually distinguishable from authentic vintage by:
+  - Surface finish: modern repros are typically uniformly painted
+    matte black; authentic vintage has natural sand-cast texture with
+    organic patina variation.
+  - Soleplate: modern repros have smooth machined soleplates;
+    authentic examples show period use-wear (scratches, polish
+    burnishing, occasional pitting).
+  - Handle craftsmanship: modern fluted handles are die-cast and
+    uniform; authentic wrought-iron twisted handles show slight
+    asymmetry and hand-finishing marks at attachment points.
+  Photos 1–4 collectively confirm authentic vintage attribution for
+  this iron. The visible "5" on the body is a weight designation, not
+  a forgery concern.
+
+Listing restrictions & legal issues:
+  No restrictions. Standard antique household item. Ships
+  domestically and internationally without issue.
+  Iron and steel content: no hazmat or shipping concerns.
+
+Known scams & buyer issues:
+  - "Hidden crack not disclosed" returns occasionally happen with
+    cast-iron items. Photograph all sides + soleplate under bright
+    light pre-listing. A bright pinging sound when tapped = sound;
+    dull thud = hidden crack.
+  - "Reproduction sold as antique" disputes — mitigated by the strong
+    multi-angle photography already on hand. Lead the listing with
+    the natural patina, sand-cast texture, and soleplate use-wear
+    photos as authenticity evidence.
+
+Authentication services available:
+  N/A through eBay. Specialized sad iron collector communities exist
+  (Pressing Iron and Trivet Collectors of America — PITCA) for
+  attribution questions on high-value pieces.
+
+Disclosure recommendations:
+  - Total weight (photograph on a kitchen scale for confirmation —
+    the "5" embossed should match; if it does, mention it in the
+    title as "Size 5" — collectors search for specific sizes).
+  - Exact dimensions (length × width × height).
+  - Maker stamp photographed if present, or explicit "unmarked" note.
+  - Soleplate condition: photograph clearly; disclose scratches /
+    polish wear / pitting / any rust pitting if present.
+  - Handle condition: any hairline cracks at attachment points,
+    losses to spiral fluting, any repairs.
+  - Body condition: hairline cracks (rare but valuable to confirm
+    absent), any chips at heel or point.
+  - Sound test if possible: confirm "rings true" rather than dull
+    thud (indicates no hidden cracks).
+  - "Decorative use, not tested for hot ironing" — standard
+    disclosure even for clearly functional-looking examples.

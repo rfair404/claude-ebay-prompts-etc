@@ -1,0 +1,245 @@
+eBay Listing Form — All Fields
+Captured: 2026-05-26
+URL: https://www.ebay.com/lstng?mode=AddItem
+Category used for capture: Collectibles > Decorative Collectibles > Sculptures & Figurines
+Total fields: 65
+
+Legend:
+  REQUIRED  = field is required (aria-required or HTML required attr)
+  HIDDEN    = not visible to user (display:none, visibility:hidden, type=hidden, or zero dimensions)
+  DISABLED  = field is disabled
+  maxLen=N  = maxlength attribute
+  PREF      = preference/toggle stored server-side; controls whether optional section is shown
+
+NOTE ON HIDDEN FIELDS:
+  eBay's form uses two patterns:
+    (A) *Pref checkboxes — server-side toggles that show/hide optional sections.
+        These are in the page but hidden from the user; they control whether
+        optional features (best offer, scheduling, shipping exclusions, etc.) are displayed.
+    (B) Attribute search-box inputs — item-specifics fields rendered as hidden text inputs
+        that back the visible tag-select/autocomplete UI.
+  Both types are marked HIDDEN below.
+
+================================================================================
+SECTION: (no section header — top-level hidden form state)
+================================================================================
+
+[1]  INPUT:hidden     | name=(no name)                  | label=""
+     >> Page state / flow parameters (inflowparameters JSON)
+
+[2]  INPUT:checkbox   | name=photoUploadMobilePref       | label="Upload photos from mobile"       | HIDDEN | PREF
+[3]  INPUT:checkbox   | name=photoUploadWebPref          | label="Upload photos from web"          | HIDDEN | PREF
+[4]  INPUT:checkbox   | name=galleryPlusPref             | label="Gallery Plus"                    | HIDDEN | PREF
+[5]  INPUT:checkbox   | name=boldTitlePref               | label="Bold title"                      | HIDDEN | PREF
+[6]  INPUT:checkbox   | name=subtitlePref                | label="Subtitle"                        | HIDDEN | PREF
+[7]  INPUT:checkbox   | name=customLabelPref             | label="Custom label (SKU)"              | HIDDEN | PREF
+
+================================================================================
+SECTION: TITLE
+================================================================================
+
+[8]  INPUT:text       | name=title                      | label="Item title"                      | REQUIRED | maxLen=80
+     >> 80-character eBay title. Only REQUIRED visible field in this section.
+
+================================================================================
+SECTION: ITEM SPECIFICS — Required
+================================================================================
+
+[9]  INPUT:text       | name=search-box-attributesType  | label="Search or enter your own..."     | HIDDEN | maxLen=65
+     >> Backs the "Type" item specific (e.g. "Figurine"). Rendered as tag-select UI.
+
+================================================================================
+SECTION: ITEM SPECIFICS — Additional (optional)
+================================================================================
+
+[10] INPUT:text       | name=universalProductCode       | label="UPC"                             | maxLen=20
+     >> Visible text input. Free-text UPC entry.
+
+[11] INPUT:text       | name=search-box-attributesBrand              | label="Search or enter your own..." | HIDDEN | maxLen=65
+[12] INPUT:text       | name=search-box-attributesCollection         | label="Search or enter your own..." | HIDDEN | maxLen=65
+[13] INPUT:text       | name=search-box-attributesSubject            | label="Search or enter your own..." | HIDDEN | maxLen=65
+[14] INPUT:text       | name=search-box-attributesMaterial           | label="Search or enter your own..." | HIDDEN | maxLen=65
+[15] INPUT:text       | name=search-box-attributesCharacterFamily    | label="Search or enter your own..." | HIDDEN | maxLen=65
+[16] INPUT:text       | name=search-box-attributesOccasion           | label="Search or enter your own..." | HIDDEN | maxLen=65
+[17] INPUT:text       | name=search-box-attributesColor              | label="Search or enter your own..." | HIDDEN | maxLen=65
+[18] INPUT:text       | name=search-box-attributesCountryofOrigin    | label="Search. Results appear below" | HIDDEN | maxLen=65
+     >> Note: Country of Origin is lookup-only (no free entry), hence different placeholder.
+[19] INPUT:text       | name=search-box-attributesPattern            | label="Search or enter your own..." | HIDDEN | maxLen=65
+[20] INPUT:text       | name=search-box-attributesTheme              | label="Search or enter your own..." | HIDDEN | maxLen=65
+[21] INPUT:text       | name=search-box-attributesStyle              | label="Search or enter your own..." | HIDDEN | maxLen=65
+[22] INPUT:text       | name=search-box-attributesSize               | label="Search or enter your own..." | HIDDEN | maxLen=65
+[23] INPUT:text       | name=search-box-attributesDepartment         | label="Search. Results appear below" | HIDDEN | maxLen=65
+[24] INPUT:text       | name=search-box-attributesTimePeriodManufactured | label="Search or enter your own..." | HIDDEN | maxLen=65
+[25] INPUT:text       | name=search-box-attributesFinish             | label="Search or enter your own..." | HIDDEN | maxLen=65
+
+     >> Fields [11]-[25] are all the backing inputs for the tag-select item-specifics UI.
+     >> All are HIDDEN — the user interacts with the styled tag-select widget, not these inputs.
+     >> Two label variants:
+     >>   "Search or enter your own..." = free-text + lookup allowed
+     >>   "Search. Results appear below" = lookup-only (controlled vocabulary)
+     >> Additional item specifics beyond these 15 are available via "Show more" (not captured here).
+
+================================================================================
+SECTION: CONDITION
+================================================================================
+
+[26] TEXTAREA:textarea | name=itemConditionDescription  | label="Condition description"           | maxLen=1000
+     >> Visible. Free-text condition notes shown to buyer. Optional.
+     >> Condition itself (New/Used/etc.) is selected in prelist step, not a form field here.
+
+================================================================================
+SECTION: DESCRIPTION
+================================================================================
+
+[27] TEXTAREA:textarea | name=description               | label="Description"                     | HIDDEN
+     >> Backing textarea for the rich-text description editor. No maxLen enforced at HTML level
+     >> (eBay enforces server-side). HIDDEN — user interacts with the rich-text UI overlay.
+
+================================================================================
+SECTION: PRICING — Preference toggles (all HIDDEN/PREF)
+================================================================================
+
+[28] INPUT:checkbox   | name=priceAutoFillPref          | label="Autofill pricing details"        | HIDDEN | PREF
+[29] INPUT:checkbox   | name=immediatePayPref           | label="Immediate payment"               | HIDDEN | PREF
+[30] INPUT:checkbox   | name=costOfGoodsPref            | label="Your cost"                       | HIDDEN | PREF
+[31] INPUT:checkbox   | name=bestOfferPref              | label="Best offer"                      | HIDDEN | PREF
+[32] INPUT:checkbox   | name=vpPref                     | label="Volume Pricing"                  | HIDDEN | PREF
+[33] INPUT:checkbox   | name=scheduledListingPref       | label="Scheduling"                      | HIDDEN | PREF
+[34] INPUT:checkbox   | name=lotSizePref                | label="Sell as a lot"                   | HIDDEN | PREF
+[35] INPUT:checkbox   | name=offlinePaymentPref         | label="Offline payment"                 | HIDDEN | PREF
+[36] INPUT:checkbox   | name=privateListingPref         | label="Private listing"                 | HIDDEN | PREF
+
+[37] SELECT:select-one | name=format                   | label="format"                           | HIDDEN
+     >> Backing select for the BIN/Auction format toggle. HIDDEN — rendered as UI buttons.
+     >> Options (from form): Buy It Now | Auction
+
+================================================================================
+SECTION: PRICING — Visible fields
+================================================================================
+
+[38] INPUT:text       | name=price                     | label="Item price"                       | maxLen=13
+     >> Visible. Numeric. BIN price in USD. No HTML required attr but functionally required.
+
+[39] INPUT:checkbox   | name=immediatePay              | label="Require immediate payment when buyer uses Buy It Now"
+     >> Visible checkbox. Default: unchecked.
+
+[40] INPUT:hidden     | name=immediatePay-hidden       | label="immediatePay-hidden"              | HIDDEN
+     >> Shadow hidden field paired with [39] checkbox (standard eBay checkbox/hidden pattern).
+
+[41] INPUT:text       | name=costOfGoods               | label="Your cost"                        | maxLen=13
+     >> Visible. Numeric. Not shown to buyers. Optional.
+
+[42] INPUT:text       | name=quantity                  | label="Quantity"                         | maxLen=5
+     >> Visible. Numeric. Defaults to 1.
+
+[43] INPUT:checkbox   | name=bestOfferEnabled          | label="Allow offers"
+     >> Visible checkbox. Enables Best Offer. Default: unchecked.
+
+[44] INPUT:text       | name=autoDeclineAmount         | label="Minimum offer"                    | maxLen=13
+     >> Visible. Auto-decline threshold. Only active when [43] is checked.
+
+[45] INPUT:text       | name=autoAcceptAmount          | label="Auto accept"                      | maxLen=13
+     >> Visible. Auto-accept threshold. Only active when [43] is checked.
+
+[46] INPUT:checkbox   | name=scheduleListingSelection  | label="Schedule your listing"
+     >> Visible. Enables date/time picker (picker fields load dynamically — not captured here).
+
+[47] INPUT:checkbox   | name=(no name)                 | label="Sell as lot"
+     >> Visible. Groups items for single buyer.
+
+================================================================================
+SECTION: SHIPPING — Preference toggles (all HIDDEN/PREF)
+================================================================================
+
+[48] INPUT:checkbox   | name=shippingAutoFillPref       | label="Autofill shipping details"       | HIDDEN | PREF
+[49] INPUT:checkbox   | name=irregularPackagePref       | label="Irregular package"               | HIDDEN | PREF
+[50] INPUT:checkbox   | name=domesticHandlingFeePref    | label="Handling cost"                   | HIDDEN | PREF
+[51] INPUT:checkbox   | name=intlShippingServicePref    | label="International shipping"          | HIDDEN | PREF
+[52] INPUT:checkbox   | name=localPickupPref            | label="Local pickup"                    | HIDDEN | PREF
+[53] INPUT:checkbox   | name=shippingExcludedLocationsPref | label="Excluded locations"          | HIDDEN | PREF
+[54] SELECT:select-one | name=domesticShippingType      | label="domesticShippingType"            | HIDDEN
+     >> Backing select for Calculated/Flat/Free shipping type picker.
+
+================================================================================
+SECTION: SHIPPING — Package weight
+================================================================================
+
+[55] INPUT:text       | name=majorWeight               | label="Enter weight in pounds"           | maxLen=3
+[56] INPUT:text       | name=minorWeight               | label="Enter weight in ounces"           | maxLen=2
+
+================================================================================
+SECTION: SHIPPING — Package dimensions
+================================================================================
+
+[57] INPUT:text       | name=packageLength             | label="Enter package length in inches"   | maxLen=5
+[58] INPUT:text       | name=packageWidth              | label="Enter package width in inches"    | maxLen=5
+[59] INPUT:text       | name=packageDepth              | label="Enter package depth in inches"    | maxLen=5
+
+================================================================================
+SECTION: SHIPPING — Domestic shipping
+================================================================================
+
+[60] SELECT:select-one | name=domesticShippingType     | label="domesticShippingType"             | HIDDEN
+     >> Duplicate reference — same backing field as [54]; appears twice in DOM.
+
+================================================================================
+SECTION: SHIPPING — Primary service
+================================================================================
+
+[61] INPUT:checkbox   | name=freeShipping              | label="Offer free shipping"
+     >> Visible. Enables free shipping for primary service.
+
+[62] INPUT:hidden     | name=freeShipping-hidden       | label="freeShipping-hidden"              | HIDDEN
+     >> Shadow hidden field paired with [61].
+
+================================================================================
+SECTION: PROMOTE YOUR LISTING — General (Sponsored / General)
+================================================================================
+
+[63] INPUT:checkbox   | name="Toggle General"          | label="Toggle General"
+     >> Enables "General" (CPC-style) promoted listing tier.
+
+================================================================================
+SECTION: PROMOTE YOUR LISTING — Priority
+================================================================================
+
+[64] INPUT:checkbox   | name="Toggle Priority"         | label="Toggle Priority"
+     >> Enables "Priority" (premium placement) promoted listing tier.
+
+================================================================================
+SECTION: (no section — file upload, hidden)
+================================================================================
+
+[65] INPUT:file       | name=(no name)                 | label=""                                 | HIDDEN
+     >> File input backing the photo upload UI. HIDDEN — user interacts with drag-drop zone.
+
+================================================================================
+SUMMARY
+================================================================================
+
+Total fields in DOM:     65
+Visible to user:         ~22 (fields not marked HIDDEN above)
+HIDDEN:                  ~43
+  - type=hidden:          3  ([1], [40], [62])
+  - PREF checkboxes:     16  ([2]-[7], [28]-[36], [48]-[54] range)
+  - Item-spec search:    16  ([9], [11]-[25])
+  - Backing selects/textarea: 3  ([27], [37], [54]/[60])
+  - Photo file input:     1  ([65])
+REQUIRED (HTML attr):    1   ([8] title)
+  NOTE: price [38] and condition (prelist step) are functionally required
+  but not marked required in HTML — eBay validates server-side on submit.
+
+FIELDS NOT CAPTURED (load dynamically or require interaction to reveal):
+  - Subtitle input (shown when [6] subtitlePref toggled)
+  - Custom label / SKU input (shown when [7] toggled)
+  - Auction-specific fields: starting price, reserve, duration (format [37] = Auction)
+  - Schedule date/time picker inputs ([46] checkbox triggers these)
+  - International shipping service fields ([51] toggles)
+  - Local pickup fields ([52] toggles)
+  - Handling fee amount ([50] toggles)
+  - Lot size quantity ([34] toggles)
+  - Volume pricing tiers ([32] toggles)
+  - Additional item specifics beyond "Show more" (category-dependent)
+  - Returns policy fields (appear to be set via account preferences, not form inputs here)
+  - Charity percentage picker ([CHARITY] section — link-based, no input captured)
+  - Any fields under collapsed "See photo options" / "See title options" / "See pricing options"

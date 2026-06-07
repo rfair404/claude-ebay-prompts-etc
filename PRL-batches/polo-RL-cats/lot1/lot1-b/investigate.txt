@@ -1,0 +1,157 @@
+=== INVESTIGATION REPORT — Polo Ralph Lauren Fashion Catalog ===
+Photos analyzed: 3 (front cover, interior opening spread, back cover)
+Confidence: HIGH for observable physical facts; flagged where inference
+            begins. No season/year/edition data visible — explicitly noted.
+
+## Brief summary
+
+This is a genuine Polo Ralph Lauren branded fashion catalog in landscape/
+wide format. The brand is confirmed by a visible "Polo Ralph Lauren"
+logotype and polo player logo on the interior spread; the gold polo player
+logo appears on both covers. The interior opens to a full-page editorial
+portrait paired with a wood-grain philosophy-statement page — a presentation
+style associated with early Polo RL catalog production. Condition is Good
+with expected age wear. No season, year, volume, or store attribution is
+visible in the 3 photos provided; those claims cannot be made from current
+evidence and should not appear in the listing without further verification.
+
+## Directly observable from the photos
+
+- Photo 1 (front cover): Landscape-format catalog, dark slate-navy ground,
+  single gold polo player logo (mounted rider, mallet raised) centered on
+  cover. No text on front cover. Surface shows light scuffing and handling
+  marks across the field; minor sheen loss; no tears or deep scratches.
+- Photo 2 (interior opening spread): Catalog opened flat. Left (right in
+  frame due to CCW rotation): full-page editorial portrait — silver-haired
+  man, brown/tan tweed sport coat, leaning on a wood surface. Right (left in
+  frame): dark wood-grain background page with gold cursive script text and
+  "Polo Ralph Lauren" logotype + polo player logo at lower portion.
+- Photo 3 (back cover): Same slate-navy ground and gold polo player logo as
+  front. Top-right corner shows creasing/folding wear. Small white mark at
+  top-right edge (adhesive residue or remnant label). Catalog has slight
+  overall warp — does not lie fully flat.
+
+## Low-end safe default (true regardless of scenario)
+
+At minimum, this is a genuine Polo Ralph Lauren branded fashion catalog in
+wide landscape format, with a minimalist navy cover bearing the gold polo
+player logo. The interior includes an editorial portrait spread and a Ralph
+Lauren philosophy statement on a wood-grain background. Condition is Good:
+covers show light scuffing and age-wear; back cover has corner creasing and
+slight warping; visible interior pages are free of tears and major damage.
+All of these claims are directly visible in the photos and not disputable.
+
+## Scenarios (most likely → least likely, evidence-ranked)
+
+### Scenario 1 — MOST LIKELY
+Early Polo Ralph Lauren fashion catalog, c.1978–1985, wide format.
+Evidence basis: The minimalist cover (no text, only logo), the gold polo
+  player logo style, the interior design (wood-grain philosophy-statement
+  opening spread, editorial portrait of a man consistent with RL himself),
+  and wide landscape format are consistent with early Polo RL catalog
+  production from this era. This combination is not consistent with
+  post-1985 production, which adopted different cover treatments.
+Probability: high
+
+### Scenario 2 — Possible
+Late Polo Ralph Lauren catalog, c.1986–1990, possibly a special edition
+  or regional shop edition with a deliberately minimal cover.
+Evidence basis: The cover design alone cannot exclude a slightly later date;
+  some regional or limited-run editions retained minimal branding. The
+  interior portrait photograph aesthetic is also consistent with late-1980s
+  production. Without a date page this cannot be excluded.
+Probability: moderate-low
+
+### Scenario 3 — Effectively excluded
+Post-1990 Polo Ralph Lauren catalog.
+Evidence basis: Post-1990 RL catalog covers adopted progressively more
+  elaborate typography and branding treatments; the pure-logo-on-navy
+  minimal cover is not consistent with that era. The interior wood-grain
+  philosophy-statement spread is an early-era hallmark not seen in later
+  production.
+Probability: very low
+
+## This agent's confident assessment
+
+Based on the three angles provided, this item is most defensibly identified
+as a genuine early Polo Ralph Lauren fashion catalog, likely c.1978–1985,
+in landscape wide format. The visible brand confirmation (logotype + logo
+on interior) is unambiguous. The minimalist navy/gold cover treatment and
+the wood-grain philosophy-statement opening spread are strongly associated
+with early-era RL catalog production. The single observable that would
+sharpen this assessment from "early 1980s range" to a specific edition is
+a clear photo of any interior page carrying a season, year, volume number,
+or store attribution — none of which are captured in the current photo set.
+
+## NOT defensible from these photos
+
+- Specific season (Fall/Spring/Summer/Winter) — not visible
+- Specific year — not visible
+- Volume number — not visible
+- Store attribution (e.g., Atlanta / Lenox Square / Park Place) — not visible
+- Specific catalog title / series name — not visible
+- Page count / completeness — only one interior spread visible; cannot
+  confirm no missing pages
+- Whether mailing label or address block appears elsewhere on the exterior
+- Country of manufacture / printing origin — not visible
+- Functional / completeness status of the full interior
+
+## Listing-safe claims (for DRAFT consumption)
+
+Title claims (safe to use in eBay title):
+- "Polo Ralph Lauren Vintage Catalog"
+- "Polo Ralph Lauren Early 1980s Fashion Lookbook"
+- "Polo Ralph Lauren Navy Gold Polo Logo Catalog Vintage"
+- "Polo Ralph Lauren Catalog Wood Grain Philosophy Spread"
+
+Description claims (safe to use in description body):
+- "Genuine Polo Ralph Lauren branded fashion catalog confirmed by interior
+  logotype and polo player logo."
+- "Wide landscape format with a minimalist dark navy cover bearing the gold
+  polo player logo — no text on the cover face."
+- "Interior opens to a full-page editorial portrait of a silver-haired man
+  in a tweed sport coat, paired with a wood-grain background page bearing a
+  Polo Ralph Lauren philosophy statement in gold cursive script."
+- "Condition: Good. Front cover shows light scuffing and handling marks
+  consistent with age. Back cover has corner creasing at top right and a
+  small mark at the top edge; catalog has slight warp and does not lie
+  fully flat. Visible interior pages are clean — no tears or major damage
+  observed."
+- "Season, year, and store attribution are not visible in available photos;
+  buyer should verify against interior pages upon receipt."
+
+Item specifics for the eBay form:
+- Brand: Ralph Lauren / Polo Ralph Lauren
+- Type: Catalog / Lookbook
+- Topic: Fashion, Menswear, Lifestyle
+- Era / Year Manufactured: 1980s (early) — approximate; not confirmed from photos
+- Country/Region of Manufacture: Unknown (not visible in photos)
+- Language: English
+- Format: Wide landscape
+- Condition: Good — see description for specifics
+
+## Open questions (would unlock stronger claims — invite user reply)
+
+- Is there a season/year/volume printed on any interior page (title page,
+  inside front cover, or back page) that wasn't photographed? This single
+  photo would lock in the specific edition and allow a precise title.
+- Does the back of the catalog carry a store address block or mailing
+  panel? (Not visible in the back-cover photo.) Atlanta / Lenox Square
+  attribution, if confirmed, would add collector-specific provenance value.
+- What is the page count of the catalog? Completeness confirmation matters
+  for buyer expectations.
+- What is the white mark at the top-right edge of the back cover — adhesive
+  residue, label remnant, or tape?
+
+## Listing approach recommendation
+
+Lead the title with "Polo Ralph Lauren" and "Vintage Catalog" — both are
+confirmed and searchable. Add the most descriptive visual signals ("Navy
+Gold," "Early 1980s") to support keyword discovery. Do NOT include season,
+year, volume number, or store attribution in the title or description
+unless the user can confirm those from an interior page photo. If confirmed,
+those specifics dramatically improve searchability and justify a premium
+price point. In the description body, lean into the interior opening spread
+as a visual selling point — the editorial portrait + wood-grain philosophy
+page is distinctive and signals collector interest. Disclose the back-cover
+creasing and warp explicitly to pre-empt INAD returns.

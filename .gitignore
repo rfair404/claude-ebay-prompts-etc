@@ -1,0 +1,32 @@
+# ebaybiz — gitignore
+
+# Live config holds API tokens — never commit. Use v2/lib/config.example.yaml
+# as the template for new setups.
+/config.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Apify raw evidence dumps (kept locally; not for repo)
+apify_run*.json
+apify_run*.stderr.txt
+
+# Sample / shoot images — kept on disk, not version-controlled (heavy binaries)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.heic
+*.webp
+*.tiff

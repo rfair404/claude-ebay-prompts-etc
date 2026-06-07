@@ -1,0 +1,177 @@
+=== PRICE OUTPUT — Item 1 (Polo Ralph Lauren Vol. IV Fall 1984 Illustrated Catalog) ===
+Comps refreshed: 2026-05-26
+Scenario bracket:  Scenario 1: Muse's Atlanta co-brand / Scenario 2: Unidentified
+                   Atlanta retailer co-brand / Scenario 3: Standalone PRL catalog
+Data quality:      No exact match found for 1984 Fall PRL catalog on eBay or
+                   WebSearch. Era-peer comps from 1977–1989 used as anchors.
+                   Source B (eBay direct) fully loaded and extracted. Source A
+                   (WebSearch) returned no direct comp listings.
+
+────────────────────────────────────────────────────────────────────
+SCENARIO: All scenarios — Polo Ralph Lauren Vol. IV Fall 1984 illustrated catalog
+(Store co-branding adds niche value but does not change the primary price tier
+significantly — value is anchored on era and volume number)
+────────────────────────────────────────────────────────────────────
+Query used: polo ralph lauren catalog 1984 (eBay sold, sorted by date)
+Source: eBay sold listings (direct browse via Chrome, 2026-05-26)
+
+NO EXACT MATCH FOUND — no Vol. IV Fall 1984 PRL catalog appeared in either
+Source A or Source B. Zero results for "polo ralph lauren catalog 1984" in
+eBay sold listings. The era-peer comps below are the pricing basis.
+
+Tier A — closest era-peer comps (anchor pricing):
+
+  • $214.00 — "RALPH LAUREN POLO VINTAGE CATALOGUE Fall 1977 volume 2 Very Good vintage cond."
+              Match: Numbered-volume early-era PRL illustrated catalog; Vol. 2 is earlier
+                     than Vol. IV, pre-1985 bracket, same collector category
+              Sold: May 5, 2026, condition: New (Other)
+              URL: https://www.ebay.com/itm/ [seller: matwas_7428]
+              Search URL: https://www.ebay.com/sch/i.html?_nkw=polo+ralph+lauren+catalog+1984&LH_Sold=1&LH_Complete=1&_sop=3
+
+  • $200.00 — "POLO RALPH LAUREN Illustrated Fall 1987 Catalog Clothing & Fashion"
+              Match: PRL illustrated fashion catalog, fall season, same seller/category;
+                     3 years later than our item
+              Sold: May 19, 2026, condition: New (Other)
+              URL: https://www.ebay.com/sch/i.html?_nkw=polo+ralph+lauren+catalog+1984&LH_Sold=1&LH_Complete=1&_sop=3
+
+  • $110.00 — "1985 POLO RALPH LAUREN Illustrated Fashion Catalog Booklet English"
+              Match: PRL illustrated catalog, 1985 — one year after our item, same format
+              Sold: May 20, 2026, condition: Pre-Owned
+              URL: https://www.ebay.com/sch/i.html?_nkw=polo+ralph+lauren+catalog+1984&LH_Sold=1&LH_Complete=1&_sop=3
+
+Tier B — branded ceiling (premium / special content):
+
+  • $300.00 — "POLO RALPH LAUREN On Safari Illustrated Catalog Fashion Wildlife Zebra Cover"
+              Ceiling note: Special-theme "On Safari" catalog commands significant
+                            premium over standard seasonal catalogs — thematic
+                            desirability (zebra cover, wildlife) drives this above
+                            standard fall/spring pricing. Not a ceiling for a
+                            standard seasonal Fall 1984.
+              Sold: May 20, 2026
+
+  • $225.00 — "Polo Ralph Lauren Spring Illustrated Fashion Catalog Booklet" (undated)
+              Ceiling note: Undated spring catalog sold at $225 — suggests demand
+                            exists at this level for illustrated PRL catalogs
+                            irrespective of confirmed year. Our confirmed Vol. IV
+                            Fall 1984 has stronger provenance.
+              Sold: May 23, 2026
+
+  • $280.00 — "POLO Ralph Lauren Fall 1991 store catalog"
+              Ceiling note: 1991 fall at $280 is anomalously high — likely premium
+                            condition, store-branded, or special edition. Not directly
+                            comparable to 1984 era.
+              Sold: Mar 11, 2026
+
+Tier C — outliers / excluded:
+
+  • $105.00 — "Rare 1986 POLO RALPH LAUREN Mens & Womens Fall Advertising Catalog Bruce Weber"
+              Exclusion reason: $105 best-offer-accepted is the floor, not a reliable
+                                anchor — Bruce Weber attribution should command more;
+                                likely accepted a low offer. Treat as floor reference only.
+
+  • $100.00 — "Polo Ralph Lauren 1989 Fall Illustrated Clothing & Fashion Catalog Booklet"
+              Exclusion reason: 1989 is 5 years later; best offer accepted suggests
+                                priced lower than market clearing. Floor reference only.
+
+Scenario price guidance:
+  All scenarios: $175–$225 based on era-peer comps. Store co-branding (Muse's
+  Atlanta confirmed) could push toward $225+; unconfirmed store name holds at
+  $175–$200. Vol. IV / Fall 1984 early-era numbering is the primary value driver.
+
+────────────────────────────────────────────────────────────────────
+CROSS-REFERENCE
+────────────────────────────────────────────────────────────────────
+Source A (WebSearch) unique: No direct comp listings surfaced. WebSearch returned
+  only category pages and editorial articles about vintage PRL pricing generally
+  (clothing, not catalogs specifically).
+Source B (eBay direct) unique: All era-peer comps above are eBay-only. The Fall 1977
+  Vol. 2 at $214, Fall 1987 at $200, 1985 at $110, and undated Spring at $225 are
+  the working anchors.
+Source agreement: N/A — no comp appeared in both sources.
+Source disagreement: N/A.
+Rarity signal: Zero exact 1984 PRL catalog comps found across both sources. This
+  means either (a) extremely few have sold recently, or (b) they sold under
+  non-specific titles and aren't surfacing in keyword search. Either way, this
+  is a rarity signal — our listing would be the only Vol. IV Fall 1984 PRL
+  catalog currently indexed by eBay's search engine.
+
+────────────────────────────────────────────────────────────────────
+PRICE BRACKET SUMMARY (for CURATE consumption)
+────────────────────────────────────────────────────────────────────
+
+Max supported price: $225
+
+  Conservative:         $150 — anchored on 1985 PRL illustrated catalog ($110 sold)
+                                + early-era premium for 1984 vs. 1985; defensible
+                                without store co-brand confirmation.
+
+  Recommended (max supported): $200 — anchored on Fall 1977 Vol. 2 ($214) and
+                                Fall 1987 ($200) era peers. Fall 1984 sits between
+                                them chronologically; Vol. IV numbering matches the
+                                "early numbered series" collectability. This is the
+                                working price.
+
+  Push-high:            $225 — anchored on undated Spring PRL catalog ($225 sold);
+                                justified if Muse's Atlanta co-branding is confirmed
+                                (adds Atlanta retail ephemera collector demand) and
+                                condition photos are strong. Requires store name
+                                close-up to support this in listing copy.
+
+If Scenario 1 (Muse's Atlanta confirmed):  $200 – $225
+If Scenario 2 (unidentified Atlanta store): $175 – $200
+If Scenario 3 (no retailer co-brand):      $150 – $175
+
+Verification required BEFORE listing:
+  Photograph the front-cover script logo at close range to confirm whether it
+  reads "Muse's" — this is the single action that resolves the scenario bracket
+  and determines whether to push toward $225 or hold at $175–$200.
+
+Save this eBay search for passive watch (zero exact matches — future comps may
+surface and move the price):
+  https://www.ebay.com/sch/i.html?_nkw=polo+ralph+lauren+1984+catalog+vol+IV&LH_Sold=1&LH_Complete=1&_sop=3
+
+SEO note: Listing with "Vol IV Fall 1984" in the title will make this the only
+  listing matching that specific query — significant SEO advantage for a collector
+  searching for this exact volume.
+
+────────────────────────────────────────────────────────────────────
+RESEARCH NOTES — Item 1
+────────────────────────────────────────────────────────────────────
+
+Authenticity & fakes:
+  No significant authenticity risk for this category. Polo Ralph Lauren printed
+  fashion catalogs of the 1980s are not a meaningful counterfeit target — the
+  economics don't support reproduction. The main risk is misidentification of
+  date/volume, not fakery. The "Vol. IV Fall 1984" text on the back cover is the
+  primary authentication anchor — it should be clearly legible and consistent with
+  the catalog's visual design and print quality.
+
+Listing restrictions & legal issues:
+  No listing restrictions identified. Printed fashion ephemera from the 1980s is
+  freely saleable. No CITES, NAGPRA, hazmat, or recalled-item concerns. Can be
+  sold internationally — paper catalogs ship via USPS First Class International
+  without restriction.
+
+Known scams & buyer issues:
+  No item-specific scam patterns identified for printed paper ephemera. Standard
+  vintage paper risks apply: buyer disputes over undisclosed foxing, soft creases,
+  or edge wear. Mitigate by photographing all four edges and any visible surface
+  wear before listing. The back cover scratches visible in Photo 2 must be
+  disclosed explicitly in condition notes.
+
+Authentication services available:
+  N/A — eBay Authenticity Guarantee does not cover paper ephemera / catalogs.
+
+Disclosure recommendations:
+  - Back cover surface scratches: explicitly disclose and photograph in close-up
+    (visible in Photo 2 — a buyer could dispute "undisclosed wear" if not called out)
+  - Interior condition: photograph remaining spreads to confirm no foxing, writing,
+    or loose pages before listing
+  - Not a mailer: explicitly state "distributed catalog, not a personal mailer —
+    no address panel" to set correct expectations (PRL mailers command different
+    collector attention and this item should not be miscategorized)
+  - Store co-branding: list as "Atlanta retailer co-branded" until script logo
+    is confirmed; do not claim Muse's without the close-up
+
+Awaiting user approval. Accept $200 as the working price, or refine?
+Final price decision deferred to publish time — this analysis is recorded for review then.

@@ -1,0 +1,161 @@
+SHOOT SUMMARY
+Photos processed: 1
+Distinct items:   4
+Photo caveats:    Foyer / entryway vignette — marble-top console table
+                  with a matched lamp pair and centerpiece arrangement.
+                  Box visible at left edge is mostly cropped out.
+                  Stairway behind is the setting, not inventory.
+
+
+--- Item 1 ---
+Category:               Cardboard or wooden box (partial view, left edge)
+Brand:                  Unknown
+Type:                   Cannot determine — only a thin slice visible at
+                        the left edge of frame
+Era:                    Unknown
+Collectability:         Unknown
+Condition:              Not assessable
+Estimated weight:       unknown — needs full view
+Estimated dimensions:   unknown — needs full view
+Distinguishing marks:   Light brown / tan surface visible; could be a
+                        cardboard moving box, vintage trunk, or wood
+                        storage chest
+needs_followup_photo:   yes — full-frame shot of the item; cannot
+                        meaningfully identify or comp from this slice.
+
+
+--- Item 2 ---
+Category:               Table lamps (matched pair)
+Brand:                  Antique converted oil lamps (Astral / Argand
+                        style) [BEST-CASE]
+Type:                   Tall ornate column-base table lamps with drum
+                        shades — classic Victorian / candelabra-style
+                        decorator pair [BEST-CASE]
+Era:                    Late 19th C. with later electric conversion
+                        [BEST-CASE]
+Collectability:         collectable [BEST-CASE]
+Condition:              Both lamps appear intact and matched; dark/black
+                        finish on bases shows even patina; drum shades
+                        look clean with decorative gold/dark trim at top
+                        and bottom; cords/wiring not visible from this
+                        angle.
+Estimated weight:       ~18 lb pair  (heavy tier — 15–25 lb; 1.5× floor
+                        multiplier)
+Estimated dimensions:   each ~7 in dia base × 32 in tall (with shade);
+                        pair packs in two ~14 × 14 × 36 in cartons
+                        (bases + shades separately for transit)
+Distinguishing marks:   Approximately 30–34" tall each; ornate fluted /
+                        turned column bases on round footed plinths;
+                        oversized drum shades trimmed with patterned
+                        bands. Matched pair — treated as ONE record
+                        per the matched-set grouping rule.
+needs_followup_photo:   yes — underside of one base for maker stamp;
+                        close-up of base detail for bronze/brass vs.
+                        painted-iron differentiation; cord/socket
+                        inspection for vintage Bakelite vs. modern
+                        replacement; shade close-up for fabric vs.
+                        paper.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Antique converted oil lamps (Astral, Argand, or similar period
+       parlor lamps converted to electric) matched pair: premium tier.
+    2. Vintage brass/bronze decorator pair, mid-20th C., signed or
+       quality-stamped: solid mid-tier.
+    3. Unbranded vintage decorator pair (1960s–80s reproduction
+       parlor lamps): modest tier.
+    4. Modern decorator reproduction pair (Pottery Barn / generic
+       import, 2000s+): floor tier.
+  How to distinguish:
+    - Underside check: maker stamp, country-of-origin label, or socket
+      cap markings.
+    - Materials: real bronze/brass has cool dense weight; painted iron
+      or zinc alloy is lighter and rings differently when tapped.
+    - Cord/socket: vintage Bakelite or fabric-covered wiring = older
+      conversion; modern PVC = recently rewired or modern construction.
+    - Shade construction: hand-applied trim vs. machine-glued = vintage
+      vs. modern.
+  Price-tier swing: significant (antique converted oil pair $400–$800+
+    vs. modern decorator pair $40–$100).
+
+
+--- Item 3 ---
+Category:               Decorative floral arrangement (silk flowers in
+                        small vessel)
+Brand:                  Unknown
+Type:                   Small dark planter / vessel with silk floral
+                        arrangement (cream/white blooms, dried botanical
+                        accents). Vessel is the value driver; flowers
+                        are decorative filler.
+Era:                    Modern (2000s–current decorator arrangement)
+                        [ASSUMPTION]
+Collectability:         modern [ASSUMPTION]
+Condition:              Arrangement appears clean and intact; vessel
+                        not fully visible (mostly covered by flowers).
+Estimated weight:       ~2 lb total  (light tier — <5 lb)
+Estimated dimensions:   vessel ~4 in dia × 5 in tall; full arrangement
+                        ~10 in dia × 12 in tall with flowers
+Distinguishing marks:   Small (~5–6" tall vessel estimate), dark/black
+                        finish on vessel, full silk arrangement on top
+needs_followup_photo:   yes — flowers removed, vessel isolated for
+                        identification (size, maker mark, material).
+
+
+--- Item 4 ---
+Category:               Console table (marble top, carved base)
+Brand:                  19th C. American or French Victorian Rococo
+                        Revival [BEST-CASE]
+Type:                   Marble-top console (or pier) table with
+                        serpentine front edge, heavily carved mahogany
+                        or walnut base, foliate/rocaille carved apron,
+                        carved cabriole or fluted legs [BEST-CASE]
+Era:                    Mid-to-late 19th C. (c.1860–1890) [BEST-CASE]
+Collectability:         antique [BEST-CASE]
+Condition:              Marble top appears smooth and uncracked from
+                        this angle; carved base details intact; finish
+                        on wood shows even color with no obvious losses.
+                        Back / underside / leg joints not assessable.
+Estimated weight:       ~120 lb  (freight tier — 50+ lb; 5× floor
+                        multiplier; effectively "requires-movers")
+Estimated dimensions:   ~40 × 18 × 32 in (W × D × H); marble top alone
+                        ~40 × 18 × 1 in and ~50 lb separately; ships
+                        in two freight crates (top + base)
+Distinguishing marks:   Serpentine white marble top with curved front
+                        edge; deeply carved skirt with floral / rocaille
+                        motifs typical of Victorian Rococo Revival;
+                        ornate carved feet visible at corners; estimated
+                        ~36–44" wide.
+needs_followup_photo:   yes — underside of marble top (for hand-cut
+                        markings vs. machine-cut edges); back of the
+                        wood base (often shows original tool marks and
+                        joinery on antiques); legs and feet close-up;
+                        any drawers or hidden compartments; original
+                        finish vs. refinish assessment.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Authentic 19th C. American or French Rococo Revival console
+       (c. 1860–1890), original marble, original carving, original
+       finish: premium antique tier.
+    2. Late-19th to early-20th C. quality reproduction (Renaissance
+       Revival or late Victorian commercial production): solid mid-tier.
+    3. Mid-20th C. Victorian revival reproduction (1950s–70s decorator
+       furniture, machine-carved): modest tier.
+    4. Modern decorator reproduction (2000s+ import or factory
+       production, marble veneer or composite top): floor tier.
+  How to distinguish:
+    - Marble inspection: authentic 19th C. marble has visible chisel
+      marks on the underside; modern marble has uniform machine-cut
+      edges. Color depth and veining patterns also differ.
+    - Carving: hand-carved details are crisper and slightly irregular,
+      with visible chisel/gouge marks on backs of carved elements;
+      machine-carved details are uniform and symmetrical.
+    - Joinery: dovetailed drawer construction + mortise-and-tenon
+      framing = 19th C.; dowel + screw = 20th C. revival;
+      staple + dowel + particleboard = modern.
+    - Finish: original shellac/varnish (yellowed, possibly crazed) vs.
+      modern polyurethane / paint.
+    - Wear pattern: authentic age shows uneven wear at high-touch
+      points; refinished antiques and modern repros show uniform
+      finish.
+  Price-tier swing: very significant.

@@ -1,0 +1,180 @@
+=== PRICE OUTPUT — Shoot: single-test-polo-blue-logo, 2026-05-26 ===
+
+Mode: single. ONE item being comped.
+Item identification (with USER-CONFIRMED era refinement):
+  Authentic Polo Ralph Lauren Fall 1981 flagship catalog,
+  logo-only cover (dark blue/teal ground, gold polo-player
+  silhouette). Era is no longer [BEST-CASE] — user-confirmed as
+  Fall 1981.
+Search strategy: PARALLEL — Source A (WebSearch) + Source B (eBay
+  direct via Claude in Chrome) BOTH ran with the corrected
+  Fall 1981 date.
+
+======================================================================
+MAX SUPPORTED PRICE: $214
+Anchored on the Fall 1977 vol. 2 sold comp — the closest direct
+era-peer in the market (early-era pre-1985 Polo RL catalog).
+No exact-match Fall 1981 comp found in either source.
+Awaiting user approval.
+======================================================================
+
+
+─── SOURCE A — WebSearch ───
+
+Query: "'Polo Ralph Lauren' 'Fall 1981' catalog vintage sold eBay
+        price"
+
+Result: NO Fall 1981 specific listing surfaced. WebSearch returned
+general Polo RL vintage clothing category pages and the eBay
+"Ralph Lauren Catalog" category page, but no specific Fall 1981
+catalog sold price recoverable via WebSearch indexing.
+
+WebSearch headline finding for Fall 1981 specifically: no comp.
+
+
+─── SOURCE B — eBay direct (Claude in Chrome) ───
+
+Search URL: https://www.ebay.com/sch/i.html?_nkw=Polo+Ralph+Lauren+Fall+1981+catalog&LH_Sold=1&LH_Complete=1&_sop=3
+
+eBay returned: "0 results for Polo Ralph Lauren Fall 1981 catalog"
+— explicit zero exact-match. "No exact matches found" surfaced on
+the page. eBay also offered "Save this search to receive email
+alerts when new items are available" — useful for the user as a
+passive watch.
+
+Adjacent Polo RL catalog comps surfaced under "Results matching
+fewer words":
+
+Closest direct era-peer (KEY ANCHOR for the Fall 1981 estimate):
+
+  $214  — "RALPH LAUREN POLO VINTAGE CATALOGUE Fall 1977 volume 2
+          Very Good vintage cond."
+          Sold: May 5, 2026. New (Other).
+          Match note: SAME ERA as our item (Fall 1977 vs. Fall 1981
+          — both pre-1985 early-era Polo RL flagship catalogs).
+          The market doesn't fine-grain differentiate within the
+          early-era (pre-1985) Polo RL catalog category — this is
+          the strongest era-peer comp available.
+          URL: https://www.ebay.com/sch/i.html?_nkw=Polo+Ralph+Lauren+Fall+1981+catalog&LH_Sold=1&LH_Complete=1&_sop=3
+
+Broader Polo RL catalog comp range (for context):
+
+  $300  — "POLO RALPH LAUREN On Safari Illustrated Catalog"
+          Sold May 20, 2026. New (Other). BO accepted. Themed
+          catalog — not era-peer.
+  $280  — "POLO Ralph Lauren Fall 1991 store catalog"
+          Sold Mar 11, 2026. Was $350, BO accepted. Store-edition
+          framing. Era is 1991 — 10 years later than our item.
+  $225  — "Polo Ralph Lauren Spring Illustrated Fashion Catalog
+          Booklet"
+          Sold May 23, 2026. New (Other).
+  $200  — "POLO RALPH LAUREN Illustrated Fall 1987 Catalog
+          Clothing & Fashion"
+          Sold May 19, 2026. New (Other).
+  $199  — "RALPH LAUREN POLO 1991 CATALOGUE FOR MEN AND WOMEN"
+          Sold Mar 18, 2026. New (Other). BO accepted.
+  $150  — "Polo Ralph Lauren 1986 Spring Home Collection Catalog"
+          Sold May 22, 2026. Pre-Owned. Home theme, not fashion.
+  $110  — "1985 POLO RALPH LAUREN Illustrated Fashion Catalog"
+          Sold May 20, 2026. Pre-Owned.
+  $105  — "Rare 1986 POLO RALPH LAUREN Fall Catalog (Bruce Weber)"
+          Sold May 23, 2026. New (Other). BO accepted.
+  $100  — "Polo Ralph Lauren 1989 Fall Illustrated Catalog"
+          Sold May 23, 2026. Pre-Owned. BO accepted.
+
+(All URLs reachable from the eBay sold-listings search page
+linked above.)
+
+
+─── CROSS-REFERENCE ───
+
+- Both sources: no exact Fall 1981 comp exists in the current
+  90-day eBay sold-listings window.
+- Source A unique: nothing useful for Fall 1981 specifically.
+- Source B unique: the $214 Fall 1977 vol. 2 comp — strongest
+  era-peer available for our Fall 1981 item.
+- Sources agree: Fall 1981 is a rare year on the secondary market.
+  Pre-1985 early-era Polo RL flagship catalogs do not surface
+  frequently; the Fall 1977 vol. 2 is the only pre-1985 comp in
+  the current sold-listings index.
+
+
+─── PRICE BRACKET (provisional — awaiting user approval) ───
+
+  Direct era-peer comp:           $214 (Fall 1977 vol. 2)
+  Mid-80s adjacent comp:          $200 (Fall 1987)
+  Late-era ceiling reference:     $280 (Fall 1991 store catalog —
+                                  not era-peer, store-attributed)
+  Themed-catalog ceiling:         $300 (On Safari — themed,
+                                  not era-peer)
+
+  Suggested max supported price:  $214
+  Reasoning: Fall 1977 vol. 2 is the closest direct era-peer
+  comp — both are pre-1985 early-era Polo RL flagship catalogs.
+  The market doesn't fine-grain differentiate within this
+  early-era category; $214 is a clean anchor.
+
+  Push-high alternative:          $225–$250
+  Reasoning: Fall 1981 has additional collectability that the
+  generic $214 comp may not capture:
+    - It's a SPECIFIC year (1981) which is highly searchable for
+      collectors targeting that year specifically (e.g., birth-year
+      Polo collectors)
+    - It's the EARLIEST identifiable Polo RL catalog era (Fall
+      1977, Fall 1981, then a gap until mid-80s in the surfaced
+      comps) — rarity premium plausible
+    - The Spring Illustrated ($225) shows recent buyers paying
+      $225 for pre-themed flagship catalogs in good condition
+  $225 anchors against the Spring Illustrated and adds an early-
+  era premium against the Fall 1977 comp.
+
+  Conservative alternative:       $175–$200
+  Reasoning: $200 is the Fall 1987 anchor — a few years later
+  than Fall 1981 but a confirmed sold price for a "vintage Polo
+  RL flagship catalog." Conservative if you want to lead with a
+  defensible-no-objection price.
+
+
+─── DATA-QUALITY NOTE ───
+
+The corrected user-supplied date (Fall 1981) is a significantly
+better anchor for comping than the prior "late 1980s to early
+1990s [BEST-CASE]" range. With Fall 1981 confirmed:
+  - The closest market peer is the Fall 1977 vol. 2 ($214) — not
+    the 1985–1991 era comps.
+  - The catalog falls into the "early-era pre-1985 Polo RL"
+    sub-segment, which is rarer than the 1985+ catalogs that
+    dominate the current sold-listings index.
+  - A buyer specifically searching for "Polo Ralph Lauren Fall
+    1981" will find this listing through the title — the era-
+    specificity is a real SEO advantage.
+
+Saving an eBay search for "Polo Ralph Lauren Fall 1981 catalog"
+(passive watch) will help track if/when another Fall 1981 comp
+surfaces in the future. eBay offered this option directly on the
+search page.
+
+
+─── RESEARCH NOTES — Item 1 ───
+
+Authenticity & fakes:
+  No authentication concern — Polo RL vintage catalogs are not
+  commercially reproduced.
+
+Listing restrictions & legal issues:
+  No restrictions. Standard vintage paper ephemera. Media Mail
+  eligible domestically.
+
+Known scams & buyer issues:
+  - "Missing pages / hidden damage" remains the dominant return
+    risk. Full leaf-through pre-listing photos head this off.
+
+Authentication services available:
+  N/A.
+
+Disclosure recommendations:
+  - Page count (open INVESTIGATE question)
+  - Any interior damage (open INVESTIGATE question)
+  - Cover creasing (visible in photos 1, 3 — disclose explicitly)
+  - Era now USER-CONFIRMED as Fall 1981 — title can lead with
+    this specificity for SEO benefit

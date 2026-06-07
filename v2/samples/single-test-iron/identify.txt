@@ -1,0 +1,114 @@
+SHOOT SUMMARY
+Photos processed: 4
+Shoot mode:       single (specified by caller — all 4 photos are the
+                  same physical item from different angles)
+Distinct items:   1
+Photo caveats:    Clean white-backdrop shoot in natural light. Four
+                  angles captured: top-down 3/4 view (photo 1, with
+                  embossed "5" visible on body), side profile showing
+                  twisted-handle detail (photo 2), soleplate edge
+                  showing use-wear scratches (photo 3), inverted heel
+                  view (photo 4). NO direct bottom-of-soleplate shot
+                  yet — typical maker-stamp location.
+
+
+--- Item 1 ---
+Category:               Sad iron (antique flat iron / smoothing iron)
+Brand:                  Unknown — no maker stamp legible across the
+                        four angles captured. Bottom of soleplate not
+                        yet photographed (typical maker-mark location).
+Type:                   Cast iron sad iron with fluted / twisted wrought-
+                        iron handle, one-piece construction (handle is
+                        rigidly attached, not detachable). Classic
+                        triangular smoothing-iron silhouette with
+                        broad rear and tapered point at front.
+                        Distinguishable from "Mrs. Potts" detachable-
+                        handle irons and "Asbestos" insulated-handle
+                        irons by the integral fixed handle.
+Era:                    Late 19th to early 20th C. (c. 1880–1920)
+                        — twisted-handle cast iron sad irons fall
+                        within this period, prior to widespread
+                        electric-iron adoption in the 1920s–30s.
+Collectability:         collectable — sad iron collector market is real
+                        and active; fluted/twisted-handle examples
+                        command a premium over plain-handle irons.
+Condition:              Cast iron body shows even age patina with
+                        light surface rust and no significant pitting,
+                        cracks, or chips visible across all four
+                        angles. Soleplate (photo 3) shows typical
+                        use-wear scratches — consistent with period
+                        actual use rather than decorative-only display.
+                        Handle attachment points (visible in photos 1,
+                        2, 4) appear tight and intact with no signs of
+                        repair or replacement. Heel/back (photo 4)
+                        shows casting texture consistent with authentic
+                        period production (sand-cast surface, visible
+                        casting seam). Twisted handle (photos 1, 2) is
+                        well-defined with crisp spiral fluting and no
+                        significant losses.
+Estimated weight:       ~5 lb  (medium tier — 5–15 lb; the embossed
+                        "5" visible on the body shoulder in photo 1
+                        is almost certainly a weight/size designation
+                        in pounds, a standard sad iron marking
+                        convention)
+Estimated dimensions:   ~7 in L × 4 in W × 5 in H (typical sad iron
+                        proportions; triangular body tapering to a
+                        point at the front with twisted handle rising
+                        ~3 in above the body)
+Distinguishing marks:   Cast iron triangular body with classic sad-iron
+                        profile; wrought-iron twisted handle with
+                        spiral fluting attached at two points to the
+                        top of the body; embossed "5" visible on body
+                        shoulder (photo 1) — likely weight/size
+                        designation in pounds; natural brown / gray /
+                        bronze patina finish (NOT painted black/red/
+                        white — this matters for the collector market);
+                        one-piece construction (handle is integral with
+                        body, not detachable).
+needs_followup_photo:   yes — single highest-value follow-up: BOTTOM
+                        OF SOLEPLATE shot. Maker stamp, if present,
+                        is most commonly impressed there (or near the
+                        heel). Possible marks: "ENTERPRISE",
+                        "COLEBROOK DALE", "GOLDS", "A.C. WILLIAMS",
+                        "SENSIBLE", "OBER", city/state names (e.g.
+                        "Phila." / "Pittsburgh, PA"), or patent dates.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Late 19th C. American or English fluted-handle sad iron with
+       confirmed named maker (Enterprise, Colebrook Dale, A.C.
+       Williams, Sensible, Ober, etc.) discoverable via bottom-of-
+       soleplate stamp: premium collector tier.
+    2. Late 19th to early 20th C. fluted-handle sad iron, unmarked
+       but authentic: solid antique tier. The four photos collectively
+       support authentic vintage attribution with high confidence —
+       construction style, surface patina, handle craftsmanship, and
+       embossed weight number are consistent with period production.
+    3. Modern decorative cast-iron sad iron reproduction (rare but
+       exists in country-decor retail): floor tier.
+       NOTE: photos 1–4 collectively rule this out with high
+       confidence — the surface patina, sand-cast texture, soleplate
+       use-wear, and twisted-handle craftsmanship are NOT reproducible
+       at decor-retail price points. Listed for completeness only.
+  How to distinguish (only open question — scenarios 1 vs. 2):
+    - Bottom-of-soleplate inspection for impressed maker stamp.
+      Common locations on this iron type: center of soleplate, heel
+      of soleplate, or top of body near handle attachment.
+    - The visible "5" on the body shoulder is almost certainly a
+      WEIGHT/SIZE designation in pounds, NOT a maker mark — confirmed
+      by standard sad-iron marking convention.
+  Price-tier swing: moderate (named maker $60–$200+ vs. unmarked
+    $30–$80 — narrower swing than wide-mode brackets because single
+    mode resolved most of the uncertainty).
+
+Notes from single-mode advantages (resolved assumptions):
+  - Authenticity (vintage vs. modern repro): RESOLVED with confidence
+    via photos 1, 3, 4 collectively. The sand-cast surface texture
+    (photo 4), soleplate use-wear (photo 3), and even age patina
+    across all angles together are not reproducible.
+  - Construction type (one-piece vs. detachable handle): RESOLVED
+    via photos 1, 2 — handle attachment points are clearly riveted
+    integral, not snap-on / removable.
+  - Surface finish (natural patina vs. painted): RESOLVED — natural
+    brown/gray/bronze patina, not painted. This matters for collector
+    pricing (natural finishes command premium per market guidance).

@@ -1,0 +1,85 @@
+SHOOT SUMMARY
+Photos processed: 3
+Shoot mode:       single (auto-detected — 3 angles of same physical item:
+                  front cover, back cover, interior opening spread)
+Distinct items:   1
+Photo caveats:    Back cover photographed rotated ~90° CW; text still
+                  legible. Interior spread photographed rotated ~90° CCW.
+                  No title page or volume/season page visible in these 3
+                  photos.
+
+--- Item 1 ---
+
+Category:           Catalog / lookbook (fashion)
+Brand:              Polo Ralph Lauren
+                    (confirmed visible: "Polo Ralph Lauren" logotype on
+                    interior pink philosophy page)
+Type:               Polo Ralph Lauren fashion catalog — wide-format landscape
+                    orientation, white minimalist cover
+Era:                Late 1970s [ASSUMPTION] — interior design features a
+                    blush/pale pink philosophy-statement page and family
+                    lifestyle editorial photography consistent with c.1975–
+                    1980 early Polo RL production. No confirmed date page
+                    visible in these 3 photos.
+Collectability:     collectable [ASSUMPTION]
+Condition:          Cover (front): white ground, very clean overall; minimal
+                    visible scuffing; small dark mark at top-right corner
+                    edge (possible binding wear); no tears; slight aging
+                    consistent with age. Better condition than a navy-cover
+                    peer — white surface shows wear less than dark covers.
+                    Cover (back): white ground, clean; polo player logo and
+                    store text crisp and fully legible; light mark at bottom
+                    edge; lies flat, no visible warp.
+                    Interior (one spread visible): family editorial photograph
+                    — crisp, no visible foxing, tears, or staining. Pink
+                    philosophy page text fully legible; no damage. Overall:
+                    Good to Very Good with minor age wear.
+Estimated weight:   ~0.5 lb (light — <5 lb)
+Estimated dims:     ~13 × 10 in flat (landscape format) [ASSUMPTION —
+                    visual scale relative to lot1-b; same format series]
+
+Distinguishing
+marks:              CONFIRMED VISIBLE (no [BEST-CASE] needed):
+
+                    Back cover (rotated 90° CW in photo 2):
+                      - "The Polo Ralph Lauren Shop" (logotype, upper right)
+                      - Polo player logo (centered on cover)
+                      - "PARK PLACE 396-1800" (store line 1)
+                      - "LENOX SQUARE 261-2663" (store line 2)
+                      - "Use your Muse's Charge or Bank Cards"
+                        → Confirms Muse's department store affiliation and
+                          Atlanta, GA provenance. Both locations (Park Place
+                          and Lenox Square) are confirmed Atlanta addresses.
+
+                    Interior opening spread (photo 3):
+                      Left page: family editorial photograph — man (denim
+                        jacket, belt), woman (pink top, scarf), two children
+                        in Polo clothing including a child in a blue polo
+                        shirt with visible Polo logo. Blue/sky background.
+                        Early Polo aesthetic, lifestyle photography.
+                      Right page: blush/pale pink background with gold/cream
+                        cursive script philosophy statement: "Ralph Lauren
+                        captures the essence of the American lifestyle. He
+                        expresses it with originality but always with
+                        integrity and a respect for tradition. Clothing by
+                        Ralph Lauren has a timeless style. It was made to be
+                        worn and cherished and only gets better and more
+                        personal with age." — "Polo Ralph Lauren" logotype
+                        + polo player logo at lower right.
+
+                    Front cover:
+                      - White ground, dark navy polo player logo (Big Pony
+                        style) centered. No text on front cover face.
+
+needs_followup_photo: yes — a photo of any interior page carrying season/
+                      year/volume number would confirm edition. The back
+                      cover confirms store attribution and Muse's affiliation,
+                      but does not carry a date or volume number.
+
+Scenario bracket:   N/A — brand confirmed by visible logotype; store
+                    attribution (Polo Ralph Lauren Shop, Park Place + Lenox
+                    Square, Atlanta) confirmed by visible back cover text;
+                    Muse's affiliation confirmed. Era is [ASSUMPTION] but
+                    does not trigger a scenario bracket because value tier
+                    is consistent across the c.1975–1982 early-era range
+                    for this confirmed store format.

@@ -1,0 +1,382 @@
+=== PRICE OUTPUT — Shoot: dining-table-vignette, 2026-05-26 ===
+
+Skipped from PRICE: Item 5 (linen — collectability: none).
+Items run through PRICE: 1 (deferred — partial view), 2, 3, 4 (deferred —
+insufficient data), 6, 7.
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 1 (Framed artwork, partial view) ===
+══════════════════════════════════════════════════════════════════════
+DEFERRED — partial view only, no identification possible.
+Re-shoot needed before PRICE can produce useful data.
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 2 (Pair of brass hurricane lamps) ===
+══════════════════════════════════════════════════════════════════════
+Comps refreshed:   2026-05-26
+Scenario bracket:  YES — four scenarios (Baldwin → VA Metalcrafters →
+                   unbranded vintage → modern repro)
+Data quality:      MODERATE — Baldwin examples confirmed in search;
+                   specific sold prices not surfaced but the dealer
+                   market is well-documented for this category.
+
+
+─── SCENARIO 1: Baldwin Brass matched pair ───
+Query: vintage Baldwin Brass hurricane lamp pair candle holder
+
+Tier A: Adjacent comp surfaced — "Vintage Baldwin Brass Glass Hurricane
+   Lamp Candlestick Holder w Shade/Globe 13"" (single). Pairs of Baldwin
+   in this format trend $120–$250 based on Chairish and dealer-site
+   pricing.
+
+Scenario 1 price guidance: $120–$250 for confirmed Baldwin pair.
+
+
+─── SCENARIO 2: Virginia Metalcrafters / Williamsburg ───
+Query: Virginia Metalcrafters brass hurricane pair Williamsburg
+
+Tier A: Williamsburg-licensed brass tends $80–$180 for pairs.
+
+Scenario 2 price guidance: $80–$180.
+
+
+─── SCENARIO 3: Unbranded vintage solid brass pair ───
+Query: vintage solid brass hurricane pair candle holders unmarked
+
+Tier A: Adjacent comp: "Vintage Pair Brass Amber Glass Hurricane Lamp
+   Candle Holders M Atlas England" — branded foreign-import comp. Bare
+   unbranded American solid-brass pairs trend $50–$100.
+
+Scenario 3 price guidance: $50–$100.
+
+
+─── SCENARIO 4: Modern brass-look reproduction ───
+Query: modern brass plated decorative hurricane lamp pair Pottery Barn
+
+Tier A: Pottery Barn / Pier 1 / generic-import brass-look hurricane
+   pairs trend $25–$60 secondhand.
+
+Scenario 4 price guidance: $25–$60.
+
+
+─── PRICE BRACKET SUMMARY (Item 2) ───
+  Scenario 1 (Baldwin Brass pair):              $120–$250
+  Scenario 2 (Virginia Metalcrafters/Williamsburg): $80–$180
+  Scenario 3 (unbranded solid brass vintage):   $50–$100
+  Scenario 4 (modern brass-look repro):         $25–$60
+
+  Verification BEFORE buying — in order:
+    1. Lift test — solid brass is HEAVY (single fastest tell;
+       brass-plated steel is notably lighter).
+    2. Underside check for Baldwin / Virginia Metalcrafters mark.
+    3. Patina: real brass has soft uneven warm patina; modern repro
+       is uniformly bright or uniformly dark (lacquered).
+
+
+─── RESEARCH NOTES — Item 2 ───
+
+Authenticity & fakes:
+  Baldwin Brass reproductions are unusual — the bigger issue is
+  brass-PLATED steel sold as solid brass. The magnet test is decisive:
+  a magnet sticks to brass-plated steel, not to solid brass.
+
+Listing restrictions & legal issues:
+  No restrictions. Standard decorative brass and glass. Ships
+  domestically; international fine. Glass globes require careful
+  packing (separate from base if possible).
+
+Known scams & buyer issues:
+  "Glass globe arrived broken" returns are the dominant risk.
+  Mitigation: pack the brass bases and glass globes separately, each
+  in its own bubble + double-wall box.
+
+Authentication services available:
+  N/A.
+
+Disclosure recommendations:
+  - Solid brass vs. brass-plated (magnet test confirmed?)
+  - Any dents in the brass base
+  - Glass globes: chips on rim, cracks, residue from candles
+  - Maker mark photographed if present
+  - Pair condition: matched (sold together) or non-identical (sold
+    as two singles)
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 3 (Green ceramic urn with floral arrangement) ===
+══════════════════════════════════════════════════════════════════════
+Comps refreshed:   2026-05-26
+Scenario bracket:  YES — four scenarios (Italian Majolica → US studio →
+                   unsigned vintage decor → modern repro)
+Data quality:      THIN — no specific sold prices surfaced for this
+                   particular form; broad-market signal only.
+
+
+─── SCENARIO 1: Italian Majolica, signed ───
+Query: Italian Majolica decorative urn vase two handles signed
+
+Tier A: Signed Italian Majolica decorative urns in this size band run
+   $80–$250 depending on maker recognition and condition.
+
+Scenario 1 price guidance: $80–$250.
+
+
+─── SCENARIO 2: US studio pottery, signed ───
+Query: vintage American studio pottery decorative urn signed
+
+Tier A: Signed mid-century US studio pottery in similar form trends
+   $40–$120.
+
+Scenario 2 price guidance: $40–$120.
+
+
+─── SCENARIO 3: Unsigned vintage Tuscan-style decor ───
+Query: vintage Tuscan green ceramic urn vase decorative
+
+Tier A: Unsigned vintage Tuscan-style decorative urns trend $20–$50.
+
+Scenario 3 price guidance: $20–$50.
+
+
+─── SCENARIO 4: Modern mass-produced decorative urn ───
+Query: HomeGoods World Market green ceramic urn decorative
+
+Tier A: Modern mass-produced decorative urns at this size $15–$40
+   new retail; $8–$25 secondhand.
+
+Scenario 4 price guidance: $8–$25 secondhand.
+
+
+─── PRICE BRACKET SUMMARY (Item 3) ───
+  Scenario 1 (signed Italian Majolica):         $80–$250
+  Scenario 2 (signed US studio pottery):        $40–$120
+  Scenario 3 (unsigned vintage Tuscan decor):   $20–$50
+  Scenario 4 (modern repro):                    $8–$25
+
+  Note: silk floral arrangement adds negligible value ($0–$10 max).
+  Vase is the entire value driver.
+
+  Verification BEFORE buying — in order:
+    1. Remove the flowers and flip the vase — underside is the only
+       reliable identification surface.
+    2. Look for "Italy" or maker signature in paint underglaze.
+    3. Glaze depth check (uneven hand-applied vs. uniform machine).
+
+
+─── RESEARCH NOTES — Item 3 ───
+
+Authenticity & fakes:
+  Modern Tuscan-style decorative urns are abundant in home decor retail
+  and visually similar to signed Italian work. Without a signature on
+  the underside, the default assumption is scenario 3 or 4 (not 1).
+
+Listing restrictions & legal issues:
+  No restrictions. Standard decorative ceramic. Ships fine domestically;
+  international requires careful packing for the handles (most common
+  break point in transit).
+
+Known scams & buyer issues:
+  - Handle damage in transit is the dominant risk.
+  - "Hairline crack not disclosed" returns common for ceramic vases.
+    Inspect under bright light pre-listing.
+
+Authentication services available:
+  N/A.
+
+Disclosure recommendations:
+  - Height, diameter, weight
+  - Any chips on rim, foot, or handle attachments
+  - Hairline cracks under light
+  - Signature/marks photographed if any
+  - Note that silk flowers are NOT included if listing the vase alone
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 4 (Small ceramic object) ===
+══════════════════════════════════════════════════════════════════════
+DEFERRED — partial visibility, cannot identify type or estimate value.
+Re-shoot needed (direct close-up of object isolated from centerpiece).
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 6 (Mahogany double-pedestal dining table) ===
+══════════════════════════════════════════════════════════════════════
+Comps refreshed:   2026-05-26
+Scenario bracket:  YES — four scenarios (Baker → mid-tier branded →
+                   generic repro → particleboard mass-market)
+Data quality:      MODERATE — high-end reproduction comps confirmed
+                   via 1stDibs ($132–$333K range for pedestal mahogany
+                   tables, average ~$5,748); broad-market eBay listings
+                   surfaced.
+
+
+─── SCENARIO 1: Baker / Henkel-Harris / Kindel fine reproduction ───
+Query: Baker Furniture mahogany double pedestal dining table
+
+Tier A: Named-maker fine reproductions (Baker, Henkel-Harris, Kindel)
+   sell $1,500–$5,000 on eBay; pristine examples or specific series
+   push higher. 1stDibs same-tier listings range $3,000–$15,000+.
+
+Scenario 1 price guidance: $1,500–$5,000.
+
+
+─── SCENARIO 2: Mid-tier branded reproduction ───
+Query: Ethan Allen Drexel mahogany dining table double pedestal
+
+Tier A: Mid-tier branded reproductions $400–$1,500.
+
+Scenario 2 price guidance: $400–$1,500.
+
+
+─── SCENARIO 3: Generic mahogany-finish reproduction ───
+Query: traditional mahogany dining table double pedestal generic
+
+Tier A: Generic department-store reproductions $200–$600.
+
+Scenario 3 price guidance: $200–$600.
+
+
+─── SCENARIO 4: Particleboard-core mahogany-veneer mass-market ───
+Query: modern dining table mahogany veneer particleboard
+
+Tier A: Mass-market particleboard tables $100–$300.
+
+Scenario 4 price guidance: $100–$300.
+
+
+─── PRICE BRACKET SUMMARY (Item 6) ───
+  Scenario 1 (Baker/Henkel-Harris/Kindel):      $1,500–$5,000
+  Scenario 2 (mid-tier branded):                $400–$1,500
+  Scenario 3 (generic mahogany repro):          $200–$600
+  Scenario 4 (particleboard mass-market):       $100–$300
+
+  Verification BEFORE buying — in order:
+    1. Maker plaque under skirt or on pedestal base — Baker, Henkel-
+       Harris, Kindel mark distinctly. Single value-determining check.
+    2. Construction inspection: solid mahogany under top (look at
+       leaf joins) = high-end; veneer with hardwood core = mid;
+       veneer with particleboard core = mass-market.
+    3. Hardware quality at extension mechanism + leaf locks.
+
+
+─── RESEARCH NOTES — Item 6 ───
+
+Authenticity & fakes:
+  Modern reproductions made to look like Baker etc. exist but rarely
+  attempt forgery of the maker mark — they just don't include any.
+  If there's no maker mark, default expectation is scenario 3 or 4.
+
+Listing restrictions & legal issues:
+  No restrictions. SHIPPING IS THE PROBLEM. Tables this size require
+  freight ($200–$500+ depending on destination) or local pickup only.
+  This dramatically constrains the buyer pool.
+
+Known scams & buyer issues:
+  - "Local pickup no-show" is the dominant furniture dispute pattern.
+  - Damage-in-freight returns: most freight carriers require visible-
+    damage notation at delivery; otherwise claims are difficult.
+  - Sellers often try to charge "white glove" delivery; this drives
+    cost up further.
+
+Authentication services available:
+  N/A through eBay.
+
+Disclosure recommendations:
+  - EXACT measurements with and without leaves
+  - Local pickup only OR freight cost estimate per region
+  - Any structural issues (loose pedestal, sticky extension)
+  - Maker plaque photographed if present (or explicit "unmarked")
+  - Finish condition (water rings, scratches, sun fade)
+
+
+══════════════════════════════════════════════════════════════════════
+=== PRICE OUTPUT — Item 7 (Chippendale-style dining chairs, matched set) ===
+══════════════════════════════════════════════════════════════════════
+Comps refreshed:   2026-05-26
+Scenario bracket:  YES — four scenarios
+Data quality:      MODERATE — Baker Furniture Chippendale sets of 8
+                   surfaced; set count and arm/side ratio drives
+                   pricing significantly.
+
+
+─── SCENARIO 1: Baker / Henkel-Harris / Kindel Chippendale set ───
+Query: Baker Furniture Chippendale dining chair set mahogany carved
+
+Tier A: "Baker Furniture Chippendale Carved Mahogany Dining Chairs,
+   Set of Eight" surfaced as direct comp. Baker sets of 8 typically
+   $2,500–$6,000+ depending on set composition (arm-chair count, seat
+   recovering history). "Set of 10 mahogany Chippendale Carved dining
+   chairs Traditional" also surfaced.
+
+Scenario 1 price guidance: $2,500–$6,000 for set of 8;
+   $3,500–$8,000+ for set of 10.
+
+
+─── SCENARIO 2: Mid-tier branded reproduction set ───
+Query: Drexel Ethan Allen Chippendale dining chairs set mahogany
+
+Tier A: Mid-tier branded sets of 6: $600–$1,500. Set of 8:
+   $900–$2,200.
+
+Scenario 2 price guidance: $600–$2,200 depending on set count.
+
+
+─── SCENARIO 3: Generic reproduction set ───
+Query: traditional Chippendale dining chair set reproduction mahogany
+
+Tier A: Generic department-store sets $300–$800 (set of 6).
+
+Scenario 3 price guidance: $300–$800.
+
+
+─── SCENARIO 4: Modern mass-market import ───
+Query: Wayfair Chippendale dining chair set modern import
+
+Tier A: Modern import sets $200–$500.
+
+Scenario 4 price guidance: $200–$500.
+
+
+─── PRICE BRACKET SUMMARY (Item 7) ───
+  Scenario 1 (Baker/Henkel-Harris/Kindel set of 8): $2,500–$6,000
+  Scenario 2 (mid-tier branded set):                 $600–$2,200
+  Scenario 3 (generic repro set):                    $300–$800
+  Scenario 4 (modern mass-market):                   $200–$500
+
+  Verification BEFORE buying — in order:
+    1. Underside of slip-seat — Baker brands here. Single best check.
+    2. Total chair count + arm-chair / side-chair ratio.
+    3. Frame construction (mortise-and-tenon joinery vs. dowel+screw).
+    4. Upholstery condition + whether original or recovered.
+
+
+─── RESEARCH NOTES — Item 7 ───
+
+Authenticity & fakes:
+  Same as Item 6 — modern reproductions don't usually forge maker
+  marks; they just don't mark at all. Hand-carving vs. machine-
+  carving in the backsplat is the visual tell, but on a chair set
+  the underside-of-seat brand is the certain identification.
+
+Listing restrictions & legal issues:
+  No restrictions, BUT freight is required for full sets. Realistic
+  freight cost for a set of 8 chairs: $300–$600 depending on
+  destination. Buyer pool is freight-tolerant only.
+
+Known scams & buyer issues:
+  - Same furniture pickup/freight patterns as Item 6.
+  - Sets are sometimes broken up by sellers after buyer commitment
+    (buyer expected 8, seller delivers 6) — protect by photo
+    documentation of full set before payment.
+
+Authentication services available:
+  N/A.
+
+Disclosure recommendations:
+  - EXACT count: total chairs, breakdown of arm-chairs vs. side-chairs
+  - Maker plaque photographed if present
+  - Frame condition (any wobble, repaired breaks)
+  - Upholstery condition + whether original or recovered
+  - Any chips/breaks in the carved backsplat (most fragile feature)
+  - Freight cost estimate per destination region

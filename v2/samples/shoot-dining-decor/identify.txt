@@ -1,0 +1,260 @@
+SHOOT SUMMARY
+Photos processed: 1
+Distinct items:   7
+Photo caveats:    Single overview shot of a formal dining table vignette
+                  (estate-sale-style scene). Hurricane lamps flank a
+                  centerpiece floral arrangement; framed art partially
+                  visible on back wall; dining table and chairs are
+                  visible but may be either inventory OR the display
+                  setting. Resolve at shoot location.
+
+
+--- Item 1 ---
+Category:               Framed artwork (partial view)
+Brand:                  Unknown — frame and image not legible
+Type:                   Apparently a black-and-white photograph or print
+                        in a dark frame
+Era:                    Unknown
+Collectability:         Unknown
+Condition:              Not assessable
+Estimated weight:       unknown — needs full view
+Estimated dimensions:   unknown — needs full view
+Distinguishing marks:   Only a corner visible at top-left of frame; image
+                        appears to show a figure but is not legible
+needs_followup_photo:   yes — straight-on shot of the full artwork, plus
+                        any signature/title plaque, plus close-up of any
+                        gallery label or signature on the back.
+
+
+--- Item 2 ---
+Category:               Decorative candleholders / hurricane lamps (matched pair)
+Brand:                  Baldwin Brass [BEST-CASE]
+Type:                   Solid brass hurricane lamp pair with clear cylindrical
+                        glass globes — classic Williamsburg / Federal
+                        decorative style [BEST-CASE]
+Era:                    Mid-to-late 20th C. [BEST-CASE]
+Collectability:         vintage [BEST-CASE]
+Condition:              Both pieces appear intact from this angle; brass
+                        shows soft warm patina (no aggressive tarnish or
+                        verdigris visible); glass globes appear clear and
+                        uncracked; matched pair, identical design.
+Estimated weight:       ~7 lb pair  (medium tier — 5–15 lb)
+Estimated dimensions:   each ~5 in dia base × 10 in h; pair packs in two
+                        ~8 × 8 × 12 in cartons (globes separate from bases
+                        for transit)
+Distinguishing marks:   Round substantial brass bases (~5" diameter
+                        estimate), turned brass stems, removable clear
+                        glass cylindrical globes/shades. Treated as ONE
+                        record per matched-pair grouping rule.
+needs_followup_photo:   yes — underside of one base for maker stamp
+                        (Baldwin, Virginia Metalcrafters, Williamsburg-
+                        licensed mark, or country-of-origin stamp);
+                        close-up of brass detail near the cup; close-up
+                        of one glass globe edge for chips.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Baldwin Brass (premium American brass-makers brand, often
+       hallmarked or signed), matched pair, vintage: premium tier.
+    2. Virginia Metalcrafters / Williamsburg-licensed brass, vintage:
+       solid mid-tier collectable.
+    3. Unbranded solid brass vintage hurricane pair, mid-20th C.:
+       modest vintage tier.
+    4. Modern brass-look decorative reproduction (Pottery Barn / Pier 1
+       legacy / generic import), 2000s+: floor tier.
+  How to distinguish:
+    - Lift one — solid brass is HEAVY; brass-plated steel is notably
+      lighter. Single fastest tell.
+    - Underside check: Baldwin marks "Baldwin" with the maker mark in
+      relief; Virginia Metalcrafters marks "V.M." with model number;
+      modern repros are unmarked or have "Made in China/India" sticker.
+    - Patina: real brass develops a soft uneven warm patina that
+      cannot be fully reproduced — modern repros look uniformly bright
+      OR uniformly dark (lacquered).
+  Price-tier swing: significant (Baldwin pair $150–$300 vs. modern
+    decorative pair $25–$60).
+
+
+--- Item 3 ---
+Category:               Decorative floral arrangement (silk flowers in
+                        ceramic urn)
+Brand:                  Unknown — vase not signed visible
+Type:                   Dark green glazed ceramic urn with twin handles,
+                        decorated with silk floral arrangement. Vase is
+                        the value driver; silk flowers are decorative
+                        filler with negligible individual resale value.
+                        [BEST-CASE qualifier applies to vase only]
+Era:                    Vase: 1990s–2010s decorator-pottery era
+                        [ASSUMPTION]. Flowers: contemporary silk.
+Collectability:         vintage [BEST-CASE — if signed Italian Majolica;
+                        otherwise modern decor]
+Condition:              Vase appears intact; glaze glossy and even;
+                        flowers appear clean (recently arranged or
+                        well-kept). Cannot assess vase interior or base.
+Estimated weight:       ~4 lb total  (light tier — <5 lb); vase alone ~3 lb
+Estimated dimensions:   vase ~6 in dia × 9 in tall; full arrangement
+                        ~12 in dia × 14 in tall with flowers
+Distinguishing marks:   Vase is dark sage/forest green with two scrolled
+                        handles, about 8–10" tall estimate. Decorative
+                        rather than utilitarian profile. Silk flowers
+                        include what appears to be hydrangea, berry
+                        sprays, and seasonal foliage.
+needs_followup_photo:   yes — flowers removed, underside of vase for
+                        maker stamp / "Made in Italy" mark / Bitossi /
+                        Majolica signature.
+
+Scenario bracket (vase only):
+  Scenarios (best → worst):
+    1. Italian Majolica or hand-painted Italian decorative urn, signed:
+       premium decorator tier.
+    2. Vintage US studio-pottery decorative urn, signed: solid mid-tier.
+    3. Unsigned vintage Tuscan-style ceramic decor, 1990s–2000s:
+       modest tier.
+    4. Modern mass-produced decorative urn (HomeGoods, World Market,
+       Pier 1 legacy): floor tier.
+  How to distinguish:
+    - Underside check: Italian work often marked "Italy" with maker
+      name or paint-marked signature.
+    - Glaze depth: hand-glazed Majolica has slight unevenness in
+      thickness and tone; modern mass-produced is uniform.
+    - Hand-painting marks: visible brush strokes on glaze =
+      hand-finished; uniformly molded color = mass-produced.
+  Price-tier swing: significant (signed Italian Majolica $80–$250 vs.
+    modern repro $15–$40).
+
+
+--- Item 4 ---
+Category:               Small ceramic decorative object (figurine,
+                        votive, or salt cellar)
+Brand:                  Unknown
+Type:                   Cannot determine — small white/cream object
+                        partly hidden by the larger items
+Era:                    Unknown
+Collectability:         vintage [ASSUMPTION — pending identification]
+Condition:              Cannot assess from this angle
+Estimated weight:       unknown — needs full view (visible size suggests
+                        <1 lb, light tier likely)
+Estimated dimensions:   unknown — needs full view (visible portion <4 in
+                        in largest dimension)
+Distinguishing marks:   Small (<4" estimate), white or cream colored,
+                        partially obscured behind the ceramic urn
+needs_followup_photo:   yes — direct close-up of this object isolated
+                        from the centerpiece. Cannot meaningfully
+                        identify without it.
+
+
+--- Item 5 ---
+Category:               Linen / decorative napkin (modern utility item)
+Brand:                  Unknown
+Type:                   Small folded white linen, likely a decorative
+                        napkin or doily used as part of the table
+                        vignette display
+Era:                    Modern
+Collectability:         none (not for sale) — decorative table linen
+                        with negligible individual resale value;
+                        possibly the seller's own display prop, not
+                        inventory
+Condition:              Appears clean and folded
+Estimated weight:       <1 lb  (light tier — <5 lb)
+Estimated dimensions:   ~6 × 4 × 1 in folded
+Distinguishing marks:   White or cream linen, folded; possibly
+                        embroidered (not legible from this angle)
+needs_followup_photo:   no (not pursuing)
+
+
+--- Item 6 ---
+Category:               Dining table (mahogany, traditional formal
+                        dining)
+Brand:                  Baker Furniture [BEST-CASE]
+Type:                   Mahogany double-pedestal dining table, traditional
+                        style with carved details, likely 84"+ long with
+                        leaves [BEST-CASE]
+Era:                    Late 20th C. fine reproduction [BEST-CASE]
+Collectability:         vintage [BEST-CASE — if Baker / Henkel-Harris /
+                        Kindel or similar fine reproduction maker]
+Condition:              Top surface visible only; appears free of major
+                        scratches or stains; wood grain shows good finish.
+                        Legs, leaves, base structure not assessable.
+Estimated weight:       ~150 lb  (freight tier — 50+ lb; 5× floor
+                        multiplier; effectively "requires-movers")
+Estimated dimensions:   ~84–108 × 44 × 30 in (W × D × H, with leaves);
+                        top + base may disassemble for freight crating
+Distinguishing marks:   Dark mahogany finish; visible center divide
+                        suggests pedestal-style base or extension
+                        mechanism; appears to seat 8–10 with leaves.
+needs_followup_photo:   yes — close-up of any maker plaque (usually on
+                        underside of skirt or top of pedestal), full
+                        underside view, view with leaves in/out, side
+                        elevation showing pedestal/leg detail.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Baker Furniture / Henkel-Harris / Kindel late-20th-C. fine
+       reproduction (named maker, premium quality): premium tier.
+    2. Mid-tier traditional reproduction (Ethan Allen, Drexel Heritage,
+       similar branded furniture): solid mid-tier.
+    3. Generic mahogany-finish reproduction (department store
+       furniture, no recognizable maker): modest tier.
+    4. Unmarked particleboard-core with mahogany veneer (modern
+       mass-market): floor tier.
+  How to distinguish:
+    - Maker plaque/branding stamp under skirt or on pedestal base —
+      Baker, Henkel-Harris, Kindel all brand prominently.
+    - Construction: solid mahogany throughout = high-end repro;
+      veneered over hardwood = mid-tier; veneered over particleboard
+      = mass-market.
+    - Hardware quality: brass castors, well-fitted leaves, tight
+      joinery = high-end; loose fits, modern plastic glides = low-end.
+  Price-tier swing: significant.
+
+
+--- Item 7 ---
+Category:               Dining chairs (Chippendale-style, matched set)
+Brand:                  Baker Furniture [BEST-CASE]
+Type:                   Carved-back Chippendale-style mahogany dining
+                        chairs, 6–10 piece set with upholstered seats
+                        (red/burgundy fabric visible). Matched set —
+                        treated as ONE record per grouping rule.
+                        [BEST-CASE]
+Era:                    Late 20th C. fine reproduction [BEST-CASE]
+Collectability:         vintage [BEST-CASE]
+Condition:              Chair backs visible, carving appears intact;
+                        upholstery visible from this angle appears clean
+                        and uncrushed. Cannot assess full set count,
+                        joinery, frame integrity, undersides of seats,
+                        or whether arm-chair/side-chair mix.
+Estimated weight:       ~150 lb full set of 8  (~18–20 lb each; freight
+                        tier — 50+ lb total; 5× floor multiplier)
+Estimated dimensions:   each chair ~22 × 22 × 40 in; full set requires
+                        freight crating (~96 × 24 × 42 in pallet)
+Distinguishing marks:   Carved back splats in classic Chippendale ribbon
+                        pattern; turned legs; red/burgundy upholstered
+                        slip-seats; mahogany finish matching the table.
+                        Probable matched set of 6–10 chairs (only 2–3
+                        visible in this shot).
+needs_followup_photo:   yes — full set photograph showing total count;
+                        side view of one chair; underside of slip-seat
+                        (Baker, Henkel-Harris, Kindel mark in this
+                        location); close-up of carving; close-up of leg
+                        joinery; arm-chair vs. side-chair count.
+
+Scenario bracket:
+  Scenarios (best → worst):
+    1. Baker Furniture / Henkel-Harris / Kindel fine-reproduction
+       Chippendale set, late 20th C., maker-marked: premium tier.
+    2. Mid-tier branded reproduction (Drexel, Ethan Allen,
+       Statton, Hickory Chair): solid mid-tier.
+    3. Generic reproduction Chippendale set (department store
+       furniture): modest tier.
+    4. Modern mass-market reproduction (Wayfair / generic import):
+       floor tier.
+  How to distinguish:
+    - Underside of slip-seat: most fine-reproduction makers brand here.
+    - Carving quality: hand-carved details are crisper and slightly
+      irregular; machine-carved is uniform.
+    - Frame construction: dovetailed/mortise-and-tenon joinery =
+      high-end; dowel + screws = mid; staples/glue = low.
+    - Original upholstery vs. recovered: fine-repro chairs are often
+      recovered without harming value; complete original webbing
+      and horsehair stuffing premium for older sets.
+  Price-tier swing: significant.
