@@ -94,14 +94,25 @@ Load each prompt when you reach its phase.
 
 **Post-pipeline (manual trigger only, NOT in the automated run):**
 
-| Step | Prompt | Reads | Effect |
+| Step | How | Reads | Effect |
 |---|---|---|---|
-| LIST/EDIT | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** listing (never published) |
+| LIST/EDIT (**primary**) | `python v2/lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay **DRAFT** via Sell API (never published) |
+| LIST/EDIT (fallback) | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** via Chrome UI |
 
-Function 6 pushes an approved `draft.md` into an eBay draft via Chrome.
-It runs ONLY when the user explicitly asks ("push to eBay draft"), one
-item at a time — never as part of `full`. The no-publish firewall applies:
-terminal action is "Save for later", never "List it".
+Function 6 pushes an approved `draft.md` into an eBay draft. It runs ONLY
+when the user explicitly asks ("push to eBay draft"), one item at a time —
+never as part of `full`. The no-publish firewall applies: the offer is
+created UNPUBLISHED / the UI terminal action is "Save for later" — never
+"List it" / publish.
+
+- **Primary — Sell API (`v2/lib/list_edit.py`).** Headless, full-res photo
+  upload (EPS), one-payload description (no missing-fields bug), idempotent
+  re-sync. Verified end-to-end on sandbox. One-time setup:
+  [v2/lib/SETUP_EBAY_API.md](../v2/lib/SETUP_EBAY_API.md). Use this by
+  default. `--validate <dir>` needs no credentials.
+- **Fallback — Chrome stand-in.** Only when the API isn't set up. Subject to
+  read-tier/sandbox limits and the debounce/trusted-input pitfalls
+  documented in its prompt.
 
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses

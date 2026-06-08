@@ -55,15 +55,22 @@ era-peer, and reports how hard it looked.
       templates/
         listing-v1.md             YAML frontmatter + body (copied from v2)
 
-**Function 6 — LIST/EDIT.** [`prompts/list_edit_chrome.md`](prompts/list_edit_chrome.md)
-pushes an approved `draft.md` into an eBay **draft** via Chrome (never
-publishes; "Save for later" only). It runs on explicit user request, not
-in the automated pipeline. The prompt encodes the lessons from the first
-live run: trust JS DOM state over (lagging) screenshots, click by
-JS label-matching rather than coordinates, never open the variations
-editor, drop inaccurate AI-suggested specifics, and flag photos for
-manual upload when `file_upload` rejects out-of-session paths. The
-eventual eBay Sell API path (`v2/lib/list_edit.py`) supersedes it.
+**Function 6 — LIST/EDIT.** Pushes an approved `draft.md` into an eBay
+**draft** (never publishes). Runs on explicit user request, not in the
+automated pipeline. Two paths:
+
+- **Primary — eBay Sell API** (`v2/lib/list_edit.py --sync <dir>`). Headless
+  and environment-proof: photos upload to EPS server-side, the description
+  is one HTTP field (so the Chrome missing-fields bug can't occur), and
+  re-sync is idempotent. **Verified end-to-end on sandbox** (11 photos, full
+  description, specifics, Best Offer; offer left UNPUBLISHED). One-time
+  setup: [`v2/lib/SETUP_EBAY_API.md`](../v2/lib/SETUP_EBAY_API.md).
+- **Fallback — Chrome stand-in**
+  ([`prompts/list_edit_chrome.md`](prompts/list_edit_chrome.md)). Only when
+  the API isn't set up. Encodes the hard-won UI lessons: trusted-keystroke
+  typing for the rich-text description (synthetic events don't persist),
+  settle-and-verify before save, JS DOM state over lagging screenshots,
+  never open the variations editor, drop inaccurate AI-suggested specifics.
 
 Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
 `list_edit`, `photo_prep`) is unchanged and shared from `v2/lib/` — v3
