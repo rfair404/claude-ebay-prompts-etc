@@ -117,12 +117,28 @@ draft remembers its `ebay_offer_id`).
 
 ---
 
-## Firewall (unchanged)
+## Going live (publish) — explicit and confirmation-gated
 
-`list_edit.py` contains no call to the publish endpoint
-(`POST /sell/inventory/v1/offer/{offerId}/publish`). The offer is created
-and left in eBay's draft state. Publishing is your deliberate manual step
-in Seller Hub. See PLAN.md "No-publish firewall".
+API-created offers are UNPUBLISHED and do **not** appear in the Seller Hub
+"Drafts" tab (that tab is for UI-created drafts). They go live only via the
+publish command — which is a **dry run** unless you add `--confirm`:
+
+```
+python list_edit.py --publish <shoot-dir>            # shows what WOULD go live; publishes nothing
+python list_edit.py --publish <shoot-dir> --confirm  # actually publishes -> real, live listing
+```
+
+On success it prints the listing URL (`ebay.com/itm/<id>`) and writes
+`ebay_listing_id` + `published_at` into the draft.
+
+## Firewall
+
+`--sync` NEVER publishes — it stops at an unpublished offer. Publishing is
+a separate, deliberate, human-run command that does nothing without
+`--confirm`, is never invoked by `--sync`, and is never automatic. That
+preserves the firewall's intent (no accidental or automated publication)
+while giving you a one-command way to take a reviewed offer live. See
+PLAN.md "No-publish firewall".
 
 ## Notes / limits
 

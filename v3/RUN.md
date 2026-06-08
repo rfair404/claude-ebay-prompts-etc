@@ -101,9 +101,11 @@ Load each prompt when you reach its phase.
 
 Function 6 pushes an approved `draft.md` into an eBay draft. It runs ONLY
 when the user explicitly asks ("push to eBay draft"), one item at a time —
-never as part of `full`. The no-publish firewall applies: the offer is
-created UNPUBLISHED / the UI terminal action is "Save for later" — never
-"List it" / publish.
+never as part of `full`. The firewall applies: `--sync` creates an
+UNPUBLISHED offer / the UI terminal action is "Save for later" — never
+auto-publish. Going live is a separate, deliberate command —
+`list_edit.py --publish <dir> --confirm` (dry run without `--confirm`) —
+never invoked by the pipeline or by `--sync`.
 
 - **Primary — Sell API (`v2/lib/list_edit.py`).** Headless, full-res photo
   upload (EPS), one-payload description (no missing-fields bug), idempotent

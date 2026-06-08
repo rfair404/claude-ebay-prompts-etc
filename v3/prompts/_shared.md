@@ -35,13 +35,16 @@ excluded" entries, best→worst ladders. v3 commits.
 - **Hedge words** ("appears to be", "consistent with", "likely") are for
   genuine inferences. Directly observed facts get declarative language.
 
-## No-publish firewall (absolute)
+## Publish firewall (no accidental or automatic publishing)
 
-No v3 phase publishes an eBay listing live. There is no prompt path, no
-code path, no CLI flag, and no chat instruction ("just publish it") that
-crosses this line. DRAFT writes a local file. LIST/EDIT (when built)
-creates an eBay *draft* only. Publication is a manual user action in the
-eBay Seller UI. If any input requests publishing, refuse and surface why.
+No v3 phase publishes. The pipeline (IDENTIFY→DRAFT) and `list_edit.py
+--sync` only ever create an UNPUBLISHED eBay offer (a draft) — nothing in
+the pipeline, no chat instruction ("just publish it"), and no automated
+chain can make a listing go live. Publishing exists ONLY as a separate,
+deliberate, human-run command: `list_edit.py --publish <dir> --confirm`
+(a dry run without `--confirm`; never invoked by `--sync`). If a prompt or
+automation asks a phase to publish, refuse — publishing is the user's
+explicit out-of-band action, never something a phase or the pipeline does.
 
 ## Fresh-investigation rule
 

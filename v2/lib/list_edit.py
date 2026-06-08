@@ -7,16 +7,24 @@ eBay IDs back into the draft. The listing ends in eBay's DRAFT state;
 the user reviews and publishes manually in Seller Hub.
 
 ================================================================
-THIS MODULE NEVER PUBLISHES AN EBAY LISTING. THERE IS NO CODE PATH IN
-THIS FILE THAT CALLS THE eBay PUBLISH ENDPOINT
-(POST /sell/inventory/v1/offer/{offerId}/publish OR ANY EQUIVALENT).
+PUBLISHING IS EXPLICIT, MANUAL, AND CONFIRMATION-GATED.
 ================================================================
+--sync NEVER publishes. It creates an UNPUBLISHED offer (a draft) and
+stops. Nothing in the build/sync path — not a config flag, env var, or
+automated chain — can make a listing go live.
 
-The no-publish firewall is enforced by ABSENCE: no function here, and no
-helper in ebay_client.api_send's callers, targets the publish path.
-Adding one is a deliberate user-initiated refactor of this file. No
-config flag, CLI argument, env var, or chat instruction can cause
-publication. See PLAN.md "No-publish firewall".
+Publishing is a SEPARATE, deliberate command:
+
+    python list_edit.py --publish <shoot-dir>            # DRY RUN (shows what would go live)
+    python list_edit.py --publish <shoot-dir> --confirm  # actually publishes
+
+Without --confirm it is a dry run. `publish_offer()` is the ONLY place
+this module calls the publishOffer endpoint, it runs only on a draft you
+already synced (has an ebay_offer_id), and it requires --confirm. It is
+never invoked by --sync and never triggered automatically. This is the
+deliberate, user-initiated publish path the original no-publish firewall
+required (see PLAN.md "No-publish firewall"): the firewall's intent —
+no ACCIDENTAL or AUTOMATIC publication — is preserved.
 
 ----- Why the eBay Sell API (vs the Chrome stand-in) -----
 
@@ -450,6 +458,74 @@ def create_or_update_listing(draft_path: Path,
 
 
 # ---------------------------------------------------------------------------
+# PUBLISH — explicit, manual, confirmation-gated (the one publish path)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PublishResult:
+    dry_run: bool
+    offer_id: str
+    title: str
+    price: str
+    status_before: str
+    listing_id: Optional[str] = None   # set only when actually published
+    listing_url: Optional[str] = None
+
+
+def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
+                  confirm: bool = False) -> PublishResult:
+    """Publish a previously-synced offer to a LIVE eBay listing.
+
+    Guarded: requires an ebay_offer_id (from --sync) AND confirm=True. With
+    confirm=False it is a DRY RUN — it fetches the offer and reports what
+    WOULD go live without calling publish. This is the only function that
+    calls publishOffer; --sync never does.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("Publish needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    offer_id = str(draft.get("meta.ebay_offer_id") or "").strip()
+    if not offer_id:
+        raise ValueError("draft has no meta.ebay_offer_id — run `--sync` first to create the offer.")
+
+    off = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+    status = str(off.get("status") or "UNKNOWN")
+    price = str(((off.get("pricingSummary") or {}).get("price") or {}).get("value") or "?")
+    sku = str(off.get("sku") or draft.get("meta.ebay_inventory_sku") or "")
+    title = str(draft.get("title") or "")
+    if not title and sku:
+        try:
+            title = str((api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
+                         .get("product") or {}).get("title") or "")
+        except EbayAPIError:
+            pass
+
+    if status == "PUBLISHED":
+        lid = str((off.get("listing") or {}).get("listingId") or "")
+        return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
+                             status_before=status, listing_id=lid or None,
+                             listing_url=(f"https://www.ebay.com/itm/{lid}" if lid else None))
+
+    if not confirm:
+        return PublishResult(dry_run=True, offer_id=offer_id, title=title,
+                             price=price, status_before=status)
+
+    # --- the single publish call ---
+    resp = api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/publish", {}, creds=creds)
+    listing_id = str(resp.get("listingId") or "")
+    if listing_id:
+        update_meta(draft_path, {
+            "ebay_listing_id": listing_id,
+            "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+    return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
+                         status_before=status, listing_id=listing_id or None,
+                         listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None))
+
+
+# ---------------------------------------------------------------------------
 # Status / setup-check
 # ---------------------------------------------------------------------------
 
@@ -519,7 +595,9 @@ def _cli() -> None:
         description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT (never publishes).",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
-    ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT from a draft.md or shoot dir.")
+    ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
+    ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish to actually go live (otherwise --publish is a dry run).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     args = ap.parse_args()
@@ -546,7 +624,25 @@ def _cli() -> None:
             print(f"  sku:       {res.inventory_sku}")
             print(f"  category:  {res.category_id}")
             print(f"  photos:    {len(res.photo_eps_urls)} uploaded to EPS")
-            print(f"  review at: {res.eb_seller_hub_url}  (publish manually in Seller Hub)")
+            print(f"  status:    UNPUBLISHED (a draft; API offers don't appear in Seller Hub Drafts)")
+            print(f"  to go live: python list_edit.py --publish {args.sync} --confirm")
+            return
+        if args.publish:
+            res = publish_offer(Path(args.publish), confirm=args.confirm)
+            if res.status_before == "PUBLISHED":
+                print(f"[i] Already LIVE. listing {res.listing_id}")
+                if res.listing_url: print(f"    {res.listing_url}")
+            elif res.dry_run:
+                print("[DRY RUN] Nothing published. This WOULD go live:")
+                print(f"  offer:  {res.offer_id}")
+                print(f"  title:  {res.title}")
+                print(f"  price:  ${res.price}")
+                print(f"  status: {res.status_before} -> would become PUBLISHED (a real, live listing)")
+                print(f"\n  To actually publish: re-run with --confirm")
+            else:
+                print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
+                if res.listing_url: print(f"  {res.listing_url}")
+                print("  This listing is now public and accepting buyers.")
             return
         if args.check:
             s = stub_status()
