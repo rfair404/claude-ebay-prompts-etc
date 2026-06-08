@@ -114,11 +114,8 @@ ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
    off.
 6. **Shipping:** confirm/set free shipping + `primary_service` (three-dot
    → Change service → search → select → Done). Weight/dims already set.
-7. **Photos:** upload from draft `photos:` via `file_upload`.
-   **Known limitation:** `file_upload` accepts only files shared with the
-   session, so arbitrary `<shoot-dir>` paths are REJECTED. If blocked, do
-   NOT fake it — flag photos for manual drag-drop (DSC order, first =
-   hero) in the status report. (The Sell-API path will fix this via EPS.)
+7. **Photos:** see "Photo upload" below — use the first method that's
+   available; never fake success.
 8. **Pre-save verification (JS):** read back title, price,
    condition-description, description length, weight/dims; confirm no
    variations modal. Re-apply once if a value is wrong; if still wrong,
@@ -142,6 +139,50 @@ ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
   apply, any field that failed verification.
 - Next step: "Open the draft in Seller Hub, finish the flagged items,
   review, and List when ready. This tool does not publish."
+
+## Photo upload (methods, in priority order)
+
+Findings from the 2026-06-07 live run. The eBay photo input is a hidden
+`input[type=file]` (multi) plus a "Drag and drop files" zone. Use the
+first method that works in the current environment:
+
+1. **eBay Sell API → EPS (target, full-res, no UI).** The real fix. When
+   `v2/lib/list_edit.py` is implemented, photos POST to eBay Picture
+   Services and attach by URL — no sandbox, no dialog, full resolution,
+   correct order. Prefer this once the dev key exists; it makes upload
+   fully hands-off.
+
+2. **`upload_image` injection (full-res, no API) — preferred interim.**
+   If the user drags the shoot photos into the chat once, each becomes an
+   in-session image with an `imageId`;
+   `upload_image({imageId, ref:<file input>, filename})` injects them into
+   the hidden file input at full resolution, in call order (first = hero).
+   This is the most reliable local-disk method when the Sell API isn't
+   available — it sidesteps both the read-tier wall and the file_upload
+   sandbox.
+
+3. **Native Windows file dialog — only if the browser is FULL tier.** Click
+   "Upload from computer", then type the shoot-dir path + quoted filenames
+   into the Windows **Open** dialog and click Open. **Confirmed blocked
+   2026-06-07** when the browser is granted at computer-use **read** tier:
+   Chrome (and its Open dialog) reject typing, and the Chrome MCP refuses
+   the file-button click. Only viable if `list_granted_applications` shows
+   the browser at `full` tier. Do not rely on it otherwise.
+
+**Does NOT work — do not retry:** `file_upload` on arbitrary disk paths.
+It accepts only files shared with the session; project paths, `~/Downloads`,
+AND folders connected via `request_directory` were all REJECTED in testing.
+`file_upload` is only viable for genuinely session-shared files.
+
+**Tooling note:** granting computer-use over Chrome can flip the Chrome MCP
+to read-only on the active tab ("Permission denied … on this domain"). If
+that happens, the user re-clicks the Claude-in-Chrome extension on the tab
+to restore write access. Prefer finishing all Chrome MCP field-fills BEFORE
+requesting computer-use access.
+
+If none are available this run, flag photos for manual drag-drop (DSC
+order, first = hero) in the status report and continue — the rest of the
+draft is still worth saving.
 
 ## Failure escapes (STOP and ask)
 
