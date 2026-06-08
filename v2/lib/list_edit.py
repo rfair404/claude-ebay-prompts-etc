@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import re
 import sys
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -122,11 +123,14 @@ def _resolve_draft_path(target: str | Path) -> Path:
 
 
 def _sku_for(draft: Draft) -> str:
+    # Reuse an already-synced SKU for idempotency; otherwise derive from the
+    # shoot FOLDER name (unique per item), NOT meta.item_id — sibling drafts
+    # in a batch often share a generic item_id and would collide on one SKU.
     existing = draft.get("meta.ebay_inventory_sku")
     if existing:
         return str(existing)
-    item_id = str(draft.get("meta.item_id") or draft.path.parent.name or "item")
-    sku = re.sub(r"[^A-Za-z0-9_-]+", "-", f"ebaybiz-{item_id}").strip("-")
+    basis = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
+    sku = re.sub(r"[^A-Za-z0-9_-]+", "-", f"ebaybiz-{basis}").strip("-")
     return sku[:50] or "ebaybiz-item"
 
 
@@ -349,6 +353,23 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     return policies, location
 
 
+def _find_offer_id_for_sku(sku: str, creds: EbayCredentials) -> Optional[str]:
+    """Return the existing API offerId for this SKU, or None.
+
+    Authoritative source for update-vs-create — do NOT trust
+    meta.ebay_offer_id, which the Chrome stand-in may have set to a UI
+    draftId (a different ID space than the Sell API offerId).
+    """
+    try:
+        d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}", creds=creds)
+    except EbayAPIError as e:
+        if e.status == 404:
+            return None
+        raise
+    offers = d.get("offers") or []
+    return str(offers[0]["offerId"]) if offers and offers[0].get("offerId") else None
+
+
 def _resolve_category_id(draft: Draft, creds: EbayCredentials) -> str:
     explicit = str(draft.get("category_id") or "").strip()
     if explicit:
@@ -385,7 +406,6 @@ def create_or_update_listing(draft_path: Path,
     sku = _sku_for(draft)
     policies, location_key = _resolve_policies_and_location(creds)
     category_id = _resolve_category_id(draft, creds)
-    existing_offer_id = str(draft.get("meta.ebay_offer_id") or "").strip() or None
 
     # 1) photos -> EPS
     image_urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
@@ -394,14 +414,15 @@ def create_or_update_listing(draft_path: Path,
     item_body = _build_inventory_item(draft, image_urls)
     api_send("PUT", f"/sell/inventory/v1/inventory_item/{sku}", item_body, creds=creds)
 
-    # 3) Offer — create (POST) or update (PUT). Never published.
-    if existing_offer_id:
-        offer_body = _build_offer(draft, sku, category_id, location_key, policies)
-        api_send("PUT", f"/sell/inventory/v1/offer/{existing_offer_id}", offer_body, creds=creds)
-        offer_id = existing_offer_id
+    # 3) Offer — update if one already exists for this SKU, else create.
+    #    Look it up by SKU (idempotent); do not trust meta.ebay_offer_id,
+    #    which may be a Chrome UI draftId rather than an API offerId.
+    offer_body = _build_offer(draft, sku, category_id, location_key, policies)
+    offer_id = _find_offer_id_for_sku(sku, creds)
+    if offer_id:
+        api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer_body, creds=creds)
         operation = "updated"
     else:
-        offer_body = _build_offer(draft, sku, category_id, location_key, policies)
         resp = api_send("POST", "/sell/inventory/v1/offer", offer_body, creds=creds)
         offer_id = str(resp.get("offerId") or "")
         if not offer_id:
