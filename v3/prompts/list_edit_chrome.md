@@ -47,8 +47,13 @@ the failure modes from the first live run.
   single listing. If that editor appears, Cancel → confirm Yes, and
   verify `document.body.textContent` no longer contains "Create your
   variations" before continuing.
-- **Set plain text/number fields with the React value-setter; set the
-  description with the iframe execCommand+blur pattern** (both below).
+- **Plain `<input>`/`<textarea>` fields take the React value-setter.** But
+  **controlled save-models ignore untrusted (JS) input** — the rich-text
+  description and tag-select item-specifics commit ONLY on TRUSTED
+  keystrokes. Enter those by **typing with the Chrome MCP `computer`
+  `type`/`key`** (CDP keystrokes are `isTrusted`), not by setting `.value`
+  or `execCommand`. JS injection updates the visible DOM but not the
+  save-state, so it silently fails to persist (see Description RTE below).
 - **Verify after every fill** via JS before moving on.
 - **Never save until the save-state has settled and verified.** eBay syncs
   fields (especially the rich-text description) to its save-state on a
@@ -65,31 +70,47 @@ const setVal=(el,val)=>{const p=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prot
 Object.getOwnPropertyDescriptor(p,'value').set.call(el,val);
 el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
 ```
-Description RTE (iframe `se-rte-frame__summary`) — `innerHTML`/`setVal`
-do NOT persist; only execCommand+blur survives a save:
-```js
-const f=document.getElementById('se-rte-frame__summary');
-const d=f.contentDocument; const ed=d.querySelector('[contenteditable="true"]');
-f.contentWindow.focus(); ed.focus(); d.execCommand('selectAll',false,null);
-d.execCommand('insertHTML',false, HTML);          // <p>…</p>, <ul><li>…</li></ul>
-ed.dispatchEvent(new FocusEvent('blur',{bubbles:true}));
-ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
-// verify: document.querySelector('textarea[aria-label="Description"]').value.length > 0
-```
+Description RTE — the iframe `se-rte-frame__summary` holds a
+`[contenteditable]` editor; `textarea[aria-label="Description"]` is its
+read-only save-state mirror.
 
-**Why the description goes missing (the #1 recurring failure) and the fix.**
-The outer `textarea[aria-label="Description"]` is eBay's save-state mirror;
-it is read-only to you and is written FROM the iframe editor by a
-**debounced** sync (a few hundred ms after the editor blurs). "Save for
-later" reads that mirror — so if you save before the debounce flushes, the
-draft persists with an EMPTY description even though the editor showed
-text. The `blur`+`focusout` dispatch starts the sync but does not finish
-it. Therefore: after editing the description, **wait ~1.5–2s for the
-debounce, then poll the outer textarea until `.value.length > 0`, and treat
-that non-zero length as the gate — never save until it is met.** If it's
-still 0 after the wait, re-run the execCommand+blur sequence and wait
-again (up to 3×). This same debounce can affect item-specifics and Best
-Offer; the settle-and-verify pass in the workflow covers them too.
+**Why the description goes missing (the #1 recurring failure) — two
+compounding root causes:**
+
+1. **Untrusted events are ignored by the save-model.** The editor commits
+   to eBay's save-state ONLY on TRUSTED input (`isTrusted === true`). JS
+   `setVal`, `innerHTML`, dispatched `Event`s, and `execCommand` are all
+   UNTRUSTED — they change what you SEE in the editor but never reach the
+   save-state, so the draft saves blank no matter how many times you
+   re-apply them. This is the real cause; the debounce below just hides it.
+2. **Debounced sync.** Even valid (trusted) input flushes to the mirror on
+   a debounce (a few hundred ms after blur), so an immediate save races it.
+
+**Reliable fix — TYPE the description with the Chrome MCP keyboard
+(trusted input).** The Chrome MCP `computer` `type`/`key` actions dispatch
+real CDP keystrokes (`isTrusted === true`), which the save-model honors —
+unlike any JS injection.
+
+```js
+// JS does ONLY focus + clear (not content insertion):
+const ed=document.getElementById('se-rte-frame__summary')
+  .contentDocument.querySelector('[contenteditable="true"]');
+ed.focus(); document.execCommand?.('selectAll'); // select existing
+```
+Then, with the editor focused:
+- `computer` action `key` "Delete" (clear any selected cloned text), then
+- `computer` action `type` with the description **plain text**; send
+  paragraph breaks with `key` "Enter" (formatting like bold/bullets is
+  lost — plain prose is fine and is what persists).
+- Blur, **wait ~1.5–2s** for the debounce, then verify
+  `textarea[aria-label="Description"]`.value.length > 0. If still 0,
+  re-focus and re-type (up to 3×).
+
+`execCommand('insertHTML')` + dispatched blur is a LAST-RESORT fallback
+only; if the verify gate shows the mirror still empty (it usually will,
+because the events are untrusted), switch to trusted typing above. The
+same trusted-input rule explains why item-specifics tag-selects need real
+typing + Enter (via `form_input`/`computer`), not a JS value set.
 
 ## Path selection (from price.txt)
 
@@ -116,11 +137,11 @@ Offer; the settle-and-verify pass in the workflow covers them too.
    quantity (`maxLength===5`), condition-description (textarea
    `maxLength===1000`), weight `aria-label="Enter weight in pounds"` /
    `"…ounces"`, dims `"Enter package length/width/depth in inches"`.
-3. **Description:** RTE execCommand+blur pattern, then **wait ~1.5–2s and
-   poll until `textarea[aria-label="Description"]`.value.length > 0** (the
-   debounced save-state mirror). Do not proceed until it's non-zero;
-   re-run the sequence up to 3× if needed. (See "Why the description goes
-   missing" above.)
+3. **Description:** focus + clear the editor via JS, then **TYPE the body
+   with the Chrome MCP `computer` `type`/`key` actions** (trusted input —
+   JS injection does NOT persist). Wait ~1.5–2s, then poll until
+   `textarea[aria-label="Description"]`.value.length > 0; re-type up to 3×
+   if still empty. (See "Why the description goes missing" above.)
 4. **Item specifics:** eBay shows AI-suggested specifics with an
    **"Apply all"**. Prefer it, THEN correct anything wrong — the
    suggester makes category-plausible but item-wrong guesses (the hen run
