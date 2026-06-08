@@ -36,43 +36,47 @@ anthropic:
   api_key: "sk-ant-REPLACE_ME"
 
 # ---------------------------------------------------------------------------
-# eBay Sell API — credentials for DRAFT (publish listings) + schema discovery
+# eBay Sell API — credentials for Function 6 (LIST/EDIT) + schema discovery
 # ---------------------------------------------------------------------------
-# Register an eBay developer account and create a keyset at:
-#   https://developer.ebay.com/my/keys
+# Sandbox and Production are separate worlds with separate keysets. This
+# config stores BOTH side by side; `environment` selects the active one —
+# flip that single line to switch between testing and live.
 #
-# Each keyset is environment-specific. Most workflows:
-#   1. Create a Sandbox keyset first (no risk, fake data)
-#   2. Use it for development / DRAFT iteration
-#   3. Apply for Production keys when ready to publish real listings
+# Per field:
+#   app_id / cert_id / dev_id — your keyset (developer.ebay.com/my/keys).
+#       dev_id IS required (photo upload uses the Trading API EPS endpoint).
+#   redirect_uri — your RuName (developer.ebay.com Auth'n'Auth), for OAuth.
+#   user_refresh_token — captured once per environment:
+#       python ebay_client.py --user-consent-url
+#       python ebay_client.py --exchange-code <code-from-callback>
+#   merchant_location_key + *_policy_id — from your account; list them with:
+#       python list_edit.py --setup-check
 #
-# The dev_id field is only needed for legacy XML-API calls; REST APIs (which
-# V2 uses) only need app_id + cert_id.
-#
-# redirect_uri is required for the user-consent OAuth flow (needed before
-# you can write listings — Sell Inventory API requires user-context tokens).
-# Set this to the "RuName" or redirect URL you register at developer.ebay.com.
+# Full runbook: v2/lib/SETUP_EBAY_API.md
 ebay:
-  # sandbox (recommended for development) or production
-  environment: "sandbox"
+  environment: "sandbox"   # active: sandbox | production
 
-  # From https://developer.ebay.com/my/keys
-  app_id: "REPLACE_ME-PRD-OR-SBX-app-id"
-  cert_id: "PRD-OR-SBX-cert-id-REPLACE_ME"
+  sandbox:
+    app_id: "SBX-app-id"
+    cert_id: "SBX-cert-id"
+    dev_id: "SBX-dev-id"
+    redirect_uri: "SBX-RuName"
+    user_refresh_token: null
+    merchant_location_key: null
+    fulfillment_policy_id: null
+    payment_policy_id: null
+    return_policy_id: null
 
-  # Optional (legacy XML API only — REST API doesn't need this)
-  dev_id: null
-
-  # Required for user-context OAuth (writes). The redirect URL registered
-  # with your eBay app at https://developer.ebay.com/my/auth-n-auth
-  redirect_uri: null
-
-  # Captured from the user-consent flow:
-  #   1. python ebay_client.py --user-consent-url
-  #   2. Visit URL, sign in, authorize
-  #   3. python ebay_client.py --exchange-code <code-from-callback>
-  #   4. Paste the printed refresh_token here
-  user_refresh_token: null
+  production:
+    app_id: "PRD-app-id"
+    cert_id: "PRD-cert-id"
+    dev_id: "PRD-dev-id"
+    redirect_uri: "PRD-RuName"
+    user_refresh_token: null
+    merchant_location_key: null
+    fulfillment_policy_id: null
+    payment_policy_id: null
+    return_policy_id: null
 
 # ---------------------------------------------------------------------------
 # CURATE strategy profiles

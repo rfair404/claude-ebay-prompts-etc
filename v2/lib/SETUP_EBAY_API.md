@@ -7,7 +7,10 @@ browser, no file dialog, no tier/sandbox limits. The no-publish firewall
 still holds — nothing here publishes; you publish manually in Seller Hub.
 
 All settings live in `config.yaml` (project root, gitignored) under
-`ebay:`. After setup, run `python list_edit.py --sync <shoot-dir>`.
+`ebay:`. **Sandbox and production keysets are stored side by side** under
+`ebay.sandbox:` and `ebay.production:`; the top-level `ebay.environment:`
+line selects the active one — flip it to switch between testing and live.
+After setup, run `python list_edit.py --sync <shoot-dir>`.
 
 ---
 
@@ -38,12 +41,22 @@ Put `app_id`, `cert_id`, `dev_id` and `environment` into `config.yaml`:
 
 ```yaml
 ebay:
-  environment: "sandbox"
-  app_id: "Your-AppID"
-  cert_id: "Your-CertID"
-  dev_id: "Your-DevID"
-  redirect_uri: "Your-RuName"
+  environment: "sandbox"          # active: sandbox | production
+  sandbox:
+    app_id: "Your-Sandbox-AppID"
+    cert_id: "Your-Sandbox-CertID"
+    dev_id: "Your-Sandbox-DevID"
+    redirect_uri: "Your-Sandbox-RuName"
+  production:                      # fill these when you go live
+    app_id: null
+    cert_id: null
+    dev_id: null
+    redirect_uri: null
 ```
+(All per-environment keys — `app_id`, `cert_id`, `dev_id`, `redirect_uri`,
+`user_refresh_token`, `merchant_location_key`, `*_policy_id` — live under
+the matching `sandbox:` / `production:` block. The steps below write into
+whichever block `environment` points at.)
 
 Verify the app token works (no user consent needed yet):
 
@@ -74,11 +87,12 @@ It prints your fulfillment / payment / return policy IDs and any inventory
 locations. Paste the chosen IDs into `config.yaml`:
 
 ```yaml
-  user_refresh_token: "v^1.1#..."
-  merchant_location_key: "primary"
-  fulfillment_policy_id: "..."
-  payment_policy_id: "..."
-  return_policy_id: "..."
+  # under the active environment block (e.g. ebay.production:)
+    user_refresh_token: "v^1.1#..."
+    merchant_location_key: "primary"
+    fulfillment_policy_id: "..."
+    payment_policy_id: "..."
+    return_policy_id: "..."
 ```
 
 If you have **no** business policies or location yet, create them once in

@@ -145,9 +145,16 @@ def _to_decimal_str(val: object) -> Optional[str]:
 
 
 def _ebay_extra(field: str) -> Optional[str]:
-    """Read an account-specific eBay setting from config.yaml `ebay:`."""
+    """Read an account-specific eBay setting for the ACTIVE environment.
+
+    Prefers ebay.<environment>.<field>; falls back to flat ebay.<field>.
+    """
     section = (load_config().get("ebay") or {})
-    v = section.get(field)
+    env = section.get("environment") or "sandbox"
+    env_section = section.get(env) or {}
+    v = env_section.get(field)
+    if v is None:
+        v = section.get(field)
     return str(v) if v else None
 
 

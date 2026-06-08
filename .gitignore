@@ -3,6 +3,7 @@
 # Live config holds API tokens — never commit. Use v2/lib/config.example.yaml
 # as the template for new setups.
 /config.yaml
+/config.*.yaml
 
 # Python
 __pycache__/

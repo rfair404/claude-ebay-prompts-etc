@@ -176,13 +176,21 @@ def load_credentials() -> EbayCredentials:
             f"(got '{env}' from {config_path()})"
         )
 
+    # Per-environment credential blocks (ebay.sandbox.* / ebay.production.*)
+    # take precedence; fall back to flat ebay.* fields for legacy configs.
+    env_section = section.get(env) or {}
+
+    def pick(key):
+        v = env_section.get(key)
+        return v if v is not None else section.get(key)
+
     return EbayCredentials(
         environment=env,
-        app_id=section.get("app_id"),
-        cert_id=section.get("cert_id"),
-        dev_id=section.get("dev_id"),
-        redirect_uri=section.get("redirect_uri"),
-        user_refresh_token=section.get("user_refresh_token"),
+        app_id=pick("app_id"),
+        cert_id=pick("cert_id"),
+        dev_id=pick("dev_id"),
+        redirect_uri=pick("redirect_uri"),
+        user_refresh_token=pick("user_refresh_token"),
     )
 
 
