@@ -489,16 +489,30 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
     if extra_headers:
         headers.update(extra_headers)
 
-    req = urllib.request.Request(url, data=data, method=method.upper(), headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            raw = resp.read().decode("utf-8")
-            return json.loads(raw) if raw.strip() else {}
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode("utf-8", errors="replace")
-        raise EbayAPIError(e.code, f"{method.upper()} {path} → HTTP {e.code}", body_text) from e
-    except urllib.error.URLError as e:
-        raise EbayAPIError(0, f"{method.upper()} {path} → network error: {e}", None) from e
+    # eBay production is occasionally flaky (transient 5xx; eventual
+    # consistency right after a create). Retry transient failures with
+    # backoff. Only retry 5xx for IDEMPOTENT methods (GET/PUT/DELETE) so a
+    # POST create can't double-fire; network errors retry for any method
+    # (the request likely never reached eBay).
+    m = method.upper()
+    idempotent = m in ("GET", "PUT", "DELETE")
+    for attempt in range(3):
+        req = urllib.request.Request(url, data=data, method=m, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")
+            err = EbayAPIError(e.code, f"{m} {path} → HTTP {e.code}", body_text)
+            if e.code >= 500 and idempotent and attempt < 2:
+                time.sleep(0.8 * (attempt + 1)); continue
+            raise err from e
+        except urllib.error.URLError as e:
+            err = EbayAPIError(0, f"{m} {path} → network error: {e}", None)
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1)); continue
+            raise err from e
 
 
 # ---------------------------------------------------------------------------

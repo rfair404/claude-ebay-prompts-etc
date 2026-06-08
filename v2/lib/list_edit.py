@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -512,8 +513,20 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         return PublishResult(dry_run=True, offer_id=offer_id, title=title,
                              price=price, status_before=status)
 
-    # --- the single publish call ---
-    resp = api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/publish", {}, creds=creds)
+    # --- the single publish call (with transient-error retry) ---
+    # Right after an offer is created, eBay sometimes 5xx's or rejects the
+    # offer's condition (25021) while category validation propagates, then
+    # accepts the identical request seconds later. Retry those transients.
+    resp = None
+    for attempt in range(4):
+        try:
+            resp = api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/publish", {}, creds=creds)
+            break
+        except EbayAPIError as e:
+            transient = e.status >= 500 or (e.status == 400 and "25021" in (e.body or ""))
+            if transient and attempt < 3:
+                time.sleep(2.0 * (attempt + 1)); continue
+            raise
     listing_id = str(resp.get("listingId") or "")
     if listing_id:
         update_meta(draft_path, {
