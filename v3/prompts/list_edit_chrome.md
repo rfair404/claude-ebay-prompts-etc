@@ -50,6 +50,12 @@ the failure modes from the first live run.
 - **Set plain text/number fields with the React value-setter; set the
   description with the iframe execCommand+blur pattern** (both below).
 - **Verify after every fill** via JS before moving on.
+- **Never save until the save-state has settled and verified.** eBay syncs
+  fields (especially the rich-text description) to its save-state on a
+  debounce; saving too soon persists a draft with missing fields. Always
+  run the settle-and-verify gate (workflow step 8) and the post-save
+  reload check (step 10) before reporting success. This is the single most
+  common cause of "missing fields" — treat it as a hard gate, not a nicety.
 
 ### JS patterns
 
@@ -70,6 +76,20 @@ ed.dispatchEvent(new FocusEvent('blur',{bubbles:true}));
 ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
 // verify: document.querySelector('textarea[aria-label="Description"]').value.length > 0
 ```
+
+**Why the description goes missing (the #1 recurring failure) and the fix.**
+The outer `textarea[aria-label="Description"]` is eBay's save-state mirror;
+it is read-only to you and is written FROM the iframe editor by a
+**debounced** sync (a few hundred ms after the editor blurs). "Save for
+later" reads that mirror — so if you save before the debounce flushes, the
+draft persists with an EMPTY description even though the editor showed
+text. The `blur`+`focusout` dispatch starts the sync but does not finish
+it. Therefore: after editing the description, **wait ~1.5–2s for the
+debounce, then poll the outer textarea until `.value.length > 0`, and treat
+that non-zero length as the gate — never save until it is met.** If it's
+still 0 after the wait, re-run the execCommand+blur sequence and wait
+again (up to 3×). This same debounce can affect item-specifics and Best
+Offer; the settle-and-verify pass in the workflow covers them too.
 
 ## Path selection (from price.txt)
 
@@ -96,8 +116,11 @@ ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
    quantity (`maxLength===5`), condition-description (textarea
    `maxLength===1000`), weight `aria-label="Enter weight in pounds"` /
    `"…ounces"`, dims `"Enter package length/width/depth in inches"`.
-3. **Description:** RTE execCommand+blur pattern; verify outer textarea
-   length > 0.
+3. **Description:** RTE execCommand+blur pattern, then **wait ~1.5–2s and
+   poll until `textarea[aria-label="Description"]`.value.length > 0** (the
+   debounced save-state mirror). Do not proceed until it's non-zero;
+   re-run the sequence up to 3× if needed. (See "Why the description goes
+   missing" above.)
 4. **Item specifics:** eBay shows AI-suggested specifics with an
    **"Apply all"**. Prefer it, THEN correct anything wrong — the
    suggester makes category-plausible but item-wrong guesses (the hen run
@@ -116,14 +139,35 @@ ed.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));
    → Change service → search → select → Done). Weight/dims already set.
 7. **Photos:** see "Photo upload" below — use the first method that's
    available; never fake success.
-8. **Pre-save verification (JS):** read back title, price,
-   condition-description, description length, weight/dims; confirm no
-   variations modal. Re-apply once if a value is wrong; if still wrong,
-   report it — never save a silently-broken field.
-9. **Save:** click **"Save for later"** (find by text; it may report
-   width 0 in a sticky footer — `.click()` it anyway). Confirm you land
-   on Seller Hub → Drafts and the item shows as a single-qty BIN draft.
-10. Write the `draftId` back into draft.md `meta.ebay_offer_id` and
+8. **Settle + verify before save (MANDATORY — this is what stops missing
+   fields).** Do NOT save on a timer or right after the last fill. Instead:
+   a. **Blur the active field** (`document.activeElement.blur()`) and **wait
+      ~1.5–2s** so every debounced React/eBay sync flushes to save-state.
+   b. **Re-read the save-state via JS** and build a checklist of REQUIRED,
+      persisted values: title (input value), price, quantity,
+      condition-description, **description = outer `textarea[aria-label=
+      "Description"]`.value.length > 0**, each filled item-specific shows
+      its value, Best Offer reflects the gate, weight/dims. Confirm no
+      variations modal.
+   c. **Re-apply any field that didn't persist** (description → re-run the
+      execCommand+blur+wait; others → re-run setVal/tag-select), then wait
+      and re-read again. Loop up to 3×.
+   d. **Hard gate:** if the description mirror is still empty, or any
+      required field is still missing after 3 tries, **DO NOT SAVE** —
+      report exactly which field failed. A saved draft with a blank
+      description is the failure we are preventing; an unsaved draft you
+      can retry is better than a silently-broken one.
+9. **Save:** only after step 8's checklist is fully green, click **"Save
+   for later"** (find by text; it may report width 0 in a sticky footer —
+   `.click()` it anyway).
+10. **Post-save persistence check (catch the debounce that slipped):**
+    after landing on Seller Hub → Drafts, **reopen the draft**
+    (`lstng?draftId=…&mode=AddItem`), wait for load, and re-read the
+    description mirror + title + price. If the description came back empty,
+    the debounce lost it on save — re-apply the description, re-run the
+    settle gate (step 8), and Save again. Only report success once the
+    reloaded draft shows a non-empty description.
+11. Write the `draftId` back into draft.md `meta.ebay_offer_id` and
     `meta.last_synced`, and append a `[LIST/EDIT]` line to NEEDS_REVIEW
     with the draftId + every manual-completion item.
 
