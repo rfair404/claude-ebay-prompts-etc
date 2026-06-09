@@ -18,7 +18,8 @@
 # Apify — eBay sold-listings scraping backend (Source B of PRICE)
 # ---------------------------------------------------------------------------
 apify:
-  # Required for PRICE's Source B to work.
+  # PRICE's default Stage B comp source (the un-gated direct-eBay sold path).
+  # If you leave this unset, Stage B falls back to the Chrome browse path.
   # Get a token at: https://console.apify.com/account/integrations
   api_token: "apify_api_REPLACE_ME"
 

@@ -131,12 +131,13 @@ The shoot directory is the directory containing the photos (e.g. a
 
 ## Gate contract (what may stop a headless run)
 
-Only TWO gates stop a run. Everything else proceeds with a logged
-default. Full contract in [RUN.md](../RUN.md); summary:
+ONE gate stops a run. Everything else proceeds with a logged default.
+Full contract in [RUN.md](../RUN.md); summary:
 
-- **HARD — stop and ask:** (1) the REVIEW gate — after DRAFT, present the
+- **HARD — stop and ask:** the REVIEW gate — after DRAFT, present the
   review card and STOP; publish LIVE only on explicit approval
-  ([review.md](review.md)); (2) any paid Apify call (confirm cost per call).
+  ([review.md](review.md)). (PRICE's Apify call is no longer a gate — it
+  runs automatically as Stage B of the comp hunt.)
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
   questions, unit_type ambiguity, INVESTIGATE open questions, working-
   price selection, lookup-value substitutions, missing required fields.

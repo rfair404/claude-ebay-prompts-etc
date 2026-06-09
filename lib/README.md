@@ -93,9 +93,10 @@ definitions.
 
 ## apify_ebay.py — Apify eBay sold-listings client
 
-Production replacement for the Claude-in-Chrome path used by PRICE's
-Source B. Returns clean structured `CompRecord` objects ready for
-PRICE's classification logic.
+PRICE's **default Stage B** comp source (the un-gated direct-eBay sold
+path). The Claude-in-Chrome browse is now the optional Stage C fallback,
+used only when confidence is low or Apify is unavailable. Returns clean
+structured `CompRecord` objects ready for PRICE's classification logic.
 
 **Actor:** built against `caffein.dev/ebay-sold-listings`
 ([docs](https://apify.com/caffein.dev/ebay-sold-listings)). Pricing:
@@ -295,9 +296,9 @@ Uses only Python stdlib (`urllib.request`, `urllib.parse`, `base64`,
 
 ## What's not in this MVP
 
-- **No PRICE integration yet** — `apify_ebay.py` is the building block;
-  wiring it into PRICE's Source B path is the next step once you've
-  verified the wrapper works against your account.
+- **PRICE calls this as Stage B** — the prompt invokes `apify_ebay.py` /
+  `search_ebay_sold()` directly as the default comp source; there is no
+  separate orchestration layer (the prompt is the orchestrator).
 - **No write operations on the eBay client yet** — only schema discovery
   and Taxonomy reads. Inventory-item creation, offer creation, and
   publishing are added when DRAFT lands.

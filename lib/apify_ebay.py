@@ -1,8 +1,9 @@
 """
 Apify eBay sold-listings client.
 
-Production replacement for the Claude-in-Chrome browser navigation
-path used today by PRICE's Source B (direct eBay sold-listings browse).
+PRICE's default Stage B comp source (un-gated direct eBay sold-listings).
+The Claude-in-Chrome browse path is the optional Stage C fallback, used
+only when confidence is low or this backend is unavailable.
 
 Calls the caffein.dev/ebay-sold-listings Apify Actor (or any
 schema-compatible alternative configured via apify.ebay_actor) to

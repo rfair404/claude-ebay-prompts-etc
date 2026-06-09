@@ -35,7 +35,7 @@ shoot directory, so phases compose without re-deriving.
 
 Reclassify every "ask the user" moment as HARD or SOFT.
 
-### HARD gates — stop the run
+### HARD gate — the only thing that stops a run
 
 1. **The REVIEW gate (publish).** In `list`/`full`, after DRAFT, run
    REVIEW: present the decision card ([prompts/review.md](prompts/review.md))
@@ -44,11 +44,11 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    "just list it" said before the card, no publish inferred from
    "ok"/"looks good"/silence. (This replaced the old absolute no-publish
    firewall — publishing is now gated here, not forbidden.)
-2. **Paid Apify call (PRICE Source C).** Confirm cost before each call:
-   "About to spend ~$0.12 on an Apify query for `<query>`. Approve,
-   change, or skip?" Apify is opt-in only — never run by default.
 
-These are the ONLY reasons to stop a run.
+This is the ONLY reason a run stops. PRICE's Apify call (Stage B) used to
+be a second HARD gate; it no longer is — Apify runs automatically as part
+of the comp hunt (~$0.12/run), no cost confirmation. See PRICE for the
+Stage-A/B/C ordering and the data-quality guardrails on Apify.
 
 ### SOFT gates — proceed with the default, log it
 
@@ -131,7 +131,8 @@ gate is what authorizes passing it. A dry run is available any time
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
   [prompts/condition-rubric.md](prompts/condition-rubric.md).
-- PRICE runs the autonomous exact-match hunt (free Sources A+B) before
+- PRICE runs the autonomous exact-match hunt (Stage A WebSearch → Stage B
+  Apify eBay-sold → optional Stage C Chrome when confidence is low) before
   any era-peer fallback; see its prompt.
 
 Shared rules (style, confidence, firewall, unit_type, char limits,
@@ -147,9 +148,10 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-3. PRICE each saleable item → run the exact-match hunt on free sources;
-   adopt Recommended tier as provisional working price; write
-   `price.txt`. Stop ONLY if you reach a paid-Apify decision.
+3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
+   → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
+   adopt Recommended tier as provisional working price; write `price.txt`.
+   Never stops.
 4. CURATE (plan mode) → write `review.md`.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.

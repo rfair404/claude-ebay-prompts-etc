@@ -10,9 +10,10 @@ IDENTIFY records.
 
 ## Autonomy (Goal: dig for the exact match, don't ask permission to look)
 
-The free sources run without any query-approval gate. v2 made you propose
-queries and wait — v3 does not. You construct queries, run A and B, and
-iterate them yourself. The ONLY paid/gated step is Apify (Source C).
+No step in PRICE gates or stops. v2 made you propose queries and wait,
+and Apify used to require cost approval — v3 does neither. You construct
+queries, run the stages, and iterate them yourself. PRICE runs
+end-to-end without ever stopping for the user.
 
 ## Selling-unit awareness
 
@@ -24,49 +25,78 @@ are per-listing-unit except `duplicate` (per-piece).
 
 ## The exact-match hunt (run before any era-peer fallback)
 
-For each item, hunt the exact match on the free sources, escalating only
-as each step dries up. Do NOT settle for an era-peer until the hunt is
-exhausted.
+For each item, hunt the exact match, escalating only as each stage dries
+up. Do NOT settle for an era-peer until the hunt is exhausted. Every
+stage is autonomous — PRICE never stops to ask.
 
 1. **Canonical query** — built from IDENTIFY's short Brand+Type+Era
    values (not the Distinguishing-marks prose). Bare words; drop
    punctuation and filler ("with/and/the"). 5–9 high-signal keywords —
    real seller-title density, so exact comps can exist. Include era ONLY
    if a printed date is visible in a photo.
-2. **Source A — WebSearch** (free, ~5s, broad). Tag `[A — WebSearch]`.
-3. **Source B — Chrome → eBay sold** (free, ~30–60s). SOLD URL with
-   `LH_Sold=1&LH_Complete=1&_sop=3`. Extract rows prefixed "Sold
-   <date>"; skip Sponsored/"Shop on eBay" house ads. Tag `[B — Chrome]`.
-   `get_page_text` gives titles/prices/dates but not per-item URLs; when
-   you can't capture each item's href (via `read_page`/`find`), cite the
-   SOLD-search URL as the verifiable source and say so — every comp stays
-   one click from verification.
-4. **If no exact match yet, broaden the query** and re-run A+B: drop the
+
+2. **Stage A — WebSearch** (free, ~5s, broad). Casts wide across the open
+   web + marketplaces. Tag `[A — WebSearch]`.
+
+3. **Stage B — Apify eBay sold** (the default direct-eBay comp source; no
+   gate). Run `python lib/apify_ebay.py "<query>"` (or `search_ebay_sold()`
+   programmatically) — it calls the eBay sold-listings Actor and returns
+   structured comps with per-item URLs, sold dates, condition, currency,
+   and seller stats. Headless, no browser. Tag `[B — Apify]`. Cost is
+   ~$0.12/run and runs automatically as part of the hunt.
+   - **Data-quality guardrails (Apify is trusted by default now, so check
+     it):** keep only `sold_currency == USD` rows — the Actor can silently
+     return GBP/BRL prices at face value; drop (or convert + note) any
+     non-USD comp. Drop the usual outliers (single bid, >2× median). If a
+     run returns suspiciously few rows, or dispersion that disagrees badly
+     with Stage A, treat confidence as **LOW** and trigger Stage C.
+   - **If Apify is unconfigured or the run fails** (no token / ApifyError /
+     timeout): fall through to Stage C for the same eBay-sold data. Note
+     "Apify unavailable → Chrome" in the Hunt line.
+
+4. **If no exact match yet, broaden and re-run A+B:** drop the
    least-load-bearing keyword (5→3 words), then try a synonym for Type.
-   Iterate 2–3 formulations. This is autonomous — no approval needed.
-5. **Active fallback** (only when sold returns zero direct matches): drop
-   the sold filters, capture active listings, tag `[B-active — ASKING
+   Iterate 2–3 formulations.
+
+5. **Stage C — Chrome → eBay sold (OPTIONAL — low-confidence only).** The
+   browser browse path is no longer routine. Invoke it ONLY when
+   confidence is still LOW after A+B — i.e. any of:
+   - no exact match, or fewer than ~3 usable USD sold comps;
+   - dispersion too wide to anchor a tier (roughly >2× spread among the
+     candidate anchors);
+   - Apify was unavailable/suspect and you need direct-eBay data;
+   - high-value item where a wrong anchor is costly and a ~60s second read
+     is worth it.
+
+   When triggered: SOLD URL with `LH_Sold=1&LH_Complete=1&_sop=3`. Extract
+   rows prefixed "Sold <date>"; skip Sponsored / "Shop on eBay" house ads.
+   Tag `[C — Chrome]`. `get_page_text` gives titles/prices/dates but not
+   per-item URLs; when you can't capture each href (via `read_page`/
+   `find`), cite the SOLD-search URL as the verifiable source and say so.
+   Subject to browser read-tier limits (see [list_edit_chrome.md](list_edit_chrome.md)).
+
+6. **Active fallback** (only when sold returns zero direct matches): drop
+   the sold filters, capture active listings, tag `[active — ASKING
    PRICE]`, treat as Tier C ceiling-context only.
-6. **Cross-reference** A vs B: agreement = high-confidence anchor;
-   divergence = trust B (direct eBay) over A.
 
-Only after steps 1–5 dry up do you fall back to the closest era-peer —
-and then state how hard you looked ("3 formulations, sold+active, no
-exact match"). Per _shared, an exact match found this way beats any
-era-peer; commit to it.
+7. **Cross-reference** A vs B (vs C if it ran): agreement = high-confidence
+   anchor; divergence = trust the direct-eBay sold source (B/C) over A's
+   broad web results.
 
-## Source C — Apify (paid, opt-in, HARD gate)
+Only after the hunt dries up do you fall back to the closest era-peer —
+and then state how hard you looked ("3 formulations, A+B+C, no exact
+match"). Per _shared, an exact match found this way beats any era-peer;
+commit to it.
 
-Tabled by default; known data issues (coverage variance run-to-run;
-silent GBP→USD; historical BRL inflation — see the Apify bug evidence
-under `deprecated/`). Run ONLY when the user explicitly
-asks, OR when A AND B both genuinely fail — then surface one fallback
-offer. Either way confirm cost first (HARD gate, per RUN.md):
+## Apify notes (the Stage B backend)
 
-> "About to spend ~$0.12 on an Apify query for `<query>`. Approve,
-> change, or skip?"
-
-Tag `[C — Apify]`. Never call without explicit approval.
+Apify is now the default Stage B source and runs without a gate. It has
+documented quirks — run-to-run coverage variance, silent GBP→USD,
+historical BRL inflation (raw evidence under `deprecated/`). The Stage-B
+guardrails above (USD-only filter, outlier drop, dispersion check, Chrome
+cross-check when suspect) exist specifically to catch these. To run
+without Apify entirely, leave the Apify token unset — Stage B then routes
+to Chrome (Stage C) automatically.
 
 ## URLs (mandatory)
 
@@ -121,8 +151,8 @@ The three tiers still apply, anchored on the era-peer.
     Working price (provisional): $X (Recommended tier). Final price is the
     user's call at publish time; recorded here for review.
 
-(No "awaiting approval" stop — headless adopts the provisional price and
-logs it. Apify is the only thing that ever stops PRICE.)
+(No stop. Headless adopts the provisional price and logs it; PRICE runs
+end-to-end without a gate.)
 
 ## Research notes (per item — catches what comps can't)
 
