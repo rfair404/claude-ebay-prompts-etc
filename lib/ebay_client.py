@@ -74,10 +74,12 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import sys
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -174,13 +176,21 @@ def load_credentials() -> EbayCredentials:
             f"(got '{env}' from {config_path()})"
         )
 
+    # Per-environment credential blocks (ebay.sandbox.* / ebay.production.*)
+    # take precedence; fall back to flat ebay.* fields for legacy configs.
+    env_section = section.get(env) or {}
+
+    def pick(key):
+        v = env_section.get(key)
+        return v if v is not None else section.get(key)
+
     return EbayCredentials(
         environment=env,
-        app_id=section.get("app_id"),
-        cert_id=section.get("cert_id"),
-        dev_id=section.get("dev_id"),
-        redirect_uri=section.get("redirect_uri"),
-        user_refresh_token=section.get("user_refresh_token"),
+        app_id=pick("app_id"),
+        cert_id=pick("cert_id"),
+        dev_id=pick("dev_id"),
+        redirect_uri=pick("redirect_uri"),
+        user_refresh_token=pick("user_refresh_token"),
     )
 
 
@@ -371,6 +381,270 @@ def api_get(path: str, query: Optional[dict] = None,
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
         raise EbayAPIError(e.code, f"GET {path} → HTTP {e.code}", body_text) from e
+
+
+# ---------------------------------------------------------------------------
+# OAuth — user-context access token (refresh_token grant)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _UserTokenCache:
+    token: Optional[str] = None
+    expires_at: float = 0.0
+
+
+_user_cache = _UserTokenCache()
+
+
+def get_user_access_token(creds: Optional[EbayCredentials] = None,
+                          force_refresh: bool = False) -> str:
+    """Return a valid USER-context access token from the stored refresh_token.
+
+    Required for every Sell-* write (Inventory, Offer, Account). The
+    refresh_token is captured once via the user-consent flow
+    (see user_consent_url / exchange_authorization_code) and stored in
+    config as ebay.user_refresh_token. User access tokens last ~2 hours;
+    we cache and re-fetch within 60s of expiry.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError(
+            "User refresh_token (ebay.user_refresh_token) is not configured.\n"
+            "  Sell-API writes need user-context OAuth. Capture it once:\n"
+            "    1. python ebay_client.py --user-consent-url\n"
+            "    2. visit the URL, sign in, authorize\n"
+            "    3. python ebay_client.py --exchange-code <code-from-callback>\n"
+            f"    4. paste the printed refresh_token into {config_path()}"
+        )
+
+    now = time.time()
+    if not force_refresh and _user_cache.token and _user_cache.expires_at - 60 > now:
+        return _user_cache.token
+
+    basic = base64.b64encode(f"{creds.app_id}:{creds.cert_id}".encode("utf-8")).decode("ascii")
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": creds.user_refresh_token,
+        "scope": " ".join(USER_SCOPES_SELL),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        creds.env["token_url"], data=body, method="POST",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode("utf-8", errors="replace")
+        raise EbayAuthError(
+            f"Refreshing user token failed (HTTP {e.code}):\n  {body_text}\n"
+            "  The refresh_token may be expired (~18 month lifetime) or scoped wrong; re-capture it."
+        ) from e
+    except urllib.error.URLError as e:
+        raise EbayAuthError(f"Network error reaching token endpoint: {e}") from e
+
+    token = payload.get("access_token")
+    if not token:
+        raise EbayAuthError(f"Refresh response missing access_token: {payload}")
+    _user_cache.token = token
+    _user_cache.expires_at = now + float(payload.get("expires_in", 7200))
+    return token
+
+
+# ---------------------------------------------------------------------------
+# Generic JSON write request (user-context: POST / PUT / DELETE)
+# ---------------------------------------------------------------------------
+
+def api_send(method: str, path: str, body: Optional[dict] = None,
+             creds: Optional[EbayCredentials] = None,
+             marketplace: Optional[str] = DEFAULT_MARKETPLACE,
+             content_language: str = "en-US",
+             extra_headers: Optional[dict] = None) -> dict:
+    """Issue a user-context JSON request (POST/PUT/DELETE) against the Sell API.
+
+    Returns the decoded JSON body (or {} for empty 2xx like 204). Raises
+    EbayAPIError on non-2xx, carrying eBay's error body for diagnosis.
+
+    NOTE: There is intentionally NO helper here for the publish endpoint.
+    The no-publish firewall is enforced by absence (see list_edit.py).
+    """
+    creds = creds or load_credentials()
+    token = get_user_access_token(creds)
+    if not path.startswith("/"):
+        path = "/" + path
+    url = creds.env["api_base"] + path
+
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Content-Language": content_language,
+    }
+    if marketplace:
+        headers["X-EBAY-C-MARKETPLACE-ID"] = marketplace
+    if extra_headers:
+        headers.update(extra_headers)
+
+    # eBay production is occasionally flaky (transient 5xx; eventual
+    # consistency right after a create). Retry transient failures with
+    # backoff. Only retry 5xx for IDEMPOTENT methods (GET/PUT/DELETE) so a
+    # POST create can't double-fire; network errors retry for any method
+    # (the request likely never reached eBay).
+    m = method.upper()
+    idempotent = m in ("GET", "PUT", "DELETE")
+    for attempt in range(3):
+        req = urllib.request.Request(url, data=data, method=m, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else {}
+        except urllib.error.HTTPError as e:
+            body_text = e.read().decode("utf-8", errors="replace")
+            err = EbayAPIError(e.code, f"{m} {path} → HTTP {e.code}", body_text)
+            if e.code >= 500 and idempotent and attempt < 2:
+                time.sleep(0.8 * (attempt + 1)); continue
+            raise err from e
+        except urllib.error.URLError as e:
+            err = EbayAPIError(0, f"{m} {path} → network error: {e}", None)
+            if attempt < 2:
+                time.sleep(0.8 * (attempt + 1)); continue
+            raise err from e
+
+
+# ---------------------------------------------------------------------------
+# Account API helpers — business policies + inventory locations
+# (createOffer requires the policy IDs + a merchantLocationKey; these are
+#  account-specific and captured once into config. --setup-check lists them.)
+# ---------------------------------------------------------------------------
+
+def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
+                             creds: Optional[EbayCredentials] = None) -> list[dict]:
+    data = api_send("GET", "/sell/account/v1/fulfillment_policy",
+                    creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+    return data.get("fulfillmentPolicies") or []
+
+
+def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
+                         creds: Optional[EbayCredentials] = None) -> list[dict]:
+    data = api_send("GET", "/sell/account/v1/payment_policy",
+                    creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+    return data.get("paymentPolicies") or []
+
+
+def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
+                        creds: Optional[EbayCredentials] = None) -> list[dict]:
+    data = api_send("GET", "/sell/account/v1/return_policy",
+                    creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+    return data.get("returnPolicies") or []
+
+
+def get_inventory_locations(creds: Optional[EbayCredentials] = None) -> list[dict]:
+    data = api_send("GET", "/sell/inventory/v1/location", creds=creds, marketplace=None)
+    return data.get("locations") or []
+
+
+# ---------------------------------------------------------------------------
+# eBay Picture Services (EPS) upload — Trading API UploadSiteHostedPictures
+# ---------------------------------------------------------------------------
+#
+# The REST Sell API has no binary-image upload endpoint; product.imageUrls
+# must already be hosted. The documented way to host a local file on eBay
+# is the Trading API call UploadSiteHostedPictures, which returns a durable
+# EPS FullURL. It uses the same OAuth user token (as an IAF token) plus the
+# dev/app/cert names. This is the function that makes photo upload headless
+# — no browser, no drag-and-drop (the V1 + Chrome-stand-in pain point).
+
+_TRADING_COMPAT_LEVEL = "967"
+_TRADING_SITE_ID = "0"  # US
+
+
+def _trading_endpoint(creds: EbayCredentials) -> str:
+    return ("https://api.sandbox.ebay.com/ws/api.dll"
+            if creds.environment == "sandbox"
+            else "https://api.ebay.com/ws/api.dll")
+
+
+def upload_site_hosted_picture(image_bytes: bytes, picture_name: str = "photo",
+                               creds: Optional[EbayCredentials] = None) -> str:
+    """Upload one image to EPS via UploadSiteHostedPictures; return the EPS URL.
+
+    Requires: app_id, cert_id, dev_id (Trading API needs all three names),
+    and a user refresh_token. Raises EbayAuthError if any are missing.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("EPS upload needs a user refresh_token (Sell scope). See --check.")
+    if not creds.dev_id:
+        raise EbayAuthError(
+            "EPS upload via the Trading API needs ebay.dev_id (Dev ID) in config.\n"
+            "  Find it at https://developer.ebay.com/my/keys (same keyset as app_id/cert_id)."
+        )
+    iaf = get_user_access_token(creds)
+
+    xml = (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+        f"<PictureName>{_xml_escape(picture_name)}</PictureName>"
+        "<PictureSet>Supersize</PictureSet>"
+        "</UploadSiteHostedPicturesRequest>"
+    )
+
+    boundary = "----ebaybizEPSboundary7d01b2"
+    pre = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="XML Payload"\r\n'
+        "Content-Type: text/xml;charset=utf-8\r\n\r\n"
+        f"{xml}\r\n"
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="dummy"; filename="{_xml_escape(picture_name)}.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode("utf-8")
+    post = f"\r\n--{boundary}--\r\n".encode("utf-8")
+    payload = pre + image_bytes + post
+
+    headers = {
+        "X-EBAY-API-COMPATIBILITY-LEVEL": _TRADING_COMPAT_LEVEL,
+        "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
+        "X-EBAY-API-SITEID": _TRADING_SITE_ID,
+        "X-EBAY-API-DEV-NAME": creds.dev_id,
+        "X-EBAY-API-APP-NAME": creds.app_id,
+        "X-EBAY-API-CERT-NAME": creds.cert_id,
+        "X-EBAY-API-IAF-TOKEN": iaf,
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = urllib.request.Request(_trading_endpoint(creds), data=payload, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body_text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise EbayAPIError(e.code, f"UploadSiteHostedPictures → HTTP {e.code}",
+                           e.read().decode("utf-8", errors="replace")) from e
+
+    ack = _xml_tag(body_text, "Ack") or _xml_tag(body_text, "ack")
+    if ack and ack.lower() not in ("success", "warning"):
+        raise EbayAPIError(0, "UploadSiteHostedPictures returned a Failure", body_text)
+    full_url = _xml_tag(body_text, "FullURL")
+    if not full_url:
+        raise EbayAPIError(0, "UploadSiteHostedPictures response had no <FullURL>", body_text)
+    return full_url
+
+
+def _xml_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+def _xml_tag(xml_text: str, tag: str) -> Optional[str]:
+    """Extract the first <tag>...</tag> text (namespace-agnostic, no XML dep)."""
+    m = re.search(rf"<(?:\w+:)?{tag}>(.*?)</(?:\w+:)?{tag}>", xml_text, re.DOTALL)
+    return m.group(1).strip() if m else None
 
 
 # ---------------------------------------------------------------------------
