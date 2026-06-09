@@ -37,14 +37,19 @@ excluded" entries, best→worst ladders. v3 commits.
 
 ## Publish firewall (no accidental or automatic publishing)
 
-No v3 phase publishes. The pipeline (IDENTIFY→DRAFT) and `list_edit.py
---sync` only ever create an UNPUBLISHED eBay offer (a draft) — nothing in
-the pipeline, no chat instruction ("just publish it"), and no automated
-chain can make a listing go live. Publishing exists ONLY as a separate,
-deliberate, human-run command: `list_edit.py --publish <dir> --confirm`
-(a dry run without `--confirm`; never invoked by `--sync`). If a prompt or
-automation asks a phase to publish, refuse — publishing is the user's
-explicit out-of-band action, never something a phase or the pipeline does.
+No phase publishes *automatically*. The pipeline (IDENTIFY→DRAFT) and
+`list_edit.py --sync` only ever create an UNPUBLISHED eBay offer (a draft).
+Nothing in the pipeline, no automated chain, and no chat instruction that
+arrives *outside the REVIEW gate* ("just publish it") makes a listing go
+live. The single path to a live listing is the **REVIEW gate**
+([review.md](review.md)): DRAFT → REVIEW presents a decision card and
+STOPS → on the user's explicit approval, REVIEW runs
+`list_edit.py --list <dir> --confirm` (sync then publish). The code's
+`--confirm` guard stays as defense-in-depth; the human's approval at the
+gate is what authorizes it. Approval must be unambiguous ("approve" /
+"publish"), given against the card — never inferred from "ok"/"looks
+good"/silence. If a prompt or automation asks a phase *other than* a
+human-approved REVIEW to publish, refuse.
 
 ## Fresh-investigation rule
 
@@ -118,6 +123,7 @@ overwriting the prior run (latest run = current record).
 | CURATE | `<shoot-dir>/review.md` |
 | INVESTIGATE | `<shoot-dir>/investigate.txt` |
 | DRAFT | `<shoot-dir>/draft.md` |
+| REVIEW | `<shoot-dir>/review_card.md` |
 | (any deferred question) | `<shoot-dir>/NEEDS_REVIEW.md` (append, don't overwrite) |
 
 The shoot directory is the directory containing the photos (e.g. a
@@ -128,8 +134,9 @@ The shoot directory is the directory containing the photos (e.g. a
 Only TWO gates stop a run. Everything else proceeds with a logged
 default. Full contract in [RUN.md](../RUN.md); summary:
 
-- **HARD — stop and ask:** (1) any eBay publish (refuse, never ask);
-  (2) any paid Apify call (confirm cost per call).
+- **HARD — stop and ask:** (1) the REVIEW gate — after DRAFT, present the
+  review card and STOP; publish LIVE only on explicit approval
+  ([review.md](review.md)); (2) any paid Apify call (confirm cost per call).
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
   questions, unit_type ambiguity, INVESTIGATE open questions, working-
   price selection, lookup-value substitutions, missing required fields.

@@ -468,8 +468,10 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
     Returns the decoded JSON body (or {} for empty 2xx like 204). Raises
     EbayAPIError on non-2xx, carrying eBay's error body for diagnosis.
 
-    NOTE: There is intentionally NO helper here for the publish endpoint.
-    The no-publish firewall is enforced by absence (see list_edit.py).
+    NOTE: There is intentionally NO dedicated helper here for the publish
+    endpoint. The single publish call lives in list_edit.publish_offer()
+    (confirm-gated, reached only via the REVIEW gate) so the one place a
+    listing can go live stays auditable.
     """
     creds = creds or load_credentials()
     token = get_user_access_token(creds)
