@@ -78,6 +78,12 @@ DEFAULT_RUN_TIMEOUT_SEC = 300
 VALID_SORTS = {"best_match", "newly_listed", "price_low", "price_high"}
 VALID_LISTING_TYPES = {"all", "auction", "buy_it_now"}
 
+# Records the most recent run's provenance so the CLI (and PRICE's research
+# log) can cite concrete proof a query hit the Apify backend: the run id,
+# actor, and comp count. Populated by search_ebay_sold() even when the run
+# is later flagged for a currency leak.
+LAST_RUN: dict = {}
+
 # ---------------------------------------------------------------------------
 # Currency-leak validator (provider-agnostic; does NOT trust currency labels)
 # ---------------------------------------------------------------------------
@@ -505,6 +511,11 @@ def search_ebay_sold(
         if comp is not None:
             comps.append(comp)
 
+    # Provenance for PRICE's research log (set before leak check so a flagged
+    # run still records that it reached the backend).
+    LAST_RUN.clear()
+    LAST_RUN.update(run_id=run_id, actor=actor, queries=keywords, n_comps=len(comps))
+
     return _check_currency_leak(comps, on_currency_leak)
 
 
@@ -558,6 +569,8 @@ def _cli() -> None:
             on_currency_leak=args.on_leak,
         )
     except CurrencyLeakError as e:
+        if LAST_RUN.get("run_id"):
+            print(f"Apify run: {LAST_RUN['run_id']}  (actor {LAST_RUN.get('actor')})  — FLAGGED currency leak")
         print(f"CURRENCY LEAK: {e}", file=sys.stderr)
         print("  -> prices NOT returned. Re-run with --on-leak repair to auto-correct, "
               "or use the Chrome (Stage C) path.", file=sys.stderr)
@@ -595,6 +608,9 @@ def _cli() -> None:
 
     query_display = " | ".join(args.query)
     print(f"Found {len(comps)} comp(s) for: {query_display}")
+    if LAST_RUN.get("run_id"):
+        print(f"Apify run: {LAST_RUN['run_id']}  (actor {LAST_RUN.get('actor')})  "
+              f"— proof this query hit the Apify backend")
     print(f"Equivalent eBay search: {build_sold_search_url(args.query[0])}")
     print()
     for i, c in enumerate(comps, 1):

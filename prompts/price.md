@@ -61,9 +61,14 @@ stage is autonomous — PRICE never stops to ask.
    - Still drop the usual outliers (single bid, >2× median). If Stage B
      returns <3 usable comps or dispersion disagrees badly with Stage A,
      treat as LOW confidence → Stage C.
+   - **Proof-of-run is mandatory.** The CLI prints `Apify run: <id>` — copy
+     that run id into the Research log (it's verifiable in the Apify backend).
+     **Never report Stage B as "ran" without a run id.** If you have no run
+     id, it did not run — say so and why.
    - **If Apify is unconfigured or the run fails** (no token / ApifyError /
-     timeout): fall through to Stage C for the same eBay-sold data. Note
-     "Apify unavailable → Chrome" in the Hunt line.
+     timeout / **no shell tool to run the CLI in this environment**): record
+     `B — UNAVAILABLE: <reason>` in the Research log and fall through to
+     Stage C for the same eBay-sold data. Do NOT silently skip B.
 
 4. **If no exact match yet, broaden and re-run A+B:** drop the
    least-load-bearing keyword (5→3 words), then try a synonym for Type.
@@ -116,9 +121,38 @@ entirely, leave the Apify token unset — Stage B then routes to Chrome
 Every comp carries a clickable source URL. A comp without a URL is not a
 comp.
 
+## Research log (MANDATORY — proof every search type actually ran)
+
+Every PRICE run, for every item, emits a Research log accounting for ALL
+THREE stages explicitly. This is non-negotiable evidence: it shows what
+research happened, not just the comps that survived. Stages A and B run on
+EVERY item; C is conditional. Each stage is `RAN` (with proof) /
+`SKIPPED` / `UNAVAILABLE` (with a reason) / `NOT TRIGGERED` (C only).
+
+(Note: "Stage A/B/C" = the search METHOD — WebSearch / Apify / Chrome.
+Don't confuse with the comp-quality "Tier A/B/C" further down.)
+
+    Research log — Item <N>
+      A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding>
+      B · Apify     : RAN — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%)
+                      [ALT] UNAVAILABLE — <no shell tool / no token / ApifyError / CurrencyLeakError>
+      C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)
+                      [ALT] RAN — <low-confidence trigger> — <n> rows
+                      [ALT] UNAVAILABLE — <no browser/Chrome MCP in this environment>
+
+Hard rules for the log:
+- **A and B must show `RAN` on every item.** If either is `SKIPPED`/
+  `UNAVAILABLE`, that is a flagged problem — also append a line to
+  `NEEDS_REVIEW.md` so the user sees research was incomplete.
+- **B's `RAN` line MUST carry a run id** (proof it hit the Apify backend).
+  No run id ⇒ it did not run ⇒ write `UNAVAILABLE — <reason>`, never `RAN`.
+- **C must be accounted for** — `NOT TRIGGERED` + why, `RAN` + trigger, or
+  `UNAVAILABLE` + why. Never omit the C line.
+- The log records what you DID; the tiers below record what you CONCLUDED.
+
 ## Output
 
-Lead with the headline, then comps, then the three tiers, then research.
+Lead with the headline, then the Research log, then comps, then tiers.
 
     Max supported price: $X   [anchored on: <exact match | era-peer + gap>]
 
@@ -126,6 +160,7 @@ Per item:
 
     === PRICE — Item <N> (<short name>) ===
     Comps refreshed: YYYY-MM-DD   ·   Data quality: good / partial / thin
+    Research log:  (the A/B/C block above — REQUIRED)
     Hunt: <one line — formulations tried, sources, exact-match yes/no>
 
 For each scenario (or just "primary" when no bracket — most items):

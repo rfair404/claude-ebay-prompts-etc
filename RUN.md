@@ -47,8 +47,9 @@ Reclassify every "ask the user" moment as HARD or SOFT.
 
 This is the ONLY reason a run stops. PRICE's Apify call (Stage B) used to
 be a second HARD gate; it no longer is — Apify runs automatically as part
-of the comp hunt (~$0.12/run), no cost confirmation. See PRICE for the
-Stage-A/B/C ordering and the data-quality guardrails on Apify.
+of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
+confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
+validator on Apify.
 
 ### SOFT gates — proceed with the default, log it
 
