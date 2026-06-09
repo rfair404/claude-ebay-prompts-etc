@@ -48,20 +48,25 @@ CLI usage (manual testing):
 
 from __future__ import annotations
 
+import json
 import re
+import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Optional, Union
 
-try:
-    from apify_client import ApifyClient
-except ImportError as e:
-    raise ImportError(
-        "apify-client is required. Install with: pip install apify-client"
-    ) from e
+# NOTE: no third-party dependency. The Apify backend is reached over its
+# plain HTTPS REST API using only the Python standard library (urllib), so
+# this runs in minimal/sandboxed environments where `pip install` is blocked
+# (e.g. a Cowork tab whose proxy 403s PyPI). The `apify-client` package is
+# NOT required.
 
 from config import ConfigError, get_apify_actor, get_apify_token
+
+APIFY_API_BASE = "https://api.apify.com/v2"
 
 
 # ---------------------------------------------------------------------------
@@ -218,15 +223,74 @@ def build_sold_search_url(query: str, sort_highest_price: bool = True) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Apify client
+# Apify REST transport (stdlib only — no apify-client needed)
 # ---------------------------------------------------------------------------
 
-def _client() -> ApifyClient:
+def _api_request(method: str, path: str, token: str,
+                 body: Optional[dict] = None, timeout: int = 60) -> Any:
+    """One Apify REST call. Returns the decoded `data` payload (or raw JSON)."""
+    url = f"{APIFY_API_BASE}/{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300] if hasattr(e, "read") else ""
+        raise ApifyError(f"Apify API {method} {path} -> HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise ApifyError(
+            f"Apify API unreachable ({method} {path}): {e.reason}. "
+            f"If this is a sandbox, its proxy may be blocking api.apify.com."
+        ) from e
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    return parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
+
+
+def _run_actor(actor: str, run_input: dict, timeout_sec: int) -> tuple[list[dict], str]:
+    """Start an actor run over REST, poll to completion, return (items, run_id).
+
+    Pure stdlib. `actor` may be 'user/name' (converted to 'user~name' for the
+    API path). The run id is returned as verifiable proof the query executed.
+    """
     try:
         token = get_apify_token()
     except ConfigError as e:
         raise ApifyError(str(e)) from e
-    return ApifyClient(token)
+
+    actor_path = actor.replace("/", "~")
+    run = _api_request(
+        "POST", f"acts/{actor_path}/runs?timeout={int(timeout_sec)}",
+        token, body=run_input, timeout=60,
+    )
+    run_id = (run or {}).get("id")
+    if not run_id:
+        raise ApifyError("Apify run start returned no run id")
+
+    deadline = time.monotonic() + timeout_sec
+    status = (run or {}).get("status")
+    dataset_id = (run or {}).get("defaultDatasetId")
+    while status in ("READY", "RUNNING"):
+        if time.monotonic() > deadline:
+            raise ApifyError(f"Apify run {run_id} timed out after {timeout_sec}s (status={status})")
+        time.sleep(2.5)
+        run = _api_request("GET", f"actor-runs/{run_id}", token, timeout=30)
+        status = (run or {}).get("status")
+        dataset_id = (run or {}).get("defaultDatasetId") or dataset_id
+
+    if status != "SUCCEEDED":
+        raise ApifyError(f"Apify run {run_id} did not succeed (status={status})")
+    if not dataset_id:
+        raise ApifyError(f"Apify run {run_id} has no defaultDatasetId")
+
+    items = _api_request("GET", f"datasets/{dataset_id}/items?clean=true&format=json",
+                         token, timeout=60)
+    return (items or []), run_id
 
 
 # ---------------------------------------------------------------------------
@@ -476,33 +540,8 @@ def search_ebay_sold(
     if max_price is not None:
         run_input["maxPrice"] = max_price
 
-    client = _client()
-
-    try:
-        run = client.actor(actor).call(
-            run_input=run_input,
-            run_timeout=timedelta(seconds=timeout_sec),
-        )
-    except Exception as e:
-        raise ApifyError(f"Apify run failed: {e}") from e
-
-    if run is None:
-        raise ApifyError("Apify .call() returned no run object")
-
-    # Normalize the run object (Pydantic model in newer SDKs, dict in older).
-    status = getattr(run, "status", None) if not isinstance(run, dict) else run.get("status")
-    run_id = getattr(run, "id", None) if not isinstance(run, dict) else run.get("id")
-    if status != "SUCCEEDED":
-        raise ApifyError(f"Apify run did not succeed (status={status}, run id={run_id})")
-    if not run_id:
-        raise ApifyError("Apify run has no id")
-
-    # Fetch the run's default dataset directly by run id — robust across SDK
-    # versions where model_dump() drops defaultDatasetId.
-    try:
-        raw_items = list(client.run(run_id).dataset().iterate_items())
-    except Exception as e:
-        raise ApifyError(f"failed to read Apify dataset for run {run_id}: {e}") from e
+    # Execute over the Apify REST API (stdlib only — no apify-client).
+    raw_items, run_id = _run_actor(actor, run_input, timeout_sec)
 
     single_tag = keywords[0] if len(keywords) == 1 else None
     comps: list[CompRecord] = []

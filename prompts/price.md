@@ -146,7 +146,8 @@ Don't confuse with the comp-quality "Tier A/B/C" further down.)
     Research log — Item <N>
       A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding>
       B · Apify     : RAN — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%)
-                      [ALT] UNAVAILABLE — <no shell tool / no token / ApifyError / CurrencyLeakError>
+                      [ALT] UNAVAILABLE — <no shell/code tool to run it | api.apify.com egress blocked | no token | CurrencyLeakError>
+                      (note: no `pip install` needed — the wrapper is stdlib-only)
       C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)
                       [ALT] RAN — <low-confidence trigger> — <n> rows
                       [ALT] UNAVAILABLE — <no browser/Chrome MCP in this environment>

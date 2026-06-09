@@ -5,8 +5,15 @@
 ### 1. Install dependencies
 
 ```bash
-pip install apify-client pyyaml
+pip install pyyaml
 ```
+
+`apify_ebay.py` needs **no third-party package** — it calls the Apify REST
+API with the Python standard library only. This is deliberate: it runs in
+sandboxed environments (e.g. a Cowork tab) where `pip install` is blocked.
+It only needs (a) Python, (b) network egress to `api.apify.com`, and (c)
+the Apify token (config file or `APIFY_API_TOKEN` env var). `pyyaml` is for
+`config.py` / the eBay Sell-API code, not for Apify.
 
 ### 2. Create the config file
 
