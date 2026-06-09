@@ -56,8 +56,10 @@ stage is autonomous — PRICE never stops to ask.
      the tool reports. MCP calls are brokered outside the code sandbox, so
      this works where direct `api.apify.com` egress is blocked.
    - **Path 2 — stdlib CLI (when you have a shell + egress to
-     api.apify.com).** Run `python lib/apify_ebay.py "<query>"` (no pip — it
-     uses only the standard library). Capture the printed `Apify run: <id>`.
+     api.apify.com).** Run `python lib/apify_ebay.py "<query>" --save-dir
+     <shoot-dir>` (no pip — standard library only). It saves the raw results
+     JSON beside `price.txt` and prints `Apify run: <id>` + `Saved results:
+     <path>`. Capture both.
    - **Map + validate (either path):** fields → comps (same shape); drop
      single-bid / >2× median outliers to Tier C. The CLI auto-runs the
      charm-price currency check; **on the MCP path you must eyeball it** —
@@ -66,9 +68,13 @@ stage is autonomous — PRICE never stops to ask.
      `currency`/`USD` label; the price pattern is what matters. (The
      US-proxy actor makes leaks unlikely — the old caffein.dev actor leaked
      BRL/CZK at ~5× mislabeled USD, which is why we switched.)
+   - **Save the results (both paths).** The CLI auto-saves the run JSON
+     (`--save-dir <shoot-dir>` to place it beside `price.txt`). On the MCP
+     path, write the returned items to `<shoot-dir>/apify_<runId>.json`
+     yourself. This is the audit trail + cache for the comps.
    - **Proof-of-run is mandatory.** Record the **Apify run id** (from the
-     MCP result or the CLI's `Apify run:` line) in the Research log — it's
-     verifiable in the Apify backend. **Never report Stage B as "ran"
+     MCP result or the CLI's `Apify run:` line) AND the saved JSON path in
+     the Research log — both are verifiable. **Never report Stage B as "ran"
      without a run id.**
    - Still drop outliers; if Stage B yields <3 usable comps or dispersion
      disagrees badly with Stage A, treat as LOW confidence → Stage C.
@@ -163,7 +169,7 @@ Don't confuse with the comp-quality "Tier A/B/C" further down.)
 
     Research log — Item <N>
       A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding>
-      B · Apify     : RAN via <MCP|CLI> — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%)
+      B · Apify     : RAN via <MCP|CLI> — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%) — saved <path>.json
                       [ALT] UNAVAILABLE — <no Apify MCP tool AND no shell/egress | api.apify.com egress blocked (sandbox proxy) | no token | CurrencyLeakError>
                       (run id comes from the MCP tool result or the CLI's `Apify run:` line; no `pip install` needed)
       C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)

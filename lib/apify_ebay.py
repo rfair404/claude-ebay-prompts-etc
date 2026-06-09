@@ -44,18 +44,26 @@ Programmatic usage:
 CLI usage (manual testing):
     python apify_ebay.py "vintage polo ralph lauren on safari catalog"
     python apify_ebay.py "..." --max 50 --sort price_high --json
+    python apify_ebay.py "..." --save-dir samples/my-shoot   # save JSON beside price.txt
+
+Result persistence: every call saves its results to JSON (run metadata,
+normalized comps, raw dataset) for audit/cache. Default location is
+$APIFY_RUNS_DIR or <repo>/apify_runs/; override with --save-dir (or the
+search_ebay_sold(save_dir=...) arg), or disable with --no-save.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional, Union
 
 # NOTE: no third-party dependency. The Apify backend is reached over its
@@ -462,6 +470,62 @@ def _map_to_comp_record(item: dict, keyword_tag: Optional[str]) -> Optional[Comp
 
 
 # ---------------------------------------------------------------------------
+# Result persistence (every Apify call is saved as JSON — audit trail / cache)
+# ---------------------------------------------------------------------------
+
+def _comp_to_dict(c: "CompRecord") -> dict:
+    return {
+        "title": c.title, "sold_price": c.sold_price, "sold_currency": c.sold_currency,
+        "sold_date": c.sold_date, "condition": c.condition, "listing_type": c.listing_type,
+        "bids_count": c.bids_count, "shipping_cost": c.shipping_cost,
+        "total_price": c.total_price, "seller_username": c.seller_username,
+        "seller_feedback_score": c.seller_feedback_score,
+        "seller_feedback_pct": c.seller_feedback_pct,
+        "item_id": c.item_id, "keyword_tag": c.keyword_tag, "url": c.url,
+    }
+
+
+def _default_runs_dir() -> Path:
+    """Where run JSON is saved by default: $APIFY_RUNS_DIR or <repo>/apify_runs."""
+    env = os.environ.get("APIFY_RUNS_DIR")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent / "apify_runs"
+
+
+def save_run_json(run_id: str, actor: str, queries: list[str],
+                  raw_items: list[dict], comps: list["CompRecord"],
+                  save_dir: Optional[Union[str, Path]] = None) -> str:
+    """Persist one Apify call's results to a JSON file; return the path.
+
+    Stores run metadata, the normalized comps, and the raw dataset items, so
+    a run can be audited or re-read later without re-querying (and re-paying).
+    """
+    base = Path(save_dir) if save_dir else _default_runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = base / f"apify_run_{ts}_{run_id}.json"
+    prices = [c.sold_price for c in comps if c.sold_price]
+    charm = _charm_share(prices) if prices else None
+    payload = {
+        "run_id": run_id,
+        "actor": actor,
+        "queries": queries,
+        "saved_at_utc": ts,
+        "n_comps": len(comps),
+        "charm_price_share": round(charm, 3) if charm is not None else None,
+        "currency_leak_suspected": bool(
+            len(prices) >= _MIN_SAMPLES_FOR_LEAK_CHECK
+            and charm is not None and charm < _CHARM_LEAK_THRESHOLD
+        ),
+        "comps": [_comp_to_dict(c) for c in comps],
+        "raw_items": raw_items,
+    }
+    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -479,6 +543,8 @@ def search_ebay_sold(
     actor_id: Optional[str] = None,
     timeout_sec: int = DEFAULT_RUN_TIMEOUT_SEC,
     on_currency_leak: str = "raise",
+    save: bool = True,
+    save_dir: Optional[Union[str, Path]] = None,
 ) -> list[CompRecord]:
     """Run the eBay sold-listings Actor and return USD comps.
 
@@ -555,6 +621,14 @@ def search_ebay_sold(
     LAST_RUN.clear()
     LAST_RUN.update(run_id=run_id, actor=actor, queries=keywords, n_comps=len(comps))
 
+    # Persist results to JSON BEFORE the leak check, so even a leak-flagged
+    # run leaves an auditable record (and a cache to avoid re-querying).
+    if save:
+        try:
+            LAST_RUN["saved_path"] = save_run_json(run_id, actor, keywords, raw_items, comps, save_dir)
+        except OSError as e:
+            LAST_RUN["save_error"] = str(e)
+
     return _check_currency_leak(comps, on_currency_leak)
 
 
@@ -589,6 +663,11 @@ def _cli() -> None:
                         help=f"Max seconds for the Apify run (default: {DEFAULT_RUN_TIMEOUT_SEC})")
     parser.add_argument("--on-leak", default="raise", choices=["raise", "repair", "ignore"],
                         help="How to handle a detected currency leak (default: raise)")
+    parser.add_argument("--save-dir", help="Directory to save the run JSON in "
+                        "(default: $APIFY_RUNS_DIR or <repo>/apify_runs). "
+                        "Tip: pass the shoot dir to save alongside price.txt.")
+    parser.add_argument("--no-save", action="store_true",
+                        help="Do not save the run results to JSON")
     parser.add_argument("--json", action="store_true",
                         help="Output raw JSON instead of human-readable list")
     args = parser.parse_args()
@@ -606,10 +685,14 @@ def _cli() -> None:
             actor_id=args.actor,
             timeout_sec=args.timeout,
             on_currency_leak=args.on_leak,
+            save=not args.no_save,
+            save_dir=args.save_dir,
         )
     except CurrencyLeakError as e:
         if LAST_RUN.get("run_id"):
             print(f"Apify run: {LAST_RUN['run_id']}  (actor {LAST_RUN.get('actor')})  — FLAGGED currency leak")
+        if LAST_RUN.get("saved_path"):
+            print(f"Saved results: {LAST_RUN['saved_path']}")
         print(f"CURRENCY LEAK: {e}", file=sys.stderr)
         print("  -> prices NOT returned. Re-run with --on-leak repair to auto-correct, "
               "or use the Chrome (Stage C) path.", file=sys.stderr)
@@ -650,6 +733,8 @@ def _cli() -> None:
     if LAST_RUN.get("run_id"):
         print(f"Apify run: {LAST_RUN['run_id']}  (actor {LAST_RUN.get('actor')})  "
               f"— proof this query hit the Apify backend")
+    if LAST_RUN.get("saved_path"):
+        print(f"Saved results: {LAST_RUN['saved_path']}")
     print(f"Equivalent eBay search: {build_sold_search_url(args.query[0])}")
     print()
     for i, c in enumerate(comps, 1):
