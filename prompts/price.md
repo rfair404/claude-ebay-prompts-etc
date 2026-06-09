@@ -116,10 +116,21 @@ the charm-price currency check (defense in depth) and raises
 entirely, leave the Apify token unset — Stage B then routes to Chrome
 (Stage C) automatically.
 
-## URLs (mandatory)
+## URLs (mandatory — the user verifies comps by clicking them)
 
-Every comp carries a clickable source URL. A comp without a URL is not a
-comp.
+Every comp carries a clickable source URL inline (a comp without a URL is
+not a comp). In ADDITION, every PRICE output ends with a consolidated
+**Comp URLs** list (see Output) so the user can click straight through and
+view the comps themselves — **exact / near-exact matches first**, then
+ceiling/context comps, then the eBay sold-search URL for the whole result
+set. These live in `price.txt` (persisted), so they're saved for reference.
+
+- Use **direct per-item eBay listing URLs** (`ebay.com/itm/<id>`) for exact
+  matches whenever you have them (Stage B/Apify returns one per comp;
+  Stage A/WebSearch and direct Chrome hrefs too).
+- Only when a per-item href genuinely can't be captured (e.g. Chrome
+  `get_page_text`) may you fall back to the sold-search URL — and say so.
+- Never list a bare price without its URL in this section.
 
 ## Research log (MANDATORY — proof every search type actually ran)
 
@@ -176,6 +187,23 @@ For each scenario (or just "primary" when no bracket — most items):
 
 Mark comps >12 months old `[STALE]`. Every Tier C needs a specific
 reason.
+
+### Comp URLs — verify these yourself (MANDATORY, ends every item)
+
+A consolidated, click-through list so the user can open the comps directly.
+Exact/near-exact anchors first; include the price + a short title with each
+URL so the list is scannable on its own. Required on every item.
+
+    Comp URLs — Item <N> (open to verify):
+      Exact / near-exact match:
+        • $<price> — "<short title>" — <https://www.ebay.com/itm/...>
+        • $<price> — "<short title>" — <https://www.ebay.com/itm/...>
+      Ceiling / context:
+        • $<price> — "<short title>" — <https://www.ebay.com/itm/...>
+      All sold results (eBay search): <sold-search URL>
+
+If NO exact match exists, say so on the "Exact / near-exact" line
+("none found") and still list the closest era-peers + the sold-search URL.
 
 ### Three tiers (always)
 
