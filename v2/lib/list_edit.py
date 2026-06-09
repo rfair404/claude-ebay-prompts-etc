@@ -539,6 +539,58 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
 
 
 # ---------------------------------------------------------------------------
+# END — take a live listing down (withdraw), also confirmation-gated
+# ---------------------------------------------------------------------------
+
+@dataclass
+class EndResult:
+    dry_run: bool
+    offer_id: str
+    title: str
+    status_before: str
+    ended: bool = False
+    listing_id: Optional[str] = None
+
+
+def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
+                confirm: bool = False) -> EndResult:
+    """End (withdraw) a live listing. Dry run unless confirm=True.
+
+    Withdraws the offer, which ends the public listing; the offer returns
+    to UNPUBLISHED so it can be re-synced/re-published later. The inverse
+    of publish — same guard (does nothing without --confirm).
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("End needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    offer_id = str(draft.get("meta.ebay_offer_id") or "").strip()
+    if not offer_id:
+        raise ValueError("draft has no meta.ebay_offer_id — nothing to end.")
+
+    off = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+    status = str(off.get("status") or "UNKNOWN")
+    listing_id = str((off.get("listing") or {}).get("listingId") or "")
+    title = str(draft.get("title") or "")
+
+    if status != "PUBLISHED":
+        return EndResult(dry_run=(not confirm), offer_id=offer_id, title=title,
+                         status_before=status, ended=False, listing_id=listing_id or None)
+    if not confirm:
+        return EndResult(dry_run=True, offer_id=offer_id, title=title,
+                         status_before=status, listing_id=listing_id or None)
+
+    api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw", {}, creds=creds)
+    update_meta(draft_path, {
+        "ebay_listing_id": "",
+        "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    return EndResult(dry_run=False, offer_id=offer_id, title=title,
+                     status_before=status, ended=True, listing_id=listing_id or None)
+
+
+# ---------------------------------------------------------------------------
 # Status / setup-check
 # ---------------------------------------------------------------------------
 
@@ -610,7 +662,8 @@ def _cli() -> None:
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
-    ap.add_argument("--confirm", action="store_true", help="Required with --publish to actually go live (otherwise --publish is a dry run).")
+    ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing. DRY RUN unless --confirm is also given.")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--end to actually act (otherwise they are dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     args = ap.parse_args()
@@ -656,6 +709,19 @@ def _cli() -> None:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
+            return
+        if args.end:
+            res = end_listing(Path(args.end), confirm=args.confirm)
+            if res.status_before != "PUBLISHED":
+                print(f"[i] Nothing live to end (offer status: {res.status_before}).")
+            elif res.dry_run:
+                print("[DRY RUN] Nothing ended. This WOULD end a LIVE listing:")
+                print(f"  offer:   {res.offer_id}")
+                print(f"  listing: {res.listing_id}")
+                print(f"  title:   {res.title}")
+                print("\n  To actually end it: re-run with --confirm")
+            else:
+                print(f"[ENDED] Withdrew offer {res.offer_id} (listing {res.listing_id}) — no longer live.")
             return
         if args.check:
             s = stub_status()

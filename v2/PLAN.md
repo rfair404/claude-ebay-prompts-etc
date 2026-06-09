@@ -13,6 +13,14 @@ Ground rules:
 
 ### No-publish firewall (absolute)
 
+> **Historical note (2026-06-08):** this section describes V2's original
+> stance. In V3 the firewall was deliberately refactored (the
+> "user personally refactors" path described below): `list_edit.py` now has
+> a guarded, confirmation-gated `--publish`/`--end` (dry run without
+> `--confirm`, never automatic, never invoked by `--sync`). The intent
+> below — no ACCIDENTAL or AUTOMATIC publication — is preserved. See
+> `v3/prompts/_shared.md` and `v2/lib/SETUP_EBAY_API.md`.
+
 **This tool NEVER publishes an eBay listing live.** There is no code path, no prompt, no function, no automation in this system that puts an item up for sale on eBay. The boundary is hard and applies to every function — current and future:
 
 - **DRAFT** (Function 5) writes a local file. No eBay calls of any kind.

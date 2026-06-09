@@ -131,6 +131,16 @@ python list_edit.py --publish <shoot-dir> --confirm  # actually publishes -> rea
 On success it prints the listing URL (`ebay.com/itm/<id>`) and writes
 `ebay_listing_id` + `published_at` into the draft.
 
+**Take a listing down** (withdraw) — same dry-run/`--confirm` guard:
+
+```
+python list_edit.py --end <shoot-dir>            # dry run; ends nothing
+python list_edit.py --end <shoot-dir> --confirm  # withdraws the live listing
+```
+
+Withdraw ends the public listing and returns the offer to UNPUBLISHED, so
+you can re-sync/re-publish it later.
+
 ## Firewall
 
 `--sync` NEVER publishes — it stops at an unpublished offer. Publishing is
