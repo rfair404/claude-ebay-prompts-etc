@@ -525,7 +525,8 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
 
 def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
                              creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/fulfillment_policy",
+    # Account API requires marketplace_id as a QUERY param (not just header).
+    data = api_send("GET", f"/sell/account/v1/fulfillment_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("fulfillmentPolicies") or []
@@ -533,7 +534,7 @@ def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
 
 def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
                          creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/payment_policy",
+    data = api_send("GET", f"/sell/account/v1/payment_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("paymentPolicies") or []
@@ -541,7 +542,7 @@ def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
 
 def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
                         creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/return_policy",
+    data = api_send("GET", f"/sell/account/v1/return_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("returnPolicies") or []

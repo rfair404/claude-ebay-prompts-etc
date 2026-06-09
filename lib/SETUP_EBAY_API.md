@@ -172,7 +172,7 @@ ebay:
 
 ```
 # 4. Pull the new account's policy IDs + inventory location
-python lib/ebay_client.py --setup-check
+python lib/list_edit.py --setup-check
 ```
 
 Paste the four account-specific values into the same env block:
@@ -186,7 +186,7 @@ Paste the four account-specific values into the same env block:
 
 ```
 # 5. Verify both the auth and the listing path see the new creds
-python lib/ebay_client.py --setup-check
+python lib/list_edit.py --setup-check
 python lib/list_edit.py  --setup-check
 ```
 
