@@ -39,36 +39,43 @@ stage is autonomous — PRICE never stops to ask.
    web + marketplaces. Tag `[A — WebSearch]`.
 
 3. **Stage B — Apify eBay sold** (the default direct-eBay comp source; no
-   gate). Run `python lib/apify_ebay.py "<query>"` (or `search_ebay_sold()`
-   programmatically) — it calls the `automation-lab/ebay-sold-scraper`
-   Actor, which **pins a US residential proxy** so eBay returns USD
-   natively, and returns structured comps with per-item URLs, sold dates,
-   condition, listing type / bid count, and seller stats. Headless, no
-   browser. Tag `[B — Apify]`. Cost ~$0.10/run; runs automatically.
-   - **Currency-leak safety is built into the wrapper** — every run is
-     checked with a provider-agnostic charm-price test (genuine USD eBay
-     prices cluster on .99/.95/.00/.50; an FX leak destroys that). If a run
-     fails the check the wrapper **raises `CurrencyLeakError`** rather than
-     return corrupt prices. Do NOT rely on the `sold_currency` label — it
-     can lie; the wrapper's check is what matters. (History: the old
-     caffein.dev actor leaked BRL/CZK at ~5× mislabeled USD — that's why we
-     switched and added this guard.)
-   - **On `CurrencyLeakError`** (rare with the US-proxy actor): treat
-     confidence as LOW and fall to Stage C (Chrome) for clean US-IP data.
-     Note "Apify currency-leak → Chrome" in the Hunt line. (A
-     `--on-leak repair` mode exists that FX-corrects the run, but prefer the
-     Chrome cross-check over trusting a repair.)
-   - Still drop the usual outliers (single bid, >2× median). If Stage B
-     returns <3 usable comps or dispersion disagrees badly with Stage A,
-     treat as LOW confidence → Stage C.
-   - **Proof-of-run is mandatory.** The CLI prints `Apify run: <id>` — copy
-     that run id into the Research log (it's verifiable in the Apify backend).
-     **Never report Stage B as "ran" without a run id.** If you have no run
-     id, it did not run — say so and why.
-   - **If Apify is unconfigured or the run fails** (no token / ApifyError /
-     timeout / **no shell tool to run the CLI in this environment**): record
-     `B — UNAVAILABLE: <reason>` in the Research log and fall through to
-     Stage C for the same eBay-sold data. Do NOT silently skip B.
+   gate). Backend Actor `automation-lab/ebay-sold-scraper` — it **pins a US
+   residential proxy** so eBay returns USD natively, and returns structured
+   comps with per-item URLs, sold dates, condition, listing type / bid
+   count, and seller stats. Tag `[B — Apify]`. ~$0.10/run. **Use whichever
+   execution path your environment supports — try them in this order:**
+
+   - **Path 1 — Apify MCP tool (preferred; works even with no sandbox
+     egress).** If an Apify MCP connector is available (e.g. in a Cowork
+     tab), call the actor `automation-lab/ebay-sold-scraper` through that
+     tool with input `{searchQueries:["<query>"], maxListingsPerSearch:30,
+     maxSearchPages:3, sort:"price_high", listingType:"all"}`. It returns
+     the dataset items (fields: `soldPrice`, `soldDate`, `title`, `url`,
+     `condition`, `listingType`, `bidsCount`, `sellerName`,
+     `sellerFeedbackCount`/`Percent`, `shippingCost`). Record the **run id**
+     the tool reports. MCP calls are brokered outside the code sandbox, so
+     this works where direct `api.apify.com` egress is blocked.
+   - **Path 2 — stdlib CLI (when you have a shell + egress to
+     api.apify.com).** Run `python lib/apify_ebay.py "<query>"` (no pip — it
+     uses only the standard library). Capture the printed `Apify run: <id>`.
+   - **Map + validate (either path):** fields → comps (same shape); drop
+     single-bid / >2× median outliers to Tier C. The CLI auto-runs the
+     charm-price currency check; **on the MCP path you must eyeball it** —
+     genuine USD eBay prices cluster on .99/.95/.00/.50; if they don't,
+     suspect a currency leak and prefer Stage C. Never trust a
+     `currency`/`USD` label; the price pattern is what matters. (The
+     US-proxy actor makes leaks unlikely — the old caffein.dev actor leaked
+     BRL/CZK at ~5× mislabeled USD, which is why we switched.)
+   - **Proof-of-run is mandatory.** Record the **Apify run id** (from the
+     MCP result or the CLI's `Apify run:` line) in the Research log — it's
+     verifiable in the Apify backend. **Never report Stage B as "ran"
+     without a run id.**
+   - Still drop outliers; if Stage B yields <3 usable comps or dispersion
+     disagrees badly with Stage A, treat as LOW confidence → Stage C.
+   - **If NEITHER path is available** (no Apify MCP tool AND no
+     shell/egress — e.g. a sandbox whose proxy 403s `api.apify.com`):
+     record `B — UNAVAILABLE: <reason>` in the Research log and fall through
+     to Stage C. Do NOT silently skip B.
 
 4. **If no exact match yet, broaden and re-run A+B:** drop the
    least-load-bearing keyword (5→3 words), then try a synonym for Type.
@@ -110,11 +117,22 @@ Apify is the default Stage B source and runs without a gate. The backend
 Actor is `automation-lab/ebay-sold-scraper` (configurable via
 `apify.ebay_actor`), chosen because it pins a **US residential proxy** —
 so eBay serves USD natively and the foreign-currency leak that sank the
-previous actor doesn't occur. The wrapper still validates every run with
-the charm-price currency check (defense in depth) and raises
-`CurrencyLeakError` if a run ever looks FX-converted. To run without Apify
-entirely, leave the Apify token unset — Stage B then routes to Chrome
-(Stage C) automatically.
+previous actor doesn't occur. The CLI/wrapper validates every run with the
+charm-price currency check (defense in depth) and raises `CurrencyLeakError`
+if a run ever looks FX-converted.
+
+**Two execution paths, by environment (see Stage B above):**
+- **Apify MCP connector** — preferred in restricted environments (e.g. a
+  Cowork tab) whose sandbox proxy blocks `api.apify.com`. MCP calls are
+  brokered outside the sandbox, so they reach Apify when raw HTTPS can't.
+  No pip, no wrapper file, token lives in the connector.
+- **stdlib CLI** (`python lib/apify_ebay.py`) — for shell environments with
+  egress. No third-party package (standard library only); needs Python +
+  network to `api.apify.com` + the Apify token.
+
+If neither is available (no MCP tool, no shell/egress), Stage B is
+`UNAVAILABLE` and PRICE routes to Chrome (Stage C). Same if the Apify token
+is unset.
 
 ## URLs (mandatory — the user verifies comps by clicking them)
 
@@ -145,9 +163,9 @@ Don't confuse with the comp-quality "Tier A/B/C" further down.)
 
     Research log — Item <N>
       A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding>
-      B · Apify     : RAN — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%)
-                      [ALT] UNAVAILABLE — <no shell/code tool to run it | api.apify.com egress blocked | no token | CurrencyLeakError>
-                      (note: no `pip install` needed — the wrapper is stdlib-only)
+      B · Apify     : RAN via <MCP|CLI> — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%)
+                      [ALT] UNAVAILABLE — <no Apify MCP tool AND no shell/egress | api.apify.com egress blocked (sandbox proxy) | no token | CurrencyLeakError>
+                      (run id comes from the MCP tool result or the CLI's `Apify run:` line; no `pip install` needed)
       C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)
                       [ALT] RAN — <low-confidence trigger> — <n> rows
                       [ALT] UNAVAILABLE — <no browser/Chrome MCP in this environment>
