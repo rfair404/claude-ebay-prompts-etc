@@ -58,8 +58,8 @@ era-peer; commit to it.
 ## Source C — Apify (paid, opt-in, HARD gate)
 
 Tabled by default; known data issues (coverage variance run-to-run;
-silent GBP→USD; historical BRL inflation — see
-`v2/.../lot2b/apify_bug_check.md`). Run ONLY when the user explicitly
+silent GBP→USD; historical BRL inflation — see the Apify bug evidence
+under `deprecated/`). Run ONLY when the user explicitly
 asks, OR when A AND B both genuinely fail — then surface one fallback
 offer. Either way confirm cost first (HARD gate, per RUN.md):
 

@@ -52,7 +52,7 @@ anthropic:
 #   merchant_location_key + *_policy_id — from your account; list them with:
 #       python list_edit.py --setup-check
 #
-# Full runbook: v2/lib/SETUP_EBAY_API.md
+# Full runbook: lib/SETUP_EBAY_API.md
 ebay:
   environment: "sandbox"   # active: sandbox | production
 

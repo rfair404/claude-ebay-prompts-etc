@@ -104,7 +104,7 @@ are Unicode characters.
   that slipped through, log the adjustment to `meta.notes`.
 
 The authoritative machine-readable limits live in the template's
-`_field_constraints` block ([v3/templates/listing-v1.md](v3/templates/listing-v1.md)).
+`_field_constraints` block ([templates/listing-v1.md](../templates/listing-v1.md)).
 
 ## Output-file persistence
 
@@ -120,13 +120,13 @@ overwriting the prior run (latest run = current record).
 | DRAFT | `<shoot-dir>/draft.md` |
 | (any deferred question) | `<shoot-dir>/NEEDS_REVIEW.md` (append, don't overwrite) |
 
-The shoot directory is the directory containing the photos. For test
-runs in this repo: `v3/samples/<shoot-name>/`.
+The shoot directory is the directory containing the photos (e.g. a
+`samples/<shoot-name>/` dir at the repo root for test runs).
 
 ## Gate contract (what may stop a headless run)
 
 Only TWO gates stop a run. Everything else proceeds with a logged
-default. Full contract in [v3/RUN.md](v3/RUN.md); summary:
+default. Full contract in [RUN.md](../RUN.md); summary:
 
 - **HARD — stop and ask:** (1) any eBay publish (refuse, never ask);
   (2) any paid Apify call (confirm cost per call).

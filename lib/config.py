@@ -11,7 +11,7 @@ Config file location (precedence, first found wins):
        or ~/.ebaybiz/config.yaml (macOS / Linux fallback)
 
 The project root is computed from this file's location:
-    <project-root>/v2/lib/config.py  →  <project-root>
+    <project-root>/lib/config.py  →  <project-root>
 
 Per-setting precedence (highest wins):
     1. Explicit function argument
@@ -76,9 +76,9 @@ DEFAULT_PROFILE = {
 def _project_root() -> Path:
     """Compute the ebaybiz project root from this file's location.
 
-    Layout: <project-root>/v2/lib/config.py
+    Layout: <project-root>/lib/config.py
     """
-    return Path(__file__).resolve().parent.parent.parent
+    return Path(__file__).resolve().parent.parent
 
 
 def _project_root_config_path() -> Path:

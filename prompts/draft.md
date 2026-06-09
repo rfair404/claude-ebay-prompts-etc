@@ -17,7 +17,7 @@ file only — no eBay calls, no publishing** (firewall, per _shared).
    (title, description, item specifics, condition wording).
 3. `price.txt` — three tiers + the working price. Headless adopts the
    Recommended/provisional working price (logged in NEEDS_REVIEW).
-4. [`v3/templates/listing-v1.md`](../templates/listing-v1.md) — the
+4. [`templates/listing-v1.md`](../templates/listing-v1.md) — the
    template; its `_field_constraints` block is the authoritative limits map.
 
 ## Preconditions

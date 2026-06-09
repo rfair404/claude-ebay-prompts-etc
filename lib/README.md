@@ -1,4 +1,4 @@
-# v2/lib — shared libraries
+# lib — shared libraries
 
 ## Setup (one time)
 

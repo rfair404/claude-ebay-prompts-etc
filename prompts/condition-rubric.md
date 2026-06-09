@@ -61,7 +61,7 @@ checked-and-absent only when it matters to the grade.
 ## eBay condition grade mapping
 
 Map the inspection to one `CONDITION_ENUM` value (from
-`v2/lib/ebay_schema.py`):
+`lib/ebay_schema.py`):
 
 | Evidence | Grade |
 |---|---|

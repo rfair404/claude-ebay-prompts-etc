@@ -4,7 +4,7 @@ Obeys [`_shared.md`](_shared.md). Read it first.
 
 Pushes an approved `draft.md` into an eBay **DRAFT** listing by driving the
 seller UI with the Claude-in-Chrome MCP. Interim until the eBay Sell API
-path is built (`v2/lib/list_edit.py`). Same inputs, same firewall, same
+path is built (`lib/list_edit.py`). Same inputs, same firewall, same
 output as the API path will have — only the mechanism differs.
 
 **Not part of the automated run.** RUN.md's pipeline ends at DRAFT.
@@ -212,7 +212,7 @@ Findings from the 2026-06-07 live run. The eBay photo input is a hidden
 first method that works in the current environment:
 
 1. **eBay Sell API → EPS (target, full-res, no UI).** The real fix. When
-   `v2/lib/list_edit.py` is implemented, photos POST to eBay Picture
+   `lib/list_edit.py` is implemented, photos POST to eBay Picture
    Services and attach by URL — no sandbox, no dialog, full resolution,
    correct order. Prefer this once the dev key exists; it makes upload
    fully hands-off.
@@ -256,6 +256,6 @@ draft is still worth saving.
 - Category-change or policy-violation prompt → STOP, report verbatim.
 - Save gated behind a violation → report; do not work around it.
 
-When `v2/lib/list_edit.py` gains the live Sell API, this prompt is
+When `lib/list_edit.py` gains the live Sell API, this prompt is
 deprecated (the API path avoids the RTE quirks, the scroll/coordinate
 fragility, and the photo-upload limitation via EPS).

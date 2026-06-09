@@ -61,7 +61,7 @@ whichever block `environment` points at.)
 Verify the app token works (no user consent needed yet):
 
 ```
-cd v2/lib
+cd lib
 python ebay_client.py --check
 ```
 Expect `[OK] App token obtained`.

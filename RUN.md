@@ -96,7 +96,7 @@ Load each prompt when you reach its phase.
 
 | Step | How | Reads | Effect |
 |---|---|---|---|
-| LIST/EDIT (**primary**) | `python v2/lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay **DRAFT** via Sell API (never published) |
+| LIST/EDIT (**primary**) | `python lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay **DRAFT** via Sell API (never published) |
 | LIST/EDIT (fallback) | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** via Chrome UI |
 
 Function 6 pushes an approved `draft.md` into an eBay draft. It runs ONLY
@@ -107,10 +107,10 @@ auto-publish. Going live is a separate, deliberate command —
 `list_edit.py --publish <dir> --confirm` (dry run without `--confirm`) —
 never invoked by the pipeline or by `--sync`.
 
-- **Primary — Sell API (`v2/lib/list_edit.py`).** Headless, full-res photo
+- **Primary — Sell API (`lib/list_edit.py`).** Headless, full-res photo
   upload (EPS), one-payload description (no missing-fields bug), idempotent
   re-sync. Verified end-to-end on sandbox. One-time setup:
-  [v2/lib/SETUP_EBAY_API.md](../v2/lib/SETUP_EBAY_API.md). Use this by
+  [lib/SETUP_EBAY_API.md](lib/SETUP_EBAY_API.md). Use this by
   default. `--validate <dir>` needs no credentials.
 - **Fallback — Chrome stand-in.** Only when the API isn't set up. Subject to
   read-tier/sandbox limits and the debounce/trusted-input pitfalls
@@ -126,7 +126,7 @@ Shared rules (style, confidence, firewall, unit_type, char limits,
 persistence) live in [prompts/_shared.md](prompts/_shared.md).
 
 Python infrastructure (config, eBay client, Apify wrapper, photo prep)
-is unchanged and shared from `v2/lib/` — v3 does not duplicate code.
+is unchanged and shared from `lib/` — v3 does not duplicate code.
 
 ---
 

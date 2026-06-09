@@ -28,7 +28,7 @@ no ACCIDENTAL or AUTOMATIC publication — is preserved.
 
 ----- Why the eBay Sell API (vs the Chrome stand-in) -----
 
-The Chrome stand-in (v3/prompts/list_edit_chrome.md) drives the seller UI
+The Chrome stand-in (prompts/list_edit_chrome.md) drives the seller UI
 and hits two environment walls for photos: file_upload is sandboxed to
 session-shared files, and browsers are granted read-only OS-automation
 tier (can't type into the native file dialog). This API path bypasses the
@@ -36,7 +36,7 @@ UI entirely — photos POST to EPS server-side, the description is one HTTP
 field (no rich-text editor), and everything is headless and repeatable in
 any environment, including a scheduled run.
 
------ One-time setup (see v2/lib/SETUP_EBAY_API.md) -----
+----- One-time setup (see lib/SETUP_EBAY_API.md) -----
 
 Needs in config.yaml under `ebay:`  app_id, cert_id, dev_id, redirect_uri,
 user_refresh_token, plus account-specific:  merchant_location_key,

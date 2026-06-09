@@ -44,27 +44,29 @@ era-peer, and reports how hard it looked.
 
 ## Layout
 
-    v3/
+    <project root>/
       RUN.md                      headless runbook + gate contract
       README.md                   this file
       prompts/
         _shared.md                rules every phase obeys
         condition-rubric.md       condition depth (Goal 3)
         identify.md  price.md  curate.md  investigate.md  draft.md
-        list_edit_chrome.md       Function 6 — push draft.md to an eBay DRAFT (manual trigger)
+        list_edit_chrome.md       Function 6 fallback — Chrome stand-in
       templates/
-        listing-v1.md             YAML frontmatter + body (copied from v2)
+        listing-v1.md             YAML frontmatter + body
+      lib/                        eBay Sell API code (sync/publish/end) + SETUP_EBAY_API.md
+      deprecated/                 frozen v1 prompts + v2 reference (context only)
 
 **Function 6 — LIST/EDIT.** Pushes an approved `draft.md` into an eBay
 **draft** (never publishes). Runs on explicit user request, not in the
 automated pipeline. Two paths:
 
-- **Primary — eBay Sell API** (`v2/lib/list_edit.py --sync <dir>`). Headless
+- **Primary — eBay Sell API** (`lib/list_edit.py --sync <dir>`). Headless
   and environment-proof: photos upload to EPS server-side, the description
   is one HTTP field (so the Chrome missing-fields bug can't occur), and
   re-sync is idempotent. **Verified end-to-end on sandbox** (11 photos, full
   description, specifics, Best Offer; offer left UNPUBLISHED). One-time
-  setup: [`v2/lib/SETUP_EBAY_API.md`](../v2/lib/SETUP_EBAY_API.md).
+  setup: [`lib/SETUP_EBAY_API.md`](lib/SETUP_EBAY_API.md).
 - **Fallback — Chrome stand-in**
   ([`prompts/list_edit_chrome.md`](prompts/list_edit_chrome.md)). Only when
   the API isn't set up. Encodes the hard-won UI lessons: trusted-keystroke
@@ -73,8 +75,7 @@ automated pipeline. Two paths:
   never open the variations editor, drop inaccurate AI-suggested specifics.
 
 Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
-`list_edit`, `photo_prep`) is unchanged and shared from `v2/lib/` — v3
-does not duplicate code.
+`list_edit`, `draft_io`, `photo_prep`) lives in `lib/`.
 
 ## Unchanged from v2
 
