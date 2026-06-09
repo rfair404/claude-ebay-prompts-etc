@@ -325,6 +325,33 @@ Uses only Python stdlib (`urllib.request`, `urllib.parse`, `base64`,
 
 ---
 
+## comps_csv.py — reviewable comps CSV (all PRICE stages)
+
+Stage B (Apify) saves JSON; stages A (WebSearch) and C (Chrome) are
+agent-driven, so PRICE logs their comps here. One `<shoot-dir>/comps.csv`
+with a `stage` column lets the user open a single spreadsheet and review
+every comp the hunt looked at. Stdlib only (`csv`).
+
+Columns: `captured_at, item, stage, query, price, title, sold_date,
+condition, listing_type, url, note`.
+
+```bash
+# fresh file for a run
+python comps_csv.py --shoot-dir <dir> --reset
+# append a Stage A / C comp
+python comps_csv.py --shoot-dir <dir> --item 1 --stage C --query "..." \
+  --price 99.99 --title "..." --url "https://www.ebay.com/itm/..." \
+  --sold-date 2026-05-14 --condition "Pre-Owned" --note "near-exact"
+# fold a saved Apify run JSON in as stage B rows (unified review file)
+python comps_csv.py --shoot-dir <dir> --from-apify-json apify_runs/apify_run_*.json
+```
+
+Programmatic: `from comps_csv import append_comp, from_apify_json, reset`.
+In environments without a shell, write `<dir>/comps.csv` directly using the
+header above.
+
+---
+
 ## What's not in this MVP
 
 - **PRICE calls this as Stage B** — the prompt invokes `apify_ebay.py` /

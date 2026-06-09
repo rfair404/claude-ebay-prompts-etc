@@ -36,7 +36,8 @@ stage is autonomous — PRICE never stops to ask.
    if a printed date is visible in a photo.
 
 2. **Stage A — WebSearch** (free, ~5s, broad). Casts wide across the open
-   web + marketplaces. Tag `[A — WebSearch]`.
+   web + marketplaces. Tag `[A — WebSearch]`. **Log each usable hit to
+   `<shoot-dir>/comps.csv` as stage A** (see "Saved comp artifacts").
 
 3. **Stage B — Apify eBay sold** (the default direct-eBay comp source; no
    gate). Backend Actor `automation-lab/ebay-sold-scraper` — it **pins a US
@@ -103,6 +104,8 @@ stage is autonomous — PRICE never stops to ask.
    per-item URLs; when you can't capture each href (via `read_page`/
    `find`), cite the SOLD-search URL as the verifiable source and say so.
    Subject to browser read-tier limits (see [list_edit_chrome.md](list_edit_chrome.md)).
+   **Log each comp to `<shoot-dir>/comps.csv` as stage C** (see "Saved comp
+   artifacts").
 
 6. **Active fallback** (only when sold returns zero direct matches): drop
    the sold filters, capture active listings, tag `[active — ASKING
@@ -140,6 +143,32 @@ If neither is available (no MCP tool, no shell/egress), Stage B is
 `UNAVAILABLE` and PRICE routes to Chrome (Stage C). Same if the Apify token
 is unset.
 
+## Saved comp artifacts (every stage leaves a reviewable record)
+
+The user reviews the raw research, so each stage persists its comps:
+
+- **Stage B (Apify)** → JSON (auto-saved; `--save-dir <shoot-dir>` puts it
+  beside `price.txt`; MCP path: write items to `<shoot-dir>/apify_<runId>.json`).
+- **Stages A (WebSearch) and C (Chrome)** → rows in **`<shoot-dir>/comps.csv`**,
+  the single spreadsheet the user opens to review every comp across sources.
+  Append each usable comp with `lib/comps_csv.py`:
+
+      python lib/comps_csv.py --shoot-dir <dir> --item <N> --stage A \
+        --query "<q>" --price <p> --title "<t>" --url "<url>" \
+        --sold-date <YYYY-MM-DD> --condition "<c>" --note "<why>"
+
+  (stage `C` for Chrome). **No shell?** Write `<shoot-dir>/comps.csv`
+  directly with the Write tool using this exact header:
+  `captured_at,item,stage,query,price,title,sold_date,condition,listing_type,url,note`
+- **Unify (recommended):** fold Stage B into the same CSV so one file holds
+  all three —
+  `python lib/comps_csv.py --shoot-dir <dir> --from-apify-json <run.json>`.
+- **Fresh per run:** `python lib/comps_csv.py --shoot-dir <dir> --reset`
+  once at the start of pricing an item, before appending.
+
+A comp with no price (a WebSearch context hit, a dealer asking price) still
+gets a row — leave `price` blank and say why in `note`.
+
 ## URLs (mandatory — the user verifies comps by clicking them)
 
 Every comp carries a clickable source URL inline (a comp without a URL is
@@ -168,12 +197,12 @@ EVERY item; C is conditional. Each stage is `RAN` (with proof) /
 Don't confuse with the comp-quality "Tier A/B/C" further down.)
 
     Research log — Item <N>
-      A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding>
+      A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding> — logged to comps.csv
       B · Apify     : RAN via <MCP|CLI> — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%) — saved <path>.json
                       [ALT] UNAVAILABLE — <no Apify MCP tool AND no shell/egress | api.apify.com egress blocked (sandbox proxy) | no token | CurrencyLeakError>
                       (run id comes from the MCP tool result or the CLI's `Apify run:` line; no `pip install` needed)
       C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)
-                      [ALT] RAN — <low-confidence trigger> — <n> rows
+                      [ALT] RAN — <low-confidence trigger> — <n> rows — logged to comps.csv
                       [ALT] UNAVAILABLE — <no browser/Chrome MCP in this environment>
 
 Hard rules for the log:
