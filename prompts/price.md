@@ -40,16 +40,27 @@ stage is autonomous — PRICE never stops to ask.
 
 3. **Stage B — Apify eBay sold** (the default direct-eBay comp source; no
    gate). Run `python lib/apify_ebay.py "<query>"` (or `search_ebay_sold()`
-   programmatically) — it calls the eBay sold-listings Actor and returns
-   structured comps with per-item URLs, sold dates, condition, currency,
-   and seller stats. Headless, no browser. Tag `[B — Apify]`. Cost is
-   ~$0.12/run and runs automatically as part of the hunt.
-   - **Data-quality guardrails (Apify is trusted by default now, so check
-     it):** keep only `sold_currency == USD` rows — the Actor can silently
-     return GBP/BRL prices at face value; drop (or convert + note) any
-     non-USD comp. Drop the usual outliers (single bid, >2× median). If a
-     run returns suspiciously few rows, or dispersion that disagrees badly
-     with Stage A, treat confidence as **LOW** and trigger Stage C.
+   programmatically) — it calls the `automation-lab/ebay-sold-scraper`
+   Actor, which **pins a US residential proxy** so eBay returns USD
+   natively, and returns structured comps with per-item URLs, sold dates,
+   condition, listing type / bid count, and seller stats. Headless, no
+   browser. Tag `[B — Apify]`. Cost ~$0.10/run; runs automatically.
+   - **Currency-leak safety is built into the wrapper** — every run is
+     checked with a provider-agnostic charm-price test (genuine USD eBay
+     prices cluster on .99/.95/.00/.50; an FX leak destroys that). If a run
+     fails the check the wrapper **raises `CurrencyLeakError`** rather than
+     return corrupt prices. Do NOT rely on the `sold_currency` label — it
+     can lie; the wrapper's check is what matters. (History: the old
+     caffein.dev actor leaked BRL/CZK at ~5× mislabeled USD — that's why we
+     switched and added this guard.)
+   - **On `CurrencyLeakError`** (rare with the US-proxy actor): treat
+     confidence as LOW and fall to Stage C (Chrome) for clean US-IP data.
+     Note "Apify currency-leak → Chrome" in the Hunt line. (A
+     `--on-leak repair` mode exists that FX-corrects the run, but prefer the
+     Chrome cross-check over trusting a repair.)
+   - Still drop the usual outliers (single bid, >2× median). If Stage B
+     returns <3 usable comps or dispersion disagrees badly with Stage A,
+     treat as LOW confidence → Stage C.
    - **If Apify is unconfigured or the run fails** (no token / ApifyError /
      timeout): fall through to Stage C for the same eBay-sold data. Note
      "Apify unavailable → Chrome" in the Hunt line.
@@ -90,13 +101,15 @@ commit to it.
 
 ## Apify notes (the Stage B backend)
 
-Apify is now the default Stage B source and runs without a gate. It has
-documented quirks — run-to-run coverage variance, silent GBP→USD,
-historical BRL inflation (raw evidence under `deprecated/`). The Stage-B
-guardrails above (USD-only filter, outlier drop, dispersion check, Chrome
-cross-check when suspect) exist specifically to catch these. To run
-without Apify entirely, leave the Apify token unset — Stage B then routes
-to Chrome (Stage C) automatically.
+Apify is the default Stage B source and runs without a gate. The backend
+Actor is `automation-lab/ebay-sold-scraper` (configurable via
+`apify.ebay_actor`), chosen because it pins a **US residential proxy** —
+so eBay serves USD natively and the foreign-currency leak that sank the
+previous actor doesn't occur. The wrapper still validates every run with
+the charm-price currency check (defense in depth) and raises
+`CurrencyLeakError` if a run ever looks FX-converted. To run without Apify
+entirely, leave the Apify token unset — Stage B then routes to Chrome
+(Stage C) automatically.
 
 ## URLs (mandatory)
 

@@ -5,21 +5,29 @@ PRICE's default Stage B comp source (un-gated direct eBay sold-listings).
 The Claude-in-Chrome browse path is the optional Stage C fallback, used
 only when confidence is low or this backend is unavailable.
 
-Calls the caffein.dev/ebay-sold-listings Apify Actor (or any
-schema-compatible alternative configured via apify.ebay_actor) to
-retrieve sold-listing comps. Returns clean structured CompRecord
-objects ready for PRICE's classification logic.
+Backend Actor: **automation-lab/ebay-sold-scraper** (configurable via
+`apify.ebay_actor`). Chosen because it pins a **US residential proxy**, so
+eBay returns prices in USD natively — avoiding the silent foreign-currency
+leak that actors without proxy control suffer (e.g. caffein.dev/ebay-sold-
+listings returned BRL/CZK prices mislabeled as USD, inflating values ~5x).
 
-Actor schema reference (caffein.dev/ebay-sold-listings):
-    Input: keywords[], count, daysToScrape, sortOrder, ebaySite,
-           minPrice, maxPrice, itemLocation, itemCondition,
-           categoryId, subcategoryId
-    Output: itemId, url, title, condition, conditionId, endedAt,
-            soldPrice (string), soldCurrency, shippingPrice (string),
-            shippingCurrency, shippingType, totalPrice (string),
-            sellerUsername, sellerPositivePercent, sellerFeedbackScore,
-            scrapedAt
-    Docs: https://apify.com/caffein.dev/ebay-sold-listings
+Actor schema reference (automation-lab/ebay-sold-scraper):
+    Input:  searchQueries[], maxListingsPerSearch, maxSearchPages, sort,
+            listingType, condition[], minPrice, maxPrice, maxRequestRetries
+    Output: itemId, title, soldPrice (number, USD), soldPriceString,
+            soldDate ("May 12, 2026"), condition, listingType, bidsCount,
+            shippingCost ("+$108.12 delivery"), sellerName,
+            sellerFeedbackPercent ("100%"), sellerFeedbackCount ("2K"),
+            thumbnail, url, scrapedAt
+
+Defense in depth: even with a US proxy, every run is checked by a
+provider-agnostic **currency-leak validator** (`_check_currency_leak`).
+Genuine USD eBay sold prices are overwhelmingly charm-priced
+(.99/.95/.00/.50); an FX leak multiplies every price by one rate and
+destroys that structure. If the charm-price share collapses, the run is
+flagged (and, by default, raises CurrencyLeakError so PRICE falls back to
+Stage C instead of anchoring on corrupt data). This does NOT trust the
+actor's currency label, which can lie.
 
 Configuration:
     API token + Actor selection loaded via `config.py` from
@@ -35,7 +43,7 @@ Programmatic usage:
 
 CLI usage (manual testing):
     python apify_ebay.py "vintage polo ralph lauren on safari catalog"
-    python apify_ebay.py "..." --count 50 --days 90 --json
+    python apify_ebay.py "..." --max 50 --sort price_high --json
 """
 
 from __future__ import annotations
@@ -43,7 +51,7 @@ from __future__ import annotations
 import re
 import urllib.parse
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional, Union
 
 try:
@@ -57,69 +65,134 @@ from config import ConfigError, get_apify_actor, get_apify_token
 
 
 # ---------------------------------------------------------------------------
-# Defaults (matched to PRICE's usage patterns)
+# Defaults (matched to PRICE's usage patterns) — automation-lab schema
 # ---------------------------------------------------------------------------
 
-DEFAULT_COUNT = 30                 # max results per keyword
-DEFAULT_DAYS_TO_SCRAPE = 90        # PRICE's anchor window
-DEFAULT_SORT_ORDER = "pricePlusPostageHighest"  # matches our _sop=3 convention
-DEFAULT_EBAY_SITE = "ebay.com"
-DEFAULT_ITEM_CONDITION = "any"
-DEFAULT_ITEM_LOCATION = "default"
-DEFAULT_RUN_TIMEOUT_SEC = 180
+DEFAULT_MAX_LISTINGS = 30          # maxListingsPerSearch (PRICE comp-list size)
+DEFAULT_MAX_PAGES = 3              # maxSearchPages (60 listings/page)
+DEFAULT_SORT = "price_high"        # surface the ceiling first (≈ old _sop=3)
+DEFAULT_LISTING_TYPE = "all"
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_RUN_TIMEOUT_SEC = 300
 
-# Allowed values per the caffein.dev Actor docs
-VALID_SORT_ORDERS = {
-    "endedRecently",
-    "timeNewlyListed",
-    "pricePlusPostageLowest",
-    "pricePlusPostageHighest",
-    "distanceNearest",
+VALID_SORTS = {"best_match", "newly_listed", "price_low", "price_high"}
+VALID_LISTING_TYPES = {"all", "auction", "buy_it_now"}
+
+# ---------------------------------------------------------------------------
+# Currency-leak validator (provider-agnostic; does NOT trust currency labels)
+# ---------------------------------------------------------------------------
+
+# Cents endings that dominate genuine USD eBay prices (charm pricing).
+_CHARM_CENTS = {0, 49, 50, 95, 98, 99}
+# Need at least this many priced comps to judge the distribution.
+_MIN_SAMPLES_FOR_LEAK_CHECK = 5
+# Below this charm share, suspect a currency leak (clean US runs are ~0.5+).
+_CHARM_LEAK_THRESHOLD = 0.30
+# Approximate USD cross-rates of currencies eBay commonly localizes into.
+# Used ONLY to diagnose/repair a detected leak (find the divisor that
+# restores charm structure). Rates need only be close; the charm check is
+# what confirms the match.
+_FX_RATES = {
+    "BRL": 5.2, "CZK": 23.0, "MXN": 17.0, "INR": 83.0, "ZAR": 18.5,
+    "EUR": 0.92, "GBP": 0.79, "CAD": 1.37, "AUD": 1.52, "JPY": 157.0,
+    "PHP": 57.0, "PLN": 4.0, "SEK": 10.5,
 }
-VALID_ITEM_CONDITIONS = {"any", "new", "used"}
-VALID_ITEM_LOCATIONS = {"default", "domestic", "worldwide"}
-VALID_EBAY_SITES = {
-    "ebay.com", "ebay.co.uk", "ebay.de", "ebay.fr",
-    "ebay.it", "ebay.es", "ebay.ca", "ebay.com.au",
-}
-
-MAX_KEYWORDS = 6  # Actor accepts up to 6 keywords per run
-
-
-# ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
-@dataclass
-class CompRecord:
-    """One sold-listing comp record from eBay.
-
-    Field shape designed for PRICE's classifier. Fields not present in
-    the Actor output are set to None; bo_accepted is always False for
-    the caffein.dev/ebay-sold-listings Actor (it doesn't expose the
-    Best Offer Accepted flag).
-    """
-    title: str
-    sold_price: float           # USD-equivalent, parsed from soldPrice string
-    url: str                    # direct link to the eBay listing
-    sold_date: Optional[str] = None       # ISO 8601 from endedAt
-    condition: Optional[str] = None       # localized eBay condition label
-    condition_id: Optional[int] = None    # numeric eBay condition ID (1000, 3000, ...)
-    seller_username: Optional[str] = None
-    seller_feedback_score: Optional[int] = None
-    seller_feedback_pct: Optional[float] = None
-    shipping_cost: Optional[float] = None
-    shipping_type: Optional[str] = None   # free / paid / pickup / unknown
-    sold_currency: Optional[str] = None
-    total_price: Optional[float] = None
-    item_id: Optional[str] = None
-    keyword_tag: Optional[str] = None     # which input keyword this matched
-    bo_accepted: bool = False             # NOT exposed by caffein.dev actor — always False
-    raw: dict = field(default_factory=dict, repr=False)
 
 
 class ApifyError(RuntimeError):
     """Raised when the Apify run fails, times out, or returns no usable data."""
+
+
+class CurrencyLeakError(ApifyError):
+    """Raised when a run's prices look FX-converted (not genuine USD).
+
+    Carries the detected diagnosis so a caller can decide to repair or fall
+    back to another source (Stage C / Chrome).
+    """
+
+    def __init__(self, message: str, *, charm_share: float,
+                 guessed_currency: Optional[str] = None,
+                 guessed_factor: Optional[float] = None):
+        super().__init__(message)
+        self.charm_share = charm_share
+        self.guessed_currency = guessed_currency
+        self.guessed_factor = guessed_factor
+
+
+def _charm_share(prices: list[float]) -> float:
+    """Fraction of prices whose cents land on a charm-price ending."""
+    if not prices:
+        return 0.0
+    hits = 0
+    for p in prices:
+        cents = round((p - int(p)) * 100)
+        if cents in _CHARM_CENTS:
+            hits += 1
+    return hits / len(prices)
+
+
+def _guess_leak(prices: list[float]) -> tuple[Optional[str], Optional[float], float]:
+    """Find the FX divisor that best restores charm structure.
+
+    For each candidate currency we refine the divisor within a ±4% band (the
+    exact rate eBay localized at drifts from a table value, and charm
+    restoration is sensitive to that precision), and keep the global best.
+
+    Returns (currency, factor, repaired_charm_share). currency/factor are
+    None if no candidate clearly beats the leaked distribution.
+    """
+    best_cur, best_factor, best_share = None, None, _charm_share(prices)
+    for cur, rate in _FX_RATES.items():
+        steps = 81  # ±4% scanned at ~0.1% resolution
+        for i in range(steps):
+            factor = rate * (0.96 + 0.08 * i / (steps - 1))
+            share = _charm_share([round(p / factor, 2) for p in prices])
+            if share > best_share:
+                best_cur, best_factor, best_share = cur, round(factor, 4), share
+    return best_cur, best_factor, best_share
+
+
+def _check_currency_leak(comps: list["CompRecord"], on_leak: str) -> list["CompRecord"]:
+    """Validate (and optionally repair) a run against currency leaks.
+
+    on_leak: "raise" (default) -> CurrencyLeakError; "repair" -> divide by
+    the detected FX factor and tag; "ignore" -> return as-is.
+    """
+    priced = [c for c in comps if c.sold_price and c.sold_price > 0]
+    if len(priced) < _MIN_SAMPLES_FOR_LEAK_CHECK:
+        return comps  # too few to judge — don't false-positive on thin queries
+    share = _charm_share([c.sold_price for c in priced])
+    if share >= _CHARM_LEAK_THRESHOLD:
+        return comps  # looks like genuine USD
+
+    cur, factor, repaired_share = _guess_leak([c.sold_price for c in priced])
+    diag = (f"charm-price share {share:.0%} (<{_CHARM_LEAK_THRESHOLD:.0%}); "
+            f"prices look FX-converted, not USD")
+    if cur:
+        diag += f" — best fit {cur} (÷{factor}, restores charm to {repaired_share:.0%})"
+
+    if on_leak == "ignore":
+        return comps
+    if on_leak == "repair":
+        if cur and factor and repaired_share >= 0.5:
+            for c in comps:
+                if c.sold_price:
+                    c.sold_price = round(c.sold_price / factor, 2)
+                if c.shipping_cost:
+                    c.shipping_cost = round(c.shipping_cost / factor, 2)
+                if c.total_price:
+                    c.total_price = round(c.total_price / factor, 2)
+                c.sold_currency = f"USD (repaired from {cur})"
+            return comps
+        raise CurrencyLeakError(
+            f"currency leak detected and not confidently repairable: {diag}",
+            charm_share=share, guessed_currency=cur, guessed_factor=factor)
+    # default: raise
+    raise CurrencyLeakError(
+        f"currency leak detected: {diag}. Refusing to return corrupt prices "
+        f"(set on_currency_leak='repair' to auto-correct, or fall back to "
+        f"Stage C / Chrome).",
+        charm_share=share, guessed_currency=cur, guessed_factor=factor)
 
 
 # ---------------------------------------------------------------------------
@@ -129,15 +202,10 @@ class ApifyError(RuntimeError):
 def build_sold_search_url(query: str, sort_highest_price: bool = True) -> str:
     """Build the equivalent eBay sold-listings search URL for a query.
 
-    NOT passed to the Apify Actor (which builds its own search from
-    keywords + filters). Kept as a utility for "show the user what
-    eBay search this maps to" output in human-readable reports.
+    NOT passed to the Apify Actor (which builds its own search). Kept as a
+    utility for "show the user what eBay search this maps to" output.
     """
-    params = {
-        "_nkw": query,
-        "LH_Sold": "1",
-        "LH_Complete": "1",
-    }
+    params = {"_nkw": query, "LH_Sold": "1", "LH_Complete": "1"}
     if sort_highest_price:
         params["_sop"] = "3"
     return "https://www.ebay.com/sch/i.html?" + urllib.parse.urlencode(params)
@@ -156,74 +224,138 @@ def _client() -> ApifyClient:
 
 
 # ---------------------------------------------------------------------------
-# Value parsing (defensive — actor returns strings for prices)
+# Data types
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CompRecord:
+    """One sold-listing comp record from eBay.
+
+    Field shape designed for PRICE's classifier. Prices are USD (the backend
+    pins a US proxy; the currency-leak validator guards the assumption).
+    Fields the Actor doesn't expose are left None.
+    """
+    title: str
+    sold_price: float                     # USD, parsed from soldPrice
+    url: str                              # direct link to the eBay listing
+    sold_date: Optional[str] = None       # ISO 8601 (parsed from "May 12, 2026")
+    condition: Optional[str] = None       # localized eBay condition label
+    condition_id: Optional[int] = None    # not exposed by this Actor (None)
+    seller_username: Optional[str] = None
+    seller_feedback_score: Optional[int] = None   # parsed from "2K" / "532"
+    seller_feedback_pct: Optional[float] = None   # parsed from "100%"
+    shipping_cost: Optional[float] = None
+    shipping_type: Optional[str] = None   # "free" when shipping is free
+    sold_currency: Optional[str] = "USD"
+    total_price: Optional[float] = None   # sold_price + shipping_cost
+    item_id: Optional[str] = None
+    listing_type: Optional[str] = None    # "Buy It Now" / "Auction"
+    bids_count: Optional[int] = None      # for Tier-C single-bid exclusion
+    keyword_tag: Optional[str] = None     # which input keyword this matched
+    bo_accepted: bool = False             # not exposed by this Actor
+    raw: dict = field(default_factory=dict, repr=False)
+
+
+# ---------------------------------------------------------------------------
+# Value parsing (defensive — Actor returns mixed string/number formats)
 # ---------------------------------------------------------------------------
 
 def _parse_price(raw: Any) -> Optional[float]:
-    """Extract a float price from a string / number / dict.
-
-    The caffein.dev actor returns prices as strings ("215", "6.20")
-    or null. This helper also handles dicts and other formats for
-    portability across Actor variants.
-    """
+    """Extract a float from a number / money string ('$450.00', '+$12 ship')."""
     if raw is None or raw == "":
         return None
     if isinstance(raw, (int, float)):
         return float(raw)
     if isinstance(raw, dict):
-        for key in ("value", "amount", "soldPrice", "currentPrice", "price"):
+        for key in ("value", "amount", "soldPrice", "price"):
             if key in raw:
                 parsed = _parse_price(raw[key])
                 if parsed is not None:
                     return parsed
         return None
     if isinstance(raw, str):
-        s = raw.replace("US", "").replace("$", "").replace(",", "").strip()
-        match = re.search(r"(\d+(?:\.\d+)?)", s)
-        if match:
-            return float(match.group(1))
+        if "free" in raw.lower():
+            return 0.0
+        m = re.search(r"(\d+(?:[\d,]*\.\d+|\d*))", raw.replace(",", ""))
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                return None
     return None
 
 
 def _parse_int(raw: Any) -> Optional[int]:
     if raw is None or raw == "":
         return None
-    if isinstance(raw, int):
-        return raw
-    if isinstance(raw, float):
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
         return int(raw)
     if isinstance(raw, str):
-        try:
-            return int(raw)
-        except ValueError:
-            return None
+        m = re.search(r"\d+", raw)
+        return int(m.group(0)) if m else None
     return None
 
 
-def _parse_float(raw: Any) -> Optional[float]:
+def _parse_feedback_count(raw: Any) -> Optional[int]:
+    """eBay feedback counts: '2K' -> 2000, '17.8K' -> 17800, '532' -> 532."""
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    s = str(raw).strip().replace(",", "")
+    m = re.match(r"([\d.]+)\s*([KkMm]?)", s)
+    if not m:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    suffix = m.group(2).upper()
+    if suffix == "K":
+        val *= 1_000
+    elif suffix == "M":
+        val *= 1_000_000
+    return int(round(val))
+
+
+def _parse_pct(raw: Any) -> Optional[float]:
     if raw is None or raw == "":
         return None
     if isinstance(raw, (int, float)):
         return float(raw)
-    if isinstance(raw, str):
+    m = re.search(r"([\d.]+)", str(raw))
+    return float(m.group(1)) if m else None
+
+
+def _parse_sold_date(raw: Any) -> Optional[str]:
+    """'May 12, 2026' / 'Sold May 12, 2026' -> '2026-05-12' (ISO date)."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    s = re.sub(r"^Sold\s+", "", s, flags=re.IGNORECASE)
+    for fmt in ("%b %d, %Y", "%B %d, %Y"):
         try:
-            return float(raw)
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
-            return None
-    return None
+            continue
+    return s  # leave as-is if an unexpected format slips through
 
 
 # ---------------------------------------------------------------------------
-# Output mapping (caffein.dev/ebay-sold-listings schema)
+# Output mapping (automation-lab/ebay-sold-scraper schema)
 # ---------------------------------------------------------------------------
 
-def _map_to_comp_record(item: dict) -> Optional[CompRecord]:
-    """Convert a raw Apify item dict to a CompRecord, or None if unusable."""
+def _map_to_comp_record(item: dict, keyword_tag: Optional[str]) -> Optional[CompRecord]:
+    """Convert a raw Actor item dict to a CompRecord, or None if unusable."""
     title = item.get("title")
     if not title:
         return None
 
     sold_price = _parse_price(item.get("soldPrice"))
+    if sold_price is None:
+        sold_price = _parse_price(item.get("soldPriceString"))
     if sold_price is None:
         return None
 
@@ -231,23 +363,30 @@ def _map_to_comp_record(item: dict) -> Optional[CompRecord]:
     if not url:
         return None
 
+    ship_raw = item.get("shippingCost")
+    shipping_cost = _parse_price(ship_raw)
+    shipping_type = "free" if (isinstance(ship_raw, str) and "free" in ship_raw.lower()) else None
+    total_price = sold_price + (shipping_cost or 0.0)
+
     return CompRecord(
         title=str(title),
         sold_price=sold_price,
         url=str(url),
-        sold_date=item.get("endedAt"),
+        sold_date=_parse_sold_date(item.get("soldDate")),
         condition=item.get("condition"),
-        condition_id=_parse_int(item.get("conditionId")),
-        seller_username=item.get("sellerUsername"),
-        seller_feedback_score=_parse_int(item.get("sellerFeedbackScore")),
-        seller_feedback_pct=_parse_float(item.get("sellerPositivePercent")),
-        shipping_cost=_parse_price(item.get("shippingPrice")),
-        shipping_type=item.get("shippingType"),
-        sold_currency=item.get("soldCurrency"),
-        total_price=_parse_price(item.get("totalPrice")),
-        item_id=item.get("itemId"),
-        keyword_tag=item.get("keyword"),  # may be set by the actor to tag multi-keyword runs
-        bo_accepted=False,                # not exposed by this Actor
+        condition_id=None,
+        seller_username=item.get("sellerName"),
+        seller_feedback_score=_parse_feedback_count(item.get("sellerFeedbackCount")),
+        seller_feedback_pct=_parse_pct(item.get("sellerFeedbackPercent")),
+        shipping_cost=shipping_cost,
+        shipping_type=shipping_type,
+        sold_currency="USD",
+        total_price=round(total_price, 2),
+        item_id=str(item.get("itemId")) if item.get("itemId") is not None else None,
+        listing_type=item.get("listingType"),
+        bids_count=_parse_int(item.get("bidsCount")),
+        keyword_tag=keyword_tag,
+        bo_accepted=False,
         raw=item,
     )
 
@@ -259,102 +398,77 @@ def _map_to_comp_record(item: dict) -> Optional[CompRecord]:
 def search_ebay_sold(
     query: Union[str, list[str]],
     *,
-    count: int = DEFAULT_COUNT,
-    days_to_scrape: int = DEFAULT_DAYS_TO_SCRAPE,
-    sort_order: str = DEFAULT_SORT_ORDER,
-    ebay_site: str = DEFAULT_EBAY_SITE,
-    item_condition: str = DEFAULT_ITEM_CONDITION,
-    item_location: str = DEFAULT_ITEM_LOCATION,
+    max_listings: int = DEFAULT_MAX_LISTINGS,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    sort: str = DEFAULT_SORT,
+    listing_type: str = DEFAULT_LISTING_TYPE,
+    condition: Optional[list[str]] = None,
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
-    category_id: Optional[str] = None,
-    subcategory_id: Optional[str] = None,
+    max_retries: int = DEFAULT_MAX_RETRIES,
     actor_id: Optional[str] = None,
     timeout_sec: int = DEFAULT_RUN_TIMEOUT_SEC,
+    on_currency_leak: str = "raise",
 ) -> list[CompRecord]:
-    """Run the caffein.dev/ebay-sold-listings Apify Actor and return comps.
+    """Run the eBay sold-listings Actor and return USD comps.
 
     Args:
-        query: a single search keyword string OR a list of up to 6
-               keywords (each runs as a separate search; results are
-               tagged with the keyword that matched them via the
-               `keyword_tag` field on the returned CompRecord).
-        count: max results PER KEYWORD (Actor default is 100; we
-               default to 30 to match PRICE's typical comp-list size).
-        days_to_scrape: how many days back to search (1–90).
-        sort_order: one of `endedRecently`, `timeNewlyListed`,
-                    `pricePlusPostageLowest`, `pricePlusPostageHighest`,
-                    `distanceNearest`. Default `pricePlusPostageHighest`
-                    matches PRICE's _sop=3 convention.
-        ebay_site: e.g. `ebay.com`, `ebay.co.uk`, `ebay.de`, ...
-        item_condition: one of `any`, `new`, `used`.
-        item_location: one of `default`, `domestic`, `worldwide`.
-        min_price, max_price: optional price range filters.
-        category_id, subcategory_id: optional eBay category filters.
-        actor_id: override the Apify Actor ID
-                  (default: from config; built-in fallback caffein.dev/ebay-sold-listings).
+        query: one search keyword string OR a list of keywords (each runs as
+               a separate search). With a single keyword, every returned
+               comp is tagged with it via `keyword_tag`.
+        max_listings: max results per keyword (maxListingsPerSearch).
+        max_pages: max search pages per keyword (60 listings/page).
+        sort: one of best_match / newly_listed / price_low / price_high.
+        listing_type: all / auction / buy_it_now.
+        condition: optional list of eBay condition filters (e.g. ["used"]).
+        min_price, max_price: optional USD price-range filters.
+        max_retries: per-request retries before skipping (anti-bot).
+        actor_id: override the Apify Actor ID (default: from config).
         timeout_sec: max time to wait for the Apify run.
+        on_currency_leak: "raise" (default) | "repair" | "ignore" — how to
+            handle a run whose prices fail the charm-price USD check.
 
     Returns:
-        List of CompRecord objects, ordered as Apify returns them.
+        List of CompRecord objects (USD), ordered as the Actor returns them.
 
     Raises:
-        ApifyError: on auth failure, run failure, timeout, or invalid
-                    config. ValueError on invalid argument values.
+        CurrencyLeakError: prices look FX-converted (and on_currency_leak
+            is not "repair"/"ignore").
+        ApifyError: auth failure, run failure, timeout, or invalid config.
+        ValueError: on invalid argument values.
     """
-    # Normalize and validate keywords
     keywords = [query] if isinstance(query, str) else list(query)
     if not keywords or not all(isinstance(k, str) and k.strip() for k in keywords):
         raise ValueError("query must be a non-empty string or list of non-empty strings")
-    if len(keywords) > MAX_KEYWORDS:
-        raise ValueError(
-            f"caffein.dev/ebay-sold-listings accepts up to {MAX_KEYWORDS} keywords; "
-            f"got {len(keywords)}"
-        )
 
-    # Validate enums
-    if sort_order not in VALID_SORT_ORDERS:
+    if sort not in VALID_SORTS:
+        raise ValueError(f"sort must be one of {sorted(VALID_SORTS)}; got {sort!r}")
+    if listing_type not in VALID_LISTING_TYPES:
         raise ValueError(
-            f"sort_order must be one of {sorted(VALID_SORT_ORDERS)}; got {sort_order!r}"
-        )
-    if item_condition not in VALID_ITEM_CONDITIONS:
-        raise ValueError(
-            f"item_condition must be one of {sorted(VALID_ITEM_CONDITIONS)}; "
-            f"got {item_condition!r}"
-        )
-    if item_location not in VALID_ITEM_LOCATIONS:
-        raise ValueError(
-            f"item_location must be one of {sorted(VALID_ITEM_LOCATIONS)}; "
-            f"got {item_location!r}"
-        )
-    if ebay_site not in VALID_EBAY_SITES:
-        raise ValueError(
-            f"ebay_site must be one of {sorted(VALID_EBAY_SITES)}; got {ebay_site!r}"
-        )
-    if not (1 <= days_to_scrape <= 90):
-        raise ValueError(f"days_to_scrape must be 1–90; got {days_to_scrape}")
-    if count < 1:
-        raise ValueError(f"count must be >= 1; got {count}")
+            f"listing_type must be one of {sorted(VALID_LISTING_TYPES)}; got {listing_type!r}")
+    if max_listings < 1:
+        raise ValueError(f"max_listings must be >= 1; got {max_listings}")
+    if max_pages < 1:
+        raise ValueError(f"max_pages must be >= 1; got {max_pages}")
+    if on_currency_leak not in ("raise", "repair", "ignore"):
+        raise ValueError("on_currency_leak must be 'raise', 'repair', or 'ignore'")
 
     actor = actor_id or get_apify_actor()
 
     run_input: dict[str, Any] = {
-        "keywords": keywords,
-        "count": count,
-        "daysToScrape": days_to_scrape,
-        "sortOrder": sort_order,
-        "ebaySite": ebay_site,
-        "itemCondition": item_condition,
-        "itemLocation": item_location,
+        "searchQueries": keywords,
+        "maxListingsPerSearch": max_listings,
+        "maxSearchPages": max_pages,
+        "sort": sort,
+        "listingType": listing_type,
+        "maxRequestRetries": max_retries,
     }
+    if condition:
+        run_input["condition"] = condition
     if min_price is not None:
         run_input["minPrice"] = min_price
     if max_price is not None:
         run_input["maxPrice"] = max_price
-    if category_id is not None:
-        run_input["categoryId"] = category_id
-    if subcategory_id is not None:
-        run_input["subcategoryId"] = subcategory_id
 
     client = _client()
 
@@ -369,48 +483,29 @@ def search_ebay_sold(
     if run is None:
         raise ApifyError("Apify .call() returned no run object")
 
-    # The SDK can return either a Pydantic Run model (newer versions) or
-    # a plain dict (older versions). Normalize to a dict.
-    if hasattr(run, "model_dump"):
-        run_dict: dict = run.model_dump()
-    elif isinstance(run, dict):
-        run_dict = run
-    else:
-        # Fallback: try attribute access on a duck-typed object
-        run_dict = {
-            "status": getattr(run, "status", None),
-            "id": getattr(run, "id", None),
-            "defaultDatasetId": (
-                getattr(run, "default_dataset_id", None)
-                or getattr(run, "defaultDatasetId", None)
-            ),
-        }
-
-    status = run_dict.get("status")
+    # Normalize the run object (Pydantic model in newer SDKs, dict in older).
+    status = getattr(run, "status", None) if not isinstance(run, dict) else run.get("status")
+    run_id = getattr(run, "id", None) if not isinstance(run, dict) else run.get("id")
     if status != "SUCCEEDED":
-        raise ApifyError(
-            f"Apify run did not succeed (status={status}, run id={run_dict.get('id')})"
-        )
+        raise ApifyError(f"Apify run did not succeed (status={status}, run id={run_id})")
+    if not run_id:
+        raise ApifyError("Apify run has no id")
 
-    # Pydantic models from apify-client use snake_case attribute names but
-    # the JSON-compatible model_dump() preserves the original casing... or
-    # not, depending on SDK version. Try both.
-    dataset_id = (
-        run_dict.get("defaultDatasetId")
-        or run_dict.get("default_dataset_id")
-    )
-    if not dataset_id:
-        raise ApifyError("Apify run has no defaultDatasetId")
+    # Fetch the run's default dataset directly by run id — robust across SDK
+    # versions where model_dump() drops defaultDatasetId.
+    try:
+        raw_items = list(client.run(run_id).dataset().iterate_items())
+    except Exception as e:
+        raise ApifyError(f"failed to read Apify dataset for run {run_id}: {e}") from e
 
-    raw_items = list(client.dataset(dataset_id).iterate_items())
-
+    single_tag = keywords[0] if len(keywords) == 1 else None
     comps: list[CompRecord] = []
     for item in raw_items:
-        comp = _map_to_comp_record(item)
+        comp = _map_to_comp_record(item, single_tag)
         if comp is not None:
             comps.append(comp)
 
-    return comps
+    return _check_currency_leak(comps, on_currency_leak)
 
 
 # ---------------------------------------------------------------------------
@@ -423,36 +518,27 @@ def _cli() -> None:
     import sys
 
     parser = argparse.ArgumentParser(
-        description="Apify eBay sold-listings search (caffein.dev/ebay-sold-listings)"
+        description="Apify eBay sold-listings search (automation-lab/ebay-sold-scraper)"
     )
-    parser.add_argument(
-        "query",
-        nargs="+",
-        help="One or more search keywords (each runs as a separate search; up to 6)",
-    )
-    parser.add_argument("--count", type=int, default=DEFAULT_COUNT,
-                        help=f"Max results per keyword (default: {DEFAULT_COUNT})")
-    parser.add_argument("--days", type=int, default=DEFAULT_DAYS_TO_SCRAPE,
-                        help=f"Days back to search 1-90 (default: {DEFAULT_DAYS_TO_SCRAPE})")
-    parser.add_argument("--sort", default=DEFAULT_SORT_ORDER,
-                        choices=sorted(VALID_SORT_ORDERS),
-                        help=f"Sort order (default: {DEFAULT_SORT_ORDER})")
-    parser.add_argument("--site", default=DEFAULT_EBAY_SITE,
-                        choices=sorted(VALID_EBAY_SITES),
-                        help=f"eBay marketplace (default: {DEFAULT_EBAY_SITE})")
-    parser.add_argument("--condition", default=DEFAULT_ITEM_CONDITION,
-                        choices=sorted(VALID_ITEM_CONDITIONS),
-                        help=f"Item condition filter (default: {DEFAULT_ITEM_CONDITION})")
-    parser.add_argument("--location", default=DEFAULT_ITEM_LOCATION,
-                        choices=sorted(VALID_ITEM_LOCATIONS),
-                        help=f"Item location filter (default: {DEFAULT_ITEM_LOCATION})")
-    parser.add_argument("--min-price", type=float, help="Minimum price filter")
-    parser.add_argument("--max-price", type=float, help="Maximum price filter")
-    parser.add_argument("--category", help="Category ID filter (default: all)")
-    parser.add_argument("--subcategory", help="Subcategory ID filter (overrides --category)")
+    parser.add_argument("query", nargs="+",
+                        help="One or more search keywords (each runs a separate search)")
+    parser.add_argument("--max", type=int, default=DEFAULT_MAX_LISTINGS, dest="max_listings",
+                        help=f"Max results per keyword (default: {DEFAULT_MAX_LISTINGS})")
+    parser.add_argument("--pages", type=int, default=DEFAULT_MAX_PAGES,
+                        help=f"Max search pages per keyword (default: {DEFAULT_MAX_PAGES})")
+    parser.add_argument("--sort", default=DEFAULT_SORT, choices=sorted(VALID_SORTS),
+                        help=f"Sort order (default: {DEFAULT_SORT})")
+    parser.add_argument("--listing-type", default=DEFAULT_LISTING_TYPE,
+                        choices=sorted(VALID_LISTING_TYPES),
+                        help=f"Listing type filter (default: {DEFAULT_LISTING_TYPE})")
+    parser.add_argument("--condition", nargs="*", help="Condition filter(s), e.g. used new")
+    parser.add_argument("--min-price", type=float, help="Minimum sold price (USD)")
+    parser.add_argument("--max-price", type=float, help="Maximum sold price (USD)")
     parser.add_argument("--actor", help="Override the Apify Actor ID")
     parser.add_argument("--timeout", type=int, default=DEFAULT_RUN_TIMEOUT_SEC,
                         help=f"Max seconds for the Apify run (default: {DEFAULT_RUN_TIMEOUT_SEC})")
+    parser.add_argument("--on-leak", default="raise", choices=["raise", "repair", "ignore"],
+                        help="How to handle a detected currency leak (default: raise)")
     parser.add_argument("--json", action="store_true",
                         help="Output raw JSON instead of human-readable list")
     args = parser.parse_args()
@@ -460,19 +546,22 @@ def _cli() -> None:
     try:
         comps = search_ebay_sold(
             args.query if len(args.query) > 1 else args.query[0],
-            count=args.count,
-            days_to_scrape=args.days,
-            sort_order=args.sort,
-            ebay_site=args.site,
-            item_condition=args.condition,
-            item_location=args.location,
+            max_listings=args.max_listings,
+            max_pages=args.pages,
+            sort=args.sort,
+            listing_type=args.listing_type,
+            condition=args.condition,
             min_price=args.min_price,
             max_price=args.max_price,
-            category_id=args.category,
-            subcategory_id=args.subcategory,
             actor_id=args.actor,
             timeout_sec=args.timeout,
+            on_currency_leak=args.on_leak,
         )
+    except CurrencyLeakError as e:
+        print(f"CURRENCY LEAK: {e}", file=sys.stderr)
+        print("  -> prices NOT returned. Re-run with --on-leak repair to auto-correct, "
+              "or use the Chrome (Stage C) path.", file=sys.stderr)
+        sys.exit(2)
     except (ApifyError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
@@ -486,7 +575,8 @@ def _cli() -> None:
                     "sold_currency": c.sold_currency,
                     "sold_date": c.sold_date,
                     "condition": c.condition,
-                    "condition_id": c.condition_id,
+                    "listing_type": c.listing_type,
+                    "bids_count": c.bids_count,
                     "url": c.url,
                     "item_id": c.item_id,
                     "seller_username": c.seller_username,
@@ -509,13 +599,13 @@ def _cli() -> None:
     print()
     for i, c in enumerate(comps, 1):
         tag = f" [{c.keyword_tag}]" if c.keyword_tag and len(args.query) > 1 else ""
-        currency = c.sold_currency or "USD"
-        print(f"[{i:2d}] {currency} {c.sold_price:.2f}{tag} - {c.title}")
+        print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {c.title}")
         if c.sold_date:
             print(f"     Sold: {c.sold_date}")
         if c.condition:
-            cond_id = f" ({c.condition_id})" if c.condition_id else ""
-            print(f"     Condition: {c.condition}{cond_id}")
+            lt = f", {c.listing_type}" if c.listing_type else ""
+            bids = f", {c.bids_count} bids" if c.bids_count else ""
+            print(f"     Condition: {c.condition}{lt}{bids}")
         if c.seller_username:
             fb_parts = []
             if c.seller_feedback_score is not None:
@@ -524,13 +614,8 @@ def _cli() -> None:
                 fb_parts.append(f"{c.seller_feedback_pct}% positive")
             fb = f" ({', '.join(fb_parts)})" if fb_parts else ""
             print(f"     Seller: {c.seller_username}{fb}")
-        if c.shipping_cost is not None or c.shipping_type:
-            ship_parts = []
-            if c.shipping_cost is not None:
-                ship_parts.append(f"+${c.shipping_cost:.2f}")
-            if c.shipping_type:
-                ship_parts.append(f"({c.shipping_type})")
-            print(f"     Shipping: {' '.join(ship_parts)}")
+        if c.shipping_cost is not None:
+            print(f"     Shipping: +${c.shipping_cost:.2f}" + (" (free)" if c.shipping_type == "free" else ""))
         print(f"     URL: {c.url}")
         print()
 

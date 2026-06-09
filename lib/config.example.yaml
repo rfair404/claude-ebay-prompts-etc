@@ -24,9 +24,11 @@ apify:
   api_token: "apify_api_REPLACE_ME"
 
   # Optional. Which Apify Actor to call for eBay scraping.
-  # The default actor below is widely used; override only if you've
-  # found one that returns cleaner data or costs less per call.
-  ebay_actor: "caffein.dev/ebay-sold-listings"
+  # Default: automation-lab/ebay-sold-scraper — pins a US residential proxy
+  # so eBay returns USD natively (avoids the foreign-currency leak that
+  # actors without proxy control suffer). Override only if you've vetted a
+  # cleaner/cheaper alternative against the currency-leak validator.
+  ebay_actor: "automation-lab/ebay-sold-scraper"
 
 # ---------------------------------------------------------------------------
 # Anthropic — Claude API (for IDENTIFY / INVESTIGATE / PRICE / CURATE)
