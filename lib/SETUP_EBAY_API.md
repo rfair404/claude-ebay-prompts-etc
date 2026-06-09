@@ -117,6 +117,86 @@ draft remembers its `ebay_offer_id`).
 
 ---
 
+## Authorize / Reauthorize (connect a store, or switch to a different one)
+
+The `user_refresh_token` ties the app to **one eBay seller account**. Use
+this to grant access the first time, when the token expires (~18-month
+lifetime), or to **switch the active environment to a different store**.
+
+**What changes vs. what stays:**
+- **Stays:** the app keyset (`app_id` / `cert_id` / `dev_id` / `redirect_uri`)
+  for the active environment — you're re-authorizing the *same app*.
+- **Changes (all in the active env block, e.g. `ebay.production:`):** the
+  `user_refresh_token`, and — because they're account-specific — the
+  `merchant_location_key` and the three `*_policy_id` values. A different
+  store has different policy IDs and location; the old ones will NOT work.
+
+**⚠ The make-or-break step:** during consent you must be signed in to eBay
+as the **store you want to connect**. Log out of any other eBay account
+first, or run the browser step in an **incognito/private window** —
+otherwise you silently re-authorize whatever account is already logged in.
+
+Run from the repo root (`environment:` already points at the target env):
+
+```
+# 0. Back up the working config so you can revert
+cp config.yaml config.bak-currentstore.yaml
+
+# 1. Print the consent URL
+python lib/ebay_client.py --user-consent-url
+```
+
+```
+# 2. Open that URL in a browser SIGNED IN AS THE TARGET STORE (incognito = safest).
+#    Approve the Sell scopes. eBay redirects to your redirect_uri with ?code=...
+#    Copy the `code` value from the address bar.
+#    (Codes are single-use and expire in minutes — do step 3 promptly.
+#     If step 3 fails with invalid_grant, URL-decode the code first:
+#     %23 -> #, %5E -> ^, etc.)
+```
+
+```
+# 3. Exchange the code for the new refresh token (prints it)
+python lib/ebay_client.py --exchange-code "<code>"
+```
+
+Paste the printed `refresh_token` into `config.yaml` under the **active
+environment block** (nested — e.g. `ebay.production.user_refresh_token`,
+not a flat `ebay.user_refresh_token`):
+
+```yaml
+ebay:
+  production:
+    user_refresh_token: "v^1.1#..."
+```
+
+```
+# 4. Pull the new account's policy IDs + inventory location
+python lib/ebay_client.py --setup-check
+```
+
+Paste the four account-specific values into the same env block:
+
+```yaml
+    merchant_location_key: "<new>"
+    fulfillment_policy_id: "<new>"
+    payment_policy_id:     "<new>"
+    return_policy_id:      "<new>"
+```
+
+```
+# 5. Verify both the auth and the listing path see the new creds
+python lib/ebay_client.py --setup-check
+python lib/list_edit.py  --setup-check
+```
+
+The target store must have **Business Policies opted in** and an
+**inventory location** (see Step 3 above) — otherwise `--setup-check` lists
+no policies and `--sync` fails. To switch back later, restore
+`config.bak-currentstore.yaml`.
+
+---
+
 ## Going live (publish) — explicit and confirmation-gated
 
 API-created offers are UNPUBLISHED and do **not** appear in the Seller Hub
