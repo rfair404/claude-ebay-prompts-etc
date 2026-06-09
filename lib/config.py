@@ -58,7 +58,7 @@ class ConfigError(RuntimeError):
 # Built-in defaults (last-resort fallbacks)
 # ---------------------------------------------------------------------------
 
-DEFAULT_APIFY_ACTOR = "epctex/ebay-scraper"
+DEFAULT_APIFY_ACTOR = "automation-lab/ebay-sold-scraper"
 
 DEFAULT_PROFILE = {
     "margin_target": 0.50,

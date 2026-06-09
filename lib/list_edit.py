@@ -17,14 +17,20 @@ Publishing is a SEPARATE, deliberate command:
 
     python list_edit.py --publish <shoot-dir>            # DRY RUN (shows what would go live)
     python list_edit.py --publish <shoot-dir> --confirm  # actually publishes
+    python list_edit.py --list    <shoot-dir> --confirm  # sync THEN publish (post review-gate)
 
 Without --confirm it is a dry run. `publish_offer()` is the ONLY place
 this module calls the publishOffer endpoint, it runs only on a draft you
 already synced (has an ebay_offer_id), and it requires --confirm. It is
-never invoked by --sync and never triggered automatically. This is the
-deliberate, user-initiated publish path the original no-publish firewall
-required (see PLAN.md "No-publish firewall"): the firewall's intent —
-no ACCIDENTAL or AUTOMATIC publication — is preserved.
+never invoked by --sync and never triggered automatically.
+
+The firewall's intent — no ACCIDENTAL or AUTOMATIC publication — is
+preserved: nothing in the IDENTIFY→DRAFT pipeline publishes, and every
+publish path still requires the explicit --confirm guard. What changed
+(v3 review-gate): publishing is no longer categorically forbidden to the
+agent. After DRAFT, the REVIEW phase (prompts/review.md) presents a
+review card and STOPS; only an explicit human approval at that gate lets
+the agent run `--list <dir> --confirm` (one step: sync then publish).
 
 ----- Why the eBay Sell API (vs the Chrome stand-in) -----
 
@@ -49,6 +55,7 @@ policy IDs / locations to paste in.
     python list_edit.py --validate <shoot-dir|draft.md>   # no creds needed
     python list_edit.py --setup-check                      # verify creds + policies
     python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT
+    python list_edit.py --list <shoot-dir|draft.md> --confirm  # sync + publish (post review-gate)
     python list_edit.py --check                             # legacy stub-status report
 """
 
@@ -83,7 +90,11 @@ from ebay_client import (
 )
 
 
-FIREWALL_NO_PUBLISH = True
+# No AUTOMATIC/ACCIDENTAL publish: --sync never publishes, the pipeline
+# never publishes, and every publish path requires the explicit --confirm
+# guard. Publishing is reachable by the agent only after a human approves
+# the REVIEW gate (prompts/review.md) — it is no longer categorically refused.
+FIREWALL_NO_AUTO_PUBLISH = True
 STUB_MESSAGE = "LIST/EDIT is stubbed — awaiting eBay developer key. See PLAN.md Function 6."
 
 CURRENCY = "USD"
@@ -603,8 +614,9 @@ def stub_status() -> dict:
     return {
         "module": "list_edit",
         "implementation_status": "implemented (needs credentials + sandbox test)",
-        "firewall_no_publish": FIREWALL_NO_PUBLISH,
-        "publish_function_exists": False,
+        "firewall_no_auto_publish": FIREWALL_NO_AUTO_PUBLISH,
+        "publish_requires_confirm": True,
+        "publish_requires_review_gate": True,
         "credentials": {
             "load_error": err,
             "app_id_set": bool(creds and creds.app_id),
@@ -657,13 +669,14 @@ def _cli() -> None:
         pass
 
     ap = argparse.ArgumentParser(
-        description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT (never publishes).",
+        description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT; publish only via --publish/--list --confirm (post review-gate).",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
+    ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing. DRY RUN unless --confirm is also given.")
-    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--end to actually act (otherwise they are dry runs).")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end to actually act (otherwise they are dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     args = ap.parse_args()
@@ -705,6 +718,27 @@ def _cli() -> None:
                 print(f"  price:  ${res.price}")
                 print(f"  status: {res.status_before} -> would become PUBLISHED (a real, live listing)")
                 print(f"\n  To actually publish: re-run with --confirm")
+            else:
+                print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
+                if res.listing_url: print(f"  {res.listing_url}")
+                print("  This listing is now public and accepting buyers.")
+            return
+        if args.list_target:
+            # One-step LIST = sync (create/update the offer) then publish it.
+            # Same --confirm guard as --publish: without it, this syncs and then
+            # shows a DRY RUN of what would go live. This is the path the agent
+            # runs ONLY after a human approves the REVIEW card.
+            sres = create_or_update_listing(Path(args.list_target))
+            print(f"[OK] {sres.operation} eBay DRAFT (offer {sres.offer_id}, {len(sres.photo_eps_urls)} photos).")
+            res = publish_offer(Path(args.list_target), confirm=args.confirm)
+            if res.status_before == "PUBLISHED":
+                print(f"[i] Already LIVE. listing {res.listing_id}")
+                if res.listing_url: print(f"    {res.listing_url}")
+            elif res.dry_run:
+                print("[DRY RUN] Synced but NOT published. This WOULD go live:")
+                print(f"  title:  {res.title}")
+                print(f"  price:  ${res.price}")
+                print(f"\n  To actually publish: re-run --list with --confirm")
             else:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")

@@ -6,7 +6,10 @@ prompt on demand as you reach it. You do not need to read all phase
 prompts up front.
 
 **Goal:** carry a shoot from photos to a review-ready artifact with no
-human babysitting — stopping only at the two HARD gates below.
+human babysitting — stopping only at the HARD gates below. In `list`/`full`
+mode the run carries through to a **REVIEW gate**: it presents a decision
+card and stops for one explicit human approval, which is what publishes the
+listing LIVE.
 
 ---
 
@@ -15,9 +18,9 @@ human babysitting — stopping only at the two HARD gates below.
 The user points at a photo directory and (optionally) names a workflow
 mode. That directory is the shoot directory; all outputs land there.
 
-    plan  <photos-dir>   → IDENTIFY → PRICE → CURATE        (pre-buy: buy list)
-    list  <photos-dir>   → INVESTIGATE → DRAFT              (post-buy: listing)
-    full  <photos-dir>   → all five in order
+    plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
+    list  <photos-dir>   → INVESTIGATE → DRAFT → REVIEW(gate)→publish (post-buy: listing)
+    full  <photos-dir>   → all in order, ending at the REVIEW gate
 
 If no mode is given: a single-item or grouped shoot of items the user
 already owns → `list`; a wide field/estate scene → `plan`. State the
@@ -32,15 +35,21 @@ shoot directory, so phases compose without re-deriving.
 
 Reclassify every "ask the user" moment as HARD or SOFT.
 
-### HARD gates — stop the run
+### HARD gate — the only thing that stops a run
 
-1. **Publish to eBay.** Never. Refuse and explain (firewall). Not even
-   if the user says to — that requires a deliberate code+prompt refactor.
-2. **Paid Apify call (PRICE Source C).** Confirm cost before each call:
-   "About to spend ~$0.12 on an Apify query for `<query>`. Approve,
-   change, or skip?" Apify is opt-in only — never run by default.
+1. **The REVIEW gate (publish).** In `list`/`full`, after DRAFT, run
+   REVIEW: present the decision card ([prompts/review.md](prompts/review.md))
+   and STOP. Publishing the listing LIVE happens ONLY on the user's
+   explicit approval at this card. No automatic publish, no publish from a
+   "just list it" said before the card, no publish inferred from
+   "ok"/"looks good"/silence. (This replaced the old absolute no-publish
+   firewall — publishing is now gated here, not forbidden.)
 
-These are the ONLY two reasons to stop a headless run.
+This is the ONLY reason a run stops. PRICE's Apify call (Stage B) used to
+be a second HARD gate; it no longer is — Apify runs automatically as part
+of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
+confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
+validator on Apify.
 
 ### SOFT gates — proceed with the default, log it
 
@@ -59,8 +68,9 @@ Never block on these. Pick the documented default, append ONE line to
 
 **Working price is NOT a HARD gate.** PRICE still records "final price
 deferred to publish time", but headless flow auto-adopts the Recommended
-tier as the working price so DRAFT can complete. The final published
-price remains the user's call — nothing publishes regardless.
+tier as the working price so DRAFT can complete. The final published price
+remains the user's call — it is confirmed (or changed) at the REVIEW gate
+before anything goes live. Nothing publishes before that gate.
 
 ### NEEDS_REVIEW.md format
 
@@ -91,21 +101,24 @@ Load each prompt when you reach its phase.
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
 | DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` |
+| REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `review_card.md` → (on approval) LIVE listing |
 
-**Post-pipeline (manual trigger only, NOT in the automated run):**
+**The publish step (reached via the REVIEW gate, on explicit approval):**
 
-| Step | How | Reads | Effect |
+| Path | How | Reads | Effect |
 |---|---|---|---|
-| LIST/EDIT (**primary**) | `python lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay **DRAFT** via Sell API (never published) |
+| LIST/EDIT (**primary**) | `python lib/list_edit.py --list <shoot-dir> --confirm` | `draft.md` | sync + **publish LIVE** via Sell API |
+| Sync-only (no publish) | `python lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay UNPUBLISHED offer only |
 | LIST/EDIT (fallback) | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** via Chrome UI |
 
-Function 6 pushes an approved `draft.md` into an eBay draft. It runs ONLY
-when the user explicitly asks ("push to eBay draft"), one item at a time —
-never as part of `full`. The firewall applies: `--sync` creates an
-UNPUBLISHED offer / the UI terminal action is "Save for later" — never
-auto-publish. Going live is a separate, deliberate command —
-`list_edit.py --publish <dir> --confirm` (dry run without `--confirm`) —
-never invoked by the pipeline or by `--sync`.
+REVIEW (Function 5.5) is the gate that authorizes Function 6. The publish
+command (`--list … --confirm`) runs ONLY after the user explicitly approves
+the review card, one item at a time (batch only on "approve all"). The
+firewall still holds against *automatic* publishing: the pipeline never
+publishes, `--sync` only ever creates an UNPUBLISHED offer, and every
+publish path keeps the `--confirm` code guard — the human's approval at the
+gate is what authorizes passing it. A dry run is available any time
+(`--list`/`--publish` without `--confirm`).
 
 - **Primary — Sell API (`lib/list_edit.py`).** Headless, full-res photo
   upload (EPS), one-payload description (no missing-fields bug), idempotent
@@ -119,7 +132,8 @@ never invoked by the pipeline or by `--sync`.
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
   [prompts/condition-rubric.md](prompts/condition-rubric.md).
-- PRICE runs the autonomous exact-match hunt (free Sources A+B) before
+- PRICE runs the autonomous exact-match hunt (Stage A WebSearch → Stage B
+  Apify eBay-sold → optional Stage C Chrome when confidence is low) before
   any era-peer fallback; see its prompt.
 
 Shared rules (style, confidence, firewall, unit_type, char limits,
@@ -135,16 +149,18 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-3. PRICE each saleable item → run the exact-match hunt on free sources;
-   adopt Recommended tier as provisional working price; write
-   `price.txt`. Stop ONLY if you reach a paid-Apify decision.
+3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
+   → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
+   adopt Recommended tier as provisional working price; write `price.txt`.
+   Never stops.
 4. CURATE (plan mode) → write `review.md`.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.
 6. DRAFT (list mode) → render template, run the pre-write validation
    pass, write `draft.md`.
-7. Closing line: outputs written + NEEDS_REVIEW count + the one headline
-   fact per artifact. Nothing is published; LIST/EDIT remains manual.
-8. (Optional, on user request) LIST/EDIT → eBay draft via
-   [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md). Still a
-   draft; the user publishes manually in Seller Hub.
+7. REVIEW (list mode) → write `review_card.md`, present the decision card,
+   and STOP (HARD gate). Surface title + price + the ⚠ count.
+8. On explicit approval at the card → `python lib/list_edit.py --list
+   <shoot-dir> --confirm` (sync + publish LIVE); report the listing URL.
+   On a change request → re-run the owning phase, re-render `draft.md`,
+   re-present the card. Anything other than explicit approval = no publish.

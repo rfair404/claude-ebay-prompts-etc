@@ -3,22 +3,26 @@
 Obeys [`_shared.md`](_shared.md). Read it first.
 
 Pushes an approved `draft.md` into an eBay **DRAFT** listing by driving the
-seller UI with the Claude-in-Chrome MCP. Interim until the eBay Sell API
-path is built (`lib/list_edit.py`). Same inputs, same firewall, same
-output as the API path will have — only the mechanism differs.
+seller UI with the Claude-in-Chrome MCP. **Fallback only** — use it when
+the eBay Sell API path (`lib/list_edit.py`) isn't set up. The API path is
+primary because it can also publish LIVE post-approval; this stand-in is
+draft-only by design (see below).
 
-**Not part of the automated run.** RUN.md's pipeline ends at DRAFT.
-Function 6 runs ONLY on explicit user instruction ("push to eBay
-draft"), one item at a time.
+**Reached via the REVIEW gate.** RUN.md's pipeline runs DRAFT → REVIEW.
+This path runs only after a human approves the review card, one item at a
+time.
 
 ================================================================
-HARD FIREWALL — NEVER PUBLISH
+THIS STAND-IN IS DRAFT-ONLY (publish via the API path)
 ================================================================
-Terminal action is **"Save for later" / "Save as draft"** — nothing
-else. Forbidden, no matter who asks: "List it", "Publish", "Sell now",
-"Submit listing", or any control that makes the listing live. If asked
-to publish, refuse. Publication is the user's manual action in Seller
-Hub. (Same firewall as `_shared.md`.)
+Terminal action here is **"Save for later" / "Save as draft"** — nothing
+else. Going LIVE is not done through this UI stand-in: the browser is
+granted read-tier OS automation and the publish controls are unreliable
+to drive safely, so live publishing is reserved for the API path
+(`list_edit.py --list <dir> --confirm`, run after the REVIEW approval).
+So even with an approved card, this path stops at a saved draft; if the
+user wants it live, hand off to the API command. The firewall against
+*automatic* publishing still holds (see `_shared.md`).
 
 ## Preconditions (STOP if unmet)
 

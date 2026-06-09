@@ -143,12 +143,14 @@ you can re-sync/re-publish it later.
 
 ## Firewall
 
-`--sync` NEVER publishes — it stops at an unpublished offer. Publishing is
-a separate, deliberate, human-run command that does nothing without
-`--confirm`, is never invoked by `--sync`, and is never automatic. That
-preserves the firewall's intent (no accidental or automated publication)
-while giving you a one-command way to take a reviewed offer live. See
-PLAN.md "No-publish firewall".
+`--sync` NEVER publishes — it stops at an unpublished offer. Publishing
+requires `--confirm`, is never invoked by `--sync`, and is never
+automatic. The agent reaches it only after a human approves the REVIEW
+card ([../prompts/review.md](../prompts/review.md)); the post-approval
+command is `list_edit.py --list <dir> --confirm` (sync + publish in one
+step). That preserves the firewall's intent — no accidental or automated
+publication — while giving you a one-command way to take a reviewed offer
+live.
 
 ## Notes / limits
 

@@ -152,4 +152,6 @@ substitution. These stay local — never pushed to eBay.
 
 Per _shared: path + chosen title with `[N/80]` + working price. List
 flagged gaps / substitutions as one-line bullets. Don't restate
-frontmatter.
+frontmatter. In `list`/`full` mode, REVIEW ([review.md](review.md)) runs
+next — it turns this draft into the decision card and stops for approval
+before anything publishes.
