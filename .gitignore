@@ -31,3 +31,6 @@ apify_run*.stderr.txt
 *.heic
 *.webp
 *.tiff
+
+# Inventory working files — never tracked (private business data + images)
+/to-id/
