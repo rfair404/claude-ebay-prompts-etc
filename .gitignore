@@ -35,3 +35,11 @@ apify_runs/
 
 # Inventory working files — never tracked (private business data + images)
 /to-id/
+
+# Business / legal documents — contain PII and confidential info; store outside repo
+*.docx
+*.doc
+*.pdf
+
+# Private correspondence
+letters/
