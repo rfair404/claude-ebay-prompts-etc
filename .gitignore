@@ -26,6 +26,7 @@ apify_runs/
 
 # eBay listings ledger (account/inventory activity — kept locally)
 listings_log.txt
+listings_ledger.csv
 
 # Sample / shoot images — kept on disk, not version-controlled (heavy binaries)
 *.jpg

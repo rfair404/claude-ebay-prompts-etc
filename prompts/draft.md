@@ -148,6 +148,21 @@ condition grade + tie-break; weight/dims rounding; price tier + source;
 photo order; any rephrase (field, orig→final length); any lookup
 substitution. These stay local — never pushed to eBay.
 
+## Register the item (SKU + ledger record)
+
+After writing `draft.md`, register the item so it has a stable identity and
+a lifecycle record from draft time onward:
+
+    python lib/list_edit.py --record <shoot-dir>
+
+This computes the item's **SKU** (a deterministic 8-hex hash of title +
+folder — no eBay call, no credentials), stamps it into the draft's
+`meta.ebay_inventory_sku`, and creates the item's row in the listings
+ledger with status **DRAFTED**. The same row is later updated in place to
+SYNCED → PUBLISHED → ENDED/DELETED. (If you can't run a shell here, it's
+not fatal — `--sync` creates the record later; registering now just means
+the SKU/record exist from draft time.)
+
 ## Closing
 
 Per _shared: path + chosen title with `[N/80]` + working price. List

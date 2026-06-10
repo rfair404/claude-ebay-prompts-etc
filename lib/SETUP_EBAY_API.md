@@ -271,22 +271,39 @@ python list_edit.py --delete-item   <sku>     --confirm   # DELETE the inventory
 
 ## Listings ledger
 
-Every listing the tooling creates is appended to a plain-text ledger,
-`listings_log.txt` (repo root; override with `EBAYBIZ_LISTINGS_LOG`). One
-line per event — when an offer is first created (`--sync`/`--list`) and when
-it goes live (`--publish`/`--list --confirm`):
+A CSV — `listings_ledger.csv` (repo root; override with
+`EBAYBIZ_LISTINGS_LEDGER`) — holds **one row per item, keyed by SKU**, that
+is created at draft time and **updated in place** through the item's
+lifecycle. Columns:
 
 ```
-<utc> | OFFER_CREATED | offer_id=… sku=… price=$… | <title>
-<utc> | PUBLISHED | listing_id=… offer_id=… sku=… price=$… | <title> | <url>
+sku, status, title, price, offer_id, listing_id, url,
+drafted_at, synced_at, published_at, ended_at, updated_at
 ```
 
-It's append-only (a running record of everything listed) and gitignored
-(account/inventory activity). Re-syncing an existing item does not add a
-duplicate line — only the first creation and each publish are recorded.
+Status flow (each step updates the same row, never duplicates it):
+
+| When | Command | status |
+|---|---|---|
+| Draft written | `--record <dir>` (no creds) | DRAFTED |
+| Offer created/updated | `--sync` / `--list` | SYNCED |
+| Goes live | `--publish` / `--list --confirm` | PUBLISHED |
+| Withdrawn | `--withdraw-offer` / `--end` | ENDED |
+| Deleted | `--delete-offer` / `--delete-item` | DELETED |
+
+Status only advances sensibly (a re-sync of a live item stays PUBLISHED;
+DRAFTED never overwrites a later state). The ledger is gitignored
+(account/inventory activity). The SKU itself is the deterministic hash from
+`_sku_for`, so the record can exist before the first eBay call.
 
 ## Notes / limits
 
+- **Custom label (SKU)** is an **8-hex-digit hash of the listing title +
+  shoot folder name** (e.g. `9c6e9361`). Unique per item (the folder is
+  unique even if two items share a title), deterministic per draft (same
+  draft → same SKU, so re-syncs are idempotent), ~4.3B space (negligible
+  collision risk). Once an item is synced, its SKU is stored in the draft
+  (`meta.ebay_inventory_sku`) and reused unchanged.
 - **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs
   `dev_id`). This is why `dev_id` is required even though the rest is REST.
 - If you'd rather not use the Trading API, you can instead host the photos

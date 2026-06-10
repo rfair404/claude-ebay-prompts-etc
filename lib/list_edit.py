@@ -53,6 +53,7 @@ policy IDs / locations to paste in.
 ----- CLI -----
 
     python list_edit.py --validate <shoot-dir|draft.md>   # no creds needed
+    python list_edit.py --record <shoot-dir|draft.md>     # DRAFT-time: stamp SKU + ledger record (DRAFTED), no creds
     python list_edit.py --preflight <shoot-dir|draft.md>  # check/auto-fix condition+shipping vs category
     python list_edit.py --setup-check                      # verify creds + policies
     python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT (runs preflight)
@@ -66,6 +67,7 @@ policy IDs / locations to paste in.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -156,15 +158,24 @@ def _resolve_draft_path(target: str | Path) -> Path:
 
 
 def _sku_for(draft: Draft) -> str:
-    # Reuse an already-synced SKU for idempotency; otherwise derive from the
-    # shoot FOLDER name (unique per item), NOT meta.item_id — sibling drafts
-    # in a batch often share a generic item_id and would collide on one SKU.
+    """eBay custom label (SKU): an 8-hex-digit hash of the listing title +
+    shoot folder name.
+
+    - Unique per item: the folder name is unique per item, so two items that
+      happen to share a title still get different SKUs.
+    - Deterministic per draft: the same draft always hashes to the same SKU,
+      so re-syncs stay idempotent.
+    - 8 hex digits (32 bits, ~4.3B space) → negligible collision risk at the
+      volumes this business lists.
+    """
+    # Reuse an already-synced SKU so existing listings keep their label.
     existing = draft.get("meta.ebay_inventory_sku")
     if existing:
         return str(existing)
-    basis = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
-    sku = re.sub(r"[^A-Za-z0-9_-]+", "-", f"ebaybiz-{basis}").strip("-")
-    return sku[:50] or "ebaybiz-item"
+    title = re.sub(r"\s+", " ", str(draft.get("title") or "")).strip().lower()
+    folder = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
+    basis = f"{title}\n{folder}".encode("utf-8")
+    return hashlib.sha1(basis).hexdigest()[:8]
 
 
 def _to_decimal_str(val: object) -> Optional[str]:
@@ -177,41 +188,88 @@ def _to_decimal_str(val: object) -> Optional[str]:
     return f"{d:.2f}"
 
 
-def _listings_log_path() -> Path:
-    """Where the listings ledger lives: $EBAYBIZ_LISTINGS_LOG or <repo>/listings_log.txt."""
-    env = os.environ.get("EBAYBIZ_LISTINGS_LOG")
-    if env:
-        return Path(env)
-    return Path(__file__).resolve().parent.parent / "listings_log.txt"
+# --- Listings ledger: ONE row per item (keyed by SKU), updated through its
+#     lifecycle DRAFTED -> SYNCED -> PUBLISHED -> ENDED/DELETED. The SKU is a
+#     deterministic hash (see _sku_for), so the record can be created at DRAFT
+#     time and updated in place as the item is published/withdrawn/deleted.
+
+_LEDGER_FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id",
+                  "url", "drafted_at", "synced_at", "published_at", "ended_at",
+                  "updated_at"]
+_LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
+                  "PUBLISHED": "published_at", "ENDED": "ended_at"}
 
 
-def record_listing(event: str, *, title: str = "", sku: str = "",
-                   offer_id: str = "", listing_id: str = "",
-                   price: str = "", url: str = "") -> Optional[str]:
-    """Append one record to the listings ledger (unique IDs + title), one line
-    per created listing. Best-effort: never raises (logging must not break a
-    sync/publish). Returns the file path, or None if the write failed."""
-    try:
-        path = _listings_log_path()
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ids = "  ".join(p for p in (
-            f"listing_id={listing_id}" if listing_id else "",
-            f"offer_id={offer_id}" if offer_id else "",
-            f"sku={sku}" if sku else "",
-            f"price=${price}" if price else "",
-        ) if p)
-        line = f"{ts} | {event} | {ids} | {title}"
-        if url:
-            line += f" | {url}"
-        fresh = not path.exists() or path.stat().st_size == 0
-        with path.open("a", encoding="utf-8") as f:
-            if fresh:
-                f.write("# eBay listings ledger — one line appended each time the "
-                        "tooling creates/publishes a listing\n")
-            f.write(line + "\n")
-        return str(path)
-    except OSError:
+def _ledger_path() -> Path:
+    """Ledger location: $EBAYBIZ_LISTINGS_LEDGER (or legacy $EBAYBIZ_LISTINGS_LOG),
+    else <repo>/listings_ledger.csv."""
+    env = os.environ.get("EBAYBIZ_LISTINGS_LEDGER") or os.environ.get("EBAYBIZ_LISTINGS_LOG")
+    return Path(env) if env else Path(__file__).resolve().parent.parent / "listings_ledger.csv"
+
+
+def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
+                   offer_id: str = "", listing_id: str = "", url: str = "") -> Optional[str]:
+    """Create or update this item's row in the listings ledger (keyed by SKU).
+
+    Status only advances sensibly: a re-sync of an already-PUBLISHED item
+    keeps PUBLISHED; DRAFTED never overwrites a later status; ENDED/DELETED
+    are explicit and always apply. Only fields that are provided are written
+    (so a later update never blanks an earlier value). Best-effort — never
+    raises (ledger bookkeeping must not break a sync/publish)."""
+    if not sku:
         return None
+    import csv
+    try:
+        path = _ledger_path()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows: list[dict] = []
+        if path.exists():
+            with path.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        row = next((r for r in rows if r.get("sku") == sku), None)
+        if row is None:
+            row = {k: "" for k in _LEDGER_FIELDS}
+            row["sku"] = sku
+            rows.append(row)
+        for k, v in (("title", title), ("price", price), ("offer_id", offer_id),
+                     ("listing_id", listing_id), ("url", url)):
+            if v:
+                row[k] = str(v)
+        cur = row.get("status") or ""
+        if status == "DRAFTED":
+            row["status"] = cur or "DRAFTED"
+        elif status == "SYNCED":
+            row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
+        else:                       # PUBLISHED / ENDED / DELETED
+            row["status"] = status
+        tsfield = _LEDGER_TS_FOR.get(status)
+        if tsfield and not row.get(tsfield):
+            row[tsfield] = ts
+        row["updated_at"] = ts
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=_LEDGER_FIELDS, extrasaction="ignore")
+            w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k, "") for k in _LEDGER_FIELDS})
+        return str(path)
+    except (OSError, csv.Error):
+        return None
+
+
+def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
+    """DRAFT-time, no credentials: compute the SKU (deterministic hash of
+    title+folder), stamp it into the draft's frontmatter, and create the
+    item's ledger record (status DRAFTED). Lets the record exist from the
+    moment a title is chosen; sync/publish later update the same row.
+    Returns (sku, ledger_path)."""
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku = _sku_for(draft)
+    if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
+        update_meta(draft_path, {"ebay_inventory_sku": sku})
+    ledger = upsert_listing(sku, "DRAFTED", title=str(draft.get("title") or ""),
+                            price=_to_decimal_str(draft.get("price")) or "")
+    return sku, ledger
 
 
 def _ebay_extra(field: str) -> Optional[str]:
@@ -702,13 +760,11 @@ def create_or_update_listing(draft_path: Path,
         "last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
 
-    # 5) ledger: record newly-created listings (offers) — append, not on re-sync
-    if operation == "created":
-        rec = record_listing("OFFER_CREATED", title=str(draft.get("title") or ""),
-                              sku=sku, offer_id=offer_id,
-                              price=_to_decimal_str(draft.get("price")) or "")
-        if rec:
-            print(f"  [ledger] recorded -> {rec}")
+    # 5) ledger: upsert this item's lifecycle record (-> SYNCED; a re-sync of
+    #    an already-published item keeps PUBLISHED).
+    if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
+                      offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or ""):
+        print(f"  [ledger] {sku} -> SYNCED")
 
     hub = "https://www.ebay.com/sh/lst/drafts"
     return SyncResult(offer_id=offer_id, inventory_sku=sku, operation=operation,
@@ -791,7 +847,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
             "ebay_listing_id": listing_id,
             "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
-        record_listing("PUBLISHED", title=title, sku=sku, offer_id=offer_id,
+        upsert_listing(sku, "PUBLISHED", title=title, offer_id=offer_id,
                        listing_id=listing_id, price=price,
                        url=f"https://www.ebay.com/itm/{listing_id}")
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
@@ -847,6 +903,8 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
         "ebay_listing_id": "",
         "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
+    upsert_listing(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED",
+                   title=title, offer_id=offer_id)
     return EndResult(dry_run=False, offer_id=offer_id, title=title,
                      status_before=status, ended=True, listing_id=listing_id or None)
 
@@ -913,6 +971,7 @@ def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("withdraw", True, False, offer_id, status, listing_id=listing_id)
     withdraw_offer(offer_id, creds=creds)
+    upsert_listing(str(off.get("sku") or ""), "ENDED", offer_id=offer_id)
     return OfferActionResult("withdraw", False, True, offer_id, status,
                              detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
 
@@ -929,6 +988,7 @@ def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
         return OfferActionResult("delete-offer", True, False, offer_id, status,
                                  detail=f"sku={off.get('sku')} price={price}", listing_id=listing_id)
     delete_offer(offer_id, creds=creds)
+    upsert_listing(str(off.get("sku") or ""), "DELETED", offer_id=offer_id)
     return OfferActionResult("delete-offer", False, True, offer_id, status,
                              detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
 
@@ -946,6 +1006,7 @@ def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("delete-item", True, False, sku, detail=detail)
     delete_inventory_item(sku, creds=creds)
+    upsert_listing(str(sku), "DELETED")
     return OfferActionResult("delete-item", False, True, sku,
                              detail=f"inventory item + {len(offers)} offer(s) deleted")
 
@@ -1021,6 +1082,7 @@ def _cli() -> None:
         description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT; publish only via --publish/--list --confirm (post review-gate).",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
+    ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
@@ -1046,6 +1108,12 @@ def _cli() -> None:
                 for i in issues:
                     print(f"  - {i}")
                 sys.exit(1)
+            return
+        if args.record:
+            sku, ledger = record_draft(Path(args.record))
+            print(f"[OK] recorded DRAFTED — sku {sku}")
+            if ledger:
+                print(f"  ledger: {ledger}")
             return
         if args.setup_check:
             _print_setup_check()

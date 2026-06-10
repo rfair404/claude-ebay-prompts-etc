@@ -100,7 +100,7 @@ Load each prompt when you reach its phase.
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
-| DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` |
+| DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` + `--record` → SKU stamped + ledger row (DRAFTED) |
 | REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `review_card.md` → (on approval) LIVE listing |
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
@@ -173,7 +173,9 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.
 6. DRAFT (list mode) → render template, run the pre-write validation
-   pass, write `draft.md`.
+   pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
+   to stamp the item's SKU into the draft and create its lifecycle ledger
+   record (status DRAFTED). Do this for EVERY draft.
 7. REVIEW (list mode) → write `review_card.md`, present the decision card,
    and STOP (HARD gate). Surface title + price + the ⚠ count.
 8. On explicit approval at the card → `python lib/list_edit.py --list
