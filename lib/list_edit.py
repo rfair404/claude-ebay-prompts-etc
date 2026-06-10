@@ -157,9 +157,17 @@ def _resolve_draft_path(target: str | Path) -> Path:
     return p
 
 
-def _sku_for(draft: Draft) -> str:
-    """eBay custom label (SKU): an 8-hex-digit hash of the listing title +
-    shoot folder name.
+# The canonical SKU format: exactly 8 lowercase hex digits (see _canonical_sku).
+# Anything else — most commonly a legacy "url-style" label like
+# "ebaybiz-sand-dollars" stamped by an older version of the app — is NOT
+# canonical. Those slugs predate the sku-keyed sync/ledger scheme and must be
+# migrated before they reach eBay (see normalize_draft_identity).
+_CANONICAL_SKU_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _canonical_sku(draft: Draft) -> str:
+    """The deterministic canonical SKU for a draft: an 8-hex-digit hash of the
+    listing title + shoot folder name.
 
     - Unique per item: the folder name is unique per item, so two items that
       happen to share a title still get different SKUs.
@@ -168,14 +176,67 @@ def _sku_for(draft: Draft) -> str:
     - 8 hex digits (32 bits, ~4.3B space) → negligible collision risk at the
       volumes this business lists.
     """
-    # Reuse an already-synced SKU so existing listings keep their label.
-    existing = draft.get("meta.ebay_inventory_sku")
-    if existing:
-        return str(existing)
     title = re.sub(r"\s+", " ", str(draft.get("title") or "")).strip().lower()
     folder = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
     basis = f"{title}\n{folder}".encode("utf-8")
     return hashlib.sha1(basis).hexdigest()[:8]
+
+
+def _sku_for(draft: Draft) -> str:
+    """Resolve a draft's SKU. Prefer an already-stamped CANONICAL sku (so a
+    live listing keeps its label and re-syncs stay idempotent), but never trust
+    a legacy url-style label — recompute the canonical one instead. Drafts from
+    an older app version are migrated in place by normalize_draft_identity()
+    before record/sync; this is the last-line guard so a stale slug can never
+    reach eBay even if normalization was skipped."""
+    existing = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if existing and _CANONICAL_SKU_RE.match(existing):
+        return existing
+    return _canonical_sku(draft)
+
+
+def normalize_draft_identity(draft_path: Path) -> dict:
+    """Self-heal a draft carried over from an older app version — NO eBay calls.
+
+    Two fixes, both deterministic from the frontmatter alone:
+      1. **Legacy url-style SKU** (e.g. "ebaybiz-sand-dollars") → rewritten to
+         the canonical 8-hex label. Those slugs don't round-trip through the
+         sku-keyed sync/ledger and must never reach eBay.
+      2. **Orphaned listing/offer ids** — when the SKU is migrated, the
+         ebay_offer_id / ebay_listing_id / published_at it carried belong to the
+         OLD label's listing and are now orphaned, so they're cleared. The next
+         sync then creates a fresh offer under the correct SKU, and publish
+         stamps the real listing id back.
+
+    A missing SKU is just left for record/sync to stamp; an already-canonical
+    SKU is left untouched. Returns a report dict the caller can print/log:
+    {changed, sku_before, sku_after, cleared:[...], note}."""
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku_before = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    canonical = _canonical_sku(draft)
+    report = {"changed": False, "sku_before": sku_before or None,
+              "sku_after": sku_before or canonical, "cleared": [], "note": ""}
+
+    # Only act on a legacy (present but non-canonical) SKU. Missing → nothing to
+    # migrate; canonical → already good (don't churn a live listing's label).
+    if not sku_before or _CANONICAL_SKU_RE.match(sku_before):
+        return report
+
+    updates: dict[str, str] = {"ebay_inventory_sku": canonical}
+    cleared: list[str] = []
+    for field in ("ebay_offer_id", "ebay_listing_id", "published_at"):
+        if str(draft.get(f"meta.{field}") or "").strip():
+            updates[field] = ""          # "" is the cleared convention (see end_listing)
+            cleared.append(field)
+    note = (f"IDENTITY NORMALIZED: legacy url-style SKU '{sku_before}' -> "
+            f"canonical '{canonical}'"
+            + (f"; cleared orphaned {', '.join(cleared)}" if cleared else ""))
+    notes = str(draft.get("meta.notes") or "")
+    updates["notes"] = (notes + " | " + note).strip(" |")
+    update_meta(draft_path, updates)
+    report.update(changed=True, sku_after=canonical, cleared=cleared, note=note)
+    return report
 
 
 def _to_decimal_str(val: object) -> Optional[str]:
@@ -263,6 +324,9 @@ def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
     moment a title is chosen; sync/publish later update the same row.
     Returns (sku, ledger_path)."""
     draft_path = _resolve_draft_path(draft_path)
+    norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
+    if norm["changed"]:
+        print(f"  [normalize] {norm['note']}")
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
@@ -327,6 +391,15 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 
     if not str(draft.get("item_specifics.type") or "").strip():
         issues.append("item_specifics.type: required, empty")
+
+    # SKU format: a stamped SKU must be canonical (8 hex). A legacy url-style
+    # slug (e.g. "ebaybiz-sand-dollars" from an older app version) is flagged
+    # here — `--record`/`--sync` auto-heal it via normalize_draft_identity, but
+    # a standalone `--validate` should surface that the draft needs migrating.
+    sku = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if sku and not _CANONICAL_SKU_RE.match(sku):
+        issues.append(f"meta.ebay_inventory_sku: {sku!r} — legacy/url-style SKU, "
+                      f"not canonical 8-hex; run `--normalize` (or --record/--sync auto-heals)")
 
     if len(draft.body.strip()) < 20:
         issues.append("description body: empty/too short (V1 missing-description guard)")
@@ -701,6 +774,9 @@ def create_or_update_listing(draft_path: Path,
         raise EbayAuthError("Sync needs user-context OAuth. Run `python list_edit.py --setup-check`.")
 
     draft_path = _resolve_draft_path(draft_path)
+    norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids before anything hits eBay
+    if norm["changed"]:
+        print(f"  [normalize] {norm['note']}")
     issues = validate_draft_for_sync(draft_path)
     if issues:
         raise ValueError("draft is not sync-ready:\n  - " + "\n  - ".join(issues))
@@ -1083,6 +1159,7 @@ def _cli() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
+    ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
@@ -1114,6 +1191,15 @@ def _cli() -> None:
             print(f"[OK] recorded DRAFTED — sku {sku}")
             if ledger:
                 print(f"  ledger: {ledger}")
+            return
+        if args.normalize:
+            rep = normalize_draft_identity(Path(args.normalize))
+            if rep["changed"]:
+                print(f"[OK] normalized — sku {rep['sku_before']} -> {rep['sku_after']}")
+                if rep["cleared"]:
+                    print(f"  cleared orphaned: {', '.join(rep['cleared'])}")
+            else:
+                print(f"[OK] no change — sku {rep['sku_after']!r} already canonical (or none stamped)")
             return
         if args.setup_check:
             _print_setup_check()
