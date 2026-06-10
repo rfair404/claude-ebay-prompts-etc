@@ -250,6 +250,12 @@ categories that only allow New/Used), and (b) **flags items priced > $100**
 to add insurance at label time (only $100 is auto-included; the eBay API
 can't set insurance — see ShipCover in Seller Hub).
 
+**One-step review prep:** `python list_edit.py --review <shoot-dir>` does the
+whole pre-publish gate in one command — records the item (SKU + DRAFTED
+ledger row), runs the preflight above, and assembles the decision card
+(`review_card.md`) from the draft + comps + ledger + preflight. It STOPS for
+approval and never publishes; on approval you run `--list … --confirm`.
+
 ## Managing listings (query / withdraw / delete)
 
 Account-level operations that work on ANY offer or SKU — not just items with

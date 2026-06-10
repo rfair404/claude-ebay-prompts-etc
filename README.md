@@ -62,12 +62,14 @@ hard it looked.
       lib/                        eBay Sell API code (sync/publish/end) + SETUP_EBAY_API.md
       deprecated/                 frozen v1 prompts + v2 reference (context only)
 
-**Function 5.5 — REVIEW.** The publish gate. After DRAFT, it renders a
-succinct decision card (title, price + supporting comp links, condition,
-anything needing manual review) to chat and `review_card.md`, then STOPS.
-Only an explicit human approval at the card publishes the listing LIVE.
-This replaced the old absolute no-publish firewall: publishing is now
-*gated*, not forbidden — but never automatic, never inferred.
+**Function 5.5 — REVIEW.** The publish gate. One command —
+`python lib/list_edit.py --review <shoot-dir>` — records the item, runs
+preflight (condition/shipping/insurance), and renders a succinct decision
+card (title, price + supporting comp links, condition, anything needing
+manual review) to `review_card.md` + chat, then STOPS. Only an explicit
+human approval at the card publishes the listing LIVE. This replaced the old
+absolute no-publish firewall: publishing is now *gated*, not forbidden —
+but never automatic, never inferred.
 
 **Function 6 — LIST/EDIT.** Pushes an approved `draft.md` to eBay. The
 agent reaches it only through a human-approved REVIEW card; the pipeline
