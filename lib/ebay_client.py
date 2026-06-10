@@ -554,6 +554,47 @@ def get_inventory_locations(creds: Optional[EbayCredentials] = None) -> list[dic
 
 
 # ---------------------------------------------------------------------------
+# Metadata API — what a category actually accepts (conditions, etc.)
+# ---------------------------------------------------------------------------
+
+def get_item_condition_policies(category_id: str,
+                                marketplace: str = DEFAULT_MARKETPLACE,
+                                creds: Optional[EbayCredentials] = None) -> dict:
+    """Raw item-condition policy for a category (Sell Metadata API)."""
+    flt = urllib.parse.quote(f"{{{category_id}}}", safe="")  # {id} -> %7Bid%7D
+    return api_send(
+        "GET",
+        f"/sell/metadata/v1/marketplace/{marketplace}/get_item_condition_policies"
+        f"?filter=categoryIds:{flt}",
+        creds=creds, marketplace=None,
+    )
+
+
+def get_allowed_condition_ids(category_id: str,
+                              marketplace: str = DEFAULT_MARKETPLACE,
+                              creds: Optional[EbayCredentials] = None) -> tuple[set[int], bool]:
+    """Return ({allowed eBay conditionId ints}, condition_required) for a category.
+
+    Empty set means the category metadata is unavailable / unrestricted —
+    callers should treat that as "don't touch the chosen condition".
+    """
+    data = get_item_condition_policies(category_id, marketplace, creds)
+    pols = data.get("itemConditionPolicies") or []
+    if not pols:
+        return set(), False
+    cp = pols[0]
+    ids: set[int] = set()
+    for c in cp.get("itemConditions", []):
+        cid = c.get("conditionId")
+        if cid is not None:
+            try:
+                ids.add(int(cid))
+            except (ValueError, TypeError):
+                pass
+    return ids, bool(cp.get("itemConditionRequired"))
+
+
+# ---------------------------------------------------------------------------
 # eBay Picture Services (EPS) upload — Trading API UploadSiteHostedPictures
 # ---------------------------------------------------------------------------
 #

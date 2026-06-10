@@ -53,8 +53,9 @@ policy IDs / locations to paste in.
 ----- CLI -----
 
     python list_edit.py --validate <shoot-dir|draft.md>   # no creds needed
+    python list_edit.py --preflight <shoot-dir|draft.md>  # check/auto-fix condition+shipping vs category
     python list_edit.py --setup-check                      # verify creds + policies
-    python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT
+    python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT (runs preflight)
     python list_edit.py --list <shoot-dir|draft.md> --confirm  # sync + publish (post review-gate)
     python list_edit.py --check                             # legacy stub-status report
 """
@@ -79,6 +80,7 @@ from ebay_client import (
     EbayAuthError,
     EbayCredentials,
     api_send,
+    get_allowed_condition_ids,
     get_category_suggestions,
     get_fulfillment_policies,
     get_inventory_locations,
@@ -410,6 +412,129 @@ def _resolve_category_id(draft: Draft, creds: EbayCredentials) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pre-publish preflight — validate condition + shipping against the category
+# ---------------------------------------------------------------------------
+
+# eBay condition enum <-> numeric conditionId (the metadata API speaks ids).
+_COND_ENUM_TO_ID = {
+    "NEW": 1000, "LIKE_NEW": 2750, "NEW_OTHER": 1500, "NEW_WITH_DEFECTS": 1750,
+    "MANUFACTURER_REFURBISHED": 2000, "CERTIFIED_REFURBISHED": 2000,
+    "EXCELLENT_REFURBISHED": 2010, "VERY_GOOD_REFURBISHED": 2020,
+    "GOOD_REFURBISHED": 2030, "SELLER_REFURBISHED": 2500,
+    "USED_EXCELLENT": 3000, "USED_VERY_GOOD": 4000, "USED_GOOD": 5000,
+    "USED_ACCEPTABLE": 6000, "FOR_PARTS_OR_NOT_WORKING": 7000,
+}
+_COND_ID_TO_ENUM = {
+    1000: "NEW", 1500: "NEW_OTHER", 1750: "NEW_WITH_DEFECTS", 2750: "LIKE_NEW",
+    2000: "CERTIFIED_REFURBISHED", 2010: "EXCELLENT_REFURBISHED",
+    2020: "VERY_GOOD_REFURBISHED", 2030: "GOOD_REFURBISHED", 2500: "SELLER_REFURBISHED",
+    3000: "USED_EXCELLENT", 4000: "USED_VERY_GOOD", 5000: "USED_GOOD",
+    6000: "USED_ACCEPTABLE", 7000: "FOR_PARTS_OR_NOT_WORKING",
+}
+_COND_FAMILIES = (
+    [1000, 1500, 1750, 2750],          # new-ish
+    [2000, 2010, 2020, 2030, 2500],    # refurbished
+    [3000, 4000, 5000, 6000],          # used grades
+    [7000],                            # for parts
+)
+
+
+def _remap_condition_for_category(enum: str, allowed_ids: set[int]) -> tuple[str, Optional[str]]:
+    """Return (condition_enum, change_reason). reason is None if unchanged.
+
+    Picks the closest accepted condition in the SAME family (used->used,
+    new->new). Raises if the category accepts nothing in that family (a real
+    mismatch the user must resolve — e.g. listing a used item in a new-only
+    category).
+    """
+    cid = _COND_ENUM_TO_ID.get(enum)
+    if cid is None or not allowed_ids or cid in allowed_ids:
+        return enum, None  # unknown enum, no metadata, or already valid
+    family = next((f for f in _COND_FAMILIES if cid in f), [])
+    candidates = [i for i in family if i in allowed_ids]
+    if not candidates:
+        allowed_names = ", ".join(_COND_ID_TO_ENUM.get(i, str(i)) for i in sorted(allowed_ids))
+        raise EbayAPIError(
+            0, f"condition {enum} is invalid for this category and no same-grade "
+               f"alternative is accepted. Category accepts: {allowed_names}. "
+               f"Fix the draft's condition or category_id.", None)
+    # Prefer generic "Used" (3000) for used items; else the nearest accepted id.
+    target = 3000 if (3000 in candidates and cid in _COND_FAMILIES[2]) else \
+        min(candidates, key=lambda i: abs(i - cid))
+    new_enum = _COND_ID_TO_ENUM[target]
+    return new_enum, (f"condition {enum} not accepted by category "
+                      f"(accepts {sorted(allowed_ids)}) -> remapped to {new_enum}")
+
+
+def _set_draft_condition(draft_path: Path, new_enum: str) -> None:
+    """Rewrite the top-level `condition:` line in the draft file."""
+    text = draft_path.read_text(encoding="utf-8")
+    new_text = re.sub(r'(?m)^(condition:\s*).*$', f'condition: "{new_enum}"', text, count=1)
+    if new_text != text:
+        draft_path.write_text(new_text, encoding="utf-8")
+
+
+def _check_shipping(draft: Draft, policies: dict,
+                    creds: EbayCredentials) -> list[str]:
+    """Verify the active fulfillment policy actually ships, and flag when the
+    draft's intended primary_service isn't what the policy offers."""
+    fid = str(policies.get("fulfillment") or "")
+    try:
+        pols = get_fulfillment_policies(creds=creds)
+    except (EbayAPIError, EbayAuthError) as e:
+        return [f"shipping: could not verify fulfillment policy ({e})"]
+    pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == fid), None)
+    if not pol:
+        return [f"shipping: fulfillment_policy_id {fid} not found on this account"]
+    offered = [s.get("shippingServiceCode")
+               for opt in (pol.get("shippingOptions") or [])
+               for s in (opt.get("shippingServices") or []) if s.get("shippingServiceCode")]
+    want = str(draft.get("shipping.primary_service") or "").strip()
+    if not offered:
+        return [f"shipping: policy '{pol.get('name')}' offers no shipping services — publish may fail"]
+    if want and want not in offered:
+        return [f"shipping: draft primary_service '{want}' is not in the active policy "
+                f"'{pol.get('name')}' (offers {offered}); eBay uses the POLICY's service. "
+                f"Switch to a matching fulfillment policy if '{want}' is required (e.g. Media Mail for books)."]
+    return []
+
+
+def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
+                      apply: bool = True) -> list[str]:
+    """Check (and, if apply=True, auto-correct) a draft against its eBay
+    category BEFORE sync/publish: condition validity + shipping. Returns a
+    list of human-readable messages. Safe to run repeatedly (idempotent)."""
+    creds = creds or load_credentials()
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    category_id = _resolve_category_id(draft, creds)
+    policies, _loc = _resolve_policies_and_location(creds)
+    msgs: list[str] = [f"category: {category_id}"]
+
+    # Condition vs category
+    allowed, required = get_allowed_condition_ids(category_id, creds=creds)
+    cur = str(draft.get("condition") or "")
+    if not allowed:
+        msgs.append(f"condition: {cur} (category condition metadata unavailable — left as-is)")
+    else:
+        new_enum, reason = _remap_condition_for_category(cur, allowed)
+        if reason:
+            msgs.append(reason)
+            if apply:
+                _set_draft_condition(draft_path, new_enum)
+                draft.frontmatter["condition"] = new_enum
+                notes = str(draft.get("meta.notes") or "")
+                update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
+        else:
+            msgs.append(f"condition: {cur} OK for category")
+
+    # Shipping vs active policy
+    ship = _check_shipping(draft, policies, creds)
+    msgs.extend(ship or ["shipping: OK (active policy offers the service)"])
+    return msgs
+
+
+# ---------------------------------------------------------------------------
 # Main sync
 # ---------------------------------------------------------------------------
 
@@ -433,6 +558,23 @@ def create_or_update_listing(draft_path: Path,
     sku = _sku_for(draft)
     policies, location_key = _resolve_policies_and_location(creds)
     category_id = _resolve_category_id(draft, creds)
+
+    # 0.5) Preflight: make the condition valid for THIS category (auto-remap)
+    #      and sanity-check shipping. Prevents the publish-time 25021
+    #      "condition invalid for category" failure (and surfaces shipping
+    #      mismatches) before any photo upload or offer write.
+    allowed_conditions, _req = get_allowed_condition_ids(category_id, creds=creds)
+    if allowed_conditions:
+        new_enum, reason = _remap_condition_for_category(
+            str(draft.get("condition") or ""), allowed_conditions)
+        if reason:
+            _set_draft_condition(draft_path, new_enum)
+            draft.frontmatter["condition"] = new_enum
+            notes = str(draft.get("meta.notes") or "")
+            update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
+            print(f"  [preflight] {reason}")
+    for _m in _check_shipping(draft, policies, creds):
+        print(f"  [preflight] {_m}")
 
     # 1) photos -> EPS
     image_urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
@@ -672,6 +814,7 @@ def _cli() -> None:
         description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT; publish only via --publish/--list --confirm (post review-gate).",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
+    ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
@@ -695,6 +838,11 @@ def _cli() -> None:
             return
         if args.setup_check:
             _print_setup_check()
+            return
+        if args.preflight:
+            print(f"Preflight {args.preflight}:")
+            for m in preflight_listing(Path(args.preflight)):
+                print(f"  {m}")
             return
         if args.sync:
             res = create_or_update_listing(Path(args.sync))
@@ -765,6 +913,9 @@ def _cli() -> None:
         ap.print_help()
     except (EbayAuthError, EbayAPIError, ConfigError, ValueError, FileNotFoundError) as e:
         print(f"[X] {type(e).__name__}: {e}", file=sys.stderr)
+        body = getattr(e, "body", None)
+        if body:
+            print(f"    eBay said: {body}", file=sys.stderr)
         sys.exit(1)
 
 
