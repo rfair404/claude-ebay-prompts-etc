@@ -250,6 +250,25 @@ categories that only allow New/Used), and (b) **flags items priced > $100**
 to add insurance at label time (only $100 is auto-included; the eBay API
 can't set insurance — see ShipCover in Seller Hub).
 
+## Managing listings (query / withdraw / delete)
+
+Account-level operations that work on ANY offer or SKU — not just items with
+a local draft. All mutations are **dry-run unless `--confirm`** (same guard
+as publish).
+
+```
+python list_edit.py --offers                            # list every offer: status, offerId, listingId, price, sku/title
+python list_edit.py --withdraw-offer <offerId> --confirm  # end a LIVE offer; offer stays (UNPUBLISHED), re-publishable
+python list_edit.py --delete-offer  <offerId> --confirm   # DELETE an offer (permanent); ends the listing if live; SKU kept
+python list_edit.py --delete-item   <sku>     --confirm   # DELETE the inventory item AND all its offers (permanent)
+```
+
+- **Withdraw vs delete:** withdraw takes a live listing down but keeps the
+  offer so you can re-publish; delete removes it for good.
+- `--delete-item` is the cleanest way to fully retire an item (removes the
+  SKU and every offer under it).
+- Use `--offers` first to find the IDs.
+
 ## Notes / limits
 
 - **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs

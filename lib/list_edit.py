@@ -57,6 +57,10 @@ policy IDs / locations to paste in.
     python list_edit.py --setup-check                      # verify creds + policies
     python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT (runs preflight)
     python list_edit.py --list <shoot-dir|draft.md> --confirm  # sync + publish (post review-gate)
+    python list_edit.py --offers                           # query ALL offers on the account
+    python list_edit.py --withdraw-offer <id> --confirm    # end a live offer (keeps it, UNPUBLISHED)
+    python list_edit.py --delete-offer <id> --confirm      # delete an offer (ends listing if live)
+    python list_edit.py --delete-item <sku> --confirm      # delete inventory item + ALL its offers
     python list_edit.py --check                             # legacy stub-status report
 """
 
@@ -80,15 +84,21 @@ from ebay_client import (
     EbayAuthError,
     EbayCredentials,
     api_send,
+    delete_inventory_item,
+    delete_offer,
     get_allowed_condition_ids,
     get_category_suggestions,
     get_fulfillment_policies,
     get_inventory_locations,
+    get_offer,
+    get_offers_for_sku,
     get_payment_policies,
     get_return_policies,
     get_user_access_token,
+    iter_inventory_items,
     load_credentials,
     upload_site_hosted_picture,
+    withdraw_offer,
 )
 
 
@@ -793,6 +803,105 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
 
 
 # ---------------------------------------------------------------------------
+# Account-level listing management — query / withdraw / delete by ID
+# (works on ANY offer/SKU on the account, not just ones with a local draft)
+# ---------------------------------------------------------------------------
+
+def list_account_offers(creds: Optional[EbayCredentials] = None) -> list[dict]:
+    """Enumerate every offer on the account (inventory items -> offers).
+
+    Returns rows: sku, title, offer_id, status, listing_id, price, marketplace.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("Query needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    rows: list[dict] = []
+    for it in iter_inventory_items(creds=creds):
+        sku = it.get("sku")
+        title = str((it.get("product") or {}).get("title") or "")
+        try:
+            offers = get_offers_for_sku(sku, creds=creds)
+        except EbayAPIError:
+            offers = []
+        if not offers:
+            rows.append({"sku": sku, "title": title, "offer_id": None,
+                         "status": "NO_OFFER", "listing_id": None,
+                         "price": None, "marketplace": None})
+        for off in offers:
+            rows.append({
+                "sku": sku, "title": title,
+                "offer_id": off.get("offerId"),
+                "status": off.get("status"),
+                "listing_id": (off.get("listing") or {}).get("listingId"),
+                "price": ((off.get("pricingSummary") or {}).get("price") or {}).get("value"),
+                "marketplace": off.get("marketplaceId"),
+            })
+    return rows
+
+
+@dataclass
+class OfferActionResult:
+    action: str               # "withdraw" | "delete-offer" | "delete-item"
+    dry_run: bool
+    done: bool
+    target: str               # offer_id or sku
+    status_before: Optional[str] = None
+    title: Optional[str] = None
+    listing_id: Optional[str] = None
+    detail: str = ""
+
+
+def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
+                         confirm: bool = False) -> OfferActionResult:
+    """Withdraw (end) a live offer by ID — keeps the offer (UNPUBLISHED)."""
+    creds = creds or load_credentials()
+    off = get_offer(offer_id, creds=creds)
+    status = str(off.get("status") or "UNKNOWN")
+    listing_id = str((off.get("listing") or {}).get("listingId") or "") or None
+    if status != "PUBLISHED":
+        return OfferActionResult("withdraw", not confirm, False, offer_id, status,
+                                 detail="not live (nothing to withdraw)", listing_id=listing_id)
+    if not confirm:
+        return OfferActionResult("withdraw", True, False, offer_id, status, listing_id=listing_id)
+    withdraw_offer(offer_id, creds=creds)
+    return OfferActionResult("withdraw", False, True, offer_id, status,
+                             detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
+
+
+def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
+                       confirm: bool = False) -> OfferActionResult:
+    """Delete an offer by ID (permanent). If live, this also ends the listing."""
+    creds = creds or load_credentials()
+    off = get_offer(offer_id, creds=creds)
+    status = str(off.get("status") or "UNKNOWN")
+    listing_id = str((off.get("listing") or {}).get("listingId") or "") or None
+    price = ((off.get("pricingSummary") or {}).get("price") or {}).get("value")
+    if not confirm:
+        return OfferActionResult("delete-offer", True, False, offer_id, status,
+                                 detail=f"sku={off.get('sku')} price={price}", listing_id=listing_id)
+    delete_offer(offer_id, creds=creds)
+    return OfferActionResult("delete-offer", False, True, offer_id, status,
+                             detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
+
+
+def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
+                       confirm: bool = False) -> OfferActionResult:
+    """Delete an inventory item (SKU) AND all its offers (permanent)."""
+    creds = creds or load_credentials()
+    try:
+        offers = get_offers_for_sku(sku, creds=creds)
+    except EbayAPIError:
+        offers = []
+    n_live = sum(1 for o in offers if str(o.get("status")) == "PUBLISHED")
+    detail = f"{len(offers)} offer(s), {n_live} live — all will be removed"
+    if not confirm:
+        return OfferActionResult("delete-item", True, False, sku, detail=detail)
+    delete_inventory_item(sku, creds=creds)
+    return OfferActionResult("delete-item", False, True, sku,
+                             detail=f"inventory item + {len(offers)} offer(s) deleted")
+
+
+# ---------------------------------------------------------------------------
 # Status / setup-check
 # ---------------------------------------------------------------------------
 
@@ -867,8 +976,12 @@ def _cli() -> None:
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
-    ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing. DRY RUN unless --confirm is also given.")
-    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end to actually act (otherwise they are dry runs).")
+    ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
+    ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
+    ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
+    ap.add_argument("--delete-offer", metavar="OFFER_ID", help="Delete an offer by ID (permanent; ends listing if live; keeps SKU). DRY RUN unless --confirm.")
+    ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     args = ap.parse_args()
@@ -953,6 +1066,46 @@ def _cli() -> None:
                 print("\n  To actually end it: re-run with --confirm")
             else:
                 print(f"[ENDED] Withdrew offer {res.offer_id} (listing {res.listing_id}) — no longer live.")
+            return
+        if args.offers:
+            rows = list_account_offers()
+            print(f"{len(rows)} offer(s) on the account:\n")
+            print(f"  {'STATUS':12} {'OFFER_ID':16} {'LISTING_ID':14} {'PRICE':>8}  SKU / TITLE")
+            for r in rows:
+                price = f"${r['price']}" if r.get("price") else "-"
+                print(f"  {str(r['status'] or '-'):12} {str(r['offer_id'] or '-'):16} "
+                      f"{str(r['listing_id'] or '-'):14} {price:>8}  {r['sku']}  |  {r['title'][:48]}")
+            return
+        if args.withdraw_offer:
+            res = withdraw_offer_by_id(args.withdraw_offer, confirm=args.confirm)
+            if not res.done and res.status_before != "PUBLISHED":
+                print(f"[i] Offer {res.target} is {res.status_before} — {res.detail}")
+            elif res.dry_run:
+                print("[DRY RUN] WOULD withdraw (end) this LIVE offer:")
+                print(f"  offer:   {res.target}\n  listing: {res.listing_id}\n  status:  {res.status_before}")
+                print("\n  To actually withdraw: re-run with --confirm")
+            else:
+                print(f"[ENDED] Withdrew offer {res.target} — {res.detail}")
+            return
+        if args.delete_offer:
+            res = delete_offer_by_id(args.delete_offer, confirm=args.confirm)
+            if res.dry_run:
+                print("[DRY RUN] WOULD DELETE this offer (permanent):")
+                print(f"  offer:   {res.target}\n  status:  {res.status_before}"
+                      + (f" (LIVE — deleting ends the listing)" if res.status_before == "PUBLISHED" else ""))
+                print(f"  {res.detail}")
+                print("\n  To actually delete: re-run with --confirm")
+            else:
+                print(f"[DELETED] Offer {res.target} — {res.detail}")
+            return
+        if args.delete_item:
+            res = delete_item_by_sku(args.delete_item, confirm=args.confirm)
+            if res.dry_run:
+                print("[DRY RUN] WOULD DELETE this inventory item AND its offers (permanent):")
+                print(f"  sku: {res.target}\n  {res.detail}")
+                print("\n  To actually delete: re-run with --confirm")
+            else:
+                print(f"[DELETED] Inventory item {res.target} — {res.detail}")
             return
         if args.check:
             s = stub_status()

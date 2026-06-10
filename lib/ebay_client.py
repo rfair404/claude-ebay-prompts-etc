@@ -554,6 +554,67 @@ def get_inventory_locations(creds: Optional[EbayCredentials] = None) -> list[dic
 
 
 # ---------------------------------------------------------------------------
+# Listing management — query inventory/offers, withdraw, delete
+# ---------------------------------------------------------------------------
+
+def get_inventory_items(limit: int = 100, offset: int = 0,
+                        creds: Optional[EbayCredentials] = None) -> dict:
+    """One page of the account's inventory items (SKUs). Use iter_inventory_items
+    to walk all pages."""
+    return api_send("GET",
+                    f"/sell/inventory/v1/inventory_item?limit={int(limit)}&offset={int(offset)}",
+                    creds=creds, marketplace=None)
+
+
+def iter_inventory_items(creds: Optional[EbayCredentials] = None) -> list[dict]:
+    """All inventory items across pages (each has sku + product.title)."""
+    items: list[dict] = []
+    offset, limit = 0, 100
+    while True:
+        page = get_inventory_items(limit=limit, offset=offset, creds=creds)
+        batch = page.get("inventoryItems") or []
+        items.extend(batch)
+        total = page.get("total")
+        offset += limit
+        if not batch or (total is not None and offset >= total):
+            break
+    return items
+
+
+def get_offers_for_sku(sku: str, creds: Optional[EbayCredentials] = None) -> list[dict]:
+    """All offers for a SKU (each has offerId, status, listing.listingId, price)."""
+    data = api_send("GET",
+                    f"/sell/inventory/v1/offer?sku={urllib.parse.quote(str(sku), safe='')}",
+                    creds=creds, marketplace=None)
+    return data.get("offers") or []
+
+
+def get_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    return api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds, marketplace=None)
+
+
+def withdraw_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """End (withdraw) a PUBLISHED offer — ends the live listing; the offer
+    returns to UNPUBLISHED (re-publishable). Not a delete."""
+    return api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw", {},
+                    creds=creds, marketplace=None)
+
+
+def delete_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """Delete an offer permanently. If it is published, this also ends the
+    live listing. The inventory item (SKU) remains."""
+    return api_send("DELETE", f"/sell/inventory/v1/offer/{offer_id}",
+                    creds=creds, marketplace=None)
+
+
+def delete_inventory_item(sku: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """Delete an inventory item (SKU) and ALL of its offers permanently."""
+    return api_send("DELETE",
+                    f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(str(sku), safe='')}",
+                    creds=creds, marketplace=None)
+
+
+# ---------------------------------------------------------------------------
 # Metadata API — what a category actually accepts (conditions, etc.)
 # ---------------------------------------------------------------------------
 
