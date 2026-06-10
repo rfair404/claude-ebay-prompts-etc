@@ -43,15 +43,27 @@ then place tiers on it."*
      order; cause unconfirmed, so KEEP it and surface a note each run for the
      human to judge. (Separately, "fewer-words" loose matches — title missing
      the key query tokens — can be down-weighted.)
+   - **Unit match (biggest lever):** when pricing a single, EXCLUDE multi-item
+     listings — title contains `lot`/`lots`/`set`/`bundle`/`complete`/
+     `collection`, multiple distinct years, or `N issues/pcs/pieces`. (Demo:
+     m-agni raw $10–$506 → after excluding lots $10–$144, IQR $27–$115 →
+     $24–$45.) `duplicate` → per-piece; when pricing a lot, keep only lots.
+   - **Same-item (core tokens):** require the brand/type tokens from IDENTIFY
+     in the comp title — drops loose keyword matches. (Demo: eagle-art's $250
+     non-needlepoint outlier removed by requiring "needlepoint".)
    - **Condition cohort:** bucket by condition; price the item against its
      like-condition cohort (New vs Used grades).
-   - **Unit match:** compare only same `unit_type`; `duplicate` → per-piece.
    - **Exclusions (Tier C reasons, unchanged in spirit):** single-bid
      auctions, <50-feedback sellers, active/asking prices.
 
 3. **Distribution stats** from the cleaned representative (`best_match`) set:
    - `n`, median, 25th/75th percentile (IQR), min/max.
+   - **Report the IQR + median as the core comp range — NOT min–max.** After
+     the unit/same-item/condition filters, the middle 50% is the robust price
+     basis; min–max is dominated by the outliers those filters target.
    - Dispersion = IQR/median (or max/min) → confidence + rarity signal.
+   - Anything outside the IQR fence is an outlier to vet — and the `price_high`
+     set is exactly where those high-side outliers live.
 
 4. **Vet the `price_high` extremes** against the representative median:
    - A high item that is genuinely the same item/condition → a real **ceiling
