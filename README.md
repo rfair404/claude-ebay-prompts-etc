@@ -88,6 +88,12 @@ never publishes on its own. Two paths:
   settle-and-verify before save, JS DOM state over lagging screenshots,
   never open the variations editor, drop inaccurate AI-suggested specifics.
 
+**Managing listings (Function 6, on request).** `lib/list_edit.py` also
+manages any offer/SKU on the account: `--offers` (query all, read-only),
+`--withdraw-offer <id>` (end a live listing, keep the offer), `--delete-offer
+<id>` and `--delete-item <sku>` (permanent removal). Mutations are dry-run
+unless `--confirm` and are user-initiated — never part of the pipeline.
+
 Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
 `list_edit`, `draft_io`, `photo_prep`) lives in `lib/`.
 

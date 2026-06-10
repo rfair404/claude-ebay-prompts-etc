@@ -525,7 +525,8 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
 
 def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
                              creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/fulfillment_policy",
+    # Account API requires marketplace_id as a QUERY param (not just header).
+    data = api_send("GET", f"/sell/account/v1/fulfillment_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("fulfillmentPolicies") or []
@@ -533,7 +534,7 @@ def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
 
 def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
                          creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/payment_policy",
+    data = api_send("GET", f"/sell/account/v1/payment_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("paymentPolicies") or []
@@ -541,7 +542,7 @@ def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
 
 def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
                         creds: Optional[EbayCredentials] = None) -> list[dict]:
-    data = api_send("GET", "/sell/account/v1/return_policy",
+    data = api_send("GET", f"/sell/account/v1/return_policy?marketplace_id={marketplace}",
                     creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
     return data.get("returnPolicies") or []
@@ -550,6 +551,108 @@ def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
 def get_inventory_locations(creds: Optional[EbayCredentials] = None) -> list[dict]:
     data = api_send("GET", "/sell/inventory/v1/location", creds=creds, marketplace=None)
     return data.get("locations") or []
+
+
+# ---------------------------------------------------------------------------
+# Listing management — query inventory/offers, withdraw, delete
+# ---------------------------------------------------------------------------
+
+def get_inventory_items(limit: int = 100, offset: int = 0,
+                        creds: Optional[EbayCredentials] = None) -> dict:
+    """One page of the account's inventory items (SKUs). Use iter_inventory_items
+    to walk all pages."""
+    return api_send("GET",
+                    f"/sell/inventory/v1/inventory_item?limit={int(limit)}&offset={int(offset)}",
+                    creds=creds, marketplace=None)
+
+
+def iter_inventory_items(creds: Optional[EbayCredentials] = None) -> list[dict]:
+    """All inventory items across pages (each has sku + product.title)."""
+    items: list[dict] = []
+    offset, limit = 0, 100
+    while True:
+        page = get_inventory_items(limit=limit, offset=offset, creds=creds)
+        batch = page.get("inventoryItems") or []
+        items.extend(batch)
+        total = page.get("total")
+        offset += limit
+        if not batch or (total is not None and offset >= total):
+            break
+    return items
+
+
+def get_offers_for_sku(sku: str, creds: Optional[EbayCredentials] = None) -> list[dict]:
+    """All offers for a SKU (each has offerId, status, listing.listingId, price)."""
+    data = api_send("GET",
+                    f"/sell/inventory/v1/offer?sku={urllib.parse.quote(str(sku), safe='')}",
+                    creds=creds, marketplace=None)
+    return data.get("offers") or []
+
+
+def get_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    return api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds, marketplace=None)
+
+
+def withdraw_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """End (withdraw) a PUBLISHED offer — ends the live listing; the offer
+    returns to UNPUBLISHED (re-publishable). Not a delete."""
+    return api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw", {},
+                    creds=creds, marketplace=None)
+
+
+def delete_offer(offer_id: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """Delete an offer permanently. If it is published, this also ends the
+    live listing. The inventory item (SKU) remains."""
+    return api_send("DELETE", f"/sell/inventory/v1/offer/{offer_id}",
+                    creds=creds, marketplace=None)
+
+
+def delete_inventory_item(sku: str, creds: Optional[EbayCredentials] = None) -> dict:
+    """Delete an inventory item (SKU) and ALL of its offers permanently."""
+    return api_send("DELETE",
+                    f"/sell/inventory/v1/inventory_item/{urllib.parse.quote(str(sku), safe='')}",
+                    creds=creds, marketplace=None)
+
+
+# ---------------------------------------------------------------------------
+# Metadata API — what a category actually accepts (conditions, etc.)
+# ---------------------------------------------------------------------------
+
+def get_item_condition_policies(category_id: str,
+                                marketplace: str = DEFAULT_MARKETPLACE,
+                                creds: Optional[EbayCredentials] = None) -> dict:
+    """Raw item-condition policy for a category (Sell Metadata API)."""
+    flt = urllib.parse.quote(f"{{{category_id}}}", safe="")  # {id} -> %7Bid%7D
+    return api_send(
+        "GET",
+        f"/sell/metadata/v1/marketplace/{marketplace}/get_item_condition_policies"
+        f"?filter=categoryIds:{flt}",
+        creds=creds, marketplace=None,
+    )
+
+
+def get_allowed_condition_ids(category_id: str,
+                              marketplace: str = DEFAULT_MARKETPLACE,
+                              creds: Optional[EbayCredentials] = None) -> tuple[set[int], bool]:
+    """Return ({allowed eBay conditionId ints}, condition_required) for a category.
+
+    Empty set means the category metadata is unavailable / unrestricted —
+    callers should treat that as "don't touch the chosen condition".
+    """
+    data = get_item_condition_policies(category_id, marketplace, creds)
+    pols = data.get("itemConditionPolicies") or []
+    if not pols:
+        return set(), False
+    cp = pols[0]
+    ids: set[int] = set()
+    for c in cp.get("itemConditions", []):
+        cid = c.get("conditionId")
+        if cid is not None:
+            try:
+                ids.add(int(cid))
+            except (ValueError, TypeError):
+                pass
+    return ids, bool(cp.get("itemConditionRequired"))
 
 
 # ---------------------------------------------------------------------------

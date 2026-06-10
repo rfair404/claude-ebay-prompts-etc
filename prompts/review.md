@@ -24,6 +24,8 @@ value from the files above; never re-derive or invent.
     Price:     $<price> (<tier> tier)  ·  Best Offer: <on @ auto-decline $X | off>
     Condition: <grade> — <one-line summary>
     Quantity:  <n> (<unit_type>)   ·   Photos: <n> (hero: <file>)
+    Shipping:  <chosen policy/service, e.g. "Media Mail (free)" or "USPS Ground (free)"; from preflight>
+    Insurance: <"$100 included" — OR, if price > $100: "⚠ add ShipCover at label time; only $100 included">
 
     Comps (supporting the price):
       • $<price> — "<title>"  ·  <A/B/C>  ·  <url>
@@ -82,6 +84,21 @@ your approval at this gate is what authorizes passing it. On success report
 the listing URL. If publish fails validation, surface the eBay error,
 fix the draft via the owning phase, and re-present the card — never retry
 blind.
+
+## After publish — managing the listing (on user request)
+
+Once live, the user may want to take a listing down or remove it. Use the
+account-level management commands (all dry-run unless `--confirm`; see
+[RUN.md](../RUN.md) + [list_edit SETUP](../lib/SETUP_EBAY_API.md)):
+
+- `--offers` — find the offerId / SKU (read-only).
+- `--withdraw-offer <id> --confirm` — end the live listing, keep the offer
+  (re-publishable). Use when they want it *off the market* but not gone.
+- `--delete-offer <id> --confirm` / `--delete-item <sku> --confirm` —
+  permanently remove. Use when they want it *gone*.
+
+Treat these like publish: run the dry run, confirm the exact target with the
+user, and only pass `--confirm` on an explicit yes.
 
 ## Closing
 

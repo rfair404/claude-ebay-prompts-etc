@@ -24,6 +24,9 @@ apify_run*.json
 apify_run*.stderr.txt
 apify_runs/
 
+# eBay listings ledger (account/inventory activity — kept locally)
+listings_log.txt
+
 # Sample / shoot images — kept on disk, not version-controlled (heavy binaries)
 *.jpg
 *.jpeg

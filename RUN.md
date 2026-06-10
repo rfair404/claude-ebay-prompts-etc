@@ -129,6 +129,22 @@ gate is what authorizes passing it. A dry run is available any time
   read-tier/sandbox limits and the debounce/trusted-input pitfalls
   documented in its prompt.
 
+**Managing live listings (Function 6, on user request).** Beyond
+publishing, `lib/list_edit.py` queries and manages any offer/SKU on the
+account. Like publish, every mutation is **dry-run unless `--confirm`** and
+runs ONLY when the user asks (never as part of the automated pipeline):
+
+| Op | Command | Effect |
+|---|---|---|
+| Query | `--offers` | list every offer (status, offerId, listingId, price, sku) — read-only |
+| Withdraw | `--withdraw-offer <id> --confirm` | end a LIVE listing; offer kept (UNPUBLISHED), re-publishable |
+| Delete offer | `--delete-offer <id> --confirm` | delete an offer (permanent; ends listing if live; SKU kept) |
+| Delete item | `--delete-item <sku> --confirm` | delete the inventory item + ALL its offers (permanent) |
+
+Withdraw/delete are destructive and **HARD-gated like publish**: confirm the
+exact target with the user (run the dry run first, show what it hits), and
+only pass `--confirm` on an explicit yes. Use `--offers` to find IDs.
+
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
   [prompts/condition-rubric.md](prompts/condition-rubric.md).
