@@ -1,0 +1,74 @@
+Max supported price: $50   [anchored on: era-peer / matching-model new+used asking, no exact sold comp captured]
+
+=== PRICE — Item 1 (3.5 gal benchtop parts washer) ===
+Comps refreshed: 2026-06-10   ·   Data quality: thin (active asking prices only; no sold comp captured)
+Research log:
+  A · WebSearch : RAN — queries "3.5 gallon parts washer benchtop electric pump used price ebay",
+                  "Harbor Freight 3-1/2 gallon parts washer price", "3.5 gallon parts washer used sold
+                  worth", "Chicago Electric 35740 ... specifications" — 4 searches — found the matching
+                  model (Chicago Electric/HF 35740, specs 17-3/8x14-1/4x8-3/4 in, 15.5 lb, .7A 110V,
+                  50 GPH) + active asking prices; no per-item SOLD price exposed — logged to comps.csv
+  B · Apify     : UNAVAILABLE — no Apify MCP tool AND no APIFY_TOKEN / shell egress to api.apify.com in
+                  this environment. (Flagged to NEEDS_REVIEW — no direct-eBay sold comps gathered.)
+  C · Chrome    : UNAVAILABLE — no browser/Chrome MCP in this environment.
+Hunt: 4 WebSearch formulations; identified exact matching model family (Chicago Electric/HF 35740 clone);
+      NO exact SOLD comp captured (Apify+Chrome unavailable). Anchoring on era-peer asking-price band.
+
+Query: 3.5 gallon benchtop parts washer electric pump (used/new)   Source(s): A
+Tier A — direct match (anchors price):
+  • (none — no SOLD comp captured; Apify/Chrome unavailable this run)
+Tier B — branded/new ceiling:
+  • $97.00 — "3.5 Gallon Portable Parts Washer Electric Solvent Pump" (4x $24.25)
+              Ceiling note: NEW retail asking; our unit is used/untested/dirty — well below this.
+              URL: https://www.ebay.com/p/571551760
+  • $29.99 — "3.5 Gallon Automotive Parts Washer Cleaner Electric Solvent Pump New"
+              Ceiling note: low-end NEW import asking; sets the new-unit floor.
+              URL: https://www.ebay.com/itm/175636482472
+Tier C — excluded:
+  • Vintage Chicago Electric 3.5 Gal (used) — Reason: matching-form used comp but NO price captured;
+              reference only.   URL: https://www.ebay.com/itm/295778799035
+
+### Comp URLs — verify these yourself
+  Comp URLs — Item 1 (open to verify):
+    Exact / near-exact match:
+      • none found with a captured sold price — closest is the same model family (used):
+        • Vintage Chicago Electric Portable Parts Washer 3.5 Gallon — https://www.ebay.com/itm/295778799035
+        • Harbor Freight Chicago 35740 (catalog/spec match) — https://www.ebay.com/p/1842326524
+    Ceiling / context (new asking):
+      • $97 — "3.5 Gal Portable Parts Washer Electric Pump" — https://www.ebay.com/p/571551760
+      • $29.99 — "3.5 Gal Automotive Parts Washer New" — https://www.ebay.com/itm/175636482472
+      • "3.5 Gal Electric Benchtop Parts Washer" — https://www.ebay.com/itm/335466397200
+    All sold results (eBay search): https://www.ebay.com/sch/i.html?_nkw=3.5+gallon+parts+washer&LH_Sold=1&LH_Complete=1&_sop=3
+
+### Three tiers
+- Conservative: $20  — no-objection floor for a dirty, untested, possibly-incomplete used unit;
+  local-pickup / for-parts buyer.
+- Recommended (max supported): $35  — used import washer with pump present, sold as untested/as-is;
+  sits well under the ~$30-97 new band, fair for a working-condition-unknown unit. ← provisional working price.
+- Push-high: $50  — defensible ceiling IF the pump is confirmed working and unit is complete (lid +
+  nozzle present); premium reason = functional + clean. Not supported by current photos.
+
+### No-exact-match case
+No exact SOLD comp was captured this run (Apify + Chrome both unavailable; WebSearch surfaces active
+asking prices, not sold). Anchored on the closest era-peer: the same model family (Chicago Electric/HF
+35740) sells NEW ~$30-97; used/untested units trade well below that. The matching-model used listing
+(295778799035) is the nearest peer but exposed no price. Rarity signal: none — common import tool, steady
+supply. Suggest the user save the eBay SOLD search above as a watch to firm the anchor before publish.
+
+### Research notes
+- Authenticity & fakes — N/A (utility tool, no counterfeit market).
+- Restrictions & legal — Ships domestically fine; tank is empty (no solvent shipped). No hazmat as listed
+  empty/clean. Note in listing it ships WITHOUT solvent. Heavy-ish (15-20 lb) → real shipping cost.
+- Scams & buyer issues — "didn't work" / INAD returns on untested electrical items. Protection: list
+  condition as FOR PARTS / UNTESTED explicitly, "sold as-is", no returns or as-is disclosure up front.
+- Authenticity Guarantee — N/A (not a covered category at this value).
+- Disclosure — REQUIRED: pump untested (never shown powered), unit is dirty/needs cleaning, completeness
+  unconfirmed (lid / flexible nozzle / cord not shown in photos). State all three up front.
+
+### Shipping economics flag
+At ~15-20 lb a 3.5 gal steel washer ships ~$18-28 domestically — a large fraction of a ~$35 item.
+Free-shipping default erodes most of the margin. Recommend LOCAL PICKUP or CALCULATED shipping (buyer
+pays) instead of free flat-rate. Flagged to NEEDS_REVIEW.
+
+Working price (provisional): $35 (Recommended tier). Final price is the user's call at publish time;
+recorded here for review.

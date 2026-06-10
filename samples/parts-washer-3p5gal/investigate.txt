@@ -1,0 +1,93 @@
+=== INVESTIGATION — 3.5 Gallon Benchtop Parts Washer ===
+Photos: 4 (motion-blurred overview, basin+pump interior, warning decal, spec plate)
+
+## Summary
+A used red-steel 3.5-gallon benchtop parts washer with an electric recirculating
+solvent pump. The spec plate reads only "3.5 GALLON PARTS WASHER / MADE IN CHINA /
+NO. 002798" — no seller brand is shown. It's dirty inside and out, the pump sits
+loose in the basin, and the pump was never shown powered, so it must go out as
+untested / for parts or repair. Honest call: a cheap, common import washer sold
+as-is.
+
+## Directly observable
+- Red enamel steel tank/basin with a recirculating pump unit inside (photo 2).
+- Pump/motor is grey-and-red with a threaded fluid outlet and a black supply hose
+  attached; it carries its own printed spec label (photo 2).
+- Interior mounting bracket on the right wall: four studs with nuts (photo 2).
+- Spec plate: "3.5 GALLON / PARTS WASHER / MADE IN CHINA / NO. 002798" (photo 4).
+- Safety decal warns of flammable-liquid use and states "Fusible link must be
+  intact at all times" (photo 3) — i.e. a heat-release self-closing lid design.
+- Heavy dirt, sediment and debris in the basin; scuffs/scratches on the red paint
+  (photos 2, 4). No through-rust visible.
+
+## Safe baseline (true regardless of scenario)
+A used, dirty 3.5-gallon steel benchtop parts washer of Chinese manufacture, with
+an electric recirculating solvent pump present. Cosmetically worn (scratched paint,
+soiled basin). Functional status of the pump is unknown — it was not shown running —
+so it is sold strictly as untested / for parts or repair, with no working claim.
+
+## Scenarios (most likely -> less likely, evidence-ranked)
+### Scenario 1 — MOST LIKELY
+Generic import 3.5-gal benchtop parts washer (Chicago Electric / Harbor Freight
+35740 family or an identical clone)  ·  Evidence: red steel benchtop tank, fusible-
+link flammable decal, recirculating pump, "3.5 GALLON / MADE IN CHINA" plate — all
+match that model family's form and specs (17-3/8x14-1/4x8-3/4 in, ~15.5 lb).
+Probability: high
+### Scenario 2 — Possible
+A differently-branded but mechanically identical import washer  ·  Evidence: no
+brand mark on the plate, so the specific seller brand is unconfirmed; many vendors
+sell the same OEM unit.  Probability: moderate
+
+## Confident assessment
+Most defensibly a used, untested generic 3.5-gallon import benchtop parts washer
+with electric pump. List it on the model-agnostic facts on the plate ("3.5 Gallon,
+Made in China") plus what's visible (steel tank, electric recirculating pump),
+graded FOR PARTS / UNTESTED. The one observable that would shift this is a photo of
+the pump running (would allow a working claim + higher price) or a brand mark
+(would allow a brand in the title). Both are logged to NEEDS_REVIEW, not asked.
+
+## NOT defensible from these photos
+- That the pump/motor works — never shown powered. Untested only.
+- Any seller brand (Chicago Electric, Harbor Freight, etc.) — no brand on the plate.
+- Completeness: the lid, fusible link, flexible nozzle/spigot, and power cord/switch
+  are not clearly shown — cannot claim they are present or intact.
+- Capacity beyond the "3.5 GALLON" printed on the plate (no measurement taken).
+- Any model number beyond the plate's serial "NO. 002798".
+
+## Listing-safe claims (DRAFT consumes)
+Title claims — strongest first, each <=80:
+  - 3.5 Gallon Benchtop Parts Washer w/ Electric Solvent Pump - Untested AS-IS [74/80]
+  - Red Steel 3.5 Gal Parts Washer Electric Recirculating Pump - For Parts/Repair [78/80]
+  - 3.5 Gallon Auto Parts Washer Cleaner Electric Pump - Made in China - Untested [78/80]
+Description claims — self-contained sentences:
+  - Used 3.5-gallon benchtop parts washer with an electric recirculating solvent pump.
+  - Red enamel steel tank; spec plate reads "3.5 Gallon Parts Washer, Made in China".
+  - The pump was not tested and is sold as-is for parts or repair.
+  - Tank is dirty inside and out and will need cleaning; paint is scuffed/scratched.
+  - Safety decal notes flammable-solvent use and a fusible-link self-closing lid.
+  - Ships empty — no solvent or cleaning fluid is included.
+Item specifics — canonical short value, each <=65:
+  - Brand: Unbranded [9/65]
+  - Type: Parts Washer [13/65]
+  - Material: Steel [5/65]
+  - Capacity: 3.5 Gallon [10/65]
+  - Power Source: Electric (Corded) [17/65]
+  - Country/Region of Manufacture: China [5/65]
+  - Color: Red [3/65]
+Condition: Used; dirty, cosmetically worn, electric pump untested -> FOR_PARTS_OR_NOT_WORKING.
+
+Pre-emit check: every title <=80 (74/78/78), every specific <=65 — OK.
+
+## Open questions (would strengthen claims)
+- Does the pump power on and circulate fluid? (Resolves working-status -> could lift
+  grade to USED_GOOD and price toward the $50 ceiling.)
+- Is there a seller brand anywhere on the unit not in these photos? (Adds a title brand.)
+- Are the lid, fusible link, flexible nozzle, and power cord present/intact?
+  (Confirms completeness — currently unclaimable.)
+
+## Listing approach
+Lead the title with the directly-defensible spec ("3.5 Gallon Benchtop Parts Washer
+w/ Electric Solvent Pump") and the honest condition flag ("Untested / AS-IS"). Use
+the body for the plate text and the flammable-solvent/fusible-link safety note, and
+to state plainly it ships empty and the pump is untested. Do NOT include a brand,
+a working claim, or a completeness claim — none are supported by the photos.

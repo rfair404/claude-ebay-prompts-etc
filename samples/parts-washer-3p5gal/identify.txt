@@ -1,0 +1,58 @@
+SHOOT SUMMARY
+Photos processed: 4
+Shoot mode:       single (auto — one item, multiple angles/details)
+Distinct items:   1
+Photo caveats:    Photo 1 (01-IMG_0853) is heavily motion-blurred — usable
+                  only for color/material context, not detail.
+Needs user confirmation:
+  none (single item, no grouping question)
+
+--- Item 1 ---
+Unit type:     single
+Quantity:      1
+Category:      Parts washer (automotive / shop cleaning equipment)
+Brand:         Unknown
+               (no brand mark visible; spec plate reads only "3.5 GALLON
+               PARTS WASHER / MADE IN CHINA / NO. 002798". Form factor —
+               red steel benchtop tank, fusible-link lid, recirculating
+               pump — matches the import 3-1/2 gal washers sold by Harbor
+               Freight / Central Machinery and similar [BEST-CASE], but
+               nothing in the photos confirms a seller brand.)
+Type:          3.5 gallon benchtop parts washer w/ electric recirculating pump
+Era:           Unknown (no date visible) [ASSUMPTION] modern import, post-2000
+Collectability: modern (utility tool, not collectable)
+Condition:
+  - Steel tank exterior: red enamel with scattered scratches, scuffs and
+    grime; light surface dirt throughout (photo 2, 4). No through-rust seen.
+  - Tank interior: heavy dirt/sediment and debris in the basin floor; dried
+    residue and what look like seed/grit fragments (photo 2). Used, unwashed.
+  - Pump/motor unit: grey-and-red recirculating pump sitting loose in the
+    basin, threaded fluid outlet visible, black supply hose attached; printed
+    spec label on motor body (photo 2). Not seen mounted/operating.
+  - Mounting bracket on right interior wall: 4 studs with nuts, light surface
+    rust on hardware (photo 2).
+  - Cannot assess: pump/motor function (electrical — never shown powered;
+    treat as untested), presence/condition of the flexible nozzle/spout,
+    presence of the lid, fusible link, and any power cord/switch — none of
+    these are clearly shown.
+Estimated weight: ~15-20 lb (heavy tier 15-25 lb) — small steel benchtop
+                  tank + pump, empty of fluid. [ASSUMPTION] from typical
+                  3.5 gal import washers.
+Estimated dimensions: ~19 x 14 x 10 in (L x W x H) tank [ASSUMPTION] — typical
+                  3.5 gal benchtop footprint; not measurable from photos.
+Distinguishing marks:
+  - Spec plate (photo 4): "3.5 GALLON / PARTS WASHER / MADE IN CHINA /
+    NO. 002798".
+  - Warning decal (photo 3): "WARNING POSSIBLE FLAMMABLE LIQUID — NO
+    SMOKING. Solvent fumes may be toxic. Use only recommended cleaning
+    solvents. Use only in a well-ventilated area. Never use volatile
+    solvents such as gasoline, kerosene or diesel. CAUTION — Use safe
+    protective measures at all times. Always wear safety glasses and rubber
+    gloves. Avoid solvent contact with skin and eyes. Fusible link must be
+    intact at all times." (Fusible-link warning confirms a heat-release
+    self-closing lid design — standard safety feature on solvent washers.)
+  - Color: red tank, grey/red pump.
+needs_followup_photo: yes — full exterior shot showing whole tank + lid +
+                  cord/switch; a clear shot of the flexible nozzle/spout if
+                  present; pump powered/running if testable. These confirm
+                  completeness and working status (both currently unknown).
