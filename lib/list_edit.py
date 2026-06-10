@@ -366,8 +366,13 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
         "payment": _ebay_extra("payment_policy_id"),
         "return": _ebay_extra("return_policy_id"),
     }
+    # Optional: a Media Mail fulfillment policy used for media items (books,
+    # magazines, comics, music, movies). Not required — falls back to default.
+    policies["fulfillment_media"] = _ebay_extra("fulfillment_policy_id_media")
     location = _ebay_extra("merchant_location_key")
     for k, v in policies.items():
+        if k == "fulfillment_media":
+            continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
     if not location:
@@ -474,28 +479,66 @@ def _set_draft_condition(draft_path: Path, new_enum: str) -> None:
         draft_path.write_text(new_text, encoding="utf-8")
 
 
-def _check_shipping(draft: Draft, policies: dict,
-                    creds: EbayCredentials) -> list[str]:
-    """Verify the active fulfillment policy actually ships, and flag when the
-    draft's intended primary_service isn't what the policy offers."""
-    fid = str(policies.get("fulfillment") or "")
+def _is_media_service(code: str) -> bool:
+    """True if a shipping service code denotes USPS Media Mail."""
+    c = (code or "").lower()
+    return "media" in c  # USPSMedia / USPSMediaMail
+
+
+def _resolve_shipping_policy(draft: Draft, policies: dict,
+                             creds: EbayCredentials) -> tuple[str, list[str]]:
+    """Choose the fulfillment policy for THIS item and validate it.
+
+    Routing: if the draft's `primary_service` is Media Mail (DRAFT sets this
+    for books/magazines/comics/music/movies) AND a media policy is configured,
+    use it; otherwise use the default (USPS Ground) policy. Returns
+    (chosen_fulfillment_id, messages).
+    """
+    default_fid = str(policies.get("fulfillment") or "")
+    media_fid = str(policies.get("fulfillment_media") or "")
+    want = str(draft.get("shipping.primary_service") or "").strip()
+    msgs: list[str] = []
+
+    if _is_media_service(want):
+        if media_fid:
+            chosen, label = media_fid, "Media Mail (media policy)"
+        else:
+            chosen, label = default_fid, "default ground (NO media policy configured)"
+            msgs.append("shipping: item wants Media Mail but ebay.fulfillment_policy_id_media "
+                        "is unset — using default ground policy. Add a Media Mail policy to save on media.")
+    else:
+        chosen, label = default_fid, "default ground policy"
+
+    # Validate the chosen policy actually exists and ships.
     try:
         pols = get_fulfillment_policies(creds=creds)
+        pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == chosen), None)
+        if not pol:
+            msgs.append(f"shipping: chosen fulfillment_policy_id {chosen} not found on this account")
+        else:
+            offered = [s.get("shippingServiceCode")
+                       for opt in (pol.get("shippingOptions") or [])
+                       for s in (opt.get("shippingServices") or []) if s.get("shippingServiceCode")]
+            if not offered:
+                msgs.append(f"shipping: policy '{pol.get('name')}' offers no services — publish may fail")
+            else:
+                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({', '.join(offered)})")
     except (EbayAPIError, EbayAuthError) as e:
-        return [f"shipping: could not verify fulfillment policy ({e})"]
-    pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == fid), None)
-    if not pol:
-        return [f"shipping: fulfillment_policy_id {fid} not found on this account"]
-    offered = [s.get("shippingServiceCode")
-               for opt in (pol.get("shippingOptions") or [])
-               for s in (opt.get("shippingServices") or []) if s.get("shippingServiceCode")]
-    want = str(draft.get("shipping.primary_service") or "").strip()
-    if not offered:
-        return [f"shipping: policy '{pol.get('name')}' offers no shipping services — publish may fail"]
-    if want and want not in offered:
-        return [f"shipping: draft primary_service '{want}' is not in the active policy "
-                f"'{pol.get('name')}' (offers {offered}); eBay uses the POLICY's service. "
-                f"Switch to a matching fulfillment policy if '{want}' is required (e.g. Media Mail for books)."]
+        msgs.append(f"shipping: could not verify fulfillment policy ({e})")
+    return chosen, msgs
+
+
+def _insurance_notes(draft: Draft) -> list[str]:
+    """Remind to insure high-value items — only $100 is auto-included, and the
+    eBay API can't set insurance (it's bought at label time via ShipCover)."""
+    price = _to_decimal_str(draft.get("price"))
+    try:
+        if price and Decimal(price) > Decimal("100"):
+            return [f"insurance: price ${price} > $100 — only $100 ships included; "
+                    f"add ShipCover/added coverage when buying the label (Seller Hub -> "
+                    f"Get shipping label -> Additional liability coverage)."]
+    except InvalidOperation:
+        pass
     return []
 
 
@@ -528,9 +571,11 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
         else:
             msgs.append(f"condition: {cur} OK for category")
 
-    # Shipping vs active policy
-    ship = _check_shipping(draft, policies, creds)
-    msgs.extend(ship or ["shipping: OK (active policy offers the service)"])
+    # Shipping policy selection (media vs ground) + validation
+    _chosen, ship = _resolve_shipping_policy(draft, policies, creds)
+    msgs.extend(ship)
+    # Insurance reminder for high-value items
+    msgs.extend(_insurance_notes(draft))
     return msgs
 
 
@@ -573,7 +618,11 @@ def create_or_update_listing(draft_path: Path,
             notes = str(draft.get("meta.notes") or "")
             update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
             print(f"  [preflight] {reason}")
-    for _m in _check_shipping(draft, policies, creds):
+    # Shipping: pick the right fulfillment policy (Media Mail for media items,
+    # else default ground) and use it for this offer.
+    chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds)
+    policies = {**policies, "fulfillment": chosen_fulfillment}
+    for _m in ship_msgs + _insurance_notes(draft):
         print(f"  [preflight] {_m}")
 
     # 1) photos -> EPS

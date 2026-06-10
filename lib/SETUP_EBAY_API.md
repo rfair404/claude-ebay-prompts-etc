@@ -232,6 +232,24 @@ step). That preserves the firewall's intent — no accidental or automated
 publication — while giving you a one-command way to take a reviewed offer
 live.
 
+## Shipping policies (ground default + optional Media Mail)
+
+`--sync` runs a **preflight** that picks the fulfillment policy per item:
+
+- **`fulfillment_policy_id`** — the default (ground) policy, used for most items.
+- **`fulfillment_policy_id_media`** *(optional)* — a USPS **Media Mail** policy.
+  When a draft's `primary_service` is Media Mail (DRAFT sets this for books /
+  magazines / comics / music / movies) and this policy is set, the offer uses
+  it; otherwise it falls back to the ground policy. To create one, add a
+  fulfillment policy with shipping service `USPSMedia` (free flat-rate) and
+  paste its ID here.
+
+The same preflight also (a) **auto-remaps the condition** to one the item's
+category accepts (e.g. `USED_GOOD` → `USED_EXCELLENT`/"Used" for non-media
+categories that only allow New/Used), and (b) **flags items priced > $100**
+to add insurance at label time (only $100 is auto-included; the eBay API
+can't set insurance — see ShipCover in Seller Hub).
+
 ## Notes / limits
 
 - **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs

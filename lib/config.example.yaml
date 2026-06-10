@@ -66,7 +66,9 @@ ebay:
     redirect_uri: "SBX-RuName"
     user_refresh_token: null
     merchant_location_key: null
-    fulfillment_policy_id: null
+    fulfillment_policy_id: null          # default (ground) shipping policy
+    fulfillment_policy_id_media: null    # optional: Media Mail policy; used for
+                                         # books/magazines/comics/music/movies
     payment_policy_id: null
     return_policy_id: null
 
@@ -77,7 +79,9 @@ ebay:
     redirect_uri: "PRD-RuName"
     user_refresh_token: null
     merchant_location_key: null
-    fulfillment_policy_id: null
+    fulfillment_policy_id: null          # default (ground) shipping policy
+    fulfillment_policy_id_media: null    # optional: Media Mail policy; used for
+                                         # books/magazines/comics/music/movies
     payment_policy_id: null
     return_policy_id: null
 

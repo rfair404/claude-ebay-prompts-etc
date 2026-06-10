@@ -24,6 +24,8 @@ value from the files above; never re-derive or invent.
     Price:     $<price> (<tier> tier)  ·  Best Offer: <on @ auto-decline $X | off>
     Condition: <grade> — <one-line summary>
     Quantity:  <n> (<unit_type>)   ·   Photos: <n> (hero: <file>)
+    Shipping:  <chosen policy/service, e.g. "Media Mail (free)" or "USPS Ground (free)"; from preflight>
+    Insurance: <"$100 included" — OR, if price > $100: "⚠ add ShipCover at label time; only $100 included">
 
     Comps (supporting the price):
       • $<price> — "<title>"  ·  <A/B/C>  ·  <url>
