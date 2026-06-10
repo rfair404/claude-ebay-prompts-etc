@@ -1,8 +1,27 @@
-# PRICE strategy v2 — distribution-based (PROPOSAL, not yet implemented)
+# PRICE strategy v2 — distribution-based (IMPLEMENTED)
 
-A proposal to re-examine PRICE now that Stage B (Apify) can cheaply return
-two complementary views of the sold market. **Nothing here is wired in yet
-— this is for review.**
+Re-examines PRICE now that Stage B (Apify) can cheaply return two
+complementary views of the sold market. **Implemented:** the deterministic
+half (filtering + statistics + tier placement) lives in
+[`lib/price_stats.py`](../lib/price_stats.py); the orchestration (dual query,
+query ladder, ceiling vetting, exact-match short-circuit, reporting) is wired
+into [`prompts/price.md`](../prompts/price.md). This document is the rationale
+and the record of the policy choices below.
+
+**Policy defaults chosen** (the "Open decisions" at the bottom — all
+configurable as constants at the top of `price_stats.py`):
+1. Conservative = 25th pct · Recommended = median · Push-high = vetted
+   `price_high` ceiling, else 90th pct.
+2. Outlier cutoff: a `price_high` survivor above **2.5× median** is surfaced
+   as a *ceiling candidate to vet* (not auto-dropped) — the prompt confirms
+   comparability, else falls back to the 90th pct.
+3. Thin-market threshold: **n < 3** like-condition comps → closest-comp
+   fallback. Broaden the query ladder while surviving comps < 3.
+4. Condition: price within the like-condition cohort; **pool Used grades
+   (with unknown) only when the strict cohort is thin**.
+5. Recommended basis: median of **comparable (same-condition)** sold.
+6. Exact-match short-circuit: **kept** — a true exact comp anchors
+   Recommended on the median of exact matches.
 
 ## Why change
 
@@ -137,10 +156,51 @@ ladder steps.
   unconfirmed. "Fewer-words" padding on niche queries is verified real.
 - Thin markets are common in this inventory — the fallback matters.
 
-## Open decisions (need your call)
-1. **Percentiles:** Conservative=25th / Recommended=median / Push-high=vetted-ceiling-or-90th — OK, or different (e.g. Recommended = 40th to lean conservative)?
-2. **Outlier cutoff:** exclude `price_high` items >2× median that aren't clearly comparable — too strict / too loose?
-3. **Thin-market threshold:** n<3 → fallback. Right number?
-4. **Condition:** price strictly within the same condition cohort, or pool Used grades together when samples are thin?
-5. **Recommended basis:** median of *comparable* (same condition) vs median of *all* sold for the query?
-6. **Keep the exact-match short-circuit** (anchor on an exact comp when one exists), or always blend with the distribution?
+## Lessons from live runs
+
+**Size (and other un-tokenizable grade axes) is not a filterable token —
+the broad median can under-price.** First live end-to-end run (2026-06-10,
+`to-id/sand-dollars`, lot of 18 ~3in white keyhole sand dollars): the engine
+cleanly filtered unit/condition and reported a used-cohort **median of $18**
+— but that pools *every* sand-dollar lot regardless of piece SIZE, and size
+is the dominant price driver here (tiny 1.5–2in lots sell $10–15; ~3in lots
+sell $24.99–30). The token filter can't separate them because eBay titles
+express size inconsistently ("2-3in", "3 inch", "2.5-3.5\"", or not at all),
+so a size term in the query/`require_tokens` is unreliable. The
+**exact-match short-circuit** is what corrected it: two genuine size+grade
+matches (13 @ 2.5-3in $24.99; 20 @ 2-3in $30) anchored Recommended at **$28**,
+well above the pooled median. (Filter note observed the same run:
+`looks_multi_item` misses a *bare leading count* — "25 White Keyhole…" reads
+as single-item — directionally harmless here but a known gap.)
+
+**How to apply now:** for any size- or grade-driven category, don't take the
+engine's broad median at face value — anchor on the size/grade sub-cohort via
+the exact-match short-circuit, and say in `price.txt` that the broad median is
+a mix artifact (as the sand-dollars run did).
+
+**↻ Revisit in the future:** the engine could make this less manual — e.g. a
+size-bucket extractor that parses inch/cm ranges from comp titles and prices
+within the item's size band (treating size like a condition cohort), and/or
+fixing `looks_multi_item` to catch a bare leading count. Worth doing once more
+live runs show how often the size-mix artifact actually bites; until then the
+short-circuit + an honest note is the documented workaround.
+
+## Open decisions — RESOLVED (defaults shipped; tune in `price_stats.py`)
+
+The proposal shipped with the defaults below. Each is a named constant at the
+top of [`lib/price_stats.py`](../lib/price_stats.py) — change it there in one
+place, no prompt edit needed. Revisit any of these if real runs argue for it.
+
+1. **Percentiles** — `CONSERVATIVE_PCT=25` / `RECOMMENDED_PCT=50` (median) /
+   Push-high = vetted ceiling, else `PUSH_HIGH_FALLBACK_PCT=90`. (Open knob
+   if Recommended should lean conservative: set `RECOMMENDED_PCT=40`.)
+2. **Outlier cutoff** — `OUTLIER_MULT=2.5`. A `price_high` survivor above
+   2.5× median is surfaced as a ceiling candidate **to vet**, not auto-
+   dropped (the module can't judge comparability; the prompt does).
+3. **Thin-market threshold** — `THIN_N=3`. Below it: closest-comp fallback;
+   broaden the query ladder while surviving comps < 3.
+4. **Condition** — like-condition cohort; pool Used grades (+ unknown) only
+   when the strict cohort is thin (`pool_used_when_thin`, on by default).
+5. **Recommended basis** — median of *comparable* (same-condition) sold.
+6. **Exact-match short-circuit** — kept; anchors Recommended on the median of
+   exact matches when the hunt finds one.

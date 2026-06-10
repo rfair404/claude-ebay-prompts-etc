@@ -8,6 +8,17 @@ Find what the same or nearly-identical item actually sold for, establish
 a defensible price, and surface category-specific selling risks. Reads
 IDENTIFY records.
 
+**Pricing model (v2 — distribution-based):** the goal is no longer "pick
+the strongest comp." It is **characterize the cleaned sold distribution,
+then place tiers on it.** Stage B pulls two complementary views of the sold
+market (`best_match` = the representative body; `price_high` = the ceiling),
+[`lib/price_stats.py`](../lib/price_stats.py) does the deterministic
+filtering + statistics, and the tiers trace to a sample size + percentiles
+rather than a hand-picked comp. Full rationale:
+[docs/price-strategy-v2.md](../docs/price-strategy-v2.md). The exact-match
+hunt below still runs — an exact comp, when one exists, short-circuits the
+distribution and anchors Recommended directly.
+
 ## Autonomy (Goal: dig for the exact match, don't ask permission to look)
 
 No step in PRICE gates or stops. v2 made you propose queries and wait,
@@ -39,54 +50,104 @@ stage is autonomous — PRICE never stops to ask.
    web + marketplaces. Tag `[A — WebSearch]`. **Log each usable hit to
    `<shoot-dir>/comps.csv` as stage A** (see "Saved comp artifacts").
 
-3. **Stage B — Apify eBay sold** (the default direct-eBay comp source; no
-   gate). Backend Actor `automation-lab/ebay-sold-scraper` — it **pins a US
-   residential proxy** so eBay returns USD natively, and returns structured
-   comps with per-item URLs, sold dates, condition, listing type / bid
-   count, and seller stats. Tag `[B — Apify]`. ~$0.10/run. **Use whichever
-   execution path your environment supports — try them in this order:**
+3. **Stage B — Apify eBay sold (DUAL QUERY — the v2 core).** The default
+   direct-eBay comp source; no gate. Backend Actor
+   `automation-lab/ebay-sold-scraper` — it **pins a US residential proxy** so
+   eBay returns USD natively, and returns structured comps with per-item
+   URLs, sold dates, condition, listing type / bid count, and seller stats.
+   Tag `[B — Apify]`. ~$0.20/item (two runs). **Run the SAME query twice,
+   once per sort** — this is what makes distribution pricing possible:
 
+   - **`best_match` run** — the representative body of the distribution
+     (`sort:"best_match"`, `maxListingsPerSearch:30`, `maxSearchPages:2`).
+   - **`price_high` run** — the ceiling/outlier set, sorted descending
+     (`sort:"price_high"`, `maxListingsPerSearch:20`, `maxSearchPages:2`).
    - **Path 1 — Apify MCP tool (preferred; works even with no sandbox
      egress).** If an Apify MCP connector is available (e.g. in a Cowork
-     tab), call the actor `automation-lab/ebay-sold-scraper` through that
-     tool with input `{searchQueries:["<query>"], maxListingsPerSearch:30,
-     maxSearchPages:3, sort:"price_high", listingType:"all"}`. It returns
-     the dataset items (fields: `soldPrice`, `soldDate`, `title`, `url`,
-     `condition`, `listingType`, `bidsCount`, `sellerName`,
-     `sellerFeedbackCount`/`Percent`, `shippingCost`). Record the **run id**
-     the tool reports. MCP calls are brokered outside the code sandbox, so
-     this works where direct `api.apify.com` egress is blocked.
+     tab), call `automation-lab/ebay-sold-scraper` through it once per sort
+     with input `{searchQueries:["<query>"], maxListingsPerSearch:<30|20>,
+     maxSearchPages:2, sort:"<best_match|price_high>", listingType:"all"}`.
+     Returned fields: `soldPrice`, `soldDate`, `title`, `url`, `condition`,
+     `listingType`, `bidsCount`, `sellerName`, `sellerFeedbackCount`/
+     `Percent`, `shippingCost`. Record **each run id**. MCP calls are
+     brokered outside the code sandbox, so this works where direct
+     `api.apify.com` egress is blocked. Write each run's items to
+     `<shoot-dir>/apify_<sort>_<runId>.json` in the
+     [`save_run_json`](../lib/apify_ebay.py) shape (a `comps` list of objects
+     with the snake_case fields `sold_price`, `total_price`, `title`, `url`,
+     `condition`, `sold_date`, `listing_type`, `bids_count`,
+     `seller_feedback_score` — `price_stats.py` reads exactly this).
    - **Path 2 — stdlib CLI (when you have a shell + egress to
-     api.apify.com).** Run `python lib/apify_ebay.py "<query>" --save-dir
-     <shoot-dir>` (no pip — standard library only). It saves the raw results
-     JSON beside `price.txt` and prints `Apify run: <id>` + `Saved results:
-     <path>`. Capture both.
-   - **Map + validate (either path):** fields → comps (same shape); drop
-     single-bid / >2× median outliers to Tier C. The CLI auto-runs the
-     charm-price currency check; **on the MCP path you must eyeball it** —
-     genuine USD eBay prices cluster on .99/.95/.00/.50; if they don't,
-     suspect a currency leak and prefer Stage C. Never trust a
-     `currency`/`USD` label; the price pattern is what matters. (The
-     US-proxy actor makes leaks unlikely — the old caffein.dev actor leaked
-     BRL/CZK at ~5× mislabeled USD, which is why we switched.)
-   - **Save the results (both paths).** The CLI auto-saves the run JSON
-     (`--save-dir <shoot-dir>` to place it beside `price.txt`). On the MCP
-     path, write the returned items to `<shoot-dir>/apify_<runId>.json`
-     yourself. This is the audit trail + cache for the comps.
-   - **Proof-of-run is mandatory.** Record the **Apify run id** (from the
-     MCP result or the CLI's `Apify run:` line) AND the saved JSON path in
-     the Research log — both are verifiable. **Never report Stage B as "ran"
-     without a run id.**
-   - Still drop outliers; if Stage B yields <3 usable comps or dispersion
-     disagrees badly with Stage A, treat as LOW confidence → Stage C.
+     api.apify.com).** Run it once per sort, saving each JSON beside
+     `price.txt`, and pass `--sku`/`--title` so each run gets a Console
+     status message:
+     `python lib/apify_ebay.py "<query>" --sort best_match --max 30 --pages 2 --save-dir <shoot-dir> --sku <sku> --title "<listing title>"`
+     and
+     `python lib/apify_ebay.py "<query>" --sort price_high --max 20 --pages 2 --save-dir <shoot-dir> --sku <sku> --title "<listing title>"`.
+     Each prints `Apify run: <id>` + `Saved results: <path>` — capture both
+     for each run. The CLI auto-runs the charm-price currency check.
+     - **`--sku`/`--title`** label the run in the Apify Console runs list
+       (status-message column) as `[best] <sku> <title[:10]>` /
+       `[sold_highest] <sku> <title[:10]>`, so past runs are diagnosable
+       there without opening each one (posted on completion; best-effort,
+       never blocks). The SKU is the deterministic 8-hex hash from
+       `list_edit.py`; if the item isn't recorded yet (PRICE runs before
+       DRAFT), pass the working title alone or the shoot-folder name as
+       `--sku`. Both are OPTIONAL — with neither, the run is still labeled by
+       its query (`[best] <query>`), so no run is anonymous. (No status is
+       posted on the MCP path — the connector only sends the actor input.)
+   - **Currency sanity (both paths):** genuine USD eBay prices cluster on
+     .99/.95/.00/.50. The CLI validates automatically; **on the MCP path
+     eyeball it** — if prices don't cluster on charm endings, suspect a
+     currency leak and prefer Stage C. Never trust a `currency`/`USD` label;
+     the price pattern is what matters. (The US-proxy actor makes leaks
+     unlikely — the old caffein.dev actor leaked BRL/CZK at ~5× mislabeled
+     USD, which is why we switched.)
+   - **Then run the distribution engine** on the two saved JSONs (use the
+     actual `Saved results:` path from each run — the CLI names them
+     `apify_run_<ts>_<runId>.json`; the MCP path uses the
+     `apify_<sort>_<runId>.json` names above):
+
+         python lib/price_stats.py \
+           --best-match <best_match run JSON> \
+           --price-high <price_high run JSON> \
+           --unit <unit_type> --condition <new|used> \
+           --require-tokens <brand/type tokens from IDENTIFY>
+
+     It applies the normalize-before-stats filters (row-0 flag, unit match,
+     same-item core tokens, condition cohort, single-bid/low-feedback
+     exclusions — each drop logged), computes `n / median / IQR / dispersion`
+     off the cleaned `best_match` set, vets the `price_high` ceiling, and
+     emits the three tiers + a confidence label. Fold its text block into
+     `price.txt` and adopt its tiers (see "Distribution-based tiers" below).
+     **No shell?** Do the same filtering + percentiles by hand from the saved
+     JSONs, using the rules in [docs/price-strategy-v2.md](../docs/price-strategy-v2.md)
+     and the constants in `price_stats.py`; show your work.
+   - **Proof-of-run is mandatory.** Record **both Apify run ids** AND both
+     saved JSON paths in the Research log. **Never report Stage B as "ran"
+     without run ids.**
    - **If NEITHER path is available** (no Apify MCP tool AND no
      shell/egress — e.g. a sandbox whose proxy 403s `api.apify.com`):
      record `B — UNAVAILABLE: <reason>` in the Research log and fall through
      to Stage C. Do NOT silently skip B.
 
-4. **If no exact match yet, broaden and re-run A+B:** drop the
-   least-load-bearing keyword (5→3 words), then try a synonym for Type.
-   Iterate 2–3 formulations.
+4. **Thin results → broaden the query (query ladder, NOT a new draft).** The
+   comp *search query* is internal to PRICE; broadening it never changes the
+   `draft.md`, SEO title, SKU, or ledger record. Build queries from
+   IDENTIFY's short Brand / Type / Era / Category fields as a specificity
+   ladder:
+   - **L1 (specific):** Brand + Type + Era [+ one distinguishing word].
+   - **L2 (broader):** Type + material; drop era + modifiers.
+   - **L3 (broadest):** category noun (+ material).
+
+   Run the dual query (`best_match` + `price_high`) at L1. If the combined
+   unique comps that survive `price_stats` filters are **below 3**, step down
+   (L2, then L3) and re-run, until enough comps or the ladder is exhausted.
+   Log each formulation in the Hunt line. Note: `price_high` often returns
+   data when `best_match` is empty (observed: mask-red `best_match`=0,
+   `price_high`=25) — an empty `best_match` doesn't block, since
+   `price_stats` uses `price_high` as the representative set when `best_match`
+   is empty (flagged in its output).
 
 5. **Stage C — Chrome → eBay sold (OPTIONAL — low-confidence only).** The
    browser browse path is no longer routine. Invoke it ONLY when
@@ -122,8 +183,10 @@ commit to it.
 
 ## Apify notes (the Stage B backend)
 
-Apify is the default Stage B source and runs without a gate. The backend
-Actor is `automation-lab/ebay-sold-scraper` (configurable via
+Apify is the default Stage B source and runs without a gate. v2 issues
+**two runs per item** — `best_match` (representative) and `price_high`
+(ceiling) — and feeds both to [`lib/price_stats.py`](../lib/price_stats.py).
+The backend Actor is `automation-lab/ebay-sold-scraper` (configurable via
 `apify.ebay_actor`), chosen because it pins a **US residential proxy** —
 so eBay serves USD natively and the foreign-currency leak that sank the
 previous actor doesn't occur. The CLI/wrapper validates every run with the
@@ -147,8 +210,10 @@ is unset.
 
 The user reviews the raw research, so each stage persists its comps:
 
-- **Stage B (Apify)** → JSON (auto-saved; `--save-dir <shoot-dir>` puts it
-  beside `price.txt`; MCP path: write items to `<shoot-dir>/apify_<runId>.json`).
+- **Stage B (Apify)** → **two** JSONs, one per sort (auto-saved; `--save-dir
+  <shoot-dir>` puts them beside `price.txt`; MCP path: write items to
+  `<shoot-dir>/apify_best_match_<runId>.json` and
+  `<shoot-dir>/apify_price_high_<runId>.json`). `price_stats.py` reads both.
 - **Stages A (WebSearch) and C (Chrome)** → rows in **`<shoot-dir>/comps.csv`**,
   the single spreadsheet the user opens to review every comp across sources.
   Append each usable comp with `lib/comps_csv.py`:
@@ -198,19 +263,21 @@ Don't confuse with the comp-quality "Tier A/B/C" further down.)
 
     Research log — Item <N>
       A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding> — logged to comps.csv
-      B · Apify     : RAN via <MCP|CLI> — query "<q>" — run <runId> — <n> comps — USD-validated (charm <x>%) — saved <path>.json
+      B · Apify     : RAN via <MCP|CLI> — query "<q>" — best_match run <id> (<n>) + price_high run <id> (<n>) — USD-validated (charm <x>%) — saved 2 JSONs — price_stats n_kept=<n>, conf=<good|partial|thin>
                       [ALT] UNAVAILABLE — <no Apify MCP tool AND no shell/egress | api.apify.com egress blocked (sandbox proxy) | no token | CurrencyLeakError>
-                      (run id comes from the MCP tool result or the CLI's `Apify run:` line; no `pip install` needed)
-      C · Chrome    : NOT TRIGGERED — confidence OK (<n> usable comps from A+B)
-                      [ALT] RAN — <low-confidence trigger> — <n> rows — logged to comps.csv
+                      (run ids come from each sort's MCP result / CLI `Apify run:` line; no `pip install` needed)
+      C · Chrome    : NOT TRIGGERED — confidence OK (price_stats conf good/partial)
+                      [ALT] RAN — <low-confidence trigger: conf=thin or dispersion too wide> — <n> rows — logged to comps.csv
                       [ALT] UNAVAILABLE — <no browser/Chrome MCP in this environment>
 
 Hard rules for the log:
 - **A and B must show `RAN` on every item.** If either is `SKIPPED`/
   `UNAVAILABLE`, that is a flagged problem — also append a line to
   `NEEDS_REVIEW.md` so the user sees research was incomplete.
-- **B's `RAN` line MUST carry a run id** (proof it hit the Apify backend).
-  No run id ⇒ it did not run ⇒ write `UNAVAILABLE — <reason>`, never `RAN`.
+- **B's `RAN` line MUST carry both run ids** (best_match + price_high — proof
+  it hit the Apify backend). No run id ⇒ it did not run ⇒ write
+  `UNAVAILABLE — <reason>`, never `RAN`. (If a thin/empty market means only
+  one sort returned data, note which and why.)
 - **C must be accounted for** — `NOT TRIGGERED` + why, `RAN` + trigger, or
   `UNAVAILABLE` + why. Never omit the C line.
 - The log records what you DID; the tiers below record what you CONCLUDED.
@@ -226,7 +293,15 @@ Per item:
     === PRICE — Item <N> (<short name>) ===
     Comps refreshed: YYYY-MM-DD   ·   Data quality: good / partial / thin
     Research log:  (the A/B/C block above — REQUIRED)
-    Hunt: <one line — formulations tried, sources, exact-match yes/no>
+    Hunt: <one line — ladder levels + formulations tried, sources, exact-match yes/no>
+    Distribution: n=<k> median=$<m> IQR=$<p25>–$<p75> ceiling=$<c> dispersion=<d>
+                  (best_match run <id> + price_high run <id>)
+
+The **Distribution** line is REQUIRED whenever Stage B ran — it is the
+`price_stats.py` output folded in, and it is the proof the tiers came from a
+sample, not a vibe. Also fold in `price_stats`'s row-0 flag, ceiling
+candidates to vet, and the per-filter drop log (so the user sees what was
+excluded and why). If Stage B was UNAVAILABLE / thin, say so here instead.
 
 For each scenario (or just "primary" when no bracket — most items):
 
@@ -234,13 +309,15 @@ For each scenario (or just "primary" when no bracket — most items):
     Tier A — direct match (anchors price):
       • $<price> — "<title>"  ·  Sold <date>, <condition>
                   Match: <one line>   URL: <url>
-    Tier B — branded/mint ceiling:
+    Tier B — branded/mint ceiling (the vetted price_high comp):
       • $<price> — "<title>"  ·  Ceiling note: <why ceiling not anchor>   URL: <url>
     Tier C — excluded:
-      • $<price> — "<title>"  ·  Reason: <single bid / <50 fb seller / >2× median / asking price>   URL: <url>
+      • $<price> — "<title>"  ·  Reason: <single bid / <50 fb seller / wrong unit / wrong condition / >2.5× median / asking price>   URL: <url>
 
-Mark comps >12 months old `[STALE]`. Every Tier C needs a specific
-reason.
+Mark comps >12 months old `[STALE]`. Every Tier C needs a specific reason.
+When Stage B ran, the Tier-C exclusions are exactly `price_stats`'s
+per-filter drop log (unit / token / condition / single-bid / low-feedback) —
+transcribe them rather than re-judging.
 
 ### Comp URLs — verify these yourself (MANDATORY, ends every item)
 
@@ -259,15 +336,36 @@ URL so the list is scannable on its own. Required on every item.
 If NO exact match exists, say so on the "Exact / near-exact" line
 ("none found") and still list the closest era-peers + the sold-search URL.
 
-### Three tiers (always)
+### Distribution-based tiers (always)
 
-- **Conservative** — no-objection floor; closest era-peer / category-mid.
-- **Recommended (max supported)** — the headline; strongest comp (exact
-  match if the hunt found one). **In headless flow this becomes the
-  provisional working price** (SOFT gate — logged to NEEDS_REVIEW, not a
+The three tiers come from `price_stats.py` on the cleaned `best_match`
+distribution. Adopt its numbers; don't re-derive by eye.
+
+- **Conservative** — **25th percentile** of the like-condition cleaned set
+  (no-objection floor).
+- **Recommended (max supported)** — **median** of the like-condition cleaned
+  set (the typical sold price, not the ceiling). **In headless flow this is
+  the provisional working price** (SOFT gate — logged to NEEDS_REVIEW, not a
   stop).
-- **Push-high** — defensible ceiling; highest comparable + the stated
-  premium reason.
+- **Push-high** — the **vetted `price_high` ceiling**: the highest surviving
+  `price_high` comp that you confirm is the same item/condition. If
+  `price_stats` flagged it `needs_vetting` (>2.5× median) and it does NOT
+  vet out as comparable (it's a bundle/mislisting/different model), drop to
+  the **90th-percentile fallback** it prints. State which you used.
+
+**Exact-match short-circuit (keep):** if the hunt found ≥1 *true* exact-match
+comp (same item, same condition), anchor **Recommended** on the median of
+those exact matches instead of the distribution median, and say so. Keep the
+distribution as context. The exact comp beats the distribution — commit to it
+(per _shared).
+
+**Thin market (`price_stats` confidence = `thin`, n<3):** do NOT use
+percentiles. Fall back to today's closest-comp / era-peer method — anchor on
+the nearest comp/era-peer, widen the bracket, flag rarity (see "No-exact-
+match case"). The three tiers still apply, anchored on the era-peer.
+
+**Best Offer gate (unchanged):** enable Best Offer if list > Recommended;
+set auto-decline at Recommended.
 
 ### No-exact-match case
 
