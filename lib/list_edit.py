@@ -66,6 +66,7 @@ policy IDs / locations to paste in.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -174,6 +175,43 @@ def _to_decimal_str(val: object) -> Optional[str]:
     except (InvalidOperation, ValueError):
         return None
     return f"{d:.2f}"
+
+
+def _listings_log_path() -> Path:
+    """Where the listings ledger lives: $EBAYBIZ_LISTINGS_LOG or <repo>/listings_log.txt."""
+    env = os.environ.get("EBAYBIZ_LISTINGS_LOG")
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parent.parent / "listings_log.txt"
+
+
+def record_listing(event: str, *, title: str = "", sku: str = "",
+                   offer_id: str = "", listing_id: str = "",
+                   price: str = "", url: str = "") -> Optional[str]:
+    """Append one record to the listings ledger (unique IDs + title), one line
+    per created listing. Best-effort: never raises (logging must not break a
+    sync/publish). Returns the file path, or None if the write failed."""
+    try:
+        path = _listings_log_path()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ids = "  ".join(p for p in (
+            f"listing_id={listing_id}" if listing_id else "",
+            f"offer_id={offer_id}" if offer_id else "",
+            f"sku={sku}" if sku else "",
+            f"price=${price}" if price else "",
+        ) if p)
+        line = f"{ts} | {event} | {ids} | {title}"
+        if url:
+            line += f" | {url}"
+        fresh = not path.exists() or path.stat().st_size == 0
+        with path.open("a", encoding="utf-8") as f:
+            if fresh:
+                f.write("# eBay listings ledger — one line appended each time the "
+                        "tooling creates/publishes a listing\n")
+            f.write(line + "\n")
+        return str(path)
+    except OSError:
+        return None
 
 
 def _ebay_extra(field: str) -> Optional[str]:
@@ -664,6 +702,14 @@ def create_or_update_listing(draft_path: Path,
         "last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
 
+    # 5) ledger: record newly-created listings (offers) — append, not on re-sync
+    if operation == "created":
+        rec = record_listing("OFFER_CREATED", title=str(draft.get("title") or ""),
+                              sku=sku, offer_id=offer_id,
+                              price=_to_decimal_str(draft.get("price")) or "")
+        if rec:
+            print(f"  [ledger] recorded -> {rec}")
+
     hub = "https://www.ebay.com/sh/lst/drafts"
     return SyncResult(offer_id=offer_id, inventory_sku=sku, operation=operation,
                       photo_eps_urls=image_urls, category_id=category_id,
@@ -745,6 +791,9 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
             "ebay_listing_id": listing_id,
             "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
+        record_listing("PUBLISHED", title=title, sku=sku, offer_id=offer_id,
+                       listing_id=listing_id, price=price,
+                       url=f"https://www.ebay.com/itm/{listing_id}")
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
                          listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None))

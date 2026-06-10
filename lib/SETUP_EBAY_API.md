@@ -269,6 +269,22 @@ python list_edit.py --delete-item   <sku>     --confirm   # DELETE the inventory
   SKU and every offer under it).
 - Use `--offers` first to find the IDs.
 
+## Listings ledger
+
+Every listing the tooling creates is appended to a plain-text ledger,
+`listings_log.txt` (repo root; override with `EBAYBIZ_LISTINGS_LOG`). One
+line per event — when an offer is first created (`--sync`/`--list`) and when
+it goes live (`--publish`/`--list --confirm`):
+
+```
+<utc> | OFFER_CREATED | offer_id=… sku=… price=$… | <title>
+<utc> | PUBLISHED | listing_id=… offer_id=… sku=… price=$… | <title> | <url>
+```
+
+It's append-only (a running record of everything listed) and gitignored
+(account/inventory activity). Re-syncing an existing item does not add a
+duplicate line — only the first creation and each publish are recorded.
+
 ## Notes / limits
 
 - **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs
