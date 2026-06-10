@@ -55,6 +55,7 @@ policy IDs / locations to paste in.
     python list_edit.py --validate <shoot-dir|draft.md>   # no creds needed
     python list_edit.py --record <shoot-dir|draft.md>     # DRAFT-time: stamp SKU + ledger record (DRAFTED), no creds
     python list_edit.py --preflight <shoot-dir|draft.md>  # check/auto-fix condition+shipping vs category
+    python list_edit.py --review <shoot-dir|draft.md>     # record + preflight + build the REVIEW card (stops; no publish)
     python list_edit.py --setup-check                      # verify creds + policies
     python list_edit.py --sync <shoot-dir|draft.md>        # create/update eBay DRAFT (runs preflight)
     python list_edit.py --list <shoot-dir|draft.md> --confirm  # sync + publish (post review-gate)
@@ -686,6 +687,97 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
 
 
 # ---------------------------------------------------------------------------
+# REVIEW — one step: record + preflight + assemble the decision card
+# ---------------------------------------------------------------------------
+
+def build_review_card(draft_path: Path,
+                      creds: Optional[EbayCredentials] = None) -> tuple[str, str]:
+    """Prepare an item for the REVIEW gate in ONE step and return
+    (card_text, card_path). Does NOT publish.
+
+    It (1) ensures the item is recorded (SKU + DRAFTED ledger row),
+    (2) runs preflight (condition remap + shipping policy + insurance flag),
+    and (3) assembles the decision card deterministically from the draft,
+    comps, ledger, and preflight — written to <shoot>/review_card.md.
+    """
+    import csv
+    creds = creds or load_credentials()
+    draft_path = _resolve_draft_path(draft_path)
+    shoot = draft_path.parent
+
+    sku, _ = record_draft(draft_path)                  # ensure SKU + DRAFTED
+    pf = preflight_listing(draft_path, creds=creds)    # remap + shipping + insurance
+    draft = parse_draft(draft_path)                    # re-read (condition may have changed)
+
+    title = str(draft.get("title") or "")
+    price = str(draft.get("price") or "")
+    cond = str(draft.get("condition") or "")
+    cond_desc = str(draft.get("condition_description") or "").strip() or "(none)"
+    qty = draft.get("quantity") or 1
+    photos = draft.frontmatter.get("photos") or []
+    hero = photos[0] if photos else "—"
+    if draft.get("best_offer.enabled"):
+        _decl = draft.get("best_offer.auto_decline_amount")
+        bo = f"on @ auto-decline ${_decl}" if _decl else "on"
+    else:
+        bo = "off"
+
+    # Comps to verify: prefer structured comps.csv, else URL lines from price.txt.
+    comps: list[str] = []
+    cpath = shoot / "comps.csv"
+    if cpath.exists():
+        for r in list(csv.DictReader(cpath.open(encoding="utf-8")))[:8]:
+            if r.get("url"):
+                comps.append(f"  • ${r.get('price','')} — {(r.get('title') or '')[:55]} — {r['url']}")
+    if not comps and (shoot / "price.txt").exists():
+        for ln in (shoot / "price.txt").read_text(encoding="utf-8").splitlines():
+            if "http" in ln:
+                comps.append("  • " + ln.strip())
+            if len(comps) >= 8:
+                break
+    if not comps:
+        comps = ["  • (no comp URLs found — see price.txt)"]
+
+    # Flags worth a human eye.
+    flags: list[str] = []
+    nr = shoot / "NEEDS_REVIEW.md"
+    if nr.exists():
+        flags = ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not flags:
+        flags = ["  • None"]
+
+    # Ledger status for this SKU.
+    status = "?"
+    lp = _ledger_path()
+    if lp.exists():
+        for r in csv.DictReader(lp.open(encoding="utf-8")):
+            if r.get("sku") == sku:
+                status = r.get("status") or "?"
+                break
+
+    card = "\n".join([
+        f"━━ REVIEW: {shoot.name}  (sku {sku} · ledger {status}) ━━",
+        f'Title:     "{title}"  [{len(title)}/80]',
+        f"Price:     ${price}  ·  Best Offer: {bo}",
+        f"Condition: {cond}",
+        f"Quantity:  {qty}   ·   Photos: {len(photos)} (hero: {hero})",
+        "Preflight (condition / shipping / insurance):",
+        *[f"  • {m}" for m in pf],
+        "Comps (open to verify):",
+        *comps,
+        "Condition detail:",
+        f"  {cond_desc}",
+        "⚠ Needs review / manual intervention:",
+        *flags,
+        "",
+        f"→ Approve publishes this LIVE at ${price}. On approval, run:",
+        f"    python lib/list_edit.py --list {shoot} --confirm",
+    ])
+    (shoot / "review_card.md").write_text(card + "\n", encoding="utf-8")
+    return card, str(shoot / "review_card.md")
+
+
+# ---------------------------------------------------------------------------
 # Main sync
 # ---------------------------------------------------------------------------
 
@@ -1084,6 +1176,7 @@ def _cli() -> None:
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
+    ap.add_argument("--review", metavar="TARGET", help="One step: record + preflight + build the REVIEW decision card. Stops for approval; does NOT publish.")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
@@ -1122,6 +1215,11 @@ def _cli() -> None:
             print(f"Preflight {args.preflight}:")
             for m in preflight_listing(Path(args.preflight)):
                 print(f"  {m}")
+            return
+        if args.review:
+            card, path = build_review_card(Path(args.review))
+            print(card)
+            print(f"\n[review_card] {path}")
             return
         if args.sync:
             res = create_or_update_listing(Path(args.sync))
