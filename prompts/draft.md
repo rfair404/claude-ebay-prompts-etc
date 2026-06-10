@@ -150,18 +150,23 @@ substitution. These stay local — never pushed to eBay.
 
 ## Register the item (SKU + ledger record)
 
-After writing `draft.md`, register the item so it has a stable identity and
-a lifecycle record from draft time onward:
+**Whenever you finish writing `draft.md` — and again after any later edit to
+it — register the item:**
 
     python lib/list_edit.py --record <shoot-dir>
 
 This computes the item's **SKU** (a deterministic 8-hex hash of title +
 folder — no eBay call, no credentials), stamps it into the draft's
-`meta.ebay_inventory_sku`, and creates the item's row in the listings
-ledger with status **DRAFTED**. The same row is later updated in place to
-SYNCED → PUBLISHED → ENDED/DELETED. (If you can't run a shell here, it's
-not fatal — `--sync` creates the record later; registering now just means
-the SKU/record exist from draft time.)
+`meta.ebay_inventory_sku`, and creates/refreshes the item's row in the
+listings ledger with status **DRAFTED**. It's idempotent — once the SKU is
+stamped it's reused, so an edit just refreshes the row's title/price and
+never duplicates it. The same row is later updated in place to
+SYNCED → PUBLISHED → ENDED/DELETED.
+
+This guarantees the record exists from draft time, **before REVIEW**.
+Belt-and-suspenders: `--review` (and `--sync`) also call `--record`
+internally, so a missed run is recovered; if you can't run a shell here, the
+record is created at the next step that can.
 
 ## Closing
 

@@ -9,53 +9,43 @@ publishes the listing LIVE. This is the gate that replaced the old
 "never publish" firewall: publishing is no longer refused, it is
 *gated here*.
 
-**Reads:** `draft.md` (authoritative for the listing) · `price.txt`
-(comp URLs + tiers) · `NEEDS_REVIEW.md` (deferred decisions for this item).
-**Writes:** `<shoot-dir>/review_card.md` (the card, for the record) and
-the same card to chat.
+**Produces:** `<shoot-dir>/review_card.md` + the same card to chat. Does
+NOT publish.
 
-## The card (succinct — fits on a screen)
+## One command builds the card
 
-Lead with the headline line, then the sections. No preamble. Pull every
-value from the files above; never re-derive or invent.
+REVIEW is a single step:
 
-    ━━ REVIEW: <item_id> ━━
-    Title:     "<title>"  [N/80]
-    Price:     $<price> (<tier> tier)  ·  Best Offer: <on @ auto-decline $X | off>
-    Condition: <grade> — <one-line summary>
-    Quantity:  <n> (<unit_type>)   ·   Photos: <n> (hero: <file>)
-    Shipping:  <chosen policy/service, e.g. "Media Mail (free)" or "USPS Ground (free)"; from preflight>
-    Insurance: <"$100 included" — OR, if price > $100: "⚠ add ShipCover at label time; only $100 included">
+    python lib/list_edit.py --review <shoot-dir>
 
-    Comps (supporting the price):
-      • $<price> — "<title>"  ·  <A/B/C>  ·  <url>
-      • $<price> — "<title>"  ·  <A/B/C>  ·  <url>
-      • (list the comps price.txt cited for the chosen tier; each with its URL)
+This does the whole pre-review prep in one shot:
+1. **Records** the item if not already — mints the SKU + writes/refreshes
+   the `DRAFTED` ledger row (so a finished draft is always registered before
+   review).
+2. **Preflight** — auto-remaps the condition to one the category accepts,
+   picks the shipping policy (Media Mail vs ground), and flags insurance on
+   items > $100.
+3. **Assembles the card** from the draft, comps, ledger, and preflight, and
+   writes `review_card.md`.
 
-    Condition detail:
-      • <every defect the draft's Condition section flagged — verbatim, no minimizing>
+Present that card to the user **verbatim** and STOP. It contains:
 
-    ⚠ Needs review / manual intervention:
-      • <each NEEDS_REVIEW.md line for this item>
-      • <each DRAFT meta.notes gap, substitution, or rephrase worth a human eye>
-      • (write "None" if genuinely clean)
+    ━━ REVIEW: <item> (sku … · ledger …) ━━
+    Title [N/80] · Price · Best Offer · Condition · Quantity · Photos
+    Preflight (condition · shipping · insurance)
+    Comps (open to verify) — each with a URL
+    Condition detail (every flagged defect, verbatim — never softened)
+    ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines)
+    → Approve publishes LIVE at $<price>, with the exact --list … --confirm command
 
-    → Approve publishes this LIVE on eBay at $<price>. Reply "approve" to
-      publish, or tell me what to change.
+Don't hand-edit or re-derive the card — the command is the single source, so
+cards stay consistent. **Fallback** (no shell/creds, e.g. a Cowork tab):
+run `--record` first, then assemble the same fields by hand from `draft.md`
++ `price.txt` + `NEEDS_REVIEW.md`.
 
-### Rules for filling it
-- **Comps:** take the URLs `price.txt` listed for the working/Recommended
-  tier. A price with no supporting comp URL is itself a ⚠ line, not a
-  silent omission.
-- **Condition:** copy the draft's flagged defects exactly. The whole point
-  of the gate is that the human sees them before money is on the line —
-  never soften or drop one.
-- **Needs review:** merge `NEEDS_REVIEW.md` entries for this item with any
-  DRAFT-flagged gap/substitution/rephrase. If a *required* field is empty
-  or a price has no comp, say so plainly and recommend resolving it before
-  approval — but the human decides.
-- **One item at a time.** In a multi-item shoot, present one card, take its
-  decision, then the next. Only batch-publish if the user says "approve all".
+**One item at a time.** In a multi-item shoot, run `--review` per item,
+present its card, take the decision, then the next. Only batch-publish if
+the user says "approve all".
 
 ## The gate (HARD — this is where the run stops)
 
@@ -69,8 +59,10 @@ Publish ONLY on an explicit, unambiguous approval ("approve", "publish it",
 in one line: *"Publishing <item_id> LIVE at $<price> now."*
 
 If the user asks for a change, treat it as feedback: the relevant prior
-phase (INVESTIGATE/DRAFT/PRICE) re-runs, DRAFT re-renders `draft.md`, and
-REVIEW presents a fresh card. Never edit `draft.md` by hand here.
+phase (INVESTIGATE/DRAFT/PRICE) re-runs and re-renders `draft.md`; then
+re-run `--review` to present a fresh card. (Editing `draft.md` is fine — the
+record refreshes automatically on the next `--review`/`--record`, keeping
+the same SKU.)
 
 ## On approval — publish (one step)
 
