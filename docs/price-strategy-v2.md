@@ -17,8 +17,10 @@ reasons to three tiers. Two problems:
 We verified empirically (see the Apify investigation) that:
 - **`best_match`** returns the representative body of the distribution.
 - **`price_high`** genuinely returns the price+shipping high end, *sorted
-  descending* (so the cap can't hide the expensive outliers) — modulo a
-  row-0 anomaly and "results matching fewer words" padding on niche queries.
+  descending* (so the cap can't hide the expensive outliers). Two things to
+  watch, NOT strip: a frequently **out-of-order first row** (cause
+  unconfirmed — keep it and flag it each run for the human to judge), and
+  "results matching fewer words" padding on niche queries.
 
 So we can now price on the **actual distribution** instead of a few comps.
 
@@ -37,8 +39,10 @@ then place tiers on it."*
 
 2. **Normalize before any stats:**
    - Currency validation (existing charm-price guard).
-   - **Strip noise:** drop the row-0 anomaly and "fewer-words" loose matches
-     (title missing the key query tokens).
+   - **Flag, don't strip, the first row:** the first item is often out of
+     order; cause unconfirmed, so KEEP it and surface a note each run for the
+     human to judge. (Separately, "fewer-words" loose matches — title missing
+     the key query tokens — can be down-weighted.)
    - **Condition cohort:** bucket by condition; price the item against its
      like-condition cohort (New vs Used grades).
    - **Unit match:** compare only same `unit_type`; `duplicate` → per-piece.
@@ -82,6 +86,32 @@ then place tiers on it."*
    - Outliers excluded + reason.
    - Confidence.
 
+## Thin results → broaden the query (NOT a new draft)
+
+The comp **search query** is internal to PRICE and is **not** the listing
+**title**. Broadening a query never changes the `draft.md`, the SEO title,
+the SKU, or the ledger record. (A *new draft* — and its re-record — happens
+only if the actual listing title/identification changes, e.g. DRAFT
+re-renders after a mis-ID. That's separate and deliberate.)
+
+Build queries from IDENTIFY's structured short fields (Brand / Type / Era /
+Category) — which IDENTIFY already separates from the rich prose — as a
+specificity ladder, so we never have to "simplify the SEO title":
+
+- **L1 (specific):** Brand + Type + Era [+ one distinguishing word]
+- **L2 (broader):** Type + material; drop era + modifiers
+- **L3 (broadest):** category noun (+ material)
+
+Fallback rule: run `best_match` + `price_high` at L1. If the combined unique
+comps are below `MIN`, step down (L2, then L3) and re-run, until enough
+comps or the ladder is exhausted. Log each formulation in the Hunt line.
+Note: `price_high` often returns data when `best_match` is empty (observed:
+mask-red `best_match`=0, `price_high`=25), so an empty `best_match` doesn't
+block — broaden for representativeness, but you already have a usable set.
+
+Open decision: `MIN` comps before broadening (0 only, or < 3?) and how many
+ladder steps.
+
 ## What this fixes
 - **Bias:** Recommended is the typical sold price (median), not the ceiling.
 - **Outliers:** seen and judged explicitly, not hidden by a cap or dropped by a blunt rule.
@@ -91,7 +121,8 @@ then place tiers on it."*
 ## Costs / caveats
 - **2 Apify calls/item (~$0.20)** instead of 1 (already accepted).
 - Must normalize condition + unit before stats, or the median lies.
-- Must strip the row-0 anomaly + "fewer-words" padding (verified real).
+- Surface (don't strip) the out-of-order first row each run; cause
+  unconfirmed. "Fewer-words" padding on niche queries is verified real.
 - Thin markets are common in this inventory — the fallback matters.
 
 ## Open decisions (need your call)
