@@ -70,22 +70,43 @@ def parse_draft(path: str | Path) -> Draft:
     return Draft(path=path, frontmatter=fm, body=body.strip("\n"))
 
 
+def _emit_meta_kv(indent: str, key: str, val: object) -> list[str]:
+    """Render `key: value` as valid YAML line(s).
+
+    - None/"" → `key: ""`.
+    - Multi-line strings → a literal block scalar (`key: |-`) with the body
+      indented, so colons/quotes/newlines are preserved safely and stay
+      human-readable.
+    - Single-line → a double-quoted scalar with `\\` and `"` escaped.
+    """
+    if val is None:
+        return [f'{indent}{key}: ""\n']
+    s = str(val)
+    if "\n" in s:
+        body = s.rstrip("\n").split("\n")
+        out = [f"{indent}{key}: |-\n"]
+        out += [f"{indent}  {line}\n" for line in body]
+        return out
+    esc = s.replace("\\", "\\\\").replace('"', '\\"')
+    return [f'{indent}{key}: "{esc}"\n']
+
+
 def update_meta(path: str | Path, updates: dict[str, str]) -> None:
-    """Write back `meta.*` scalar values into a draft's frontmatter, in place.
+    """Write back `meta.*` values into a draft's frontmatter, in place.
 
-    Used by LIST/EDIT to record ebay_offer_id, ebay_inventory_sku, and
-    last_synced after a successful sync. Does a minimal, line-oriented
-    rewrite of the `meta:` block so the rest of the file (comments,
-    ordering, the markdown body) is preserved exactly.
+    Used by LIST/EDIT to record ebay_offer_id, ebay_inventory_sku,
+    last_synced, etc. after a sync. Rewrites only the `meta:` block so the
+    rest of the file (comments, ordering, the markdown body) is preserved.
 
-    Only keys already present under `meta:` are updated; unknown keys are
-    appended inside the meta block. Quotes the value.
+    Values are serialized as valid YAML: single-line values are quoted +
+    escaped; multi-line values become a literal block scalar. A key whose
+    existing value spans multiple lines (e.g. a block `notes:`) is replaced
+    in full — no orphaned continuation lines. Keys not already present are
+    appended inside the block.
     """
     path = Path(path)
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
-    # locate the `meta:` block: from the 'meta:' line to the next top-level
-    # (column-0, non-comment) key.
     start = None
     for i, ln in enumerate(lines):
         if re.match(r"^meta:[ \t]*(#.*)?$", ln):
@@ -96,27 +117,54 @@ def update_meta(path: str | Path, updates: dict[str, str]) -> None:
 
     end = len(lines)
     for j in range(start + 1, len(lines)):
-        if re.match(r"^[^\s#]", lines[j]):  # next column-0 key
+        if re.match(r"^[^\s#]", lines[j]):  # next column-0 (non-comment) key
             end = j
             break
 
+    def _indent_of(s: str) -> int:
+        return len(s) - len(s.lstrip(" \t"))
+
     remaining = dict(updates)
-    for j in range(start + 1, end):
-        for key, val in list(remaining.items()):
-            if re.match(rf"^\s+{re.escape(key)}:", lines[j]):
-                indent = lines[j][: len(lines[j]) - len(lines[j].lstrip())]
-                lines[j] = f'{indent}{key}: "{val}"\n'
-                del remaining[key]
-                break
+    head, tail = lines[: start + 1], lines[end:]
+    body, new_body = lines[start + 1: end], []
+    i, n = 0, len(lines[start + 1: end])
+    while i < n:
+        ln = body[i]
+        m = re.match(r"^([ \t]+)([A-Za-z0-9_]+):", ln)
+        if m and not ln.lstrip().startswith("#"):
+            key_indent = m.group(1)
+            key = m.group(2)
+            # span = the key line + its continuation lines (more indented than
+            # the key). Blank lines are kept inside the span only if a deeper-
+            # indented line follows before any dedent (i.e. they're part of a
+            # block scalar); otherwise the blank ends the span.
+            j = i + 1
+            while j < n:
+                if body[j].strip() == "":
+                    k = j
+                    while k < n and body[k].strip() == "":
+                        k += 1
+                    if k < n and _indent_of(body[k]) > len(key_indent):
+                        j = k          # blank(s) are inside the block value
+                        continue
+                    break              # trailing blank ends the span
+                if _indent_of(body[j]) > len(key_indent):
+                    j += 1
+                else:
+                    break              # next sibling key / dedent
+            if key in remaining:
+                new_body += _emit_meta_kv(key_indent, key, remaining.pop(key))
+            else:
+                new_body += body[i:j]
+            i = j
+        else:
+            new_body.append(ln)
+            i += 1
 
-    # append any keys not already present, just before the block end
-    if remaining:
-        indent = "  "
-        insert_at = end
-        addition = [f'{indent}{k}: "{v}"\n' for k, v in remaining.items()]
-        lines[insert_at:insert_at] = addition
+    for k, v in remaining.items():  # keys not already in the block
+        new_body += _emit_meta_kv("  ", k, v)
 
-    path.write_text("".join(lines), encoding="utf-8")
+    path.write_text("".join(head + new_body + tail), encoding="utf-8")
 
 
 def resolve_photo_paths(draft: Draft) -> list[Path]:
