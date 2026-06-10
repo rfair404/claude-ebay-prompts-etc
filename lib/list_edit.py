@@ -66,6 +66,7 @@ policy IDs / locations to paste in.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -156,15 +157,24 @@ def _resolve_draft_path(target: str | Path) -> Path:
 
 
 def _sku_for(draft: Draft) -> str:
-    # Reuse an already-synced SKU for idempotency; otherwise derive from the
-    # shoot FOLDER name (unique per item), NOT meta.item_id — sibling drafts
-    # in a batch often share a generic item_id and would collide on one SKU.
+    """eBay custom label (SKU): an 8-hex-digit hash of the listing title +
+    shoot folder name.
+
+    - Unique per item: the folder name is unique per item, so two items that
+      happen to share a title still get different SKUs.
+    - Deterministic per draft: the same draft always hashes to the same SKU,
+      so re-syncs stay idempotent.
+    - 8 hex digits (32 bits, ~4.3B space) → negligible collision risk at the
+      volumes this business lists.
+    """
+    # Reuse an already-synced SKU so existing listings keep their label.
     existing = draft.get("meta.ebay_inventory_sku")
     if existing:
         return str(existing)
-    basis = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
-    sku = re.sub(r"[^A-Za-z0-9_-]+", "-", f"ebaybiz-{basis}").strip("-")
-    return sku[:50] or "ebaybiz-item"
+    title = re.sub(r"\s+", " ", str(draft.get("title") or "")).strip().lower()
+    folder = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
+    basis = f"{title}\n{folder}".encode("utf-8")
+    return hashlib.sha1(basis).hexdigest()[:8]
 
 
 def _to_decimal_str(val: object) -> Optional[str]:

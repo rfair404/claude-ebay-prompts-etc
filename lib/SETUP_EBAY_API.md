@@ -287,6 +287,12 @@ duplicate line — only the first creation and each publish are recorded.
 
 ## Notes / limits
 
+- **Custom label (SKU)** is an **8-hex-digit hash of the listing title +
+  shoot folder name** (e.g. `9c6e9361`). Unique per item (the folder is
+  unique even if two items share a title), deterministic per draft (same
+  draft → same SKU, so re-syncs are idempotent), ~4.3B space (negligible
+  collision risk). Once an item is synced, its SKU is stored in the draft
+  (`meta.ebay_inventory_sku`) and reused unchanged.
 - **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs
   `dev_id`). This is why `dev_id` is required even though the rest is REST.
 - If you'd rather not use the Trading API, you can instead host the photos
