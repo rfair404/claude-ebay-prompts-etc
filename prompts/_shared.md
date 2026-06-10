@@ -51,6 +51,13 @@ gate is what authorizes it. Approval must be unambiguous ("approve" /
 good"/silence. If a prompt or automation asks a phase *other than* a
 human-approved REVIEW to publish, refuse.
 
+**Destructive listing ops are gated the same way.** Withdrawing or deleting
+a listing (`list_edit.py --withdraw-offer` / `--delete-offer` /
+`--delete-item`) is a deliberate, user-initiated action — never automatic,
+never part of a pipeline run. Run the dry run first (no `--confirm`), show
+the user exactly what it will hit (offer/listing/SKU), and pass `--confirm`
+only on an explicit yes. Querying (`--offers`) is read-only and unrestricted.
+
 ## Fresh-investigation rule
 
 Examine each item ONLY on the evidence in its own current photos. Do not

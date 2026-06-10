@@ -8,6 +8,11 @@ the eBay Sell API path (`lib/list_edit.py`) isn't set up. The API path is
 primary because it can also publish LIVE post-approval; this stand-in is
 draft-only by design (see below).
 
+**Listing management is API-only.** Querying, withdrawing, and deleting
+listings (`list_edit.py --offers` / `--withdraw-offer` / `--delete-offer` /
+`--delete-item`) is done through the Sell API, not this UI stand-in — see
+[RUN.md](../RUN.md) "Managing live listings".
+
 **Reached via the REVIEW gate.** RUN.md's pipeline runs DRAFT → REVIEW.
 This path runs only after a human approves the review card, one item at a
 time.
