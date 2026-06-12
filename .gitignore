@@ -43,3 +43,6 @@ listings_ledger.csv
 # Sensitive business documents + correspondence — kept locally, not tracked
 *.docx
 letters/
+
+# Entity formation docs — contain PII (legal name, home address). Local only.
+/formation/

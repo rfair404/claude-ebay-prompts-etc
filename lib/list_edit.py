@@ -158,9 +158,17 @@ def _resolve_draft_path(target: str | Path) -> Path:
     return p
 
 
-def _sku_for(draft: Draft) -> str:
-    """eBay custom label (SKU): an 8-hex-digit hash of the listing title +
-    shoot folder name.
+# The canonical SKU format: exactly 8 lowercase hex digits (see _canonical_sku).
+# Anything else — most commonly a legacy "url-style" label like
+# "ebaybiz-sand-dollars" stamped by an older version of the app — is NOT
+# canonical. Those slugs predate the sku-keyed sync/ledger scheme and must be
+# migrated before they reach eBay (see normalize_draft_identity).
+_CANONICAL_SKU_RE = re.compile(r"^[0-9a-f]{8}$")
+
+
+def _canonical_sku(draft: Draft) -> str:
+    """The deterministic canonical SKU for a draft: an 8-hex-digit hash of the
+    listing title + shoot folder name.
 
     - Unique per item: the folder name is unique per item, so two items that
       happen to share a title still get different SKUs.
@@ -169,14 +177,67 @@ def _sku_for(draft: Draft) -> str:
     - 8 hex digits (32 bits, ~4.3B space) → negligible collision risk at the
       volumes this business lists.
     """
-    # Reuse an already-synced SKU so existing listings keep their label.
-    existing = draft.get("meta.ebay_inventory_sku")
-    if existing:
-        return str(existing)
     title = re.sub(r"\s+", " ", str(draft.get("title") or "")).strip().lower()
     folder = draft.path.parent.name or str(draft.get("meta.item_id") or "item")
     basis = f"{title}\n{folder}".encode("utf-8")
     return hashlib.sha1(basis).hexdigest()[:8]
+
+
+def _sku_for(draft: Draft) -> str:
+    """Resolve a draft's SKU. Prefer an already-stamped CANONICAL sku (so a
+    live listing keeps its label and re-syncs stay idempotent), but never trust
+    a legacy url-style label — recompute the canonical one instead. Drafts from
+    an older app version are migrated in place by normalize_draft_identity()
+    before record/sync; this is the last-line guard so a stale slug can never
+    reach eBay even if normalization was skipped."""
+    existing = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if existing and _CANONICAL_SKU_RE.match(existing):
+        return existing
+    return _canonical_sku(draft)
+
+
+def normalize_draft_identity(draft_path: Path) -> dict:
+    """Self-heal a draft carried over from an older app version — NO eBay calls.
+
+    Two fixes, both deterministic from the frontmatter alone:
+      1. **Legacy url-style SKU** (e.g. "ebaybiz-sand-dollars") → rewritten to
+         the canonical 8-hex label. Those slugs don't round-trip through the
+         sku-keyed sync/ledger and must never reach eBay.
+      2. **Orphaned listing/offer ids** — when the SKU is migrated, the
+         ebay_offer_id / ebay_listing_id / published_at it carried belong to the
+         OLD label's listing and are now orphaned, so they're cleared. The next
+         sync then creates a fresh offer under the correct SKU, and publish
+         stamps the real listing id back.
+
+    A missing SKU is just left for record/sync to stamp; an already-canonical
+    SKU is left untouched. Returns a report dict the caller can print/log:
+    {changed, sku_before, sku_after, cleared:[...], note}."""
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku_before = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    canonical = _canonical_sku(draft)
+    report = {"changed": False, "sku_before": sku_before or None,
+              "sku_after": sku_before or canonical, "cleared": [], "note": ""}
+
+    # Only act on a legacy (present but non-canonical) SKU. Missing → nothing to
+    # migrate; canonical → already good (don't churn a live listing's label).
+    if not sku_before or _CANONICAL_SKU_RE.match(sku_before):
+        return report
+
+    updates: dict[str, str] = {"ebay_inventory_sku": canonical}
+    cleared: list[str] = []
+    for field in ("ebay_offer_id", "ebay_listing_id", "published_at"):
+        if str(draft.get(f"meta.{field}") or "").strip():
+            updates[field] = ""          # "" is the cleared convention (see end_listing)
+            cleared.append(field)
+    note = (f"IDENTITY NORMALIZED: legacy url-style SKU '{sku_before}' -> "
+            f"canonical '{canonical}'"
+            + (f"; cleared orphaned {', '.join(cleared)}" if cleared else ""))
+    notes = str(draft.get("meta.notes") or "")
+    updates["notes"] = (notes + " | " + note).strip(" |")
+    update_meta(draft_path, updates)
+    report.update(changed=True, sku_after=canonical, cleared=cleared, note=note)
+    return report
 
 
 def _to_decimal_str(val: object) -> Optional[str]:
@@ -264,6 +325,9 @@ def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
     moment a title is chosen; sync/publish later update the same row.
     Returns (sku, ledger_path)."""
     draft_path = _resolve_draft_path(draft_path)
+    norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
+    if norm["changed"]:
+        print(f"  [normalize] {norm['note']}")
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
@@ -328,6 +392,15 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 
     if not str(draft.get("item_specifics.type") or "").strip():
         issues.append("item_specifics.type: required, empty")
+
+    # SKU format: a stamped SKU must be canonical (8 hex). A legacy url-style
+    # slug (e.g. "ebaybiz-sand-dollars" from an older app version) is flagged
+    # here — `--record`/`--sync` auto-heal it via normalize_draft_identity, but
+    # a standalone `--validate` should surface that the draft needs migrating.
+    sku = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if sku and not _CANONICAL_SKU_RE.match(sku):
+        issues.append(f"meta.ebay_inventory_sku: {sku!r} — legacy/url-style SKU, "
+                      f"not canonical 8-hex; run `--normalize` (or --record/--sync auto-heals)")
 
     if len(draft.body.strip()) < 20:
         issues.append("description body: empty/too short (V1 missing-description guard)")
@@ -394,13 +467,72 @@ def _build_weight_lb(draft: Draft) -> Optional[float]:
     return round(total, 2) if total > 0 else None
 
 
+def _md_inline(text: str) -> str:
+    """Escape HTML, then render the inline markdown the templates use."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    return text
+
+
+def _body_to_html(md: str) -> str:
+    """Convert the markdown subset used in draft bodies (ATX headings, `-`/`*`
+    bullet lists, **bold**, blank-line paragraphs) into HTML.
+
+    eBay renders `product.description` / `listingDescription` as HTML, so a raw
+    markdown body collapses into one run-on paragraph (newlines and `#`/`-`
+    markers are ignored). This restores the intended structure. Stdlib-only —
+    no markdown dependency, matching the rest of lib/.
+    """
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    in_ul = False
+    para: list[str] = []
+
+    def flush_para() -> None:
+        if para:
+            out.append("<p>" + " ".join(_md_inline(p) for p in para) + "</p>")
+            para.clear()
+
+    def close_ul() -> None:
+        nonlocal in_ul
+        if in_ul:
+            out.append("</ul>")
+            in_ul = False
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            flush_para()
+            close_ul()
+            continue
+        m_h = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        m_li = re.match(r"^[-*]\s+(.*)$", stripped)
+        if m_h:
+            flush_para()
+            close_ul()
+            level = min(len(m_h.group(1)) + 1, 4)   # "#" -> h2, "##" -> h3, ...
+            out.append(f"<h{level}>{_md_inline(m_h.group(2))}</h{level}>")
+        elif m_li:
+            flush_para()
+            if not in_ul:
+                out.append("<ul>")
+                in_ul = True
+            out.append(f"<li>{_md_inline(m_li.group(1))}</li>")
+        else:
+            close_ul()
+            para.append(stripped)
+    flush_para()
+    close_ul()
+    return "\n".join(out)
+
+
 def _build_inventory_item(draft: Draft, image_urls: list[str]) -> dict:
     item: dict = {
         "availability": {"shipToLocationAvailability": {"quantity": int(draft.get("quantity") or 1)}},
         "condition": str(draft.get("condition")),
         "product": {
             "title": str(draft.get("title")),
-            "description": draft.body,
+            "description": _body_to_html(draft.body),
             "imageUrls": image_urls,
             "aspects": _build_aspects(draft),
         },
@@ -436,7 +568,7 @@ def _build_offer(draft: Draft, sku: str, category_id: str,
         "format": "FIXED_PRICE",
         "availableQuantity": int(draft.get("quantity") or 1),
         "categoryId": str(category_id),
-        "listingDescription": draft.body,
+        "listingDescription": _body_to_html(draft.body),
         "pricingSummary": {"price": {"value": price, "currency": CURRENCY}},
         "merchantLocationKey": location_key,
         "listingPolicies": {
@@ -793,6 +925,9 @@ def create_or_update_listing(draft_path: Path,
         raise EbayAuthError("Sync needs user-context OAuth. Run `python list_edit.py --setup-check`.")
 
     draft_path = _resolve_draft_path(draft_path)
+    norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids before anything hits eBay
+    if norm["changed"]:
+        print(f"  [normalize] {norm['note']}")
     issues = validate_draft_for_sync(draft_path)
     if issues:
         raise ValueError("draft is not sync-ready:\n  - " + "\n  - ".join(issues))
@@ -862,6 +997,161 @@ def create_or_update_listing(draft_path: Path,
     return SyncResult(offer_id=offer_id, inventory_sku=sku, operation=operation,
                       photo_eps_urls=image_urls, category_id=category_id,
                       eb_seller_hub_url=hub)
+
+
+# ---------------------------------------------------------------------------
+# Field-scoped update — change ONLY the named fields, preserve everything else
+# ---------------------------------------------------------------------------
+#
+# create_or_update_listing() rebuilds the WHOLE inventory item + offer from
+# draft.md and PUTs them, which clobbers any change made on eBay's side that
+# the draft doesn't know about (most painfully, a photo re-order done in the
+# Seller Hub UI). update_listing_fields() instead GETs the current live
+# objects, overlays ONLY the requested field groups from the draft, and PUTs
+# them back — so unrequested fields keep their current eBay value. It never
+# publishes, so it can only edit an existing listing, never push a new one live.
+
+# friendly name -> canonical field group
+_SYNC_FIELD_ALIASES = {
+    "description": "description", "desc": "description", "body": "description",
+    "title": "title",
+    "price": "price",
+    "condition": "condition", "cond": "condition",
+    "aspects": "aspects", "specifics": "aspects", "itemspecifics": "aspects",
+    "photos": "photos", "images": "photos", "pics": "photos",
+    "shipping": "shipping", "weight": "shipping", "dims": "shipping",
+    "quantity": "quantity", "qty": "quantity",
+    "bestoffer": "bestoffer", "best_offer": "bestoffer", "offer": "bestoffer",
+}
+_ITEM_SIDE = {"title", "description", "condition", "aspects", "photos", "shipping", "quantity"}
+_OFFER_SIDE = {"description", "price", "quantity", "bestoffer"}
+# Keys accepted by PUT inventory_item / updateOffer — used to strip read-only
+# echo fields (offerId, listing, status, …) out of the GET response before PUT.
+_WRITABLE_ITEM_KEYS = ("availability", "condition", "conditionDescription",
+                       "packageWeightAndSize", "product")
+_WRITABLE_OFFER_KEYS = ("availableQuantity", "categoryId", "listingDescription",
+                        "listingPolicies", "pricingSummary", "merchantLocationKey",
+                        "marketplaceId", "format", "sku", "tax", "listingDuration",
+                        "quantityLimitPerBuyer", "storeCategoryNames", "listingStartDate",
+                        "secondaryCategoryId", "hideBuyerDetails",
+                        "includeCatalogProductDetails", "lotSize")
+
+
+def _canonical_sync_fields(fields) -> set[str]:
+    """Map user-supplied field names to canonical groups; raise on unknown."""
+    out: set[str] = set()
+    unknown: list[str] = []
+    for raw in fields:
+        key = re.sub(r"[\s_-]+", "", str(raw).strip().lower())
+        canon = _SYNC_FIELD_ALIASES.get(key) or _SYNC_FIELD_ALIASES.get(str(raw).strip().lower())
+        if canon:
+            out.add(canon)
+        elif raw:
+            unknown.append(str(raw))
+    if unknown:
+        valid = sorted(set(_SYNC_FIELD_ALIASES.values()))
+        raise ValueError(f"unknown --fields value(s): {', '.join(unknown)}. "
+                         f"Valid groups: {', '.join(valid)}")
+    if not out:
+        raise ValueError("no fields given — pass --fields description[,price,…]")
+    return out
+
+
+def update_listing_fields(draft_path: Path, fields,
+                          creds: Optional[EbayCredentials] = None) -> list[str]:
+    """Update ONLY the named field groups on an existing eBay item/offer.
+
+    GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
+    current eBay value. Never publishes. Returns the list of fields changed.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("Update needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku = _sku_for(draft)
+    canon = _canonical_sync_fields(fields)
+    item_fields = canon & _ITEM_SIDE
+    offer_fields = canon & _OFFER_SIDE
+    changed: list[str] = []
+
+    if item_fields:
+        try:
+            cur = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
+        except EbayAPIError as e:
+            raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
+        item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
+        product = item.setdefault("product", {})
+        if "title" in item_fields:
+            product["title"] = str(draft.get("title")); changed.append("title")
+        if "description" in item_fields:
+            product["description"] = _body_to_html(draft.body); changed.append("description")
+        if "aspects" in item_fields:
+            product["aspects"] = _build_aspects(draft); changed.append("aspects")
+        if "condition" in item_fields:
+            cond = str(draft.get("condition") or "")
+            allowed, _r = get_allowed_condition_ids(_resolve_category_id(draft, creds), creds=creds)
+            if allowed:
+                new_enum, reason = _remap_condition_for_category(cond, allowed)
+                if reason:
+                    cond = new_enum
+                    print(f"  [preflight] {reason}")
+            item["condition"] = cond
+            cd = str(draft.get("condition_description") or "").strip()
+            if cd and cond != "NEW":
+                item["conditionDescription"] = cd[:1000]
+            changed.append("condition")
+        if "shipping" in item_fields:
+            full = _build_inventory_item(draft, product.get("imageUrls", []))
+            if "packageWeightAndSize" in full:
+                item["packageWeightAndSize"] = full["packageWeightAndSize"]
+            changed.append("shipping")
+        if "quantity" in item_fields:
+            item.setdefault("availability", {}).setdefault(
+                "shipToLocationAvailability", {})["quantity"] = int(draft.get("quantity") or 1)
+            changed.append("quantity")
+        if "photos" in item_fields:
+            urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
+            product["imageUrls"] = urls
+            changed.append(f"photos({len(urls)})")
+        api_send("PUT", f"/sell/inventory/v1/inventory_item/{sku}", item, creds=creds)
+
+    if offer_fields:
+        offer_id = _find_offer_id_for_sku(sku, creds)
+        if not offer_id:
+            raise ValueError(f"no offer for SKU {sku} — run a full `--sync` first")
+        cur = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+        offer = {k: cur[k] for k in _WRITABLE_OFFER_KEYS if k in cur}
+        if "description" in offer_fields and "description" not in changed:
+            changed.append("description")
+        if "description" in offer_fields:
+            offer["listingDescription"] = _body_to_html(draft.body)
+        if "price" in offer_fields:
+            offer["pricingSummary"] = {"price": {"value": _to_decimal_str(draft.get("price")),
+                                                 "currency": CURRENCY}}
+            changed.append("price")
+        if "quantity" in offer_fields and "quantity" not in changed:
+            offer["availableQuantity"] = int(draft.get("quantity") or 1); changed.append("quantity")
+        elif "quantity" in offer_fields:
+            offer["availableQuantity"] = int(draft.get("quantity") or 1)
+        if "bestoffer" in offer_fields:
+            lp = offer.setdefault("listingPolicies", {})
+            if draft.get("best_offer.enabled"):
+                terms: dict = {"bestOfferEnabled": True}
+                d = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
+                a = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
+                if d:
+                    terms["autoDeclinePrice"] = {"value": d, "currency": CURRENCY}
+                if a:
+                    terms["autoAcceptPrice"] = {"value": a, "currency": CURRENCY}
+                lp["bestOfferTerms"] = terms
+            else:
+                lp.pop("bestOfferTerms", None)
+            changed.append("bestoffer")
+        api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer, creds=creds)
+
+    update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -1175,11 +1465,14 @@ def _cli() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
+    ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
     ap.add_argument("--review", metavar="TARGET", help="One step: record + preflight + build the REVIEW decision card. Stops for approval; does NOT publish.")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
+    ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
+    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
@@ -1207,6 +1500,15 @@ def _cli() -> None:
             print(f"[OK] recorded DRAFTED — sku {sku}")
             if ledger:
                 print(f"  ledger: {ledger}")
+            return
+        if args.normalize:
+            rep = normalize_draft_identity(Path(args.normalize))
+            if rep["changed"]:
+                print(f"[OK] normalized — sku {rep['sku_before']} -> {rep['sku_after']}")
+                if rep["cleared"]:
+                    print(f"  cleared orphaned: {', '.join(rep['cleared'])}")
+            else:
+                print(f"[OK] no change — sku {rep['sku_after']!r} already canonical (or none stamped)")
             return
         if args.setup_check:
             _print_setup_check()
@@ -1268,6 +1570,18 @@ def _cli() -> None:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
+            return
+        if args.update:
+            if not args.fields:
+                print("[X] --update requires --fields (e.g. --fields description). "
+                      "No implicit 'all' — that's what --sync/--list are for.")
+                sys.exit(1)
+            field_list = [f for f in args.fields.split(",") if f.strip()]
+            changed = update_listing_fields(Path(args.update), field_list)
+            if changed:
+                print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
+            else:
+                print(f"[i] nothing changed on {args.update}.")
             return
         if args.end:
             res = end_listing(Path(args.end), confirm=args.confirm)

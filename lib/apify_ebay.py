@@ -91,6 +91,16 @@ DEFAULT_RUN_TIMEOUT_SEC = 300
 VALID_SORTS = {"best_match", "newly_listed", "price_low", "price_high"}
 VALID_LISTING_TYPES = {"all", "auction", "buy_it_now"}
 
+# Short tag per `sort`, used in the run's completion status message shown in
+# the Apify Console. PRICE's dual query uses best_match + price_high.
+SORT_STATUS_TAG = {
+    "best_match": "best",
+    "price_high": "sold_highest",
+    "price_low": "sold_lowest",
+    "newly_listed": "newest",
+}
+DEFAULT_STATUS_TITLE_CHARS = 10    # first N title chars in the status message
+
 # Records the most recent run's provenance so the CLI (and PRICE's research
 # log) can cite concrete proof a query hit the Apify backend: the run id,
 # actor, and comp count. Populated by search_ebay_sold() even when the run
@@ -299,6 +309,63 @@ def _run_actor(actor: str, run_input: dict, timeout_sec: int) -> tuple[list[dict
     items = _api_request("GET", f"datasets/{dataset_id}/items?clean=true&format=json",
                          token, timeout=60)
     return (items or []), run_id
+
+
+# ---------------------------------------------------------------------------
+# Run status message (Console label — cosmetic, best-effort)
+# ---------------------------------------------------------------------------
+
+def build_status_message(sort: str, sku: Optional[str] = None,
+                         title: Optional[str] = None,
+                         query: Optional[str] = None,
+                         title_chars: int = DEFAULT_STATUS_TITLE_CHARS,
+                         query_chars: int = 48) -> str:
+    """Compose the run's completion status message for the Apify Console.
+
+    This is what makes runs diagnosable from the Console's runs LIST (the
+    status-message column) without opening each one. Format:
+    ``[<tag>] <sku> <title[:N]>`` — e.g. ``[best] 588a1313 Vintage In``
+    (tag = 'best' for best_match, 'sold_highest' for price_high). sku/title
+    are optional; whatever is supplied is appended, in that order.
+
+    When NEITHER sku nor title is given (e.g. PRICE runs before a SKU
+    exists), the search query is appended instead so the run is never
+    anonymous: ``[best] vintage Indonesian Balinese carved wood mask``.
+    """
+    tag = SORT_STATUS_TAG.get(sort, sort)
+    parts = [f"[{tag}]"]
+    if sku:
+        parts.append(str(sku))
+    if title:
+        parts.append(str(title)[:title_chars])
+    if not sku and not title and query:
+        parts.append(str(query)[:query_chars])
+    return " ".join(parts)
+
+
+def set_run_status_message(run_id: str, message: str,
+                           token: Optional[str] = None, *,
+                           terminal: bool = True, timeout: int = 30) -> None:
+    """Set a run's status message via `PUT /v2/actor-runs/{runId}`.
+
+    The message is cosmetic (Apify Console only), so callers treat this as
+    best-effort and never let a failure break the actual search. Apify can
+    reject a terminal-flagged update on an already-finished run
+    (`cannot-set-is-status-message-terminal`); we retry once without the
+    terminal flag before giving up.
+    """
+    if token is None:
+        token = get_apify_token()
+    body: dict[str, Any] = {"runId": run_id, "statusMessage": message}
+    if terminal:
+        body["isStatusMessageTerminal"] = True
+    try:
+        _api_request("PUT", f"actor-runs/{run_id}", token, body=body, timeout=timeout)
+    except ApifyError:
+        if not terminal:
+            raise
+        _api_request("PUT", f"actor-runs/{run_id}", token,
+                     body={"runId": run_id, "statusMessage": message}, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +612,10 @@ def search_ebay_sold(
     on_currency_leak: str = "raise",
     save: bool = True,
     save_dir: Optional[Union[str, Path]] = None,
+    sku: Optional[str] = None,
+    title: Optional[str] = None,
+    status_label: Optional[str] = None,
+    set_status: bool = True,
 ) -> list[CompRecord]:
     """Run the eBay sold-listings Actor and return USD comps.
 
@@ -563,6 +634,13 @@ def search_ebay_sold(
         timeout_sec: max time to wait for the Apify run.
         on_currency_leak: "raise" (default) | "repair" | "ignore" — how to
             handle a run whose prices fail the charm-price USD check.
+        sku, title: optional item identifiers used to build the run's
+            completion status message (Apify Console label); title is
+            truncated to the first DEFAULT_STATUS_TITLE_CHARS chars.
+        status_label: override the full status-message text (ignores sku/title).
+        set_status: post a completion status message labeling the run in the
+            Apify Console runs list (default True). Falls back to the query
+            when sku/title are absent, so every run is labeled. Best-effort.
 
     Returns:
         List of CompRecord objects (USD), ordered as the Actor returns them.
@@ -629,6 +707,23 @@ def search_ebay_sold(
         except OSError as e:
             LAST_RUN["save_error"] = str(e)
 
+    # Post a completion status message to the run so it's identifiable in the
+    # Console runs LIST (the status-message column) — the whole point: diagnose
+    # past runs without a custom UI. Format "[best|sold_highest] <sku>
+    # <title[:10]>", falling back to the query when sku/title aren't supplied,
+    # so NO run is anonymous. Best-effort — a status failure never breaks the
+    # returned comps.
+    if set_status:
+        msg = status_label or build_status_message(
+            sort, sku, title, query=" | ".join(keywords))
+        LAST_RUN["status_message"] = msg
+        try:
+            set_run_status_message(run_id, msg)
+            LAST_RUN["status_message_posted"] = True
+        except (ApifyError, ConfigError) as e:
+            LAST_RUN["status_message_posted"] = False
+            LAST_RUN["status_message_error"] = str(e)
+
     return _check_currency_leak(comps, on_currency_leak)
 
 
@@ -640,6 +735,13 @@ def _cli() -> None:
     import argparse
     import json
     import sys
+
+    # Avoid UnicodeEncodeError on Windows (cp1252) when comp titles contain
+    # non-cp1252 characters (e.g. emoji); same approach as lib/list_edit.py.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
     parser = argparse.ArgumentParser(
         description="Apify eBay sold-listings search (automation-lab/ebay-sold-scraper)"
@@ -668,6 +770,13 @@ def _cli() -> None:
                         "Tip: pass the shoot dir to save alongside price.txt.")
     parser.add_argument("--no-save", action="store_true",
                         help="Do not save the run results to JSON")
+    parser.add_argument("--sku", help="SKU for the run's completion status message "
+                        "(Console label: '[best|sold_highest] <sku> <title[:10]>')")
+    parser.add_argument("--title", help="Item title; first 10 chars go in the status message")
+    parser.add_argument("--status-label", dest="status_label",
+                        help="Override the full status-message text")
+    parser.add_argument("--no-status", action="store_true",
+                        help="Do not post a completion status message to the run")
     parser.add_argument("--json", action="store_true",
                         help="Output raw JSON instead of human-readable list")
     args = parser.parse_args()
@@ -687,6 +796,10 @@ def _cli() -> None:
             on_currency_leak=args.on_leak,
             save=not args.no_save,
             save_dir=args.save_dir,
+            sku=args.sku,
+            title=args.title,
+            status_label=args.status_label,
+            set_status=not args.no_status,
         )
     except CurrencyLeakError as e:
         if LAST_RUN.get("run_id"):
@@ -733,13 +846,21 @@ def _cli() -> None:
     if LAST_RUN.get("run_id"):
         print(f"Apify run: {LAST_RUN['run_id']}  (actor {LAST_RUN.get('actor')})  "
               f"— proof this query hit the Apify backend")
+    if LAST_RUN.get("status_message"):
+        posted = LAST_RUN.get("status_message_posted")
+        state = "posted" if posted else f"NOT posted ({LAST_RUN.get('status_message_error', 'unknown')})"
+        print(f"Run status message: {LAST_RUN['status_message']!r} — {state}")
     if LAST_RUN.get("saved_path"):
         print(f"Saved results: {LAST_RUN['saved_path']}")
     print(f"Equivalent eBay search: {build_sold_search_url(args.query[0])}")
     print()
     for i, c in enumerate(comps, 1):
         tag = f" [{c.keyword_tag}]" if c.keyword_tag and len(args.query) > 1 else ""
-        print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {c.title}")
+        try:
+            print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {c.title}")
+        except UnicodeEncodeError:
+            safe = c.title.encode("ascii", "replace").decode("ascii")
+            print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {safe}")
         if c.sold_date:
             print(f"     Sold: {c.sold_date}")
         if c.condition:
