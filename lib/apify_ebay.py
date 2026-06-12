@@ -736,6 +736,13 @@ def _cli() -> None:
     import json
     import sys
 
+    # Avoid UnicodeEncodeError on Windows (cp1252) when comp titles contain
+    # non-cp1252 characters (e.g. emoji); same approach as lib/list_edit.py.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Apify eBay sold-listings search (automation-lab/ebay-sold-scraper)"
     )
@@ -849,7 +856,11 @@ def _cli() -> None:
     print()
     for i, c in enumerate(comps, 1):
         tag = f" [{c.keyword_tag}]" if c.keyword_tag and len(args.query) > 1 else ""
-        print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {c.title}")
+        try:
+            print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {c.title}")
+        except UnicodeEncodeError:
+            safe = c.title.encode("ascii", "replace").decode("ascii")
+            print(f"[{i:2d}] {c.sold_currency} {c.sold_price:.2f}{tag} - {safe}")
         if c.sold_date:
             print(f"     Sold: {c.sold_date}")
         if c.condition:
