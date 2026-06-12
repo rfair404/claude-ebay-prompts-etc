@@ -245,6 +245,17 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
     ocr_text = " | ".join(dict.fromkeys(s for s in ocr_raw if s))[:600]
     ocr_makers = sorted({m for m in makers if m in ocr_text.lower()})
 
+    # The actor reports per-searchType failures as {"error": "No results found"}.
+    # Surface them so an empty result is HONEST: Lens OCR routinely can't read a
+    # low-contrast or embossed metal stamp (silver/pewter/buckle) — that's a Lens
+    # limitation, not an absent mark. Don't let it read as "no mark exists".
+    lens_errors = sorted({
+        st for it in items if isinstance(it, dict)
+        for st, v in it.items() if isinstance(v, dict)
+        for rr in (v.get("results") or [])
+        if isinstance(rr, dict) and rr.get("error")
+    })
+
     n = len(titles)
     branded = sum(c["count"] for c in maker_candidates)
     top = maker_candidates[0] if maker_candidates else None
@@ -259,6 +270,11 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
             len(maker_candidates) == 1 or top["count"] >= 2 * maker_candidates[1]["count"]):
         verdict = (f"leans {top['maker'].title()} "
                    f"({top['count']}/{n} matches) — still confirm against a mark")
+    elif n == 0 and lens_errors:
+        verdict = ("Lens returned NO results (" + "/".join(lens_errors) + ") — "
+                   "common for low-contrast or EMBOSSED METAL stamps (silver/"
+                   "pewter/buckle/jewelry); Lens OCR can't read those. Rely on "
+                   "your OWN close-read of the mark, not Lens, for metal stamps.")
     elif n == 0:
         verdict = "no usable matches (Lens returned nothing for the image(s))"
     elif branded <= max(1, n // 6):
@@ -277,6 +293,7 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
         "ai_answer": ai_answer,
         "ocr_text": ocr_text,
         "ocr_makers": ocr_makers,
+        "lens_errors": lens_errors,
         "verdict": verdict,
     }
 

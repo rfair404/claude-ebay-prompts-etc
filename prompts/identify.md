@@ -95,8 +95,14 @@ expensive thing to leave on the table.
      background). Finds the same-shaped piece across the web.
    - **Mark match** → if step 1 found a **mark / stamp / signature / label**
      (usually on the **underside or back**), send that **close-up too**: Lens
-     runs OCR and can *read the maker name*, which beats any look-alike. A wide
-     hero shot is useless for this — the underside is the decisive photo.
+     OCR can *read* a maker name off it, which beats any look-alike. A wide hero
+     shot is useless for this — the underside is the decisive photo.
+     **Caveat (verified):** Lens OCR reads **printed/painted** marks (paper
+     labels, painted backstamps, ink) — it routinely **can't read low-contrast
+     EMBOSSED METAL stamps** (silver/pewter/buckles/jewelry; it returns "No
+     results"). For a pressed-metal stamp, **your own step-1 close-read is the
+     authority** — don't wait on Lens, and don't read its empty result as "no
+     mark". (lens_id flags this: verdict says "rely on your own close-read".)
 
    You examined every photo in this pass, so YOU pick — deliberately, by reason.
    **Cap at 2–3 images, each earning its place:** the full-form shot (design),
