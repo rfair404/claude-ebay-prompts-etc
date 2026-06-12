@@ -99,7 +99,6 @@ SORT_STATUS_TAG = {
     "price_low": "sold_lowest",
     "newly_listed": "newest",
 }
-DEFAULT_STATUS_TITLE_CHARS = 10    # first N title chars in the status message
 
 # Records the most recent run's provenance so the CLI (and PRICE's research
 # log) can cite concrete proof a query hit the Apify backend: the run id,
@@ -318,15 +317,17 @@ def _run_actor(actor: str, run_input: dict, timeout_sec: int) -> tuple[list[dict
 def build_status_message(sort: str, sku: Optional[str] = None,
                          title: Optional[str] = None,
                          query: Optional[str] = None,
-                         title_chars: int = DEFAULT_STATUS_TITLE_CHARS,
+                         title_chars: Optional[int] = None,
                          query_chars: int = 48) -> str:
     """Compose the run's completion status message for the Apify Console.
 
     This is what makes runs diagnosable from the Console's runs LIST (the
     status-message column) without opening each one. Format:
-    ``[<tag>] <sku> <title[:N]>`` — e.g. ``[best] 588a1313 Vintage In``
+    ``[<tag>] <sku> <title>`` — e.g. ``[best] 588a1313 Vintage Indonesian mask``
     (tag = 'best' for best_match, 'sold_highest' for price_high). sku/title
-    are optional; whatever is supplied is appended, in that order.
+    are optional; whatever is supplied is appended, in that order. The full
+    title is passed through — the Apify Console truncates it in the runs-list
+    column. (Pass ``title_chars`` to cap it explicitly.)
 
     When NEITHER sku nor title is given (e.g. PRICE runs before a SKU
     exists), the search query is appended instead so the run is never
@@ -337,7 +338,7 @@ def build_status_message(sort: str, sku: Optional[str] = None,
     if sku:
         parts.append(str(sku))
     if title:
-        parts.append(str(title)[:title_chars])
+        parts.append(str(title)[:title_chars] if title_chars else str(title))
     if not sku and not title and query:
         parts.append(str(query)[:query_chars])
     return " ".join(parts)
@@ -635,8 +636,8 @@ def search_ebay_sold(
         on_currency_leak: "raise" (default) | "repair" | "ignore" — how to
             handle a run whose prices fail the charm-price USD check.
         sku, title: optional item identifiers used to build the run's
-            completion status message (Apify Console label); title is
-            truncated to the first DEFAULT_STATUS_TITLE_CHARS chars.
+            completion status message (Apify Console label); the full title
+            is passed through (the Console truncates it in the runs list).
         status_label: override the full status-message text (ignores sku/title).
         set_status: post a completion status message labeling the run in the
             Apify Console runs list (default True). Falls back to the query
@@ -710,7 +711,7 @@ def search_ebay_sold(
     # Post a completion status message to the run so it's identifiable in the
     # Console runs LIST (the status-message column) — the whole point: diagnose
     # past runs without a custom UI. Format "[best|sold_highest] <sku>
-    # <title[:10]>", falling back to the query when sku/title aren't supplied,
+    # <title>", falling back to the query when sku/title aren't supplied,
     # so NO run is anonymous. Best-effort — a status failure never breaks the
     # returned comps.
     if set_status:
@@ -771,8 +772,9 @@ def _cli() -> None:
     parser.add_argument("--no-save", action="store_true",
                         help="Do not save the run results to JSON")
     parser.add_argument("--sku", help="SKU for the run's completion status message "
-                        "(Console label: '[best|sold_highest] <sku> <title[:10]>')")
-    parser.add_argument("--title", help="Item title; first 10 chars go in the status message")
+                        "(Console label: '[best|sold_highest] <sku> <title>')")
+    parser.add_argument("--title", help="Item title for the status message "
+                        "(full title; the Apify Console truncates it in the runs list)")
     parser.add_argument("--status-label", dest="status_label",
                         help="Override the full status-message text")
     parser.add_argument("--no-status", action="store_true",
