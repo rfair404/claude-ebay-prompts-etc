@@ -113,14 +113,21 @@ expensive thing to leave on the table.
    background) can mislead Lens. `lib/lens_id.py` takes those images in one run
    (~pennies each):
 
-       # markless piece — design match only:
-       python lib/lens_id.py <shoot-dir>/<full-view>.jpg
-       # mark present — send BOTH (full view + the underside/mark close-up):
+       # "what is this?" — markless / metal-marked piece, design + AI mode, NO OCR (cheaper):
+       python lib/lens_id.py <shoot-dir>/<full-view>.jpg --no-ocr
+       # mark present AND printed/painted (readable) — add the mark close-up + OCR:
        python lib/lens_id.py <shoot-dir>/<full-view>.jpg <shoot-dir>/<mark-shot>.jpg
 
-   It hosts each photo at a temp public URL, runs the Lens actor (OCR on), and
-   prints a **verdict + a maker tally across distinct visual matches + any
-   mark/OCR read**. Weigh it — never obey it:
+   The CORE is always a **"what is this?"** read (visual match + AI mode) off the
+   full-form shot — it does NOT need a mark. **OCR is an add-on:** include it
+   (default) only when you're sending a **readable printed/painted** mark; use
+   **`--no-ocr`** otherwise (markless pieces, or an embossed metal stamp where
+   OCR returns nothing) for a cheaper mark-free pass. OCR failing never blocks
+   the "what is this?" result.
+
+   It hosts each photo at a temp public URL, runs the Lens actor, and prints a
+   **verdict + a maker tally across distinct visual matches + any mark/OCR read**.
+   Weigh it — never obey it:
    - **`MARK READ (OCR): <Maker>`** → strongest signal: Lens read a maker name
      off the mark. Confirm the reading is legible/correct on the photo, then
      write `Brand: <Maker>` (a confirmed read mark is real evidence, not a guess

@@ -106,29 +106,37 @@ def host_image_tmpfiles(image_path: str | Path, *, timeout: int = 120) -> str:
 # 2) Run the Lens actor on the public URL
 # ---------------------------------------------------------------------------
 
-_DEFAULT_QUESTION = ("What is the brand, manufacturer, or collectible product "
-                     "line of this item? Identify the maker if you can; say so "
-                     "plainly if it appears to be an unbranded/generic design.")
+_DEFAULT_QUESTION = ("What is this object — what is it, what is it for, and who "
+                     "made it (brand / maker / collectible line) if you can tell? "
+                     "Say plainly if it looks unbranded or like a generic design.")
 
 
 def run_lens(image_urls, *, token: Optional[str] = None,
              actor: Optional[str] = None, question: str = _DEFAULT_QUESTION,
-             timeout: int = 300) -> list[dict]:
+             include_ocr: bool = True, timeout: int = 300) -> list[dict]:
     """Run the Apify Google Lens actor on ONE OR MORE public image URLs.
 
-    Pass several URLs in a single run — e.g. a full-form shot (design/visual
-    match) AND an underside/back mark close-up (the decisive ID, where OCR can
-    read a maker name outright). `ocr` is in searchTypes so a legible mark is
-    read, not just matched. Returns the actor's dataset items (tally_opinion
-    parses them)."""
+    The CORE is always a "what is this?" identification — visual match + AI mode
+    — which works off the full-form shot and does NOT depend on reading a mark.
+    OCR is an OPTIONAL add-on (`include_ocr`, default True): include it only when
+    you're sending a readable mark close-up. Lens OCR reads printed/painted marks
+    but NOT low-contrast embossed metal stamps (it returns "No results" — see
+    tally_opinion); when that happens the "what is this?" result still stands, so
+    set `include_ocr=False` for a cheaper, mark-free "WTF is this" pass.
+
+    Pass several URLs in one run (full-form + optional mark close-up). Returns the
+    actor's dataset items (tally_opinion parses them)."""
     if isinstance(image_urls, str):
         image_urls = [image_urls]
     token = token or get_apify_token()
     actor = (actor or get_lens_actor()).replace("/", "~")
     endpoint = (f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
                 f"?token={token}")
+    search_types = ["all", "visual-match", "exact-match", "ai-mode"]
+    if include_ocr:
+        search_types.append("ocr")
     payload = {
-        "searchTypes": ["all", "visual-match", "exact-match", "ocr", "ai-mode"],
+        "searchTypes": search_types,
         "imageUrls": [{"url": u} for u in image_urls],
         "aiModeQuestions": [question],
     }
@@ -307,12 +315,15 @@ def tl_count(titles: list[str], maker: str) -> int:
 # ---------------------------------------------------------------------------
 
 def lens_opinion(images, *, token: Optional[str] = None,
-                 actor: Optional[str] = None,
-                 question: str = _DEFAULT_QUESTION) -> dict:
-    """Full pipeline on ONE OR MORE photos. Pass the full-form shot AND, when a
-    mark/stamp/label is visible, the underside/back close-up — IDENTIFY chooses
-    which photos (see prompts/identify.md). Returns the opinion dict, or
-    {"error": ...} on failure (never raises — IDENTIFY degrades to its own call)."""
+                 actor: Optional[str] = None, question: str = _DEFAULT_QUESTION,
+                 include_ocr: bool = True) -> dict:
+    """Full pipeline on ONE OR MORE photos. The default is a "what is this?"
+    identification (visual match + AI mode) that works off the full-form shot.
+    Pass the underside/back mark close-up too AND keep include_ocr=True to also
+    read a printed mark; set include_ocr=False for a cheaper mark-free pass (e.g.
+    after a metal stamp returns no OCR). IDENTIFY chooses the photos + the mode
+    (see prompts/identify.md). Returns the opinion dict, or {"error": ...} on
+    failure (never raises — IDENTIFY degrades to its own call)."""
     paths = [images] if isinstance(images, (str, Path)) else list(images)
     hosted: list[str] = []
     for p in paths:
@@ -321,7 +332,8 @@ def lens_opinion(images, *, token: Optional[str] = None,
         except Exception as e:  # noqa: BLE001
             return {"error": f"host failed for {p}: {e}", "images": [str(x) for x in paths]}
     try:
-        items = run_lens(hosted, token=token, actor=actor, question=question)
+        items = run_lens(hosted, token=token, actor=actor, question=question,
+                         include_ocr=include_ocr)
     except Exception as e:  # noqa: BLE001
         return {"error": f"lens run failed: {e}", "hosted_urls": hosted}
     report = tally_opinion(items)
@@ -371,9 +383,14 @@ def _cli() -> None:
                          "is visible) the underside/back/mark close-up")
     ap.add_argument("--actor", help="Override the Lens actor (default from config)")
     ap.add_argument("--question", default=_DEFAULT_QUESTION, help="AI-mode question")
+    ap.add_argument("--no-ocr", action="store_true",
+                    help='Skip OCR — pure "what is this?" pass (visual + AI mode). '
+                         'Use when not sending a readable mark (cheaper); good after '
+                         'a metal stamp returned no OCR.')
     ap.add_argument("--json", action="store_true", help="Emit the full report as JSON")
     args = ap.parse_args()
-    report = lens_opinion(args.image, actor=args.actor, question=args.question)
+    report = lens_opinion(args.image, actor=args.actor, question=args.question,
+                          include_ocr=not args.no_ocr)
     if args.json:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
