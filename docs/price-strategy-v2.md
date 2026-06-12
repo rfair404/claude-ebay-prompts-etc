@@ -160,7 +160,7 @@ ladder steps.
 
 **Size (and other un-tokenizable grade axes) is not a filterable token —
 the broad median can under-price.** First live end-to-end run (2026-06-10,
-`to-id/sand-dollars`, lot of 18 ~3in white keyhole sand dollars): the engine
+`inventory/sand-dollars`, lot of 18 ~3in white keyhole sand dollars): the engine
 cleanly filtered unit/condition and reported a used-cohort **median of $18**
 — but that pools *every* sand-dollar lot regardless of piece SIZE, and size
 is the dominant price driver here (tiny 1.5–2in lots sell $10–15; ~3in lots

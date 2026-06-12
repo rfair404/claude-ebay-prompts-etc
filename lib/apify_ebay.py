@@ -44,7 +44,7 @@ Programmatic usage:
 CLI usage (manual testing):
     python apify_ebay.py "vintage polo ralph lauren on safari catalog"
     python apify_ebay.py "..." --max 50 --sort price_high --json
-    python apify_ebay.py "..." --save-dir samples/my-shoot   # save JSON beside price.txt
+    python apify_ebay.py "..." --save-dir inventory/my-shoot   # save JSON beside price.txt
 
 Result persistence: every call saves its results to JSON (run metadata,
 normalized comps, raw dataset) for audit/cache. Default location is

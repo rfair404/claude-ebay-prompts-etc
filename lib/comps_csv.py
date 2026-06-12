@@ -29,7 +29,7 @@ CLI usage:
 
 Programmatic:
     from comps_csv import append_comp, from_apify_json
-    append_comp("samples/my-shoot", stage="A", query="...", price=99.99,
+    append_comp("inventory/my-shoot", stage="A", query="...", price=99.99,
                 title="...", url="...", item="1", note="near-exact")
 """
 

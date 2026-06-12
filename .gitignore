@@ -38,7 +38,7 @@ listings_ledger.csv
 *.tiff
 
 # Inventory working files — never tracked (private business data + images)
-/to-id/
+/inventory/
 
 # Sensitive business documents + correspondence — kept locally, not tracked
 *.docx
