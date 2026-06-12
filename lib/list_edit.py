@@ -908,6 +908,161 @@ def create_or_update_listing(draft_path: Path,
 
 
 # ---------------------------------------------------------------------------
+# Field-scoped update — change ONLY the named fields, preserve everything else
+# ---------------------------------------------------------------------------
+#
+# create_or_update_listing() rebuilds the WHOLE inventory item + offer from
+# draft.md and PUTs them, which clobbers any change made on eBay's side that
+# the draft doesn't know about (most painfully, a photo re-order done in the
+# Seller Hub UI). update_listing_fields() instead GETs the current live
+# objects, overlays ONLY the requested field groups from the draft, and PUTs
+# them back — so unrequested fields keep their current eBay value. It never
+# publishes, so it can only edit an existing listing, never push a new one live.
+
+# friendly name -> canonical field group
+_SYNC_FIELD_ALIASES = {
+    "description": "description", "desc": "description", "body": "description",
+    "title": "title",
+    "price": "price",
+    "condition": "condition", "cond": "condition",
+    "aspects": "aspects", "specifics": "aspects", "itemspecifics": "aspects",
+    "photos": "photos", "images": "photos", "pics": "photos",
+    "shipping": "shipping", "weight": "shipping", "dims": "shipping",
+    "quantity": "quantity", "qty": "quantity",
+    "bestoffer": "bestoffer", "best_offer": "bestoffer", "offer": "bestoffer",
+}
+_ITEM_SIDE = {"title", "description", "condition", "aspects", "photos", "shipping", "quantity"}
+_OFFER_SIDE = {"description", "price", "quantity", "bestoffer"}
+# Keys accepted by PUT inventory_item / updateOffer — used to strip read-only
+# echo fields (offerId, listing, status, …) out of the GET response before PUT.
+_WRITABLE_ITEM_KEYS = ("availability", "condition", "conditionDescription",
+                       "packageWeightAndSize", "product")
+_WRITABLE_OFFER_KEYS = ("availableQuantity", "categoryId", "listingDescription",
+                        "listingPolicies", "pricingSummary", "merchantLocationKey",
+                        "marketplaceId", "format", "sku", "tax", "listingDuration",
+                        "quantityLimitPerBuyer", "storeCategoryNames", "listingStartDate",
+                        "secondaryCategoryId", "hideBuyerDetails",
+                        "includeCatalogProductDetails", "lotSize")
+
+
+def _canonical_sync_fields(fields) -> set[str]:
+    """Map user-supplied field names to canonical groups; raise on unknown."""
+    out: set[str] = set()
+    unknown: list[str] = []
+    for raw in fields:
+        key = re.sub(r"[\s_-]+", "", str(raw).strip().lower())
+        canon = _SYNC_FIELD_ALIASES.get(key) or _SYNC_FIELD_ALIASES.get(str(raw).strip().lower())
+        if canon:
+            out.add(canon)
+        elif raw:
+            unknown.append(str(raw))
+    if unknown:
+        valid = sorted(set(_SYNC_FIELD_ALIASES.values()))
+        raise ValueError(f"unknown --fields value(s): {', '.join(unknown)}. "
+                         f"Valid groups: {', '.join(valid)}")
+    if not out:
+        raise ValueError("no fields given — pass --fields description[,price,…]")
+    return out
+
+
+def update_listing_fields(draft_path: Path, fields,
+                          creds: Optional[EbayCredentials] = None) -> list[str]:
+    """Update ONLY the named field groups on an existing eBay item/offer.
+
+    GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
+    current eBay value. Never publishes. Returns the list of fields changed.
+    """
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("Update needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku = _sku_for(draft)
+    canon = _canonical_sync_fields(fields)
+    item_fields = canon & _ITEM_SIDE
+    offer_fields = canon & _OFFER_SIDE
+    changed: list[str] = []
+
+    if item_fields:
+        try:
+            cur = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
+        except EbayAPIError as e:
+            raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
+        item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
+        product = item.setdefault("product", {})
+        if "title" in item_fields:
+            product["title"] = str(draft.get("title")); changed.append("title")
+        if "description" in item_fields:
+            product["description"] = _body_to_html(draft.body); changed.append("description")
+        if "aspects" in item_fields:
+            product["aspects"] = _build_aspects(draft); changed.append("aspects")
+        if "condition" in item_fields:
+            cond = str(draft.get("condition") or "")
+            allowed, _r = get_allowed_condition_ids(_resolve_category_id(draft, creds), creds=creds)
+            if allowed:
+                new_enum, reason = _remap_condition_for_category(cond, allowed)
+                if reason:
+                    cond = new_enum
+                    print(f"  [preflight] {reason}")
+            item["condition"] = cond
+            cd = str(draft.get("condition_description") or "").strip()
+            if cd and cond != "NEW":
+                item["conditionDescription"] = cd[:1000]
+            changed.append("condition")
+        if "shipping" in item_fields:
+            full = _build_inventory_item(draft, product.get("imageUrls", []))
+            if "packageWeightAndSize" in full:
+                item["packageWeightAndSize"] = full["packageWeightAndSize"]
+            changed.append("shipping")
+        if "quantity" in item_fields:
+            item.setdefault("availability", {}).setdefault(
+                "shipToLocationAvailability", {})["quantity"] = int(draft.get("quantity") or 1)
+            changed.append("quantity")
+        if "photos" in item_fields:
+            urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
+            product["imageUrls"] = urls
+            changed.append(f"photos({len(urls)})")
+        api_send("PUT", f"/sell/inventory/v1/inventory_item/{sku}", item, creds=creds)
+
+    if offer_fields:
+        offer_id = _find_offer_id_for_sku(sku, creds)
+        if not offer_id:
+            raise ValueError(f"no offer for SKU {sku} — run a full `--sync` first")
+        cur = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+        offer = {k: cur[k] for k in _WRITABLE_OFFER_KEYS if k in cur}
+        if "description" in offer_fields and "description" not in changed:
+            changed.append("description")
+        if "description" in offer_fields:
+            offer["listingDescription"] = _body_to_html(draft.body)
+        if "price" in offer_fields:
+            offer["pricingSummary"] = {"price": {"value": _to_decimal_str(draft.get("price")),
+                                                 "currency": CURRENCY}}
+            changed.append("price")
+        if "quantity" in offer_fields and "quantity" not in changed:
+            offer["availableQuantity"] = int(draft.get("quantity") or 1); changed.append("quantity")
+        elif "quantity" in offer_fields:
+            offer["availableQuantity"] = int(draft.get("quantity") or 1)
+        if "bestoffer" in offer_fields:
+            lp = offer.setdefault("listingPolicies", {})
+            if draft.get("best_offer.enabled"):
+                terms: dict = {"bestOfferEnabled": True}
+                d = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
+                a = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
+                if d:
+                    terms["autoDeclinePrice"] = {"value": d, "currency": CURRENCY}
+                if a:
+                    terms["autoAcceptPrice"] = {"value": a, "currency": CURRENCY}
+                lp["bestOfferTerms"] = terms
+            else:
+                lp.pop("bestOfferTerms", None)
+            changed.append("bestoffer")
+        api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer, creds=creds)
+
+    update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return changed
+
+
+# ---------------------------------------------------------------------------
 # PUBLISH — explicit, manual, confirmation-gated (the one publish path)
 # ---------------------------------------------------------------------------
 
@@ -1223,6 +1378,8 @@ def _cli() -> None:
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
+    ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
+    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
@@ -1315,6 +1472,18 @@ def _cli() -> None:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
+            return
+        if args.update:
+            if not args.fields:
+                print("[X] --update requires --fields (e.g. --fields description). "
+                      "No implicit 'all' — that's what --sync/--list are for.")
+                sys.exit(1)
+            field_list = [f for f in args.fields.split(",") if f.strip()]
+            changed = update_listing_fields(Path(args.update), field_list)
+            if changed:
+                print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
+            else:
+                print(f"[i] nothing changed on {args.update}.")
             return
         if args.end:
             res = end_listing(Path(args.end), confirm=args.confirm)
