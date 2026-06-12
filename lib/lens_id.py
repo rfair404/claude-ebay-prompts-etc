@@ -279,10 +279,11 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
         verdict = (f"leans {top['maker'].title()} "
                    f"({top['count']}/{n} matches) — still confirm against a mark")
     elif n == 0 and lens_errors:
-        verdict = ("Lens returned NO results (" + "/".join(lens_errors) + ") — "
-                   "common for low-contrast or EMBOSSED METAL stamps (silver/"
-                   "pewter/buckle/jewelry); Lens OCR can't read those. Rely on "
-                   "your OWN close-read of the mark, not Lens, for metal stamps.")
+        verdict = ("Lens found NO results for this image (" + "/".join(lens_errors)
+                   + ") — no web/visual match; fall back to your own visual call. "
+                   + ("(If this was a mark close-up: OCR can't read low-contrast "
+                      "EMBOSSED METAL stamps — trust your own close-read of it.)"
+                      if "ocr" in lens_errors else ""))
     elif n == 0:
         verdict = "no usable matches (Lens returned nothing for the image(s))"
     elif branded <= max(1, n // 6):
