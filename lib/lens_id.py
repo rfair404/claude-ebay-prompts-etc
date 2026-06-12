@@ -111,17 +111,25 @@ _DEFAULT_QUESTION = ("What is the brand, manufacturer, or collectible product "
                      "plainly if it appears to be an unbranded/generic design.")
 
 
-def run_lens(image_url: str, *, token: Optional[str] = None,
+def run_lens(image_urls, *, token: Optional[str] = None,
              actor: Optional[str] = None, question: str = _DEFAULT_QUESTION,
              timeout: int = 300) -> list[dict]:
-    """Run the Apify Google Lens actor synchronously; return its dataset items."""
+    """Run the Apify Google Lens actor on ONE OR MORE public image URLs.
+
+    Pass several URLs in a single run — e.g. a full-form shot (design/visual
+    match) AND an underside/back mark close-up (the decisive ID, where OCR can
+    read a maker name outright). `ocr` is in searchTypes so a legible mark is
+    read, not just matched. Returns the actor's dataset items (tally_opinion
+    parses them)."""
+    if isinstance(image_urls, str):
+        image_urls = [image_urls]
     token = token or get_apify_token()
     actor = (actor or get_lens_actor()).replace("/", "~")
     endpoint = (f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
                 f"?token={token}")
     payload = {
-        "searchTypes": ["all", "visual-match", "exact-match", "ai-mode"],
-        "imageUrls": [{"url": image_url}],
+        "searchTypes": ["all", "visual-match", "exact-match", "ocr", "ai-mode"],
+        "imageUrls": [{"url": u} for u in image_urls],
         "aiModeQuestions": [question],
     }
     req = urllib.request.Request(endpoint, data=json.dumps(payload).encode(),
@@ -173,6 +181,24 @@ def _harvest_ai_answer(obj: Any, depth: int = 0) -> Optional[str]:
     return best
 
 
+def _harvest_ocr(obj: Any, out: list[str], depth: int = 0) -> None:
+    """Collect OCR / extracted-text strings — i.e. what Lens READ off the image
+    (a mark, a backstamp, a signature). A read maker name is near-decisive."""
+    if depth > 8:
+        return
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = k.lower()
+            if isinstance(v, str) and v.strip() and (
+                    "ocr" in kl or kl in ("text", "extractedtext", "fulltext",
+                                          "plaintext", "words", "recognizedtext")):
+                out.append(v.strip())
+            _harvest_ocr(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _harvest_ocr(v, out, depth + 1)
+
+
 def _clean_title(t: str) -> str:
     """Strip a leading marketplace name (e.g. 'eBayVintage Boy…' -> 'Vintage Boy…')."""
     return _SOURCE_NOISE.sub("", t).lstrip(" -|·").strip()
@@ -211,18 +237,30 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
     origin_hits = sorted({h for t in titles for h in _ORIGIN_HINTS if h in t.lower()})
     ai_answer = _harvest_ai_answer(items)
 
+    # OCR — what Lens READ off the image(s). A maker name read from a mark/back-
+    # stamp is near-decisive and outranks visual-match convergence.
+    ocr_raw: list[str] = []
+    for it in items:
+        _harvest_ocr(it, ocr_raw)
+    ocr_text = " | ".join(dict.fromkeys(s for s in ocr_raw if s))[:600]
+    ocr_makers = sorted({m for m in makers if m in ocr_text.lower()})
+
     n = len(titles)
     branded = sum(c["count"] for c in maker_candidates)
     top = maker_candidates[0] if maker_candidates else None
-    # Verdict: convergence discipline. A maker only "leads" if it recurs across
-    # several distinct matches AND clearly dominates; otherwise it's the common,
-    # honest "widely-copied / likely unmarked".
-    if top and top["count"] >= 3 and top["count"] >= 0.4 * max(branded, 1) and (
+    # Verdict, in priority order: a read mark (OCR) > visual convergence >
+    # split/no-convergence > markless. OCR wins because it's the actual mark,
+    # not a look-alike.
+    if ocr_makers:
+        verdict = (f"MARK READ (OCR): a maker name appears in the image text "
+                   f"({', '.join(m.title() for m in ocr_makers)}) — near-decisive "
+                   f"if the reading is legible; confirm it on the photo")
+    elif top and top["count"] >= 3 and top["count"] >= 0.4 * max(branded, 1) and (
             len(maker_candidates) == 1 or top["count"] >= 2 * maker_candidates[1]["count"]):
         verdict = (f"leans {top['maker'].title()} "
                    f"({top['count']}/{n} matches) — still confirm against a mark")
     elif n == 0:
-        verdict = "no usable matches (Lens returned nothing for this image)"
+        verdict = "no usable matches (Lens returned nothing for the image(s))"
     elif branded <= max(1, n // 6):
         verdict = ("no single maker — widely-copied / likely unmarked "
                    f"(only {branded}/{n} matches name a maker)")
@@ -237,6 +275,8 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
         "maker_candidates": maker_candidates,
         "origin_hints": origin_hits,
         "ai_answer": ai_answer,
+        "ocr_text": ocr_text,
+        "ocr_makers": ocr_makers,
         "verdict": verdict,
     }
 
@@ -249,22 +289,27 @@ def tl_count(titles: list[str], maker: str) -> int:
 # 4) Orchestrate: host -> search -> tally
 # ---------------------------------------------------------------------------
 
-def lens_opinion(image_path: str | Path, *, token: Optional[str] = None,
+def lens_opinion(images, *, token: Optional[str] = None,
                  actor: Optional[str] = None,
                  question: str = _DEFAULT_QUESTION) -> dict:
-    """Full pipeline. Returns the opinion dict, or {"error": ...} on failure
-    (never raises — IDENTIFY should degrade gracefully to its own call)."""
+    """Full pipeline on ONE OR MORE photos. Pass the full-form shot AND, when a
+    mark/stamp/label is visible, the underside/back close-up — IDENTIFY chooses
+    which photos (see prompts/identify.md). Returns the opinion dict, or
+    {"error": ...} on failure (never raises — IDENTIFY degrades to its own call)."""
+    paths = [images] if isinstance(images, (str, Path)) else list(images)
+    hosted: list[str] = []
+    for p in paths:
+        try:
+            hosted.append(host_image_tmpfiles(p))
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"host failed for {p}: {e}", "images": [str(x) for x in paths]}
     try:
-        url = host_image_tmpfiles(image_path)
+        items = run_lens(hosted, token=token, actor=actor, question=question)
     except Exception as e:  # noqa: BLE001
-        return {"error": f"host failed: {e}", "image": str(image_path)}
-    try:
-        items = run_lens(url, token=token, actor=actor, question=question)
-    except Exception as e:  # noqa: BLE001
-        return {"error": f"lens run failed: {e}", "hosted_url": url}
+        return {"error": f"lens run failed: {e}", "hosted_urls": hosted}
     report = tally_opinion(items)
-    report["hosted_url"] = url
-    report["image"] = str(image_path)
+    report["hosted_urls"] = hosted
+    report["images"] = [str(p) for p in paths]
     return report
 
 
@@ -272,8 +317,13 @@ def render(report: dict) -> str:
     """Human-readable block IDENTIFY folds into its reasoning."""
     if report.get("error"):
         return f"Lens cross-check: UNAVAILABLE — {report['error']}"
-    out = [f"Lens cross-check ({report['n_matches']} visual matches):",
+    out = [f"Lens cross-check ({report['n_matches']} visual matches"
+           f"{', images: ' + str(len(report.get('images', []))) if report.get('images') else ''}):",
            f"  Verdict: {report['verdict']}"]
+    if report.get("ocr_text"):
+        out.append(f"  Mark/OCR read: \"{report['ocr_text'][:140]}\""
+                   + (f"  → maker: {', '.join(m.title() for m in report['ocr_makers'])}"
+                      if report.get("ocr_makers") else ""))
     if report["maker_candidates"]:
         out.append("  Maker mentions across matches:")
         for c in report["maker_candidates"][:5]:
@@ -299,7 +349,9 @@ def _cli() -> None:
     except Exception:  # pragma: no cover
         pass
     ap = argparse.ArgumentParser(description="Google Lens second opinion for IDENTIFY")
-    ap.add_argument("image", help="Path to the best photo of the item")
+    ap.add_argument("image", nargs="+",
+                    help="One or more photos: the full-form shot AND (when a mark "
+                         "is visible) the underside/back/mark close-up")
     ap.add_argument("--actor", help="Override the Lens actor (default from config)")
     ap.add_argument("--question", default=_DEFAULT_QUESTION, help="AI-mode question")
     ap.add_argument("--json", action="store_true", help="Emit the full report as JSON")
