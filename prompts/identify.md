@@ -42,6 +42,50 @@ Marker discipline (per _shared confidence rule):
   mid-to-late"). No bracket.
 - `Unknown` — no real basis. Not a license to invent the priciest identity.
 
+## Maker / brand attribution (work it HARD — high leverage)
+
+Brand is the single highest-leverage field: a confirmed maker changes the
+PRICE tier, lets PRICE hunt an EXACT maker+pattern comp, sharpens the title
+SEO, and informs authenticity. So `Unknown` is a LAST RESORT after a real
+attribution attempt — never a lazy default. Run this pass on every item before
+settling Brand:
+
+1. **Hunt every mark.** Scan ALL surfaces for any mark — base/underside, foot
+   rim, back, lid underside, inside rim, handle/spout joins, seams, stickers/
+   labels. A mark, stamp, signature, hallmark, trademark, pattern/model number,
+   size code, or registry mark MUST be addressed (read it, decode it, or state
+   it is present-but-illegible). Never silently skip a visible mark.
+2. **Decode it by type.**
+   - **Silver/metal:** distinguish GENUINE assay hallmarks (e.g. lion passant =
+     English sterling, town + date letters) from a MAKER's mark, from EPNS / EP
+     / "quadruple plate" / "silver on copper" plate marks, from pattern + size
+     numbers, and from purely DECORATIVE pseudo-hallmarks. Each tells you
+     something: assay → solid silver + origin/date; trademark roundel + pattern
+     number → a specific plate maker (often catalog-matchable).
+   - **Ceramics/porcelain/pottery:** backstamp, impressed mark, painted mark,
+     pattern name/number; country-of-origin wording dates it ("England" vs
+     "Made in England", post-1891 "country" rule, "Occupied Japan", etc.).
+   - **Other:** logos, model numbers, union/care labels, date codes.
+3. **Research the mark.** Use reference knowledge and web search to MATCH a
+   partial or stylized mark to a maker (silver-mark encyclopedias, pottery-mark
+   references, pattern-number catalogs). A pattern/size number plus a trademark
+   shape is often enough to name the maker even when the legend is worn.
+4. **Commit at the right confidence.** If research yields a likely maker, write
+   `Brand: <maker> [BEST-CASE]` + a Scenario bracket + the exact resolution
+   step (the macro shot or test that would confirm). Only a legible, matched
+   mark earns a maker WITHOUT `[BEST-CASE]`. A genuinely markless piece, or a
+   purely decorative fantasy pseudo-hallmark with no maker name, is honestly
+   `Unknown` — say which it is.
+
+**Honesty guard (unchanged, non-negotiable):** trying harder is NOT license to
+invent. Do not promote a guess to a stated maker, and do not read a maker into
+fantasy/pseudo marks to inflate value. The bar for a named maker is a real,
+decodable signal; the bar for `[BEST-CASE]` is a mark whose style/elements
+genuinely point to one. When the mark is present but you cannot resolve it, set
+`needs_followup_photo: yes` with the SPECIFIC shot (a raking-light macro of the
+mark) and note the downstream value impact — an unread mark is the most
+expensive thing to leave on the table.
+
 ## Output format
 
     SHOOT SUMMARY
@@ -61,8 +105,10 @@ Then one block per item, `--- Item <N> ---`, fields in this order:
 - **Quantity** — integer. 1 for single, 2 for pair, piece count for
   set/lot, copy count for duplicate.
 - **Category** — general bucket (bike, magazine, chess set). Uncapped.
-- **Brand** — visible mark → write it; inferred → `value [BEST-CASE]`;
-  none → `Unknown`. ≤65.
+- **Brand** — run the maker-attribution pass above FIRST. Legible/matched mark
+  → write the maker; mark whose style points to a likely maker → `value
+  [BEST-CASE]` + bracket; genuinely markless or fantasy-marked → `Unknown`
+  (last resort, after the pass). ≤65.
 - **Type** — specific descriptor. Same marker convention. ≤65.
 - **Era** — date/range. `[ASSUMPTION]` if inferred from styling. ≤65.
 - **Collectability** — collectable / vintage / antique / modern /

@@ -34,6 +34,38 @@ discount to sum-of-parts — single-item comps ×N are Tier C reference
 only); `duplicate` → price one piece (CURATE scales). All quoted prices
 are per-listing-unit except `duplicate` (per-piece).
 
+## Silver — rarity double-check, exact comp, push HIGH (category override)
+
+Silver gets special handling. In practice our silver has been UNDER-priced and
+sells immediately — money left on the table. Whenever IDENTIFY tags an item as
+silver in ANY form — sterling / .925, coin silver, .800/.835/.900 continental,
+hallmarked silver, silver-on-copper, or silverplate — apply ALL of the following
+and OVERRIDE the plain distribution defaults:
+
+1. **Rarity double-check (mandatory).** Before settling a price, explicitly work
+   the maker / hallmark / pattern / assay + (for solid silver) the weight. Ask:
+   is THIS piece scarce — a sought maker (Tiffany, Georg Jensen, Gorham, Jensen,
+   Kirk, etc.), a rare or discontinued pattern, an early assay date, an unusual
+   form, a matched pair/set, or heavy gauge? For solid silver compute the **melt
+   floor** (troy-oz × spot × purity) — price NEVER drops below melt. Record a
+   one-line `Rarity:` verdict in price.txt.
+2. **Hunt the EXACT comp harder.** Do NOT settle for an era-peer on silver. Run
+   the full query ladder, and if Stage B (Apify) is thin, ESCALATE to Stage C
+   (Chrome eBay-sold) rather than falling back — an exact maker+pattern+form comp
+   anchors the ceiling. Silver is identifiable; an exact match usually exists if
+   you dig.
+3. **Push HIGH by default.** For silver the provisional working / list price is
+   the **Push-high (vetted ceiling)** tier, NOT the median — with Best Offer ON
+   and auto-decline at the Recommended/median (the DRAFT Best Offer gate does
+   this automatically once list > Recommended). List at the top of the supported
+   range and let Best Offer capture the market; "sold immediately" means we
+   listed too low. Still bounded by VETTED comps — push to the honest ceiling,
+   never invent value above it (plate / silver-on-copper ceilings stay modest;
+   solid silver never below melt).
+
+State `SILVER: push-high strategy applied` in price.txt so the choice is visible
+at the REVIEW gate.
+
 ## The exact-match hunt (run before any era-peer fallback)
 
 For each item, hunt the exact match, escalating only as each stage dries
