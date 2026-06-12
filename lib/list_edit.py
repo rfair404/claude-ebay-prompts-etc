@@ -466,13 +466,72 @@ def _build_weight_lb(draft: Draft) -> Optional[float]:
     return round(total, 2) if total > 0 else None
 
 
+def _md_inline(text: str) -> str:
+    """Escape HTML, then render the inline markdown the templates use."""
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    return text
+
+
+def _body_to_html(md: str) -> str:
+    """Convert the markdown subset used in draft bodies (ATX headings, `-`/`*`
+    bullet lists, **bold**, blank-line paragraphs) into HTML.
+
+    eBay renders `product.description` / `listingDescription` as HTML, so a raw
+    markdown body collapses into one run-on paragraph (newlines and `#`/`-`
+    markers are ignored). This restores the intended structure. Stdlib-only —
+    no markdown dependency, matching the rest of lib/.
+    """
+    lines = (md or "").replace("\r\n", "\n").split("\n")
+    out: list[str] = []
+    in_ul = False
+    para: list[str] = []
+
+    def flush_para() -> None:
+        if para:
+            out.append("<p>" + " ".join(_md_inline(p) for p in para) + "</p>")
+            para.clear()
+
+    def close_ul() -> None:
+        nonlocal in_ul
+        if in_ul:
+            out.append("</ul>")
+            in_ul = False
+
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped:
+            flush_para()
+            close_ul()
+            continue
+        m_h = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        m_li = re.match(r"^[-*]\s+(.*)$", stripped)
+        if m_h:
+            flush_para()
+            close_ul()
+            level = min(len(m_h.group(1)) + 1, 4)   # "#" -> h2, "##" -> h3, ...
+            out.append(f"<h{level}>{_md_inline(m_h.group(2))}</h{level}>")
+        elif m_li:
+            flush_para()
+            if not in_ul:
+                out.append("<ul>")
+                in_ul = True
+            out.append(f"<li>{_md_inline(m_li.group(1))}</li>")
+        else:
+            close_ul()
+            para.append(stripped)
+    flush_para()
+    close_ul()
+    return "\n".join(out)
+
+
 def _build_inventory_item(draft: Draft, image_urls: list[str]) -> dict:
     item: dict = {
         "availability": {"shipToLocationAvailability": {"quantity": int(draft.get("quantity") or 1)}},
         "condition": str(draft.get("condition")),
         "product": {
             "title": str(draft.get("title")),
-            "description": draft.body,
+            "description": _body_to_html(draft.body),
             "imageUrls": image_urls,
             "aspects": _build_aspects(draft),
         },
@@ -508,7 +567,7 @@ def _build_offer(draft: Draft, sku: str, category_id: str,
         "format": "FIXED_PRICE",
         "availableQuantity": int(draft.get("quantity") or 1),
         "categoryId": str(category_id),
-        "listingDescription": draft.body,
+        "listingDescription": _body_to_html(draft.body),
         "pricingSummary": {"price": {"value": price, "currency": CURRENCY}},
         "merchantLocationKey": location_key,
         "listingPolicies": {
