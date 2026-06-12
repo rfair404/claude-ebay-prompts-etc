@@ -18,6 +18,13 @@ listing LIVE.
 The user points at a photo directory and (optionally) names a workflow
 mode. That directory is the shoot directory; all outputs land there.
 
+**Resolving a bare name — always look in `inventory/` first.** When the user
+says just "run `<name>`" (e.g. "run sand-dollars"), the shoot directory is
+**`inventory/<name>/`** — start there before anywhere else. `inventory/` is the
+default content store ("our" data: photos + per-item phase outputs; gitignored,
+never version-controlled). Only treat `<name>` as a different location if it
+isn't found under `inventory/`, or the user gives an explicit path.
+
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
     list  <photos-dir>   → INVESTIGATE → DRAFT → REVIEW(gate)→publish (post-buy: listing)
     full  <photos-dir>   → all in order, ending at the REVIEW gate
