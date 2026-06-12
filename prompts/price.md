@@ -123,8 +123,9 @@ stage is autonomous — PRICE never stops to ask.
      Each prints `Apify run: <id>` + `Saved results: <path>` — capture both
      for each run. The CLI auto-runs the charm-price currency check.
      - **`--sku`/`--title`** label the run in the Apify Console runs list
-       (status-message column) as `[best] <sku> <title[:10]>` /
-       `[sold_highest] <sku> <title[:10]>`, so past runs are diagnosable
+       (status-message column) as `[best] <sku> <title>` /
+       `[sold_highest] <sku> <title>` (full title — the Console auto-truncates
+       it in the runs-list column), so past runs are diagnosable
        there without opening each one (posted on completion; best-effort,
        never blocks). The SKU is the deterministic 8-hex hash from
        `list_edit.py`; if the item isn't recorded yet (PRICE runs before
