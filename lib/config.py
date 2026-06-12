@@ -60,6 +60,10 @@ class ConfigError(RuntimeError):
 
 DEFAULT_APIFY_ACTOR = "automation-lab/ebay-sold-scraper"
 
+# Google Lens reverse-image actor (IDENTIFY's visual second opinion). Chosen for
+# reliability (high success rate) + AI-mode + visual/exact match buckets.
+DEFAULT_LENS_ACTOR = "borderline/google-lens"
+
 DEFAULT_PROFILE = {
     "margin_target": 0.50,
     "buy_point_multiplier": 0.5,
@@ -222,6 +226,20 @@ def get_apify_actor() -> str:
         return str(actor)
 
     return DEFAULT_APIFY_ACTOR
+
+
+def get_lens_actor() -> str:
+    """Google Lens reverse-image Actor ID. Precedence: env > config > default."""
+    env = os.environ.get("APIFY_LENS_ACTOR")
+    if env:
+        return env
+
+    config = load_config()
+    actor = _nested(config, "apify", "lens_actor")
+    if actor:
+        return str(actor)
+
+    return DEFAULT_LENS_ACTOR
 
 
 def get_anthropic_key() -> str:

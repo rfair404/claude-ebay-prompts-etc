@@ -86,6 +86,35 @@ genuinely point to one. When the mark is present but you cannot resolve it, set
 mark) and note the downstream value impact — an unread mark is the most
 expensive thing to leave on the table.
 
+5. **Visual second opinion (Google Lens) — for markless / can't-place pieces.**
+   When the piece is markless (or the mark is illegible) AND it's plausibly
+   collectible/branded, get an independent read before settling on `Unknown`.
+   Run [`lib/lens_id.py`](../lib/lens_id.py) on the single **best photo** (the
+   clearest full view, in focus, minimal background):
+
+       python lib/lens_id.py <shoot-dir>/<best-photo>.jpg
+
+   It hosts the photo at a temp public URL, runs an Apify Google Lens actor, and
+   prints a **verdict + a maker tally counted across distinct visual matches**
+   (plus match titles + Lens's AI guess). Weigh it — never obey it:
+   - **`leans <Maker>`** (recurs across several matches AND fits what you see) →
+     `Brand: <Maker> [BEST-CASE]` + scenario bracket, note "Lens-corroborated".
+   - **`split across makers` / `no single maker — widely-copied`** → stay
+     `Unbranded`/`Unknown`; the names are later keywords, NOT a claim. This is
+     the common, honest result — do NOT promote a single stray Lens mention into
+     an attribution (that is the same failure as inventing a maker from a
+     fantasy mark). Lens is evidence about the *design*, not proof of *this*
+     piece's maker.
+   - Record a `Lens cross-check: <verdict>` line on the item and reconcile it
+     with your own visual call in one line (agree / conflict / refined).
+
+   **Gate (cost + privacy):** RUN only when attribution is genuinely uncertain
+   AND would move value/SEO. SKIP for legibly-marked items, obvious low-value
+   commodities, and lots of generics — it sends the photo to Google via a
+   temporary public host (auto-expiring) and spends ~$0.02–0.05 of Apify credit.
+   Needs direct egress (tmpfiles + api.apify.com); in a blocked sandbox, run with
+   egress on, or host via the lib and drive the actor through the Apify MCP.
+
 ## Output format
 
     SHOOT SUMMARY
