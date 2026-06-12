@@ -257,12 +257,26 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
     # Surface them so an empty result is HONEST: Lens OCR routinely can't read a
     # low-contrast or embossed metal stamp (silver/pewter/buckle) — that's a Lens
     # limitation, not an absent mark. Don't let it read as "no mark exists".
-    lens_errors = sorted({
-        st for it in items if isinstance(it, dict)
-        for st, v in it.items() if isinstance(v, dict)
-        for rr in (v.get("results") or [])
-        if isinstance(rr, dict) and rr.get("error")
-    })
+    lens_errors: list[str] = []
+    lens_error_msgs: list[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        for st, v in it.items():
+            if isinstance(v, dict):
+                for rr in (v.get("results") or []):
+                    if isinstance(rr, dict) and rr.get("error"):
+                        lens_errors.append(st)
+                        lens_error_msgs.append(str(rr.get("error")))
+    lens_errors = sorted(set(lens_errors))
+    # Distinguish a TOOLING failure (the actor's headless scraper timed out /
+    # couldn't parse Google's page) from a genuine "No results found". A scraper
+    # failure is retryable / fixable by switching actors — NOT evidence of "no
+    # match" and definitely not a metal-stamp issue.
+    scraper_failed = any(
+        re.search(r"timeout|waitforselector|page\.|navigation|selector|net::|"
+                  r"econn|429|blocked", m, re.IGNORECASE)
+        for m in lens_error_msgs)
 
     n = len(titles)
     branded = sum(c["count"] for c in maker_candidates)
@@ -278,6 +292,11 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
             len(maker_candidates) == 1 or top["count"] >= 2 * maker_candidates[1]["count"]):
         verdict = (f"leans {top['maker'].title()} "
                    f"({top['count']}/{n} matches) — still confirm against a mark")
+    elif n == 0 and scraper_failed:
+        verdict = ("Lens ACTOR FAILED to scrape (browser timeout / page-selector "
+                   "error) — a TOOLING failure, NOT 'no match'. Retry shortly, or "
+                   "switch the Lens actor (--actor / apify.lens_actor in config); "
+                   "the actor's headless scrape of Google Lens is currently broken.")
     elif n == 0 and lens_errors:
         verdict = ("Lens found NO results for this image (" + "/".join(lens_errors)
                    + ") — no web/visual match; fall back to your own visual call. "
@@ -303,6 +322,7 @@ def tally_opinion(items: list[dict], *, makers: Optional[list[str]] = None) -> d
         "ocr_text": ocr_text,
         "ocr_makers": ocr_makers,
         "lens_errors": lens_errors,
+        "scraper_failed": scraper_failed,
         "verdict": verdict,
     }
 
