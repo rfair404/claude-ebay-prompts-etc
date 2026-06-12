@@ -37,10 +37,14 @@ are per-listing-unit except `duplicate` (per-piece).
 ## Silver — rarity double-check, exact comp, push HIGH (category override)
 
 Silver gets special handling. In practice our silver has been UNDER-priced and
-sells immediately — money left on the table. Whenever IDENTIFY tags an item as
-silver in ANY form — sterling / .925, coin silver, .800/.835/.900 continental,
-hallmarked silver, silver-on-copper, or silverplate — apply ALL of the following
-and OVERRIDE the plain distribution defaults:
+sells immediately — money left on the table. The trigger is the word "silver" in
+ANY form, **regardless of precious-metal content** — base-metal "silver" counts
+too: sterling / .925, coin silver, .800/.835/.900 continental, hallmarked silver,
+silver-on-copper, silverplate / EPNS, AND **nickel silver / German silver /
+alpaca / silver-tone / "silver" plate over base metal**. Do NOT exempt a piece
+just because it isn't precious — push high on all of it. Whenever IDENTIFY tags
+an item as silver in any of these senses, apply ALL of the following and OVERRIDE
+the plain distribution defaults:
 
 1. **Rarity double-check (mandatory).** Before settling a price, explicitly work
    the maker / hallmark / pattern / assay + (for solid silver) the weight. Ask:
