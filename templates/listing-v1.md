@@ -105,6 +105,17 @@ best_offer:
 # Dimensions: inches, all maxLen=5. eBay form fields [57][58][59].
 # Round UP. Use packed dims (including box + padding), not bare item dims.
 shipping:
+  # Fulfillment mode: SHIP (default — parcel shipping, fields below apply) or
+  # LOCAL_PICKUP (ship-risky item — fragile/oversized — the USER confirmed as
+  # pickup-only). DRAFT sets LOCAL_PICKUP only after an explicit user OK (see
+  # the soft-gate suggestion in draft.md). LOCAL_PICKUP routes to the account's
+  # local-pickup fulfillment policy (ebay.fulfillment_policy_id_local_pickup);
+  # eBay treats local pickup as exclusive, so no parcel shipping is offered —
+  # the freight fallback is offered by quote in the description body.
+  fulfillment_mode: "SHIP"     # SHIP | LOCAL_PICKUP
+  local_pickup:                # only meaningful when fulfillment_mode == LOCAL_PICKUP
+    freight_quote: true        # invite distant buyers to message for a freight quote
+    location_hint: ""          # city/region shown to buyers (from seller profile)
   weight:
     major_lb: 0                # maxLen=3
     minor_oz: 0                # maxLen=2
@@ -112,7 +123,7 @@ shipping:
     length: 0                  # maxLen=5
     width:  0                  # maxLen=5
     depth:  0                  # maxLen=5
-  free_shipping: true          # eBay form field [61] — default ON
+  free_shipping: true          # eBay form field [61] — default ON; ignored when LOCAL_PICKUP
   # CALCULATED | FLAT_RATE | FREE_FLAT_RATE
   # When free_shipping is true this is FREE_FLAT_RATE.
   domestic_shipping_type: "FREE_FLAT_RATE"

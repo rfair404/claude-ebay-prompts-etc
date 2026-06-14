@@ -76,7 +76,35 @@ down to it.
 
 **shipping:** weight/dims from IDENTIFY (round up); `free_shipping` true →
 `domestic_shipping_type` FREE_FLAT_RATE; `primary_service` per Service
-map; `handling_time_days` 1; `item_location_zip` blank.
+map; `handling_time_days` 1; `item_location_zip` blank. **Set
+`fulfillment_mode` per the Local-pickup gate below** — default `SHIP`.
+
+**Local-pickup gate (SOFT — suggest, never assume).** Some items are
+awkward or unsafe to parcel-ship (heavy, oversized, or fragile like stained
+glass). For these we list as **local pickup** (no parcel shipping; freight
+offered by quote in the description), routed to the account's local-pickup
+fulfillment policy. Decide `fulfillment_mode`:
+
+- **Default `SHIP`.** Most items ship normally — leave `fulfillment_mode:
+  SHIP` and fill the shipping fields as usual.
+- **Set `LOCAL_PICKUP` only when the user has indicated it** — either they
+  said so for this item ("local only", "pickup only", "too fragile to ship"),
+  or you asked and they confirmed. The user usually says so up front.
+- **When to ASK (and you must ask before assuming):** if IDENTIFY's **Ship
+  risk** is `suggest-pickup` (weight > 25 lb or any side > 24 in), OR the item
+  is clearly fragile (stained/blown glass, thin porcelain), surface the
+  suggestion: *"This looks <reason> — risky to ship. List as local pickup
+  (freight by quote), or ship normally?"* **Attended:** ask and honor the
+  answer. **Headless (no one to ask):** keep `SHIP` (the safe non-blocking
+  default), and append a NEEDS_REVIEW line suggesting local pickup so it's
+  raised again at REVIEW. Never silently flip an item to pickup-only.
+- **When `LOCAL_PICKUP`:** set `fulfillment_mode: LOCAL_PICKUP`,
+  `free_shipping: false`, `domestic_shipping_type` blank, `primary_service`
+  blank (no parcel service); still record weight/dims (useful for a freight
+  quote). Set `local_pickup.location_hint` from the seller's city/region if
+  known. Add a short closing line to the description body: *"Local pickup only
+  — <location_hint>. Not local? Message me for a freight quote."* Log the
+  decision (+ trigger) in `meta.notes`.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.
@@ -90,9 +118,12 @@ reads it.
 the only case eBay quantity > 1.
 
 ### Service map
+Applies only when `fulfillment_mode: SHIP`. (LOCAL_PICKUP offers no parcel
+service — leave `primary_service` blank.)
 Books/catalogs/magazines/media → `USPSMediaMail`. ≤15 lb non-media →
 `USPSGroundAdvantage`. >15 lb / oversized → `UPSGround`. freight/movers →
-blank + flag (needs a quote).
+blank + flag (needs a quote) — also a strong local-pickup candidate (gate
+above).
 
 ## Markdown body (description)
 

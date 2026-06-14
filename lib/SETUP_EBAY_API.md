@@ -232,7 +232,7 @@ step). That preserves the firewall's intent — no accidental or automated
 publication — while giving you a one-command way to take a reviewed offer
 live.
 
-## Shipping policies (ground default + optional Media Mail)
+## Shipping policies (ground default + optional Media Mail + optional local pickup)
 
 `--sync` runs a **preflight** that picks the fulfillment policy per item:
 
@@ -243,6 +243,18 @@ live.
   it; otherwise it falls back to the ground policy. To create one, add a
   fulfillment policy with shipping service `USPSMedia` (free flat-rate) and
   paste its ID here.
+- **`fulfillment_policy_id_local_pickup`** *(optional)* — a **local-pickup-only**
+  policy for ship-risky items (heavy / oversized / fragile) that DRAFT marks
+  `fulfillment_mode: LOCAL_PICKUP`. When set, those items list as local pickup
+  with no parcel shipping (the freight fallback is offered by quote in the
+  description). Create it idempotently with:
+
+      python lib/list_edit.py --create-pickup-policy
+
+  then paste the printed ID under the active `ebay.<env>` block. (eBay quirk:
+  a local-pickup policy carries `localPickup: true` and **no** `handlingTime`
+  or shipping services — local pickup is exclusive and can't be combined with
+  parcel/freight in one policy; `create_local_pickup_policy()` handles this.)
 
 The same preflight also (a) **auto-remaps the condition** to one the item's
 category accepts (e.g. `USED_GOOD` → `USED_EXCELLENT`/"Used" for non-media

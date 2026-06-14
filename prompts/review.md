@@ -32,6 +32,7 @@ Present that card to the user **verbatim** and STOP. It contains:
 
     ━━ REVIEW: <item> (sku … · ledger …) ━━
     Title [N/80] · Price · Best Offer · Condition · Quantity · Photos
+    Fulfillment (Ship · service, OR LOCAL PICKUP only — confirm pickup items)
     Preflight (condition · shipping · insurance)
     Comps (open to verify) — each with a URL
     Condition detail (every flagged defect, verbatim — never softened)

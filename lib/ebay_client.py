@@ -532,6 +532,39 @@ def get_fulfillment_policies(marketplace: str = DEFAULT_MARKETPLACE,
     return data.get("fulfillmentPolicies") or []
 
 
+def create_local_pickup_policy(name: str = "Local pickup only (freight by quote)",
+                               marketplace: str = DEFAULT_MARKETPLACE,
+                               creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) a LOCAL-PICKUP-ONLY fulfillment policy and return it.
+
+    eBay treats local pickup as exclusive: a policy with `localPickup: true`
+    may carry NO other shipping services, and (verified the hard way) must NOT
+    include `handlingTime` — its presence is read as a shipping service and the
+    request is rejected with LOCAL_PICKUP_ONLY_ERROR. So the payload is
+    deliberately minimal. Freight for distant buyers is offered by quote in the
+    listing description, not by this policy (pickup + freight can't coexist).
+
+    Idempotent by name: if a policy with `name` already exists, it's returned
+    instead of creating a duplicate.
+    """
+    existing = next((p for p in get_fulfillment_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": ("Local pickup only — no standard parcel shipping. For "
+                        "distant buyers, freight is available by quote (message)."),
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "localPickup": True,
+        # NB: NO handlingTime — see docstring.
+    }
+    return api_send("POST", "/sell/account/v1/fulfillment_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
 def get_payment_policies(marketplace: str = DEFAULT_MARKETPLACE,
                          creds: Optional[EbayCredentials] = None) -> list[dict]:
     data = api_send("GET", f"/sell/account/v1/payment_policy?marketplace_id={marketplace}",

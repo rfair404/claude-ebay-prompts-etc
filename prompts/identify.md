@@ -186,6 +186,14 @@ Then one block per item, `--- Item <N> ---`, fields in this order:
 - **Estimated dimensions** — item size (not packed). Box `~L×W×H in`;
   cylinder `~dia×h in`; furniture `~W×D×H in`; flat `~L×W in`; irregular
   free-text w/ key measurements. Range when unsure.
+- **Ship risk** — `none` or `suggest-pickup`. Set `suggest-pickup` when the
+  item is awkward/unsafe to parcel-ship: estimated weight **> 25 lb** OR any
+  estimated dimension **> 24 in (2 ft)** on a side. Add a short reason
+  (`too heavy ~40 lb` / `> 2 ft long (38 in)`). This is only a *signal* for
+  DRAFT's local-pickup suggestion — IDENTIFY never decides fulfillment. If you
+  can't estimate weight/dims, leave `none` and rely on `needs_followup_photo`.
+  (Fragility the user names is honored at DRAFT too, but the auto-trigger here
+  is purely weight/size.)
 - **Distinguishing marks** — free-text, uncapped catch-all: cover text,
   dated copyright, photographer credit, model number, materials, the rich
   context that does NOT fit the capped fields above.

@@ -149,7 +149,10 @@ Full contract in [RUN.md](../RUN.md); summary:
   runs automatically as Stage B of the comp hunt.)
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
   questions, unit_type ambiguity, INVESTIGATE open questions, working-
-  price selection, lookup-value substitutions, missing required fields.
+  price selection, lookup-value substitutions, missing required fields,
+  the **local-pickup suggestion** for ship-risky items (heavy/oversized/
+  fragile — DRAFT suggests pickup-only but never assumes it; default
+  `SHIP`, see [draft.md](draft.md) "Local-pickup gate").
 
 A SOFT gate never blocks. Pick the documented default, write a one-line
 entry to `NEEDS_REVIEW.md`, keep going.
