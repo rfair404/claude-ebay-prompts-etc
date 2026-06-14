@@ -17,7 +17,10 @@ filtering + statistics, and the tiers trace to a sample size + percentiles
 rather than a hand-picked comp. Full rationale:
 [docs/price-strategy-v2.md](../docs/price-strategy-v2.md). The exact-match
 hunt below still runs — an exact comp, when one exists, short-circuits the
-distribution and anchors Recommended directly.
+distribution and anchors Recommended directly. All tiers are placed on the
+**DELIVERED (sold + shipping) basis** whenever the listing is free-shipping
+(our default) — see "Delivered-price basis" below; never anchor a free-shipping
+price on a comp's item-only `sold_price`.
 
 ## Autonomy (Goal: dig for the exact match, don't ask permission to look)
 
@@ -33,6 +36,36 @@ Query the selling unit, not pieces. `pair` → include "pair";
 discount to sum-of-parts — single-item comps ×N are Tier C reference
 only); `duplicate` → price one piece (CURATE scales). All quoted prices
 are per-listing-unit except `duplicate` (per-piece).
+
+## Delivered-price basis (anchor on sold + shipping — the default)
+
+eBay comps almost always charge BUYER-PAID shipping, so a comp's `sold_price` is
+the ITEM price only — the buyer's real outlay is `sold_price + shipping_cost`, the
+**delivered price**. Our listings default to FREE shipping, so OUR list price IS the
+delivered price. Comparing our free-ship price to a comp's item-only `sold_price`
+understates the comp by its shipping (often $10–25 on breakables / heavier items)
+and makes a fair price look like a push above the market. So:
+
+1. **Anchor on the DELIVERED price.** Stage B carries `total_price` =
+   `sold_price + shipping_cost`. The CLI (`apify_ebay.py`) computes and saves it
+   automatically (the currency normalizer scales it too); on the **MCP path**, parse
+   each comp's `shippingCost` yourself ("+$24.25 delivery" → 24.25, "Free delivery"
+   → 0) into `total_price` before writing the run JSON.
+2. **Run the distribution on the delivered basis when the listing is free-shipping**
+   (the default): `price_stats.py … --price-field total`. The delivered tiers are the
+   headline and decide the sale price; an item-only run (`--price-field sold`) is at
+   most a secondary read. (If the listing will use buyer-paid / calculated shipping
+   instead, anchor item-only — then our list price is the item price and the buyer
+   covers shipping exactly like the comps.)
+3. **Translate to NET-TO-US.** Free shipping means we absorb postage AND pay eBay
+   fees on the full delivered amount: `net ≈ list − our_postage − fees`
+   (fees ≈ 13% + $0.40; postage from IDENTIFY's weight/dims). Surface net-to-us for
+   each candidate price so the user sees what each option actually returns — two
+   listings at the same delivered price net differently if one ships a 1 lb item and
+   the other a 10 lb one.
+
+State the basis used (`delivered` / `item-only`) on the Distribution line so the
+choice is visible at REVIEW.
 
 ## Silver — rarity double-check, exact comp, push HIGH (category override)
 
@@ -149,7 +182,10 @@ stage is autonomous — PRICE never stops to ask.
            --best-match <best_match run JSON> \
            --price-high <price_high run JSON> \
            --unit <unit_type> --condition <new|used> \
-           --require-tokens <brand/type tokens from IDENTIFY>
+           --require-tokens <brand/type tokens from IDENTIFY> \
+           --price-field total   # DELIVERED basis (sold+shipping) for a free-ship
+                                 # listing — our default; use 'sold' only if the
+                                 # listing will charge buyer-paid/calculated shipping
 
      It applies the normalize-before-stats filters (row-0 flag, unit match,
      same-item core tokens, condition cohort, single-bid/low-feedback
@@ -376,7 +412,10 @@ If NO exact match exists, say so on the "Exact / near-exact" line
 ### Distribution-based tiers (always)
 
 The three tiers come from `price_stats.py` on the cleaned `best_match`
-distribution. Adopt its numbers; don't re-derive by eye.
+distribution. Adopt its numbers; don't re-derive by eye. For a free-shipping
+listing these are **delivered** prices (run with `--price-field total`), so the
+list price maps to them 1:1; always pair them with the net-to-us figure (list −
+our_postage − fees) per the Delivered-price basis section.
 
 - **Conservative** — **25th percentile** of the like-condition cleaned set
   (no-objection floor).
