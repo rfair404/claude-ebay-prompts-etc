@@ -18,6 +18,13 @@ listing LIVE.
 The user points at a photo directory and (optionally) names a workflow
 mode. That directory is the shoot directory; all outputs land there.
 
+**Resolving a bare name — always look in `inventory/` first.** When the user
+says just "run `<name>`" (e.g. "run sand-dollars"), the shoot directory is
+**`inventory/<name>/`** — start there before anywhere else. `inventory/` is the
+default content store ("our" data: photos + per-item phase outputs; gitignored,
+never version-controlled). Only treat `<name>` as a different location if it
+isn't found under `inventory/`, or the user gives an explicit path.
+
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
     list  <photos-dir>   → INVESTIGATE → DRAFT → REVIEW(gate)→publish (post-buy: listing)
     full  <photos-dir>   → all in order, ending at the REVIEW gate
@@ -25,6 +32,25 @@ mode. That directory is the shoot directory; all outputs land there.
 If no mode is given: a single-item or grouped shoot of items the user
 already owns → `list`; a wide field/estate scene → `plan`. State the
 inferred mode in your first line and proceed (it's a SOFT call).
+
+**Single phase vs. the sequence.** "run" defaults to *run the steps in
+sequence* — a bare name or a mode keyword (`plan`/`list`/`full`) runs the
+pipeline. But a **phase keyword runs ONLY that one prompt and stops** (it does
+NOT continue to the next phase):
+
+    identify    <name>   → only IDENTIFY     ([prompts/identify.md](prompts/identify.md))    → identify.txt
+    price       <name>   → only PRICE        ([prompts/price.md](prompts/price.md))          → price.txt (+ comps.csv)
+    curate      <name>   → only CURATE       ([prompts/curate.md](prompts/curate.md))        → review.md
+    investigate <name>   → only INVESTIGATE  ([prompts/investigate.md](prompts/investigate.md)) → investigate.txt
+    draft       <name>   → only DRAFT        ([prompts/draft.md](prompts/draft.md))          → draft.md (+ --record)
+    review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md (HARD gate)
+
+So "run identify sand-dollars" (or just "identify sand-dollars") runs IDENTIFY
+alone on `inventory/sand-dollars/` and stops — it does not roll on to PRICE. A
+single phase reads its normal inputs (the prior phases' files already in the
+shoot dir) and writes only its own output; use it to re-run or fix one step
+without redoing the whole pipeline. The same `<name>` → `inventory/<name>/`
+resolution applies.
 
 Run phases in order. Each phase reads the prior phase's file from the
 shoot directory, so phases compose without re-deriving.

@@ -133,8 +133,10 @@ overwriting the prior run (latest run = current record).
 | REVIEW | `<shoot-dir>/review_card.md` |
 | (any deferred question) | `<shoot-dir>/NEEDS_REVIEW.md` (append, don't overwrite) |
 
-The shoot directory is the directory containing the photos (e.g. a
-`samples/<shoot-name>/` dir at the repo root for test runs).
+The shoot directory is the directory containing the photos — by default an
+`inventory/<shoot-name>/` dir at the repo root. `inventory/` is the default
+content store ("our" data: photos + per-item outputs); it is **gitignored and
+never version-controlled**.
 
 ## Gate contract (what may stop a headless run)
 

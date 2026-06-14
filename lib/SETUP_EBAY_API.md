@@ -103,7 +103,7 @@ to get the IDs.
 **4. Validate + sync.** Always validate first (no creds needed):
 
 ```
-python list_edit.py --validate <shoot-dir>     # e.g. ../to-id/hens/la-poule-black-white-small
+python list_edit.py --validate <shoot-dir>     # e.g. ../inventory/hens/la-poule-black-white-small
 python list_edit.py --sync     <shoot-dir>
 ```
 
