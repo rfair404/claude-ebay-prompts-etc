@@ -50,6 +50,46 @@ SEO, and informs authenticity. So `Unknown` is a LAST RESORT after a real
 attribution attempt — never a lazy default. Run this pass on every item before
 settling Brand:
 
+**Stop-and-ask gate (mark-likely categories, interactive runs).** Some
+categories almost always carry a maker's mark that swings value hard. These are
+the **gate categories** — the editable list that arms the stop-and-ask (grow it
+as you learn; "for now" it is):
+
+- **Jewelry** — incl. gemstone & costume pieces (maker / karat / assay / stone
+  marks, usually on the clasp, gallery, or inner band).
+- **Precious metals** — silver/sterling, gold, platinum (holloware, flatware,
+  plate; hallmarks, assay/karat marks, EPNS/EP, maker roundels + pattern
+  numbers).
+- **Glass** — anything made of glass (art, pressed, cut, studio; pontil,
+  acid-etched, or sticker marks).
+- **Pottery / ceramics / porcelain** — backstamps, impressed/painted marks,
+  pattern names/numbers, country-of-origin wording.
+
+When an item is in a gate category AND a mark is **plausibly present but you
+cannot decisively read it from the photos** (illegible, obscured, or on a
+surface this shoot doesn't show), **STOP and ask the user to read the
+inside/underside marking before you spend on searches/Lens or settle Brand.**
+The user is holding the piece; their close-read of the mark beats any web or
+Lens guess and is the cheapest path to a confirmed maker. Ask specifically —
+name the surface and what to look for ("Can you read the mark on the base of the
+silver pot? Any lion/letters, 'STERLING'/'EPNS', or a number?"). Resume the pass
+below with whatever they report; only if they decline or genuinely can't read it
+do you fall through to research → Lens → (last resort) Unknown.
+
+**Exception (skip the stop).** A gate category is a *default* to stop, not an
+absolute. If THIS specific piece is plainly mass-produced / unmarked / low-value
+such that a maker's mark is genuinely unlikely AND a maker wouldn't move
+value or SEO — a plain modern drinking glass, a generic unmarked terracotta pot,
+a strand of costume beads — you MAY proceed without asking. Log the carve-out in
+one line (`exception: <why a mark is unlikely here>`) so the skip is auditable.
+When genuinely in doubt, stop and ask: a missed mark is the most expensive thing
+to leave on the table.
+
+This is a HARD stop in an **interactive** run. In a **headless** run (no user to
+ask) it degrades to the SOFT path: set `needs_followup_photo: yes` naming the
+exact macro shot, log the question to `NEEDS_REVIEW.md`, and proceed with the
+attribution pass below.
+
 1. **Hunt every mark.** Scan ALL surfaces for any mark — base/underside, foot
    rim, back, lid underside, inside rim, handle/spout joins, seams, stickers/
    labels. A mark, stamp, signature, hallmark, trademark, pattern/model number,
@@ -75,7 +115,10 @@ settling Brand:
    step (the macro shot or test that would confirm). Only a legible, matched
    mark earns a maker WITHOUT `[BEST-CASE]`. A genuinely markless piece, or a
    purely decorative fantasy pseudo-hallmark with no maker name, is honestly
-   `Unknown` — say which it is.
+   `Unknown` — say which it is. Reach `Unknown`/`Unbranded` only AFTER you have
+   genuinely worked at least two SPECIFIC maker candidates — name each, then rule
+   it out against an observable — never as a first-pass shrug. Note the
+   candidates you considered and why each failed so the rejection is auditable.
 
 **Honesty guard (unchanged, non-negotiable):** trying harder is NOT license to
 invent. Do not promote a guess to a stated maker, and do not read a maker into

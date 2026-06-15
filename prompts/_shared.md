@@ -140,13 +140,21 @@ never version-controlled**.
 
 ## Gate contract (what may stop a headless run)
 
-ONE gate stops a run. Everything else proceeds with a logged default.
-Full contract in [RUN.md](../RUN.md); summary:
+In a headless run, ONE gate stops it — REVIEW; everything else proceeds with a
+logged default. An **interactive** run adds one more: IDENTIFY's maker-mark
+stop-and-ask. Full contract in [RUN.md](../RUN.md); summary:
 
 - **HARD — stop and ask:** the REVIEW gate — after DRAFT, present the
   review card and STOP; publish LIVE only on explicit approval
   ([review.md](review.md)). (PRICE's Apify call is no longer a gate — it
   runs automatically as Stage B of the comp hunt.)
+- **HARD (interactive only) — stop and ask:** IDENTIFY's maker-mark gate —
+  in a gate category (jewelry, precious metals, glass, pottery — editable list in
+  [identify.md](identify.md)) with a mark that's likely-present but undecisive,
+  stop and ask the user to read the inside marking before searches or settling
+  Brand. A clear no-mark-likely exception may skip it (logged). Headless (no
+  user to ask) → degrades to SOFT (`needs_followup_photo` + a `NEEDS_REVIEW.md`
+  line, then proceed).
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
   questions, unit_type ambiguity, INVESTIGATE open questions, working-
   price selection, lookup-value substitutions, missing required fields.

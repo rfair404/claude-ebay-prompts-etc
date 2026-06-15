@@ -71,7 +71,19 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    "ok"/"looks good"/silence. (This replaced the old absolute no-publish
    firewall — publishing is now gated here, not forbidden.)
 
-This is the ONLY reason a run stops. PRICE's Apify call (Stage B) used to
+2. **The IDENTIFY maker-mark gate (interactive only).** In a gate category —
+   jewelry, precious metals, glass, pottery/ceramics (editable list in
+   [prompts/identify.md](prompts/identify.md)) — when a maker's mark is plausibly
+   present but undecisive from the photos, IDENTIFY STOPS and asks the user to
+   read the inside/underside marking before spending on searches/Lens or settling
+   Brand. A clear no-mark-likely item (plain modern glass, generic terracotta)
+   takes a logged exception and proceeds. This gate exists only when a human is
+   at the keyboard; in a headless run (cron, `full`/`list` with no one to answer)
+   it degrades to the SOFT path — `needs_followup_photo` + a `NEEDS_REVIEW.md`
+   line — and the run proceeds.
+
+REVIEW is the only thing that stops a **headless** run (the maker-mark gate
+above is interactive-only). PRICE's Apify call (Stage B) used to
 be a second HARD gate; it no longer is — Apify runs automatically as part
 of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
 confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
@@ -107,6 +119,7 @@ Append (don't overwrite) one line per deferred decision:
 Example:
 
     [IDENTIFY] items 2-3 — kept as 2 singles (default); possible brass-candlestick pair
+    [IDENTIFY] silver-pot — Brand left Unknown; mark present but illegible, needs base macro (maker-mark gate degraded, headless)
     [PRICE] iron — adopted Recommended $48 as working price; no exact comp, era-peer anchor
     [INVESTIGATE] iron — committed "Size 5 sad iron"; maker stamp not photographed
 
