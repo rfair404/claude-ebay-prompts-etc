@@ -132,6 +132,17 @@ Sort the pile into **PULL** (look closer) vs **FILLER** (jar lot) in seconds:
 - **Marble King** — patches (two-color "rainbows"), the bread-and-butter of
   later mass marbles; mostly common. *Thinner coverage — verify.*
 
+**Modern foreign mass-makers (the bulk of any pile — usually filler):**
+- **Vacor de Mexico** (a.k.a. Mega Marbles; 1990s–2000s+) — the dominant modern
+  maker. Patches & swirls in transparent or opaque glass; named series incl.
+  **"Planet"/"splatterpatch"** (dark transparent base densely packed with
+  embedded opaque multicolor SPECKLE spots — Jupiter, etc.), galaxy/sun/animal
+  themes. **Tell: a faintly pitted "orange-peel" surface + an oily, extra-shiny
+  sheen.** Machine-made (patch/cut marks, not hand pontils — though the two
+  patch-fold marks are easily MISREAD as pontils). Value ~**$1** single (a
+  "Vacor Planet splatterpatch 5/8 Mint" sold for $1.00); lots are the play.
+- **Modern Chinese** — bag/dollar-store cat's-eyes and patches; filler.
+
 > Coverage note: verified depth is strongest on **Christensen Agate, Peltier,
 > Akro, and Lutz/handmade**. For **M.F. Christensen, Vitro, Master, Marble
 > King**, identify cautiously and use `[BEST-CASE]` + Lens/web confirmation
@@ -180,6 +191,12 @@ Pull and price-hunt these on sight:
   base** is rarer than the common white/yellow ground, and bright splotches shade
   toward "Clown". Confirm cloud-vs-onionskin against the End-of-Day reference
   photos (see Reference library) — the two look alike and price differently.
+  ⚠ **Biggest trap:** a dark-base SPECKLED marble is far more often a **modern
+  Vacor "Planet"/splatterpatch (~$1)** than an antique Cloud ($60–95). Before
+  pricing a speckled marble as an antique Cloud, **run Google Lens** (it cleanly
+  flags Vacor Planets) AND check the surface — Vacor's **orange-peel pitting +
+  oily sheen** and the ~5/8″/.61″ size give it away. Antique Clouds have smoother
+  period glass, genuine play-wear, and rough cane pontils (not patch-fold marks).
 - **Clambroths, Indians, large onionskins/micas** in good grade — solid
   mid-to-high tier.
 
@@ -336,6 +353,8 @@ identification.)
 | Christensen Agate (Guineas, flames) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/christensen-agate-co/ |
 | M.F. Christensen & Son (slags, early machine) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/m-f-christensen-son-co/ |
 | Master Marble / Master Glass | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/master-marble-glass-cos/ |
+| Foreign makers (incl. Vacor de Mexico) — MCSA | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/foreign-manufacturers/ |
+| **Vacor de Mexico** "Planet"/splatterpatch + orange-peel tell (BuyMarbles/Basinet) | https://buymarbles.com/marblealan-vacor.html |
 
 **Grading, triage & value:**
 
