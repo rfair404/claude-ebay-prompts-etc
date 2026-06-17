@@ -2,7 +2,7 @@
 
 ```yaml
 triggers: [marble, marbles, shooter, swirl, sulphide, onionskin, "glass ball toy", "marble lot", "marble jar", "marble collection", agate-marble]
-version: 1
+version: 2
 last_reviewed: 2026-06-16
 sources:
   - Marble Collectors Society of America — marblecollecting.com (taxonomy, grading)
@@ -17,6 +17,13 @@ sources:
 > many styles are still sold in dollar stores. Assume any given marble in a
 > bulk collection is filler until a specific cue says otherwise. The job is to
 > *flag the few percent that are worth pulling*, not to grade everything.
+
+> **Match against real photos, not memory.** Before committing any value-moving
+> type or maker, **WebFetch the relevant page(s) in the Reference Library below
+> and compare the item's photos to the actual reference photographs.** Do not
+> settle a type from recall or from a schematic — the look-alikes (Cloud vs
+> Onionskin vs Joseph's Coat vs machine-made Guinea) are exactly where memory
+> misleads. The MCSA guide is the authority for type; auction sites for value.
 
 ## When this applies
 
@@ -48,8 +55,10 @@ Sort the pile into **PULL** (look closer) vs **FILLER** (jar lot) in seconds:
 - Plain clearies, plain opaque "milkies," common single-color glass.
 
 **PULL signals (worth a closer look):**
-- **Two rough pontil marks** (rough/sheared spots at opposite poles) → likely
-  **German handmade**, c.1850–1920. Handmade = the high-end pool.
+- **Two rough pontil marks** (rough/sheared spots at opposite poles) → **handmade**
+  (cane-cut). Handmade is where the high-end pool lives — but pontils prove *method
+  only*, NOT origin or age: antique German, antique American, and modern/contemporary
+  or reproduction handmades all have pontils. Pull it, then judge origin/era separately.
 - **One pontil + an embedded figure** (animal, person, number) → **sulphide**.
 - **Glittery gold/copper bands or sprinkles** in the glass → possible **Lutz**.
 - **Mica flecks** (silvery metallic specks suspended in colored glass) → mica.
@@ -69,9 +78,12 @@ Sort the pile into **PULL** (look closer) vs **FILLER** (jar lot) in seconds:
 ## Taxonomy — makers / types and how to recognize each
 
 **First split: handmade vs machine-made (read it off the surface).**
-- **Handmade** (German, c.1850–1920): **two rough pontil marks** at opposite
-  poles (cut from a cane). Single-gather types — **sulphides, paperweight-style
-  — show ONE pontil** (formed on a punty). No seams.
+- **Handmade** (cane-cut): **two rough pontil marks** at opposite poles.
+  Single-gather types — **sulphides, paperweight-style — show ONE pontil**
+  (formed on a punty). No seams. Pontils establish the marble is **handmade**;
+  they do NOT by themselves establish German origin or antique age — those are
+  separate inferences (see the method≠origin≠era caution below). Antique German
+  handmades fall ~c.1850–1920, but modern studio/art makers make handmades too.
 - **Transitional / early machine** (turn of the century): a pontil on one end
   but machine character on the other; MCSA lists distinct pontil styles
   (regular, ground, melted, pinpoint, fold, pinch, crease).
@@ -80,6 +92,16 @@ Sort the pile into **PULL** (look closer) vs **FILLER** (jar lot) in seconds:
 - ⚠ Do **not** try to date a handmade marble by how "smooth" the pontil is —
   the once-common pre-1880-smooth / post-1880-rough heuristic is **not
   reliable** (specifically refuted against the specialist sources).
+- ⚠ **Method ≠ origin ≠ era — the cardinal anti-bias rule.** A pontil tells you
+  HOW a marble was made (handmade), not WHERE or WHEN. "Two pontils" is NOT proof
+  of German manufacture or pre-1920 age: modern studio/art marbles and deliberate
+  reproductions are handmade with pontils too. Treat **German origin** and
+  **antique era** as SEPARATE inferences, each earned from glass quality, color
+  idiom, genuine play-wear, size, and any signature/date cane — and held at
+  `[BEST-CASE]` unless the evidence is strong. When it doesn't clearly add up,
+  default to **"handmade — origin/era undetermined"**, never "German antique".
+  (This is a known failure mode: do not let the module's German-handmade emphasis
+  bias an unmarked handmade toward antique German.)
 
 **Handmade categories (the collectible ones):**
 - **Swirls / core swirls** — colored core or bands twisting through clear.
@@ -151,6 +173,13 @@ Pull and price-hunt these on sight:
 - **Sulphides** — clear sphere with embedded figure; **colored or rare-figure
   (human, numbers, painted) sulphides** are the valuable ones; plain animal
   sulphides are more common.
+- **End-of-Day Clouds & Onionskins** — handmade, transparent base with colored
+  flecks. **Cloud** = flecks suspended *unstretched* (spotted); **Onionskin** =
+  flecks *stretched* into a surface skin (converge at poles). Both are a real
+  mid-to-high tier (clouds in ~5/8″ NM–Mint commonly $60–95+); a **dark/colored
+  base** is rarer than the common white/yellow ground, and bright splotches shade
+  toward "Clown". Confirm cloud-vs-onionskin against the End-of-Day reference
+  photos (see Reference library) — the two look alike and price differently.
 - **Clambroths, Indians, large onionskins/micas** in good grade — solid
   mid-to-high tier.
 
@@ -211,8 +240,12 @@ Pull and price-hunt these on sight:
 - **Reproductions / modern art-glass.** Contemporary art-glass makers produce
   beautiful spheres that can be mistaken for antiques; modern handmades often
   have **one ground/polished pontil or a maker's signature/cane date**, very
-  saturated modern colors, and large size. Genuine antique German handmades
-  show **two rough (sheared) pontils** and period color/wear.
+  saturated modern colors, and large size. But **two rough pontils do NOT prove
+  antique** — some modern pieces and deliberate reproductions carry two pontils
+  as well. Separate antique German from modern handmade on glass quality, color
+  idiom, genuine play-wear (vs artificial distressing), size, and design; when
+  they don't clearly add up, stay at **"handmade — era undetermined"** rather
+  than asserting antique.
 - **Faked rarities.** The holy-grail types (Guineas especially) are faked.
   Demand crisp type-specific structure, sensible size, period wear, and ideally
   provenance; when a "Guinea/Superman/Popeye" looks too clean/cheap, assume
@@ -246,6 +279,10 @@ When the photos can't settle identity or condition, request (via
   detect buffing/grinding flats.
 - **Backlit / transmitted-light shot** — for swirls, NLR ribbons, oxblood,
   Lutz glitter, mica, and to see a sulphide figure clearly.
+- ⚠ **Light it from the SIDE, never flat/overhead.** Flat overhead light makes a
+  **transparent base read as opaque/black** and hides the type (verified on a
+  smoky-base Cloud: flat shots looked black; side-lit shots revealed the clear
+  base + suspended flecks). Side/backlight before judging transparency or type.
 - **In-hand with a scale/coin** — size is a value driver; need diameter
   (calipers/ruler ideal; note inches).
 - **Close-up of any printed image/letters** — for a suspected comic/picture
@@ -255,19 +292,63 @@ When the photos can't settle identity or condition, request (via
 
 - **Brand** → the maker when a named type/seam/pattern confirms it (Christensen
   Agate, Akro, Peltier…); `[BEST-CASE]` + bracket for thin-coverage makers
-  (M.F.C., Vitro, Master, Marble King) or unconfirmed rarities; handmade German
-  marbles are typically **Unbranded/maker-unknown** (German handmade) — say so.
+  (M.F.C., Vitro, Master, Marble King) or unconfirmed rarities; **handmade**
+  marbles are **Unbranded/maker-unknown** — call them "handmade" (cane-cut) and
+  only add "German" when origin evidence supports it, not from pontils alone.
 - **Type** → the named type/pattern (e.g. "NLR Superman", "Akro Popeye
   corkscrew", "4-panel onionskin", "sulphide — dog"). This is the highest-
   leverage field for marbles.
-- **Era** → handmade German c.1850–1920; Golden Age machine ~1905–1950s; modern
-  1980s+. `[ASSUMPTION]` when inferred from style only.
+- **Era** → earn it separately from method. Handmade: antique (~1850–1920) vs
+  modern/contemporary studio is often unresolvable from photos → default
+  **"handmade — era undetermined" [BEST-CASE]** unless glass/wear/signature
+  decide it. Machine: Golden Age ~1905–1950s; modern 1980s+. `[ASSUMPTION]` when
+  inferred from style only; never upgrade to "antique German" on pontils alone.
 - **Condition** → MCSA grade + band (e.g. "Near Mint 8.5 — two small subsurface
   moons; no chips") per the rubric above; flag buffed/polished as **no grade**.
 - **Distinguishing marks** → record the **value tier** ($ / $$ / $$$ / $$$$ /
   🏆) here so PRICE/CURATE know which to comp-hunt vs jar; plus size (diameter),
   pontil/seam read, and Lutz/mica/oxblood presence.
 - **needs_followup_photo** → the inspection shot above (usually the pole macro).
+
+## Reference library (fetch real photos before committing)
+
+These are the authoritative pages with **actual reference photographs**. When a
+type/maker is uncertain or value-moving, **WebFetch the matching page and compare
+the item's photos to the real images there** before settling the field — never
+from memory or a schematic. All links verified against MCSA / Block's; if a
+sub-type isn't listed, navigate from the ID-guide index. (These are reference
+*knowledge*; the fresh-investigation rule still applies — judge THIS item on its
+own photos, using the references only to recognize the type, not to import a prior
+identification.)
+
+**Type identification — MCSA "Online Marble ID Guide" (marblecollecting.com):**
+
+| Use it for | URL |
+|---|---|
+| Index — all marble types/makers (start + navigate) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/ |
+| **End of Day — Cloud vs Onionskin** (our key fork) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/end-of-days/ |
+| Handmade overview (swirls, cores, etc.) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/handmade-marbles/ |
+| Lutz (gold/copper glitter types) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/lutzes/ |
+| Other handmades (Indian, Clambroth, Mica, Sulphide, etc.) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/all-other-handmades/ |
+| Earthenware / clay marbles | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/earthenware/ |
+| Akro Agate (corkscrew, Popeye, patch) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/akro-agate-co/ |
+| Peltier (NLR, comics, Peerless patch) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/peltier-glass-co/ |
+| Christensen Agate (Guineas, flames) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/christensen-agate-co/ |
+| M.F. Christensen & Son (slags, early machine) | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/m-f-christensen-son-co/ |
+| Master Marble / Master Glass | https://www.marblecollecting.com/marble-reference/online-marble-id-guide/master-marble-glass-cos/ |
+
+**Grading, triage & value:**
+
+| Use it for | URL |
+|---|---|
+| MCSA grading guide (0–10 scale, defect terms) | https://www.marblecollecting.com/marble-reference/marble-grading-guide/ |
+| MCSA "Get a Marble Identified" (the 90%-modern reality check) | https://www.marblecollecting.com/marble-reference/get-a-marble-identified/ |
+| MCSA collector FAQ | https://www.marblecollecting.com/marble-reference/marble-faq/ |
+| Block's condition-grading policy (conservative, no-grade-for-buffed) | https://www.marbleauctions.com/condition-grading |
+| Block's realized auction comps (e.g. Christensen Agate) | https://bid.marbleauctions.com/category/christensen-agate-company-241 |
+
+For an independent visual second opinion on a markless/can't-place marble, also
+see `lib/lens_id.py` (Google Lens) per [`../prompts/identify.md`](../prompts/identify.md).
 
 ## Sources
 
@@ -283,7 +364,7 @@ When the photos can't settle identity or condition, request (via
   *Collecting Antique Marbles*; Robert Block, *Marbles Identification & Price
   Guide*; Everett Grist, *Antique & Collectible Marbles*.
 
-> Open items to deepen in v2 of this module: realized (hammer, not estimate)
+> Open items to deepen in a future revision: realized (hammer, not estimate)
 > price ranges separating the $50/$500/$5,000 tiers; deeper ID for M.F.
 > Christensen, Vitro, Master, Marble King; sharper fake-detection tells; and
 > size-vs-value thresholds beyond the Akro "over 1″" data point.
