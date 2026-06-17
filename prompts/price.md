@@ -120,85 +120,31 @@ stage is autonomous — PRICE never stops to ask.
    `<shoot-dir>/comps.csv` as stage A** (see "Saved comp artifacts").
 
 3. **Stage B — Apify eBay sold (DUAL QUERY — the v2 core).** The default
-   direct-eBay comp source; no gate. Backend Actor
-   `automation-lab/ebay-sold-scraper` — it **pins a US residential proxy** so
-   eBay returns USD natively, and returns structured comps with per-item
-   URLs, sold dates, condition, listing type / bid count, and seller stats.
-   Tag `[B — Apify]`. ~$0.20/item (two runs). **Run the SAME query twice,
-   once per sort** — this is what makes distribution pricing possible:
-
-   - **`best_match` run** — the representative body of the distribution
-     (`sort:"best_match"`, `maxListingsPerSearch:30`, `maxSearchPages:2`).
-   - **`price_high` run** — the ceiling/outlier set, sorted descending
-     (`sort:"price_high"`, `maxListingsPerSearch:20`, `maxSearchPages:2`).
-   - **Path 1 — Apify MCP tool (preferred; works even with no sandbox
-     egress).** If an Apify MCP connector is available (e.g. in a Cowork
-     tab), call `automation-lab/ebay-sold-scraper` through it once per sort
-     with input `{searchQueries:["<query>"], maxListingsPerSearch:<30|20>,
-     maxSearchPages:2, sort:"<best_match|price_high>", listingType:"all"}`.
-     Returned fields: `soldPrice`, `soldDate`, `title`, `url`, `condition`,
-     `listingType`, `bidsCount`, `sellerName`, `sellerFeedbackCount`/
-     `Percent`, `shippingCost`. Record **each run id**. MCP calls are
-     brokered outside the code sandbox, so this works where direct
-     `api.apify.com` egress is blocked. Write each run's items to
-     `<shoot-dir>/apify_<sort>_<runId>.json` in the
-     [`save_run_json`](../lib/apify_ebay.py) shape (a `comps` list of objects
-     with the snake_case fields `sold_price`, `total_price`, `title`, `url`,
-     `condition`, `sold_date`, `listing_type`, `bids_count`,
-     `seller_feedback_score` — `price_stats.py` reads exactly this).
-   - **Path 2 — stdlib CLI (when you have a shell + egress to
-     api.apify.com).** Run it once per sort, saving each JSON beside
-     `price.txt`, and pass `--sku`/`--title` so each run gets a Console
-     status message:
-     `python lib/apify_ebay.py "<query>" --sort best_match --max 30 --pages 2 --save-dir <shoot-dir> --sku <sku> --title "<listing title>"`
-     and
-     `python lib/apify_ebay.py "<query>" --sort price_high --max 20 --pages 2 --save-dir <shoot-dir> --sku <sku> --title "<listing title>"`.
-     Each prints `Apify run: <id>` + `Saved results: <path>` — capture both
-     for each run. The CLI auto-runs the charm-price currency check.
-     - **`--sku`/`--title`** label the run in the Apify Console runs list
-       (status-message column) as `[best] <sku> <title>` /
-       `[sold_highest] <sku> <title>` (full title — the Console auto-truncates
-       it in the runs-list column), so past runs are diagnosable
-       there without opening each one (posted on completion; best-effort,
-       never blocks). The SKU is the deterministic 8-hex hash from
-       `list_edit.py`; if the item isn't recorded yet (PRICE runs before
-       DRAFT), pass the working title alone or the shoot-folder name as
-       `--sku`. Both are OPTIONAL — with neither, the run is still labeled by
-       its query (`[best] <query>`), so no run is anonymous. (No status is
-       posted on the MCP path — the connector only sends the actor input.)
-   - **Currency sanity (both paths):** genuine USD eBay prices cluster on
-     .99/.95/.00/.50. The CLI validates automatically; **on the MCP path
-     eyeball it** — if prices don't cluster on charm endings, suspect a
-     currency leak and prefer Stage C. Never trust a `currency`/`USD` label;
-     the price pattern is what matters. (The US-proxy actor makes leaks
-     unlikely — the old caffein.dev actor leaked BRL/CZK at ~5× mislabeled
-     USD, which is why we switched.)
-   - **Then run the distribution engine** on the two saved JSONs (use the
-     actual `Saved results:` path from each run — the CLI names them
-     `apify_run_<ts>_<runId>.json`; the MCP path uses the
-     `apify_<sort>_<runId>.json` names above):
-
-         python lib/price_stats.py \
-           --best-match <best_match run JSON> \
-           --price-high <price_high run JSON> \
-           --unit <unit_type> --condition <new|used> \
-           --require-tokens <brand/type tokens from IDENTIFY> \
-           --price-field total   # DELIVERED basis (sold+shipping) for a free-ship
-                                 # listing — our default; use 'sold' only if the
-                                 # listing will charge buyer-paid/calculated shipping
-
-     It applies the normalize-before-stats filters (row-0 flag, unit match,
-     same-item core tokens, condition cohort, single-bid/low-feedback
-     exclusions — each drop logged), computes `n / median / IQR / dispersion`
-     off the cleaned `best_match` set, vets the `price_high` ceiling, and
-     emits the three tiers + a confidence label. Fold its text block into
-     `price.txt` and adopt its tiers (see "Distribution-based tiers" below).
-     **No shell?** Do the same filtering + percentiles by hand from the saved
-     JSONs, using the rules in [docs/price-strategy-v2.md](../docs/price-strategy-v2.md)
-     and the constants in `price_stats.py`; show your work.
-   - **Proof-of-run is mandatory.** Record **both Apify run ids** AND both
-     saved JSON paths in the Research log. **Never report Stage B as "ran"
-     without run ids.**
+   direct-eBay comp source; no gate. Tag `[B — Apify]`. ~$0.20/item. Run the
+   SAME query twice — `best_match` (representative body, `--max 30`) and
+   `price_high` (ceiling set, `--max 20`), both `--pages 2`. The dual pull is
+   what makes distribution pricing possible. Pick the path your environment
+   allows; exact commands live in "Tooling — CLI contracts" below.
+   - **MCP connector** (preferred; works with no egress): call the actor once
+     per sort, dump each raw result to `<shoot-dir>/raw_<sort>.json`, then
+     `apify_ebay.py --ingest` it. Run id = the MCP result's `runId`.
+   - **stdlib CLI** (shell + egress): one `apify_ebay.py` live run per sort.
+     Optionally `--sku`/`--title` to label the run in the Apify Console (else
+     it's labeled by the query; SKU is `list_edit.py`'s 8-hex hash, or use the
+     working title / shoot-folder name since PRICE precedes DRAFT).
+   - **Currency sanity:** genuine USD prices cluster on .99/.95/.00/.50; each
+     save's `charm_price_share` / `currency_leak_suspected` flags a leak. The
+     US-proxy actor makes leaks unlikely (the old caffein.dev actor leaked
+     BRL/CZK at ~5× mislabeled USD — why we switched). On a suspected leak
+     prefer Stage C; trust the price pattern, never a `currency`/`USD` label.
+   - **Run the distribution engine** on the two saved JSONs (`--price-field
+     total` for free-ship — the default), fold its block into `price.txt`,
+     adopt its tiers. **No shell?** Do the filtering + percentiles by hand per
+     [docs/price-strategy-v2.md](../docs/price-strategy-v2.md) (Conservative=25th
+     pct · Recommended=median · Push-high=vetted ceiling else 90th pct; drop
+     single-bid auctions & <50-feedback sellers; flag >2.5× median); show work.
+   - **Proof-of-run is mandatory:** record both run ids AND both saved JSON
+     paths in the Research log — never report B as "ran" without run ids.
    - **If NEITHER path is available** (no Apify MCP tool AND no
      shell/egress — e.g. a sandbox whose proxy 403s `api.apify.com`):
      record `B — UNAVAILABLE: <reason>` in the Research log and fall through
@@ -254,39 +200,34 @@ and then state how hard you looked ("3 formulations, A+B+C, no exact
 match"). Per _shared, an exact match found this way beats any era-peer;
 commit to it.
 
-## Apify notes (the Stage B backend)
+## Tooling — CLI contracts (use these; do NOT read the .py source)
 
-Apify is the default Stage B source and runs without a gate. v2 issues
-**two runs per item** — `best_match` (representative) and `price_high`
-(ceiling) — and feeds both to [`lib/price_stats.py`](../lib/price_stats.py).
-The backend Actor is `automation-lab/ebay-sold-scraper` (configurable via
-`apify.ebay_actor`), chosen because it pins a **US residential proxy** —
-so eBay serves USD natively and the foreign-currency leak that sank the
-previous actor doesn't occur. The CLI/wrapper validates every run with the
-charm-price currency check (defense in depth) and raises `CurrencyLeakError`
-if a run ever looks FX-converted.
+Everything PRICE needs from `lib/` is below — treat it as the interface and
+don't open the implementation files (reading them is wasted tokens). Stage B
+runs the Actor `automation-lab/ebay-sold-scraper` (US residential proxy → native
+USD; configurable via `apify.ebay_actor`), twice per item (`best_match` +
+`price_high`), and every save runs the charm-price currency check + flags a
+suspected FX leak. Two execution paths: the **MCP connector** (restricted /
+no-egress envs — brokered outside the sandbox) and the **stdlib CLI** (shell +
+egress to `api.apify.com` + Apify token). Neither available ⇒ Stage B
+`UNAVAILABLE` → Chrome (Stage C).
 
-**Two execution paths, by environment (see Stage B above):**
-- **Apify MCP connector** — preferred in restricted environments (e.g. a
-  Cowork tab) whose sandbox proxy blocks `api.apify.com`. MCP calls are
-  brokered outside the sandbox, so they reach Apify when raw HTTPS can't.
-  No pip, no wrapper file, token lives in the connector.
-- **stdlib CLI** (`python lib/apify_ebay.py`) — for shell environments with
-  egress. No third-party package (standard library only); needs Python +
-  network to `api.apify.com` + the Apify token.
+`python lib/apify_ebay.py` — run OR ingest a sold-comp search:
+- live run: `"<query>" --sort <best_match|price_high> --max <30|20> --pages 2 --save-dir <shoot-dir> [--sku <sku> --title "<title>"]`
+- ingest (MCP path): `--ingest <shoot-dir>/raw_<sort>.json --save-dir <shoot-dir>` — normalizes the MCP tool's raw items into the canonical saved JSON, no live call.
+- both print `Apify run: <id>` + `Saved results: <path>`. Saved JSON has a `comps` list with `sold_price`, `total_price` (=sold+shipping), `shipping_cost`, `title`, `url`, `condition`, `sold_date`, `listing_type`, `bids_count`, `seller_feedback_score`, plus top-level `charm_price_share` / `currency_leak_suspected`.
 
-If neither is available (no MCP tool, no shell/egress), Stage B is
-`UNAVAILABLE` and PRICE routes to Chrome (Stage C). Same if the Apify token
-is unset.
+`python lib/price_stats.py` — distribution tiers from the saved JSON(s):
+- `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>]`
+- prints the Distribution line (n / median / IQR / dispersion), vetted ceiling, the three tiers, a confidence label, and the per-filter drop log. `--price-field total` for free-ship listings (default — see Delivered-price basis). Fold its block into `price.txt`; n<3 ⇒ confidence `thin`, fall back to the closest era-peer (it says so).
 
 ## Saved comp artifacts (every stage leaves a reviewable record)
 
 The user reviews the raw research, so each stage persists its comps:
 
-- **Stage B (Apify)** → **two** JSONs, one per sort (auto-saved; `--save-dir
-  <shoot-dir>` puts them beside `price.txt`; MCP path: write items to
-  `<shoot-dir>/apify_best_match_<runId>.json` and
-  `<shoot-dir>/apify_price_high_<runId>.json`). `price_stats.py` reads both.
+- **Stage B (Apify)** → **two** JSONs, one per sort, saved beside `price.txt`
+  by `--save-dir <shoot-dir>` (live run auto-saves; MCP path saves via
+  `--ingest`). `price_stats.py` reads both.
 - **Stages A (WebSearch) and C (Chrome)** → rows in **`<shoot-dir>/comps.csv`**,
   the single spreadsheet the user opens to review every comp across sources.
   Append each usable comp with `lib/comps_csv.py`:
@@ -309,19 +250,13 @@ gets a row — leave `price` blank and say why in `note`.
 
 ## URLs (mandatory — the user verifies comps by clicking them)
 
-Every comp carries a clickable source URL inline (a comp without a URL is
-not a comp). In ADDITION, every PRICE output ends with a consolidated
-**Comp URLs** list (see Output) so the user can click straight through and
-view the comps themselves — **exact / near-exact matches first**, then
-ceiling/context comps, then the eBay sold-search URL for the whole result
-set. These live in `price.txt` (persisted), so they're saved for reference.
-
-- Use **direct per-item eBay listing URLs** (`ebay.com/itm/<id>`) for exact
-  matches whenever you have them (Stage B/Apify returns one per comp;
-  Stage A/WebSearch and direct Chrome hrefs too).
-- Only when a per-item href genuinely can't be captured (e.g. Chrome
-  `get_page_text`) may you fall back to the sold-search URL — and say so.
-- Never list a bare price without its URL in this section.
+A comp without a URL is not a comp. Use **direct per-item** `ebay.com/itm/<id>`
+URLs (Stage B returns one per comp; Stage A / Chrome hrefs too); fall back to the
+sold-search URL only when a per-item href genuinely can't be captured (e.g.
+Chrome `get_page_text`) — and say so. Every output also ends with the
+consolidated **Comp URLs** block (exact/near-exact first, then ceiling/context,
+then the sold-search URL — format under Output); never list a bare price without
+its URL there.
 
 ## Research log (MANDATORY — proof every search type actually ran)
 

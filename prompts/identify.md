@@ -9,6 +9,18 @@ Enumerate the distinct items across a shoot's photos and write one
 structured record each. Speculative-upward: surface best-case identity so
 the user can see upside, with the verification path attached.
 
+## Photo intake (read the decisive set, not every frame)
+
+Full-res photos are the biggest token cost in a shoot, so read the frames that
+decide the record — not every angle. A single-item shoot is usually decided by
+4–6: the **hero / full-form** shot, the **underside / backstamp / mark** shot(s),
+**1–2 detail** shots (condition, a distinguishing feature), and any **ruler /
+scale** frame. Skip near-duplicate angles — they add cost, not evidence.
+Coverage still wins where it matters: on wide/group shoots read enough to
+enumerate every item, and never skip a frame that shows a mark you must read
+(see "Hunt every mark"). Glance at the filename list to pick; fully read only
+what you need.
+
 ## Shoot mode
 
 One mode per shoot. Source: CLI flag → profile default → auto-detect.

@@ -747,8 +747,19 @@ def _cli() -> None:
     parser = argparse.ArgumentParser(
         description="Apify eBay sold-listings search (automation-lab/ebay-sold-scraper)"
     )
-    parser.add_argument("query", nargs="+",
-                        help="One or more search keywords (each runs a separate search)")
+    parser.add_argument("query", nargs="*",
+                        help="One or more search keywords (each runs a separate search). "
+                             "Optional with --ingest.")
+    parser.add_argument("--ingest", metavar="RAW_JSON",
+                        help="Skip the live Actor call: read raw scraper items from a "
+                             "JSON file (the Apify MCP tool's result — a dict with an "
+                             "'items' list, or a bare list of items) and write the same "
+                             "saved-run JSON that a live run produces (normalized comps "
+                             "with total_price + charm/currency check). Use on the MCP "
+                             "path so no JSON is hand-authored.")
+    parser.add_argument("--run-id", dest="run_id",
+                        help="Run id to stamp on an --ingest save (default: the file's "
+                             "runId/run_id, else 'ingested').")
     parser.add_argument("--max", type=int, default=DEFAULT_MAX_LISTINGS, dest="max_listings",
                         help=f"Max results per keyword (default: {DEFAULT_MAX_LISTINGS})")
     parser.add_argument("--pages", type=int, default=DEFAULT_MAX_PAGES,
@@ -782,6 +793,50 @@ def _cli() -> None:
     parser.add_argument("--json", action="store_true",
                         help="Output raw JSON instead of human-readable list")
     args = parser.parse_args()
+
+    # --- Ingest path: normalize raw MCP items into a saved run JSON, no live call ---
+    if args.ingest:
+        try:
+            raw = json.loads(Path(args.ingest).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"ERROR: cannot read --ingest file: {e}", file=sys.stderr)
+            sys.exit(1)
+        if isinstance(raw, dict):
+            items = raw.get("items") or raw.get("raw_items") or raw.get("comps") or []
+            run_id = args.run_id or raw.get("runId") or raw.get("run_id") or "ingested"
+            file_queries = raw.get("queries") or raw.get("searchQueries")
+        else:
+            items = raw
+            run_id = args.run_id or "ingested"
+            file_queries = None
+        actor = args.actor or "automation-lab/ebay-sold-scraper"
+        queries = args.query or file_queries or []
+        comps = [c for c in (_map_to_comp_record(it, None) for it in items) if c]
+        if not comps:
+            print(f"ERROR: no usable comps in {args.ingest} "
+                  f"(expected a dict with an 'items' list, or a bare list of scraper items)",
+                  file=sys.stderr)
+            sys.exit(1)
+        prices = [c.sold_price for c in comps if c.sold_price]
+        charm = _charm_share(prices) if prices else None
+        leak = bool(len(prices) >= _MIN_SAMPLES_FOR_LEAK_CHECK
+                    and charm is not None and charm < _CHARM_LEAK_THRESHOLD)
+        if args.no_save:
+            print(json.dumps([_comp_to_dict(c) for c in comps], indent=2, default=str))
+            return
+        path = save_run_json(run_id, actor, queries, items, comps, save_dir=args.save_dir)
+        print(f"Ingested {len(comps)} comp(s) from {args.ingest} (no live Apify call)")
+        print(f"Apify run: {run_id}  (actor {actor})  — ingested")
+        print(f"Saved results: {path}")
+        if charm is not None:
+            note = ("  -> CURRENCY LEAK SUSPECTED: prices don't cluster on USD charm "
+                    "endings; verify or prefer Chrome (Stage C)" if leak
+                    else "  (USD charm pattern OK)")
+            print(f"Charm-price share: {charm:.0%}{note}")
+        return
+
+    if not args.query:
+        parser.error("a search query is required unless --ingest is given")
 
     try:
         comps = search_ebay_sold(

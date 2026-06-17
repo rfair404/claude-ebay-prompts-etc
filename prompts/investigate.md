@@ -22,6 +22,10 @@ isn't visible, treat it as nonexistent. No "the back probably…", no
 hidden-side speculation. Suspected-but-unphotographed evidence goes to
 Open questions, not into a claim.
 
+Re-read only the decisive frames (hero + mark + the defects you'll claim), per
+IDENTIFY's "Photo intake" rule — don't re-open every angle you already saw at
+IDENTIFY. IDENTIFY's record tells you which frames matter.
+
 ## Unit-type phrasing
 
 Thread `unit_type` into every title/description: `single` singular noun;
