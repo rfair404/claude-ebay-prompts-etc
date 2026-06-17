@@ -45,8 +45,11 @@ repeat a claim INVESTIGATE confirmed.
 - `category_id` blank (eBay suggests at LIST) · `category_path` from
   INVESTIGATE/IDENTIFY category (human-readable only).
 - `condition` — map INVESTIGATE's grade (already from condition-rubric)
-  to `CONDITION_ENUM`. · `condition_description` from INVESTIGATE's
-  observable condition lines; ≤1000; **every flagged defect survives**.
+  to `CONDITION_ENUM`. · `condition_description` — telegraphic factual
+  disclosure per condition-rubric's "write it telegraphic" spec: defect
+  fragments → one grade-relevant `No … noted.` → can't-assess. No
+  narrative, marketing, decorative description, or what's-included.
+  ≤1000 but aim far shorter; **every flagged defect survives**.
 
 **item_specifics:** from INVESTIGATE's "Item specifics" section ONLY. If
 INVESTIGATE listed it, copy; else `""` — do NOT fall back to IDENTIFY.
@@ -131,9 +134,10 @@ Compose from INVESTIGATE's claim set only:
 - **Hook** (1–2 sentences) from INVESTIGATE Summary, buyer-facing.
 - **What's Included** — bullets from observable components; unit-type
   vocabulary.
-- **Condition** — one warm framing sentence + bullets enumerating EVERY
-  defect INVESTIGATE flagged (no minimizing); context sentence for
-  vintage wear.
+- **Condition** — factual, minimal. Bullets enumerating EVERY defect
+  INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`.
+  At most one short context line for expected vintage wear; no warm
+  framing sentence, no marketing. Defects always survive any trim.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
 
@@ -154,8 +158,9 @@ Satisfy by **rephrasing, never mid-word truncation:**
   words. Always keep brand (or "Vintage"/"Unbranded") + the noun.
 - item_specifics: shortest correct canonical form (`Store Catalog`, not a
   prose sentence).
-- condition_description: trim redundancy first, then least-critical
-  observations; defects always stay; end at a sentence boundary.
+- condition_description: already telegraphic, so rarely near the cap. If
+  over, drop grade-relevant clears first, then can't-assess; defects
+  always stay; end at a fragment boundary.
 - numeric fields: the cap is on the string form. If a real value won't
   fit, the input is wrong (round/re-measure/flag) — never drop digits.
 - `lookup_only` (`country_of_origin`, `department`): substitute closest
