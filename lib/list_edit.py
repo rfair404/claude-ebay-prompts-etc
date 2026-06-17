@@ -88,6 +88,7 @@ from ebay_client import (
     EbayAuthError,
     EbayCredentials,
     api_send,
+    create_local_pickup_policy,
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
@@ -393,6 +394,11 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     if not str(draft.get("item_specifics.type") or "").strip():
         issues.append("item_specifics.type: required, empty")
 
+    # Fulfillment mode: a typo must not silently ship a ship-risky item.
+    mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
+    if mode not in ("SHIP", "LOCAL_PICKUP"):
+        issues.append(f"shipping.fulfillment_mode: {mode!r} — must be SHIP or LOCAL_PICKUP")
+
     # SKU format: a stamped SKU must be canonical (8 hex). A legacy url-style
     # slug (e.g. "ebaybiz-sand-dollars" from an older app version) is flagged
     # here — `--record`/`--sync` auto-heal it via normalize_draft_identity, but
@@ -608,9 +614,12 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # Optional: a Media Mail fulfillment policy used for media items (books,
     # magazines, comics, music, movies). Not required — falls back to default.
     policies["fulfillment_media"] = _ebay_extra("fulfillment_policy_id_media")
+    # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
+    # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
+    policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup")
     location = _ebay_extra("merchant_location_key")
     for k, v in policies.items():
-        if k == "fulfillment_media":
+        if k in ("fulfillment_media", "fulfillment_local_pickup"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
@@ -728,17 +737,32 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
 
-    Routing: if the draft's `primary_service` is Media Mail (DRAFT sets this
-    for books/magazines/comics/music/movies) AND a media policy is configured,
-    use it; otherwise use the default (USPS Ground) policy. Returns
-    (chosen_fulfillment_id, messages).
+    Routing, in order:
+    1. If the draft is `fulfillment_mode: LOCAL_PICKUP` (DRAFT sets this for
+       ship-risky items the user confirmed as local-pickup), use the
+       local-pickup policy.
+    2. Else if `primary_service` is Media Mail (DRAFT sets this for
+       books/magazines/comics/music/movies) AND a media policy is configured,
+       use it.
+    3. Else use the default (USPS Ground) policy.
+    Returns (chosen_fulfillment_id, messages).
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
+    pickup_fid = str(policies.get("fulfillment_local_pickup") or "")
+    mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
     msgs: list[str] = []
 
-    if _is_media_service(want):
+    if mode == "LOCAL_PICKUP":
+        if pickup_fid:
+            chosen, label = pickup_fid, "local pickup (pickup-only policy)"
+        else:
+            chosen, label = default_fid, "default ground (NO local-pickup policy configured)"
+            msgs.append("shipping: item is LOCAL_PICKUP but ebay.fulfillment_policy_id_local_pickup "
+                        "is unset — falling back to the default ground policy. Add a local-pickup "
+                        "policy (see SETUP_EBAY_API.md) so ship-risky items list as pickup-only.")
+    elif _is_media_service(want):
         if media_fid:
             chosen, label = media_fid, "Media Mail (media policy)"
         else:
@@ -758,10 +782,15 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             offered = [s.get("shippingServiceCode")
                        for opt in (pol.get("shippingOptions") or [])
                        for s in (opt.get("shippingServices") or []) if s.get("shippingServiceCode")]
-            if not offered:
+            # A local-pickup-only / freight policy legitimately carries no parcel
+            # shippingServices — pickup/freight are top-level flags, not services.
+            pickup_or_freight = bool(pol.get("localPickup") or pol.get("freightShipping"))
+            if not offered and not pickup_or_freight:
                 msgs.append(f"shipping: policy '{pol.get('name')}' offers no services — publish may fail")
             else:
-                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({', '.join(offered)})")
+                desc = ", ".join(offered) if offered else (
+                    "local pickup" if pol.get("localPickup") else "freight")
+                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})")
     except (EbayAPIError, EbayAuthError) as e:
         msgs.append(f"shipping: could not verify fulfillment policy ({e})")
     return chosen, msgs
@@ -853,6 +882,12 @@ def build_review_card(draft_path: Path,
         bo = f"on @ auto-decline ${_decl}" if _decl else "on"
     else:
         bo = "off"
+    _mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
+    if _mode == "LOCAL_PICKUP":
+        _hint = str(draft.get("shipping.local_pickup.location_hint") or "").strip()
+        fulfill = f"LOCAL PICKUP only{(' · ' + _hint) if _hint else ''} (no parcel shipping; freight by quote)"
+    else:
+        fulfill = "Ship" + (f" · {draft.get('shipping.primary_service')}" if draft.get("shipping.primary_service") else "")
 
     # Comps to verify: prefer structured comps.csv, else URL lines from price.txt.
     comps: list[str] = []
@@ -893,6 +928,7 @@ def build_review_card(draft_path: Path,
         f"Price:     ${price}  ·  Best Offer: {bo}",
         f"Condition: {cond}",
         f"Quantity:  {qty}   ·   Photos: {len(photos)} (hero: {hero})",
+        f"Fulfillment: {fulfill}",
         "Preflight (condition / shipping / insurance):",
         *[f"  • {m}" for m in pf],
         "Comps (open to verify):",
@@ -1480,6 +1516,7 @@ def _cli() -> None:
     ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
     ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
+    ap.add_argument("--create-pickup-policy", action="store_true", help="Create (idempotent) a LOCAL-PICKUP-ONLY fulfillment policy and print its ID to paste into config (ebay.fulfillment_policy_id_local_pickup).")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     args = ap.parse_args()
 
@@ -1512,6 +1549,13 @@ def _cli() -> None:
             return
         if args.setup_check:
             _print_setup_check()
+            return
+        if args.create_pickup_policy:
+            pol = create_local_pickup_policy()
+            pid = pol.get("fulfillmentPolicyId")
+            print(f"[OK] local-pickup policy: {pid}  ({pol.get('name')!r}, localPickup={pol.get('localPickup')})")
+            print(f"  Paste into config.yaml under the active ebay.<env> block:")
+            print(f"    fulfillment_policy_id_local_pickup: \"{pid}\"")
             return
         if args.preflight:
             print(f"Preflight {args.preflight}:")

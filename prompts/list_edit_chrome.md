@@ -165,8 +165,14 @@ typing + Enter (via `form_input`/`computer`), not a JS value set.
    (= the Recommended tier). Leave auto-accept empty. If
    `best_offer.enabled` is false (list price ≤ Recommended), leave offers
    off.
-6. **Shipping:** confirm/set free shipping + `primary_service` (three-dot
-   → Change service → search → select → Done). Weight/dims already set.
+6. **Shipping:** if `shipping.fulfillment_mode` is **LOCAL_PICKUP**, do NOT
+   set a parcel service — instead choose eBay's **local pickup** option
+   ("No shipping — local pickup only" / enable "Local pickup") and leave the
+   shipping service empty; weight/dims can stay for reference. The draft's
+   description already carries the "freight by quote" line. Otherwise
+   (**SHIP**, the default): confirm/set free shipping + `primary_service`
+   (three-dot → Change service → search → select → Done). Weight/dims already
+   set.
 7. **Photos:** see "Photo upload" below — use the first method that's
    available; never fake success.
 8. **Settle + verify before save (MANDATORY — this is what stops missing

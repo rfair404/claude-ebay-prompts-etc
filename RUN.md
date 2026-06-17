@@ -91,6 +91,7 @@ Never block on these. Pick the documented default, append ONE line to
 | `lookup_only` value not canonical (e.g. "USA") | substitute closest canonical ("United States") | verify |
 | Required field has no source data | leave empty, flag | fill it |
 | Item below profit floor | route to CURATE SKIPPED with the math | override per category |
+| Item ship-risky (>25 lb or >24 in/side, or fragile) | keep `SHIP`; suggest local pickup, log it | confirm local-pickup (attended: DRAFT asks before assuming) |
 
 **Working price is NOT a HARD gate.** PRICE still records "final price
 deferred to publish time", but headless flow auto-adopts the Recommended
