@@ -54,6 +54,13 @@ repeat a claim INVESTIGATE confirmed.
 **item_specifics:** from INVESTIGATE's "Item specifics" section ONLY. If
 INVESTIGATE listed it, copy; else `""` — do NOT fall back to IDENTIFY.
 Standard fields ≤65, `upc` ≤20. Extra specifics → `item_specifics.extra`.
+**Category-REQUIRED aspects must still be emitted** even if INVESTIGATE didn't
+itemize them and even when unbranded — eBay rejects the publish otherwise (errorId
+25002 "item specific <X> is missing"). A loaded specialization names its category's
+required aspects in its Output hooks (e.g. jewelry rings require `Metal` +
+`Metal Purity` + `Ring Size`); emit those into `item_specifics.extra` from
+INVESTIGATE/IDENTIFY. When unsure which a category requires, prefer including the
+obvious ones over a failed publish.
 
 **pricing:** `format` FIXED_PRICE (AUCTION only if price.txt says) ·
 `price` = working price as string, ≤13 · `cost_of_goods` null ·

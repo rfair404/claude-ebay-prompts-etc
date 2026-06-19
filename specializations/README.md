@@ -24,6 +24,7 @@ files in this directory — it is the single source of truth for what's active.
 | Module | Triggers (category / material / keyword match) | Status |
 |---|---|---|
 | [marbles.md](marbles.md) | marble, marbles, shooter, swirl, sulphide, agate (as a marble), "glass ball" toy, marble lot/jar/collection | active |
+| [jewelry.md](jewelry.md) | ring, necklace, pendant, locket, bracelet, bangle, brooch/pin, earrings, cufflinks, chain, charm, parure; precious-metal marks (10k/14k/18k, 375/585/750, sterling/925, plat/950, "gold filled"/GF/vermeil); costume jewelry, rhinestone, signed maker (Tiffany/Cartier/Trifari/etc.); a gemstone **set in / sold as jewelry** (diamond, sapphire, jade, agate-as-gemstone, etc.) | active (v1, partial — see module header) |
 
 _Add a row per new module. Triggers should be specific enough not to fire on
 unrelated items (e.g. "agate" alone is also a gemstone — qualify it)._
