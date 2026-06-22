@@ -59,6 +59,7 @@ def _normalize(it: dict) -> dict:
         val = float(val) if val is not None else None
     except (TypeError, ValueError):
         pass
+    seller = it.get("seller") or {}
     return {
         "itemId": it.get("itemId"),
         "title": it.get("title"),
@@ -69,7 +70,9 @@ def _normalize(it: dict) -> dict:
         "conditionId": it.get("conditionId"),
         "thumbnail": img,                      # named to match ebay_visual ingest
         "url": (it.get("itemWebUrl") or "").split("?")[0] or None,
-        "seller": (it.get("seller") or {}).get("username"),
+        "seller": seller.get("username"),
+        "sellerFeedbackPct": seller.get("feedbackPercentage"),
+        "sellerFeedbackScore": seller.get("feedbackScore"),
         "buyingOptions": it.get("buyingOptions"),
         "listingStatus": "active",             # NB: asking price, not sold
     }
