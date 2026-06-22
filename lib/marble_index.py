@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import random
 import re
 import sys
 import time
@@ -42,8 +43,10 @@ from pathlib import Path
 FORUM_BASE = "https://marbleconnection.com/forum/22-marble-ids/"
 UA = "Mozilla/5.0 (compatible; ebaybiz-KB/1.0; personal collectables research)"
 INDEX_DIR = Path(__file__).resolve().parent.parent / "kb" / "index" / "marbleconnection"
-PAGE_DELAY = 0.7      # seconds between forum page / topic fetches (be polite)
-IMG_DELAY = 0.2       # seconds between image downloads
+# Randomized polite pauses — (min, max) seconds, drawn uniformly per request so
+# the traffic pattern isn't a fixed metronome. Tune to go gentler on the server.
+PAGE_DELAY = (1.0, 2.5)   # between forum page / topic fetches
+IMG_DELAY = (0.25, 0.8)   # between image downloads
 EMBED_BATCH = 16
 MODEL_NAME = "clip-ViT-B-32"
 # image hosts that carry user-posted marble photos (not avatars / emoji / theme)
@@ -52,6 +55,12 @@ IMG_SKIP = ("emoji", "avatar", "profile", "default_photo", "theme", ".svg",
             "rising", "set_resources", "/reactions/", "react_")
 
 TOPIC_RE = re.compile(r"/topic/(\d+)-")
+
+
+# --- pacing ------------------------------------------------------------------
+def _nap(rng):
+    """Sleep a random duration in the (min, max) seconds tuple — polite jitter."""
+    time.sleep(random.uniform(rng[0], rng[1]))
 
 
 # --- tiny http ---------------------------------------------------------------
@@ -296,7 +305,7 @@ def crawl_topics(topics, state, *, verbose=True):
         except Exception as e:
             if verbose:
                 print(f"  ! topic {tid} fetch/parse failed: {e}", flush=True)
-            time.sleep(PAGE_DELAY)
+            _nap(PAGE_DELAY)
             continue
         kept = 0
         for u in imgs:
@@ -307,7 +316,7 @@ def crawl_topics(topics, state, *, verbose=True):
                 batch_meta.append({"img": u, "tid": tid, "turl": turl, "title": title})
                 indexed_imgs.add(u)
                 kept += 1
-                time.sleep(IMG_DELAY)
+                _nap(IMG_DELAY)
             except Exception as e:
                 if verbose:
                     print(f"  ! image skip ({tid}): {e}", flush=True)
@@ -317,7 +326,7 @@ def crawl_topics(topics, state, *, verbose=True):
         state["max_topic_id"] = max(state["max_topic_id"], tid)
         if verbose:
             print(f"  + topic {tid}: {kept} img  \"{title[:48]}\"", flush=True)
-        time.sleep(PAGE_DELAY)
+        _nap(PAGE_DELAY)
 
     flush()
     state["indexed_topic_ids"] = sorted(indexed_tids)
@@ -345,7 +354,7 @@ def cmd_index(args):
         print(f"[page {page}] {len(topics)} topics", flush=True)
         total += crawl_topics(topics, state)
         state["pages_indexed"] = max(state["pages_indexed"], page)
-        time.sleep(PAGE_DELAY)
+        _nap(PAGE_DELAY)
     print(f"\nDone. +{total} images this run. Index now holds {state['count']} images "
           f"across {len(state['indexed_topic_ids'])} threads.", flush=True)
 
@@ -370,7 +379,7 @@ def cmd_refresh(args):
             break
         total += crawl_topics(fresh, state)
         known |= {t[0] for t in fresh}
-        time.sleep(PAGE_DELAY)
+        _nap(PAGE_DELAY)
     print(f"\nRefresh done. +{total} images ({before} -> {state['count']}).", flush=True)
 
 
