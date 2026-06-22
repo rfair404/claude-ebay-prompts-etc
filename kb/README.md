@@ -85,7 +85,7 @@ listings — same source-quality bar as the specializations.
 ### General collectables hubs & guides (cross-category identification + overview)
 | Resource | Good for | URL | Ingest |
 |---|---|---|---|
-| COLLECT.Guide | Cross-category ID/reference hub: manufacturer rosters, size-for-ID, grading, glossaries, per-type guides (marbles, etc.) | https://www.collect.guide | ◐ Chrome to ingest (403) |
+| COLLECT.Guide | Cross-category ID/reference hub: manufacturer rosters, size-for-ID, grading, glossaries, per-type guides (marbles, etc.) | https://www.collect.guide | ▢ retry — site down 2026-06-21 (Cloudflare 520 origin error); WebFetch also 403. Ingest via Chrome once origin is back |
 | Collectors Weekly | Broad category overview guides + community knowledge | https://www.collectorsweekly.com/ | ▢ |
 | The Spruce Crafts — Collectibles | Beginner-friendly category primers across many collectables | https://www.thesprucecrafts.com/collectibles-4127771 | ▢ |
 | Invaluable — "Knowledge Center" | Auction-house-backed category guides + realized prices | https://www.invaluable.com/ | ▢ |
@@ -124,6 +124,16 @@ listings — same source-quality bar as the specializations.
 | Antique Trader — fakes coverage | Editorial on fakes, repros, and market trends | https://www.antiquetrader.com/ | ▢ |
 | Entrupy / brand authentication (luxury) | Authentication context for handbags, sneakers, luxury goods | https://www.entrupy.com/ | ▢ |
 
+### Community peer-ID forums (second opinion — crowd, not authority)
+| Resource | Good for | URL | Ingest |
+|---|---|---|---|
+| Marble Connection — "Marble I.D.'s" | Marble photo-ID forum (~17k threads). Indexed for **visual similarity search** — given a reference marble, find the most-similar posted marbles. See [`../lib/marble_index.py`](../lib/marble_index.py) | https://marbleconnection.com/forum/22-marble-ids/ | ● (CLIP index + refresh tool) |
+
+> Forums are **peer opinion** (sometimes wrong), so they're a *second-opinion /
+> look-alike* layer, not an authority like MCSA or an auction house. The visual
+> index narrows the corpus to candidates; final ID still follows the
+> [marbles specialization](../specializations/marbles.md) discipline.
+
 ### Category specialist references (cross-link to specializations)
 | Resource | Good for | URL | Ingest |
 |---|---|---|---|
@@ -132,6 +142,41 @@ listings — same source-quality bar as the specializations.
 
 _When a resource is specific to one category that already has a specialization
 module, keep its deep links in that module; list it here only as a pointer._
+
+---
+
+## Tools (KB-adjacent scripts)
+
+Reusable scripts a run can call to turn a source into an answer. Code is
+tracked; generated indexes live under `kb/index/` (gitignored, regenerable).
+
+### `lib/marble_index.py` — marble visual-similarity search
+
+Index the marble photos posted to the Marble Connection "Marble I.D.'s" forum,
+then find the threads whose marbles look most like a reference photo.
+
+```
+# build / extend the index (newest threads first; resumable)
+python lib/marble_index.py index --max-pages 10 [--start-page 1]
+
+# periodic sync — append only threads created since the last run
+python lib/marble_index.py refresh [--max-new-pages 10]
+
+# find the top-K most-similar threads for one or more reference photos
+python lib/marble_index.py query path/or/url [more-angles...] --top 5 [--json out.json]
+
+python lib/marble_index.py status      # index size + last sync
+```
+
+- **Embedding backend** (`MARBLE_EMBED` env): `phash` (default — colour+structure
+  features, no torch) or `clip` (CLIP ViT-B/32, needs torch + the MS VC++
+  Redistributable). An index is tied to the backend that built it; to upgrade
+  phash→clip, install VC++ then rebuild with `MARBLE_EMBED=clip`.
+- **Honesty contract:** similarity retrieval is a *candidate finder*, not an ID.
+  Treat the top-K as "look here", then settle maker/era per the
+  [marbles specialization](../specializations/marbles.md) (method ≠ origin ≠ era).
+- **Periodic refresh:** `refresh` is safe to run on a schedule (idempotent,
+  dedups by thread-id + image-URL) to keep the index current as new IDs are posted.
 
 ---
 
