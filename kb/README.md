@@ -66,6 +66,7 @@ lives so it isn't copy-pasted into every module.
 |---|---|---|
 | [silver-hallmarks.md](articles/silver-hallmarks.md) | Sterling vs coin vs plate vs not-silver; reading US maker marks & British hallmark sets (standard/town/date-letter/maker); continental fineness; `925` forgery & EPNS red flags | v1 |
 | [ebay-sold-comps.md](articles/ebay-sold-comps.md) | Finding real sold-price comps: sold≠asking, the Apify/Chrome ladder, query craft, delivered basis, distribution tiers, comp pitfalls | v1 |
+| [taxonomies/marble-types-top100.md](taxonomies/marble-types-top100.md) | The 100 most-collectable marble types, grouped by family with value tiers; doubles as the keyword matcher for the eBay-sold visual library | v1 |
 
 _Add a row per article as it's ingested. Keep this in sync with `articles/`._
 
