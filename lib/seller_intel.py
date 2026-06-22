@@ -198,6 +198,67 @@ def cmd_profile(args):
         print(f"\nWrote {args.json}")
 
 
+def cmd_landscape(args):
+    """Competitive landscape for a category: join realized comps (who sells, how
+    much) to LIVE active inventory (who has the most for sale, who asks highest).
+    """
+    import time
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+    pairs = load_taxonomy()
+    sellers = aggregate(load_comps(args.from_), pairs)
+
+    # the competitor set = sellers most active in the comp data
+    ranked = sorted(sellers.items(),
+                    key=lambda kv: max(len(kv[1]["prices"]), sum(kv[1]["types"].values())),
+                    reverse=True)[: args.check]
+    print(f"\nProbing live active inventory for the top {len(ranked)} comp sellers "
+          f"(category {args.category or ebay_browse.DEFAULT_SELLER_CATEGORY}, Browse API)…\n")
+
+    rows = []
+    for name, s in ranked:
+        n, total, med, mx = _stats(s["prices"])
+        try:
+            active_total, recs = ebay_browse.seller_active(
+                name, q=args.q, category_ids=args.category, sample=200)
+        except Exception as e:
+            active_total, recs = -1, []
+            print(f"  ! {name}: Browse error ({type(e).__name__})")
+        asks = [r["askingPrice"] for r in recs if isinstance(r.get("askingPrice"), float)]
+        rows.append({
+            "seller": name, "comps": max(n, sum(s["types"].values())),
+            "realized": total, "med_sold": med, "high_sold": mx,
+            "active": active_total,
+            "ask_med": statistics.median(asks) if asks else 0.0,
+            "ask_max": max(asks) if asks else 0.0,
+            "fb": s["fb_pct"] or "?",
+            "top": ", ".join(t for t, _ in s["types"].most_common(2)),
+        })
+        time.sleep(args.delay)
+
+    def show(title, key, fmt):
+        print(f"\n=== {title} ===")
+        print(f"  {'seller':<20} {'active':>6} {'sold':>5} {'realized$':>9} "
+              f"{'medSold':>7} {'askMed':>7} {'askMax':>7} {'fb':>6}  top types")
+        for r in sorted(rows, key=key, reverse=True)[: args.top]:
+            at = r["active"] if r["active"] >= 0 else "err"
+            print(f"  {r['seller']:<20} {str(at):>6} {r['comps']:>5} {r['realized']:>9.0f} "
+                  f"{r['med_sold']:>7.0f} {r['ask_med']:>7.0f} {r['ask_max']:>7.0f} "
+                  f"{str(r['fb']):>6}  {r['top']}")
+
+    show("MOST FOR SALE NOW (active inventory leaders)", lambda r: r["active"], None)
+    show("HIGHEST-PRICED (premium — by top active asking)", lambda r: r["ask_max"], None)
+    show("TOP REALIZED (volume x price, from sold comps)", lambda r: r["realized"], None)
+    print("\nReading it: high active + low median = volume players; few active + high "
+          "ask/realized = premium specialists. 'active' is exact (Browse total); "
+          "sold figures are from the comp sample, asking from a 200-item sample.")
+    if args.json:
+        Path(args.json).write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        print(f"\nWrote {args.json}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -219,6 +280,16 @@ def main():
     p.add_argument("--category", default=None)
     p.add_argument("--json", default=None)
     p.set_defaults(func=cmd_profile)
+
+    p = sub.add_parser("landscape", help="category competitive map: active inventory + price leaders")
+    p.add_argument("--from", dest="from_", nargs="+", required=True)
+    p.add_argument("--category", default=None, help="category_ids (default 220 Toys)")
+    p.add_argument("--q", default=None, help="optional keyword to scope the category")
+    p.add_argument("--check", type=int, default=30, help="how many top comp-sellers to probe live")
+    p.add_argument("--top", type=int, default=12, help="rows per ranking")
+    p.add_argument("--delay", type=float, default=0.2, help="seconds between Browse calls")
+    p.add_argument("--json", default=None)
+    p.set_defaults(func=cmd_landscape)
 
     args = ap.parse_args()
     args.func(args)

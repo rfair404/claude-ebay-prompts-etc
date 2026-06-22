@@ -118,6 +118,25 @@ def seller_items(seller: str, *, q: str | None = None,
                   max_items=max_items, creds=creds)
 
 
+def seller_active(seller: str, *, q: str | None = None,
+                  category_ids: str | None = None, sample: int = 200,
+                  creds=None) -> tuple[int, list[dict]]:
+    """One Browse call: a seller's EXACT active-listing `total` in a category +
+    a normalised price sample (up to `sample`). Cheap enough to fan across many
+    sellers to map a category's competitive landscape."""
+    if not q and not category_ids:
+        category_ids = DEFAULT_SELLER_CATEGORY
+    query = {"limit": min(PAGE_LIMIT, sample), "filter": f"sellers:{{{seller}}}"}
+    if q:
+        query["q"] = q
+    if category_ids:
+        query["category_ids"] = category_ids
+    data = ec.api_get(BROWSE_SEARCH, query=query, marketplace="EBAY_US", creds=creds)
+    total = int(data.get("total") or 0)
+    recs = [_normalize(it) for it in (data.get("itemSummaries") or [])]
+    return total, recs
+
+
 def _print(records: list[dict], header: str) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
