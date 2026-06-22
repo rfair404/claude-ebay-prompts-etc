@@ -30,12 +30,14 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import random
 import re
 import sys
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,8 +48,15 @@ INDEX_DIR = Path(__file__).resolve().parent.parent / "kb" / "index" / "marblecon
 # Randomized polite pauses — (min, max) seconds, drawn uniformly per request so
 # the traffic pattern isn't a fixed metronome. Tune to go gentler on the server.
 PAGE_DELAY = (1.0, 2.5)   # between forum page / topic fetches
-IMG_DELAY = (0.25, 0.8)   # between image downloads
+IMG_DELAY = (0.25, 0.8)   # between image downloads (sequential mode only)
 EMBED_BATCH = 16
+
+# Speed knob: MARBLE_IMG_WORKERS>1 downloads a topic's images CONCURRENTLY (they
+# hit S3/image hosts, which are built to be fast) and switches to a short
+# between-topic delay. Default 1 = the gentle sequential behaviour (unchanged).
+IMG_WORKERS = max(1, int(os.environ.get("MARBLE_IMG_WORKERS", "1")))
+FAST = IMG_WORKERS > 1
+FAST_PAGE_DELAY = (0.1, 0.4)   # between forum topic-page fetches in fast mode
 MODEL_NAME = "clip-ViT-B-32"
 # image hosts that carry user-posted marble photos (not avatars / emoji / theme)
 IMG_HOST_OK = ("s3mcinvision", "/uploads/monthly_")
@@ -273,6 +282,30 @@ def _download_pil(url):
     return Image.open(io.BytesIO(raw)).convert("RGB")
 
 
+def _download_pils(urls):
+    """Download urls -> [(url, PIL)] for successes. Parallel when IMG_WORKERS>1
+    (image hosts tolerate it); else sequential with the polite IMG_DELAY nap."""
+    out = []
+    if not urls:
+        return out
+    if IMG_WORKERS <= 1:
+        for u in urls:
+            try:
+                out.append((u, _download_pil(u)))
+            except Exception:
+                pass
+            _nap(IMG_DELAY)
+        return out
+    with ThreadPoolExecutor(max_workers=IMG_WORKERS) as ex:
+        futs = {ex.submit(_download_pil, u): u for u in urls}
+        for f in as_completed(futs):
+            try:
+                out.append((futs[f], f.result()))
+            except Exception:
+                pass
+    return out
+
+
 # --- crawl core --------------------------------------------------------------
 def crawl_topics(topics, state, *, verbose=True):
     """Crawl a list of (tid, turl, title), embed OP images, append to index."""
@@ -305,28 +338,22 @@ def crawl_topics(topics, state, *, verbose=True):
         except Exception as e:
             if verbose:
                 print(f"  ! topic {tid} fetch/parse failed: {e}", flush=True)
-            _nap(PAGE_DELAY)
+            _nap(FAST_PAGE_DELAY if FAST else PAGE_DELAY)
             continue
         kept = 0
-        for u in imgs:
-            if u in indexed_imgs:
-                continue
-            try:
-                pil_batch.append(_download_pil(u))
-                batch_meta.append({"img": u, "tid": tid, "turl": turl, "title": title})
-                indexed_imgs.add(u)
-                kept += 1
-                _nap(IMG_DELAY)
-            except Exception as e:
-                if verbose:
-                    print(f"  ! image skip ({tid}): {e}", flush=True)
+        new_urls = [u for u in imgs if u not in indexed_imgs]
+        for u, pil in _download_pils(new_urls):
+            pil_batch.append(pil)
+            batch_meta.append({"img": u, "tid": tid, "turl": turl, "title": title})
+            indexed_imgs.add(u)
+            kept += 1
             if len(pil_batch) >= EMBED_BATCH:
                 flush()
         indexed_tids.add(tid)
         state["max_topic_id"] = max(state["max_topic_id"], tid)
         if verbose:
             print(f"  + topic {tid}: {kept} img  \"{title[:48]}\"", flush=True)
-        _nap(PAGE_DELAY)
+        _nap(FAST_PAGE_DELAY if FAST else PAGE_DELAY)
 
     flush()
     state["indexed_topic_ids"] = sorted(indexed_tids)
@@ -354,7 +381,7 @@ def cmd_index(args):
         print(f"[page {page}] {len(topics)} topics", flush=True)
         total += crawl_topics(topics, state)
         state["pages_indexed"] = max(state["pages_indexed"], page)
-        _nap(PAGE_DELAY)
+        _nap(FAST_PAGE_DELAY if FAST else PAGE_DELAY)
     print(f"\nDone. +{total} images this run. Index now holds {state['count']} images "
           f"across {len(state['indexed_topic_ids'])} threads.", flush=True)
 
@@ -379,7 +406,7 @@ def cmd_refresh(args):
             break
         total += crawl_topics(fresh, state)
         known |= {t[0] for t in fresh}
-        _nap(PAGE_DELAY)
+        _nap(FAST_PAGE_DELAY if FAST else PAGE_DELAY)
     print(f"\nRefresh done. +{total} images ({before} -> {state['count']}).", flush=True)
 
 
