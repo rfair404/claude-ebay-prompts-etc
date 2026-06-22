@@ -178,6 +178,37 @@ python lib/marble_index.py status      # index size + last sync
 - **Periodic refresh:** `refresh` is safe to run on a schedule (idempotent,
   dedups by thread-id + image-URL) to keep the index current as new IDs are posted.
 
+### `lib/ebay_visual.py` — eBay SOLD visual comp finder
+
+Same featurizer as `marble_index` (imported, not duplicated), but the corpus is
+**eBay sold listings with realized prices** — so a reference photo returns
+visually-similar *sold* listings **and what they went for**. A priced
+look-alike finder that complements the forum index (which has no prices).
+
+Data flow — the Apify scraper is an **MCP tool the assistant runs**, not Python:
+```
+# 1) assistant runs automation-lab/ebay-sold-scraper for some pattern queries
+#    (the same actor PRICE uses), then pulls the dataset to a JSON file, e.g.
+#    via the Apify API using apify.api_token from config.yaml.
+# 2) ingest those listings (download image, embed, dedup by itemId):
+python lib/ebay_visual.py add --from results.json [more.json] --label "pattern-name"
+
+# 3) find the top-K similar SOLD listings + price signal (min/median/max):
+python lib/ebay_visual.py query path/or/url [more-angles...] --top 6 [--json out.json]
+
+python lib/ebay_visual.py status
+```
+
+- **Index:** `kb/index/ebay-sold/` (gitignored). meta rows carry `price`, `url`,
+  `soldDate`, `condition` → results are priced comps.
+- **Honesty contract:** similarity finds *priced candidates*, not a valuation.
+  The top-K are comps to **vet** — condition, size, and authenticity still
+  decide validity (see [`../prompts/price.md`](../prompts/price.md)). Backend is
+  `phash` today (CLIP upgrade is the same VC++ path as marble_index).
+- **Build it by pattern:** ingest one named collectable pattern at a time
+  (`--label`) so the library grows into a tagged, queryable set of priced
+  examples for the categories you sell.
+
 ---
 
 ## Article file schema
