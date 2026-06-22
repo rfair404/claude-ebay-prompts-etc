@@ -467,6 +467,13 @@ def cmd_status(args):
 
 
 def main():
+    # Forum titles can carry emoji; the Windows console / redirected log defaults
+    # to cp1252 and a bare print() of such a title raises UnicodeEncodeError
+    # (which would kill a long crawl). Force utf-8 so progress prints never crash.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
