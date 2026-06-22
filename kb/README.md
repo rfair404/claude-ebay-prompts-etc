@@ -210,6 +210,59 @@ python lib/ebay_visual.py status
   (`--label`) so the library grows into a tagged, queryable set of priced
   examples for the categories you sell.
 
+### `lib/ebay_browse.py` — other sellers' ACTIVE listings (Browse API)
+
+Direct eBay **Browse API** reader (app-context OAuth, no Chrome/Apify). Pulls any
+seller's currently-active listings, or a general keyword search.
+```
+python lib/ebay_browse.py seller <username> [--q ...] [--category 220] [--max 200]
+python lib/ebay_browse.py search "<keywords>" [--seller ...] [--max 100]
+```
+- **Active listings only = ASKING prices.** Other sellers' **sold** history is
+  NOT available via API (Marketplace Insights is gated/404 for this keyset) —
+  realized comps still come from Apify. See [[ebay_api_seller_access]] in memory.
+- Seller filter needs a `q`/`category_ids` (Browse rejects it alone); seller
+  mode defaults to Toys & Hobbies (220).
+
+### `lib/seller_intel.py` — comps × live API (who sells, who competes)
+
+Bridges the two sources: Apify sold comps carry `sellerName`, so mine them for
+*who sells a type*, then pull that seller's live activity via Browse.
+```
+python lib/seller_intel.py rank      --from <comps.json...> [--by comps|realized]
+python lib/seller_intel.py profile   <username> --from <comps.json...>
+python lib/seller_intel.py landscape --from <comps.json...> [--check 30]
+```
+- **rank** — top sellers by sold-comp count or realized $, with median sale,
+  feedback, and their top types (attributed via the top-100 taxonomy).
+- **profile** — one seller's realized footprint + LIVE active listings + feedback.
+- **landscape** — category competitive map: MOST FOR SALE (active inventory),
+  HIGHEST-PRICED (top asking), TOP REALIZED — to see how successful sellers
+  operate (volume players vs premium specialists).
+- Reads the standard `apify_ebay.py` saved-run JSON (`raw_items`) directly —
+  `sellerName` flows through with no extra step.
+
+---
+
+## Recipe — studying a new category (reusable beyond marbles)
+
+The marble work above is a template. To bring a new category (jewelry, Pyrex,
+Fenton…) up to the same depth:
+
+1. **Taxonomy** — author `kb/taxonomies/<category>-types.md` (the named
+   collectable types + value tiers + match keywords), mirroring
+   [`taxonomies/marble-types-top100.md`](taxonomies/marble-types-top100.md).
+2. **Pull comps** — `python lib/apify_ebay.py "<type queries…>" --save-dir <dir>`
+   (one run, many keywords). The saved JSON carries `sellerName` + images.
+3. **Priced visual library** — `ebay_visual.py add --from <saved.json>` →
+   query by photo for similar **sold** listings + prices.
+4. **Seller intelligence** — `seller_intel.py rank|landscape --from <saved.json>`
+   → who sells the category, who competes, how they price.
+5. **(Optional) forum/visual ID index** — if a peer-ID forum exists, mirror
+   `lib/marble_index.py` for the look-alike side.
+
+Same tooling, new taxonomy — that's the whole pattern.
+
 ---
 
 ## Article file schema

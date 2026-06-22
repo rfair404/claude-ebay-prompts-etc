@@ -95,11 +95,20 @@ def load_index():
 
 
 def _load_items(paths):
-    """Read Apify dataset items from one or more JSON files (list or {items})."""
+    """Read Apify sold-listing items from one or more JSON files.
+
+    Accepts a bare list, an Apify MCP dump ({items}), or — preferred — the
+    standard saved-run JSON from lib/apify_ebay.py ({raw_items}). raw_items are
+    full raw records (sellerName, thumbnail, soldPrice…), so a comp pull feeds
+    the visual library directly with no field loss.
+    """
     items = []
     for f in paths:
         data = json.loads(Path(f).read_text(encoding="utf-8"))
-        items.extend(data if isinstance(data, list) else data.get("items", []))
+        if isinstance(data, list):
+            items.extend(data)
+        else:
+            items.extend(data.get("raw_items") or data.get("items") or [])
     return items
 
 

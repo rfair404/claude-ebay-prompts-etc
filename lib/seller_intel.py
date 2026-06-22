@@ -69,10 +69,15 @@ def type_for(title, pairs):
 
 # --- data --------------------------------------------------------------------
 def load_comps(paths):
+    """Read sold comps from a bare list, an Apify dump ({items}), or the standard
+    saved-run JSON from lib/apify_ebay.py ({raw_items} — carries sellerName)."""
     items = []
     for f in paths:
         data = json.loads(Path(f).read_text(encoding="utf-8"))
-        items.extend(data if isinstance(data, list) else data.get("items", []))
+        if isinstance(data, list):
+            items.extend(data)
+        else:
+            items.extend(data.get("raw_items") or data.get("items") or [])
     return items
 
 

@@ -397,6 +397,7 @@ class CompRecord:
     item_id: Optional[str] = None
     listing_type: Optional[str] = None    # "Buy It Now" / "Auction"
     bids_count: Optional[int] = None      # for Tier-C single-bid exclusion
+    thumbnail: Optional[str] = None       # listing image (for the visual library)
     keyword_tag: Optional[str] = None     # which input keyword this matched
     bo_accepted: bool = False             # not exposed by this Actor
     raw: dict = field(default_factory=dict, repr=False)
@@ -531,6 +532,7 @@ def _map_to_comp_record(item: dict, keyword_tag: Optional[str]) -> Optional[Comp
         item_id=str(item.get("itemId")) if item.get("itemId") is not None else None,
         listing_type=item.get("listingType"),
         bids_count=_parse_int(item.get("bidsCount")),
+        thumbnail=item.get("thumbnail"),
         keyword_tag=keyword_tag,
         bo_accepted=False,
         raw=item,
@@ -549,7 +551,8 @@ def _comp_to_dict(c: "CompRecord") -> dict:
         "total_price": c.total_price, "seller_username": c.seller_username,
         "seller_feedback_score": c.seller_feedback_score,
         "seller_feedback_pct": c.seller_feedback_pct,
-        "item_id": c.item_id, "keyword_tag": c.keyword_tag, "url": c.url,
+        "item_id": c.item_id, "thumbnail": c.thumbnail,
+        "keyword_tag": c.keyword_tag, "url": c.url,
     }
 
 
@@ -890,6 +893,7 @@ def _cli() -> None:
                     "shipping_cost": c.shipping_cost,
                     "shipping_type": c.shipping_type,
                     "total_price": c.total_price,
+                    "thumbnail": c.thumbnail,
                     "keyword_tag": c.keyword_tag,
                 }
                 for c in comps
