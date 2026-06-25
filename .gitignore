@@ -12,6 +12,10 @@ __pycache__/
 .venv/
 venv/
 
+# Local scratch + generated similarity indexes (large/binary, regenerable)
+.scratch/
+/kb/index/
+
 # Editor / OS
 .vscode/
 .idea/

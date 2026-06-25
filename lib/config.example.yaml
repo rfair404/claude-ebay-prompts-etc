@@ -74,6 +74,10 @@ ebay:
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.
                                          # Create via `--create-pickup-policy`.
     payment_policy_id: null
+    payment_policy_id_auction: null      # optional: a payment policy with immediate
+                                         # payment OFF; required for AUCTION offers
+                                         # (eBay forbids immediate-pay on auctions).
+                                         # Falls back to payment_policy_id if unset.
     return_policy_id: null
 
   production:
@@ -91,6 +95,10 @@ ebay:
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.
                                          # Create via `--create-pickup-policy`.
     payment_policy_id: null
+    payment_policy_id_auction: null      # optional: a payment policy with immediate
+                                         # payment OFF; required for AUCTION offers
+                                         # (eBay forbids immediate-pay on auctions).
+                                         # Falls back to payment_policy_id if unset.
     return_policy_id: null
 
 # ---------------------------------------------------------------------------

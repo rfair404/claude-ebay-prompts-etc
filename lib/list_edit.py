@@ -568,14 +568,14 @@ def _build_inventory_item(draft: Draft, image_urls: list[str]) -> dict:
 def _build_offer(draft: Draft, sku: str, category_id: str,
                  location_key: str, policies: dict) -> dict:
     price = _to_decimal_str(draft.get("price"))
+    fmt = str(draft.get("format") or "FIXED_PRICE").upper()
     offer: dict = {
         "sku": sku,
         "marketplaceId": DEFAULT_MARKETPLACE,
-        "format": "FIXED_PRICE",
+        "format": fmt,
         "availableQuantity": int(draft.get("quantity") or 1),
         "categoryId": str(category_id),
         "listingDescription": _body_to_html(draft.body),
-        "pricingSummary": {"price": {"value": price, "currency": CURRENCY}},
         "merchantLocationKey": location_key,
         "listingPolicies": {
             "fulfillmentPolicyId": policies["fulfillment"],
@@ -583,15 +583,30 @@ def _build_offer(draft: Draft, sku: str, category_id: str,
             "returnPolicyId": policies["return"],
         },
     }
-    if draft.get("best_offer.enabled"):
-        terms: dict = {"bestOfferEnabled": True}
-        decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
-        accept = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
-        if decline:
-            terms["autoDeclinePrice"] = {"value": decline, "currency": CURRENCY}
-        if accept:
-            terms["autoAcceptPrice"] = {"value": accept, "currency": CURRENCY}
-        offer["listingPolicies"]["bestOfferTerms"] = terms
+    if fmt == "AUCTION":
+        # Auctions: the start bid goes in auctionStartPrice (NOT price); a
+        # listingDuration is REQUIRED (DAYS_1..DAYS_10); availableQuantity is
+        # rejected (always 1 implicitly); Best Offer is not permitted. eBay also
+        # forbids immediate-payment on auctions, so use the auction-specific
+        # payment policy (no immediate pay) when configured.
+        offer.pop("availableQuantity", None)
+        offer["pricingSummary"] = {
+            "auctionStartPrice": {"value": price, "currency": CURRENCY}
+        }
+        offer["listingDuration"] = str(draft.get("listing_duration") or "DAYS_7").upper()
+        if policies.get("payment_auction"):
+            offer["listingPolicies"]["paymentPolicyId"] = policies["payment_auction"]
+    else:
+        offer["pricingSummary"] = {"price": {"value": price, "currency": CURRENCY}}
+        if draft.get("best_offer.enabled"):
+            terms: dict = {"bestOfferEnabled": True}
+            decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
+            accept = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
+            if decline:
+                terms["autoDeclinePrice"] = {"value": decline, "currency": CURRENCY}
+            if accept:
+                terms["autoAcceptPrice"] = {"value": accept, "currency": CURRENCY}
+            offer["listingPolicies"]["bestOfferTerms"] = terms
     return offer
 
 
@@ -617,9 +632,13 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
     # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
     policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup")
+    # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
+    # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
+    # listings need it; falls back to the default payment policy otherwise.
+    policies["payment_auction"] = _ebay_extra("payment_policy_id_auction")
     location = _ebay_extra("merchant_location_key")
     for k, v in policies.items():
-        if k in ("fulfillment_media", "fulfillment_local_pickup"):
+        if k in ("fulfillment_media", "fulfillment_local_pickup", "payment_auction"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
@@ -1225,7 +1244,8 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
 
     off = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
     status = str(off.get("status") or "UNKNOWN")
-    price = str(((off.get("pricingSummary") or {}).get("price") or {}).get("value") or "?")
+    _ps = off.get("pricingSummary") or {}
+    price = str((_ps.get("price") or _ps.get("auctionStartPrice") or {}).get("value") or "?")
     sku = str(off.get("sku") or draft.get("meta.ebay_inventory_sku") or "")
     title = str(draft.get("title") or "")
     if not title and sku:

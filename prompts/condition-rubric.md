@@ -87,3 +87,26 @@ its decisions.
   one-line condition summary feed "Listing-safe claims"; un-assessables
   go in "NOT defensible". DRAFT writes every flagged defect into the
   listing's Condition section — defects always survive any trim.
+
+### `condition_description` field — write it telegraphic
+
+The eBay `condition_description` is a **factual defect disclosure, not
+sales copy**. Absolute minimum information that protects against an INAD
+return. Sentence fragments are correct; full warm sentences are not.
+
+Order, each part only if it applies:
+1. **Defects** — every flagged defect, as `<location>: <defect>`
+   fragments. Severity word only when it changes buyer expectation
+   (`hairline crack`, `light shelf wear`). This part never gets trimmed.
+2. **Grade-relevant clears** — one terse `No <defects> noted.` covering
+   the defects a buyer would reasonably fear for this material/grade
+   (e.g. `No chips, cracks, or repairs.`). Skip clears that don't bear on
+   the grade.
+3. **Can't-assess** — untested function, undersides/interior unseen,
+   smoke-free not verifiable from photos. One fragment.
+
+**Never** include: narrative ("removed from box only to photograph"),
+marketing adjectives, decorative description of the item itself (that's
+the title/specifics), or what's-included (that's the body's What's
+Included). If a clause doesn't disclose a defect, a grade-relevant clear,
+or a limit of inspection, it does not belong in this field.

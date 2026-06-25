@@ -188,6 +188,9 @@ only pass `--confirm` on an explicit yes. Use `--offers` to find IDs.
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
   [prompts/condition-rubric.md](prompts/condition-rubric.md).
+- IDENTIFY loads a category **specialization** (expert field guide) when an
+  item matches one — registry + modules in
+  [specializations/README.md](specializations/README.md) (e.g. marbles).
 - PRICE runs the autonomous exact-match hunt (Stage A WebSearch → Stage B
   Apify eBay-sold → optional Stage C Chrome when confidence is low) before
   any era-peer fallback; see its prompt.

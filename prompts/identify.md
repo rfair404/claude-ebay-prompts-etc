@@ -54,6 +54,33 @@ Marker discipline (per _shared confidence rule):
   mid-to-late"). No bracket.
 - `Unknown` — no real basis. Not a license to invent the priciest identity.
 
+## Category specializations (load expert knowledge on a match)
+
+Some categories have a dedicated **specialization module** — a self-contained
+expert field guide under [`../specializations/`](../specializations/). After you
+form an item's first-pass Category, check the registry table in
+[`../specializations/README.md`](../specializations/README.md): match the item's
+category / material / keywords against each module's **Triggers**. On a hit, the
+item is *in specialization* — **read that module file and apply it** before
+settling this item's fields.
+
+A loaded module gives you, for that item: the maker/type taxonomy and visual
+tells, the named high-value types to watch for, the category's own condition
+vocabulary, the authentication/fake tests, and a coarse **value tier**. Use it
+to:
+
+- settle Brand / Type / Era / Condition with specialist precision;
+- record the module's **value tier** in Distinguishing marks (so PRICE/CURATE
+  know which items deserve the exact-comp hunt vs which are filler);
+- set `needs_followup_photo` to the SPECIFIC inspection shot the module names
+  (e.g. a pontil/seam macro) when the confident call needs an inspection the
+  photos don't show.
+
+A specialization **refines, never overrides** the honesty rules and the
+maker-attribution discipline below: still no inventing, still `[BEST-CASE]` +
+scenario bracket for value-swing inferences, still the maker-mark gate. If no
+module's triggers match, proceed with the general pass as normal.
+
 ## Maker / brand attribution (work it HARD — high leverage)
 
 Brand is the single highest-leverage field: a confirmed maker changes the
