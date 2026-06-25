@@ -3,8 +3,9 @@
 
 Given a reference photo, return the most visually-similar *sold* eBay listings
 together with their realized prices. Complements lib/marble_index.py (forum
-photos, no prices) with priced comps, and **reuses its pHash featurizer** so the
-two libraries behave identically (same embedding method, separate indexes).
+photos, no prices) with priced comps. Embedding + http + storage come from the
+shared CLIP core (lib/vindex.py) — same space as the forum + MCSA indexes, so
+results are comparable (and unifiable). CLIP-only since the visual-index refactor.
 
 Why a separate ingester: eBay sold data comes from the Apify actor
 `automation-lab/ebay-sold-scraper`, which is an **MCP tool the assistant runs**,
@@ -22,8 +23,8 @@ not something Python can call. So the flow is:
 
 Index: kb/index/ebay-sold/ (gitignored, regenerable).
   meta.jsonl  one row per listing image {i,img,itemId,url,title,price,...}
-  emb.npy     float32 [N,D] L2-normalised features, row-aligned to meta
-  state.json  dedup sets + last_sync_utc + backend
+  emb.npy     float32 [N,D] L2-normalised CLIP embeddings, row-aligned to meta
+  state.json  dedup sets + last_sync_utc + {model, dim}
 
 Honesty contract (same as marble_index): similarity finds *candidates*, it does
 NOT identify maker/era or guarantee a comp is truly comparable. Treat the
@@ -36,15 +37,12 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
-# Reuse marble_index's tooling WITHOUT editing it (import is read-only/safe even
-# while a marble crawl is running in another process).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from marble_index import _feat_phash, _download_pil, _nap, IMG_DELAY  # noqa: E402
+from vindex import VIndex, download_pil, embed_images  # noqa: E402
 
-INDEX_DIR = Path(__file__).resolve().parent.parent / "kb" / "index" / "ebay-sold"
+IDX = VIndex("ebay-sold")
 EMBED_BATCH = 16
 
 
@@ -53,45 +51,9 @@ def _hires(url: str) -> str:
     return re.sub(r"s-l\d+\.", "s-l500.", url) if url else url
 
 
-# --- storage (same layout as marble_index, own dir) --------------------------
-def _state_path():
-    return INDEX_DIR / "state.json"
-
-
-def load_state():
-    p = _state_path()
-    if p.exists():
-        return json.loads(p.read_text())
-    return {"indexed_item_ids": [], "indexed_img_urls": [],
-            "count": 0, "last_sync_utc": None, "backend": "phash",
-            "queries": []}
-
-
-def save_state(state):
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    _state_path().write_text(json.dumps(state, indent=2))
-
-
-def append_index(rows, embeddings):
-    import numpy as np
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    emb_p, meta_p = INDEX_DIR / "emb.npy", INDEX_DIR / "meta.jsonl"
-    if emb_p.exists():
-        embeddings = np.vstack([np.load(emb_p), embeddings]).astype("float32")
-    np.save(emb_p, embeddings.astype("float32"))
-    with meta_p.open("a", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def load_index():
-    import numpy as np
-    emb_p, meta_p = INDEX_DIR / "emb.npy", INDEX_DIR / "meta.jsonl"
-    if not emb_p.exists() or not meta_p.exists():
-        raise SystemExit("Index is empty — run `add` first.")
-    emb = np.load(emb_p)
-    meta = [json.loads(l) for l in meta_p.read_text(encoding="utf-8").splitlines() if l.strip()]
-    return emb, meta
+def _default_state():
+    return {"indexed_item_ids": [], "indexed_img_urls": [], "count": 0,
+            "last_sync_utc": None, "backend": None, "model": None, "queries": []}
 
 
 def _load_items(paths):
@@ -114,23 +76,24 @@ def _load_items(paths):
 
 # --- commands ----------------------------------------------------------------
 def cmd_add(args):
-    import numpy as np
-    state = load_state()
+    state = IDX.load_state(_default_state())
     seen_items = set(state["indexed_item_ids"])
     seen_imgs = set(state["indexed_img_urls"])
     items = _load_items(args.from_)
     print(f"loaded {len(items)} listing rows from {len(args.from_)} file(s)", flush=True)
 
     pil_batch, batch_meta, added, skipped = [], [], 0, 0
+    dim_seen = 0
 
     def flush():
-        nonlocal added
+        nonlocal added, dim_seen
         if not pil_batch:
             return
-        emb = np.vstack([_feat_phash(p) for p in pil_batch]).astype("float32")
+        emb = embed_images(pil_batch)
+        dim_seen = emb.shape[1]
         base = state["count"]
         rows = [dict(m, i=base + k) for k, m in enumerate(batch_meta)]
-        append_index(rows, emb)
+        IDX.append(rows, emb)
         state["count"] += len(rows)
         added += len(rows)
         pil_batch.clear()
@@ -146,7 +109,7 @@ def cmd_add(args):
             skipped += 1
             continue
         try:
-            pil_batch.append(_download_pil(url))
+            pil_batch.append(download_pil(url))
         except Exception as e:
             print(f"  ! img skip {iid}: {e}", flush=True)
             skipped += 1
@@ -161,7 +124,6 @@ def cmd_add(args):
             "condition": it.get("condition"),
             "query": it.get("query") or args.label,
         })
-        _nap(IMG_DELAY)
         if len(pil_batch) >= EMBED_BATCH:
             flush()
     flush()
@@ -170,15 +132,17 @@ def cmd_add(args):
     state["indexed_img_urls"] = sorted(seen_imgs)
     if args.label and args.label not in state["queries"]:
         state["queries"].append(args.label)
-    state["last_sync_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    save_state(state)
+    if dim_seen:
+        IDX.stamp(state, dim_seen)
+    IDX.save_state(state)
     print(f"\n+{added} listings ({skipped} skipped). Index holds {state['count']} "
           f"sold listings.", flush=True)
 
 
 def cmd_query(args):
-    import numpy as np
-    emb, meta = load_index()
+    state = IDX.load_state(_default_state())
+    IDX.check_model(state)
+    emb, meta = IDX.load()
     pil = []
     for ref in args.images:
         p = Path(ref)
@@ -187,12 +151,12 @@ def cmd_query(args):
                 from PIL import Image
                 pil.append(Image.open(p).convert("RGB"))
             else:
-                pil.append(_download_pil(ref))
+                pil.append(download_pil(ref))
         except Exception as e:
             print(f"! could not load reference {ref}: {e}", file=sys.stderr)
     if not pil:
         raise SystemExit("No usable reference image.")
-    q = np.vstack([_feat_phash(p) for p in pil]).astype("float32")
+    q = embed_images(pil)
     score = (emb @ q.T).max(axis=1)
     # best image per listing
     best = {}
@@ -221,14 +185,14 @@ def cmd_query(args):
 
 
 def cmd_status(args):
-    state = load_state()
+    state = IDX.load_state(_default_state())
     print(json.dumps({
         "listings": state["count"],
         "distinct_item_ids": len(state["indexed_item_ids"]),
         "queries_ingested": state["queries"],
-        "backend": state["backend"],
+        "model": state.get("model"),
         "last_sync_utc": state["last_sync_utc"],
-        "index_dir": str(INDEX_DIR),
+        "index_dir": str(IDX.dir),
     }, indent=2))
 
 
