@@ -54,6 +54,30 @@ Marker discipline (per _shared confidence rule):
   mid-to-late"). No bracket.
 - `Unknown` — no real basis. Not a license to invent the priciest identity.
 
+### Good / Better / Best + poll when uncertain
+
+Lead with the upside, and make the downgrade EARN it. Where a specialization
+provides a **Good / Better / Best** ladder (e.g. marbles), present all three
+live tiers on the item instead of collapsing to one verdict:
+
+- **GOOD** — an *optimistic* floor (what it is even if nothing special confirms);
+  never "filler" by default.
+- **BETTER** — the named-maker / upgraded read, with the cue that supports it.
+- **BEST** — the trophy read if the tells align; stays `[BEST-CASE]` + verify,
+  but is STATED, not buried.
+
+Grade to the TOP of the supported band — a clean surface in adequate photos is
+the top grade, not a hedged "pending". Damage must be *visible* to cost grade.
+
+When you genuinely cannot tell which tier the item lands on AND it swings value,
+do **not** silently pick the low one. **Poll the user with the SPECIFIC
+discriminating question(s)** the specialization names — in an *interactive* run
+this is a stop-and-ask (same gate as the maker-mark stop below); in a *headless*
+run it degrades to the SOFT path (log them to `needs_followup_photo` +
+`NEEDS_REVIEW.md`). Ask only for what the photos can't answer — settle from the
+photos everything you can read yourself; never offload an expert read (pattern,
+seam, ribbons-vs-patch) onto the user.
+
 ## Category specializations (load expert knowledge on a match)
 
 Some categories have a dedicated **specialization module** — a self-contained

@@ -2,7 +2,7 @@
 
 ```yaml
 triggers: [marble, marbles, shooter, swirl, sulphide, onionskin, "glass ball toy", "marble lot", "marble jar", "marble collection", agate-marble, seam, cutline, "fisheye", moonie, "patch and ribbon"]
-version: 4
+version: 5
 last_reviewed: 2026-06-25
 sources:
   - Marble Collectors Society of America — marblecollecting.com (taxonomy, grading)
@@ -38,7 +38,26 @@ sources:
 > and held at `[BEST-CASE]` unless the evidence is strong. When it doesn't clearly
 > add up, default to **"handmade — origin/era undetermined"**, never "German
 > antique". This is a known failure mode: do not let the module's German-handmade
-> or rare-type emphasis bias an unmarked marble upward.
+> or rare-type emphasis bias an unmarked marble upward. And **where a marble was
+> *found* ≠ who *made* it** — an example dug at the Sistersville Alley site was
+> consensus-ID'd **Akro**, not Alley; provenance is a hint, never the ID.
+
+> 🔎 **Read the seam first — machine-made ID starts at the seam (core tenet).**
+> For any *machine-made* marble the **seam / cutline / pole** (the line[s] where
+> the pattern closes) is the primary diagnostic: *"when in doubt, start with the
+> seams"* (Steph, MC seam tutorial). Two rules follow. **(1) Shoot BOTH ends** —
+> the *second* seam is often what resolves the ID (a short, V-shaped second seam
+> says Master over Akro; a "busy" marble that looks like it has three seams really
+> has two — find the true second one). **(2) The pattern runs seam-to-seam /
+> pole-to-pole** — read how the ribbons or patch are organized between the poles.
+> Which word the marble "wants" is itself a soft cue (Master *cutlines/poles*;
+> Akro/Peltier/Marble King/Vitro *seams*; corkscrew *cutline*; Akro Moonie
+> *pole*). For some types the diagnostic isn't the seam but a *named feature* —
+> a corkscrew's ribbon start+finish, a Moonie's fisheye, an Acme Realer's interior
+> "fire" — so chase that instead. When the seams won't decide it, **"maker
+> uncertain" / "Akro or Master" is a valid answer** — no single tell (e.g.
+> "eyelashes") is proof. The per-maker seam playbook is in **"Reading seams,
+> cutlines & poles"** below; light it and shoot it per **Inspection shots**.
 
 ## When this applies
 
@@ -491,6 +510,50 @@ frames, not their number):
 - **Target the diagnostic feature:** corkscrew → ribbon **start + finish**; Acme
   Realer (translucent-white Pelt patch) → the interior **"fire"/glow**; opal /
   opalescent Vitro → the **opalescent flash**.
+
+## Good / Better / Best — mandatory output + poll when uncertain
+
+Every marble (and marble lot) is reported as a **GOOD / BETTER / BEST** ladder on
+type — three live tiers, never a single verdict. Lead with the bull case; the
+floor is *optimistic*, not pessimistic; make the downgrade EARN it with a
+concrete observable; grade a clean surface **Mint**, not "NM pending". This is
+the speculative-upward mandate applied to marbles.
+
+- **GOOD (floor):** the conservative-but-not-pessimistic read — e.g. "vintage
+  machine-made swirl, Mint, sells as a matched set", **not** "filler".
+- **BETTER:** the named-maker / better-grade step up, with the cue that supports it.
+- **BEST:** the named money-type / trophy read if the tells align — stays
+  `[BEST-CASE]` + verify, but is STATED, not buried.
+
+**Read everything you can off the photos yourself — only poll the user for what a
+photo can't show.** Pattern, seam count, ribbons-vs-patch, colour, base
+transparency from a backlit frame: YOUR call. When the tier genuinely can't be
+settled AND value swings on it, poll with the SPECIFIC question(s) below
+(interactive) or log to `needs_followup_photo` + `NEEDS_REVIEW.md` (headless) —
+never silently default to the low tier.
+
+**Decision question bank (each tied to which tier it moves):**
+1. **Provenance / age** of the lot → sets the age dial (`lib/marble_prior.py`).
+2. **Size by caliper** (mm/in) → >5/8" adds; ¾"+ and 1"+ jump tiers (size is a
+   top multiplier even on a common type).
+3. **Pole check** → rough/grainy pontils (handmade → BEST) vs smooth seams (machine).
+4. **Backlit** → glows translucent (common) vs dense opaque brick-red (oxblood →
+   up) vs thin translucent ribbons + two seams (Peltier NLR → up); **and is the
+   base SEE-THROUGH** (clear → Akro/Vitro veneer) **or opaque** (→ Marble King)?
+5. **Surface (raking + loupe)** → orange-peel + oily sheen (modern Vacor → down)
+   vs smooth period glass; any chip/moon (grade down) vs clean (Mint → up).
+6. **UV / blacklight** → does it fluoresce? (WV swirl / JABO Fenton-scrap /
+   Jackson Vitrolite maker-era clue).
+7. **Colour character** → crisp, intense, non-bleeding (Christensen Agate → BEST)
+   vs soft/bleeding.
+8. **Count / match** → how many of this exact type, all mint? (matched mint set =
+   premium unit, not bulk).
+
+**Ribbons vs patch — read it off the photo, do NOT ask:** broad colour zones/caps
++ a band where they meet at the seam = **patch / patch-and-ribbon** (Marble King &
+common patches); **4–8 thin parallel pinstripes** pole-to-pole + two seams =
+**Peltier NLR** (the $$ upgrade). This single read is often the $1-vs-$$ fork —
+make it yourself, then use the backlit/seam questions only to confirm.
 
 ## Output hooks (maps onto IDENTIFY fields)
 
