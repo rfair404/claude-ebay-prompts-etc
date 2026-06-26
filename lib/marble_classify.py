@@ -123,6 +123,29 @@ def _softmax(x, tau):
     return e / e.sum()
 
 
+def topk_floor(pairs, *, abs_floor=0.03, rel_frac=1 / 6, min_show=2, max_show=5):
+    """Trim a ranked [(label, prob)] down to the *meaningful* candidates.
+
+    Keeps a candidate only if it clears BOTH an absolute floor and a fraction of
+    the leader's probability — so a genuine close 2nd/3rd is shown, but the
+    ultra-low-probability tail ("0.0085% chance of X") is dropped. Always keeps
+    at least `min_show` so a real runner-up is never hidden behind the floor.
+    Returns (shown, n_hidden, hidden_mass).
+    """
+    if not pairs:
+        return [], 0, 0.0
+    p1 = pairs[0][1]
+    cut = max(abs_floor, rel_frac * p1)
+    shown = []
+    for i, (lab, p) in enumerate(pairs[:max_show]):
+        if i < min_show or p >= cut:
+            shown.append((lab, p))
+        else:
+            break
+    hidden = pairs[len(shown):]
+    return shown, len(hidden), float(sum(p for _, p in hidden))
+
+
 class Classifier:
     def __init__(self, *, w_proto=1.0, w_text=0.0, w_knn=1.0, tau=0.04,
                  knn_k=3, abstain_p=0.45, abstain_margin=0.10):
@@ -215,16 +238,56 @@ class Classifier:
         i = int(np.argmax(prob))
         return self.fam_names[i], float(prob[i]), prob
 
-    def predict(self, q):
-        """q: [D] normalized. -> dict with label probs, family, abstain."""
+    def predict(self, q, age=None, prior_strength=1.0):
+        """q: [D] normalized. -> dict with label probs, family, abstain.
+
+        Carries the FULL ranked family vector and a `family_soft` flag: the
+        machine/non-glass families own most of the label slots and the corpus
+        base rate, so the head can drift to "machine" with a handmade/
+        transitional reading sitting right behind it. We surface that runner-up
+        family instead of silently reporting only the winner — leaning generic
+        with a live PULL second is exactly what "going soft" looks like.
+
+        `age` (None = raw CLIP likelihood, the measurement path used by eval /
+        gold_eval). When set (float or a marble_prior preset name), the family
+        vector is combined Bayesian-style with the estate "value lean" prior —
+        `families_adj` + an `era_lean` are added and family_soft is judged on the
+        prior-adjusted vector. The prior moves the LEAN, not the honesty clamps.
+        """
         import numpy as np
         prob = self._blend(q, self.proto)
         order = np.argsort(-prob)
-        top = [(self.labels[i], float(prob[i])) for i in order[:5]]
-        fname, fprob, _ = self._family(q)            # balanced family head
+        top = [(self.labels[i], float(prob[i])) for i in order[:8]]
+        fname, fprob, fvec = self._family(q)         # balanced family head
+        forder = np.argsort(-fvec)
+        families = [(self.fam_names[i], float(fvec[i])) for i in forder]
         p1 = top[0][1]; p2 = top[1][1] if len(top) > 1 else 0.0
         abstain = (p1 < self.abstain_p) or (p1 - p2 < self.abstain_margin)
-        return {"top": top, "family": (fname, fprob), "abstain": abstain}
+        out = {"top": top, "family": (fname, fprob), "families": families,
+               "abstain": abstain}
+        # apply the operating prior (estate value-lean) when an age is supplied
+        if age is not None:
+            from marble_prior import apply_prior, vintage_fraction, resolve_age
+            lik = {f: p for f, p in families}
+            post = apply_prior(lik, age, strength=prior_strength)
+            fam_judge = sorted(post.items(), key=lambda kv: -kv[1])
+            out["families_adj"] = fam_judge
+            out["age"] = resolve_age(age)
+            out["era_lean"] = vintage_fraction(age)
+        else:
+            fam_judge = families                     # judge softness on raw
+        # softness gate: leader family is machine/non-glass, but a PULL family
+        # (handmade/transitional) is a live runner-up -> don't quietly jar it.
+        lead_fam, lead_fp = fam_judge[0]
+        family_soft = False
+        if lead_fam in ("machine", "nonglass"):
+            for fam, fp in fam_judge[1:]:
+                if fam in ("handmade", "transitional") and (
+                        fp >= lead_fp * 0.6 or lead_fp - fp <= 0.15):
+                    family_soft = True
+                    break
+        out["family_soft"] = family_soft
+        return out
 
     # ---- evaluation ----
     def eval_loo(self, verbose=True):
@@ -269,28 +332,67 @@ class Classifier:
 
 def _report(clf, result, refs):
     print(f"\n=== marble ID  ({', '.join(Path(r).name for r in refs)}) ===")
-    fam, famp = result["family"]
-    print(f"FAMILY: {fam.upper()}  ({famp:.0%})  — {FAMILY_DESC[fam]}")
+    # FAMILY — show the runner-up family when it's a live call (≥10% and ≥1/3 of
+    # the leader), not just the winner. A close 2nd family is the headline tell.
+    fams = result["families"]
+    shown_f, _, _ = topk_floor(fams, abs_floor=0.10, rel_frac=1 / 3,
+                               min_show=1, max_show=3)
+    fam_str = "  ·  ".join(f"{f} {p:.0%}" for f, p in shown_f)
+    print(f"FAMILY (CLIP): {fam_str}")
+    # operating prior (estate value-lean) — the call we actually act on
+    flead = fams[0][0]
+    if result.get("families_adj"):
+        from marble_prior import value_posture, MODERN_FLOOR
+        adj = result["families_adj"]
+        flead = adj[0][0]
+        shown_a, _, _ = topk_floor(adj, abs_floor=0.10, rel_frac=1 / 3,
+                                   min_show=1, max_show=3)
+        astr = "  ·  ".join(f"{f} {p:.0%}" for f, p in shown_a)
+        vp = value_posture(result["age"])
+        print(f"FAMILY (estate lean, age={result['age']:.2f}): {astr}   — "
+              f"{FAMILY_DESC[flead]}")
+        print(f"  era lean (if machine): ~{result['era_lean']:.0%} vintage / "
+              f"{1 - result['era_lean']:.0%} modern  → default {vp['tier']}; "
+              f"{vp['action']}  (modern floor {MODERN_FLOOR:.0%} until UV/raking)")
+    else:
+        print(f"  — {FAMILY_DESC[flead]}")
+    if result["family_soft"]:
+        print("   ⚠ SOFT family call — a handmade/transitional reading is a live "
+              "runner-up; do NOT jar as filler on this alone (a pontil/cane/Lutz "
+              "tell is REQUIRED to claim handmade).")
     if result["abstain"]:
         print("MAKER/TYPE: ⚠ uncertain — candidates only (judge on the photo / get the shot):")
     else:
         print("MAKER/TYPE (calibrated):")
-    for rank, (lab, p) in enumerate(result["top"], 1):
+    # top-5 with a noise floor — show the real contenders, drop the long tail
+    shown, n_hidden, _ = topk_floor(result["top"])
+    for rank, (lab, p) in enumerate(shown, 1):
         tier, pull = TIER.get(lab, ("?", False))
         flag = "PULL" if pull else "filler"
         mark = "→" if rank == 1 and not result["abstain"] else " "
         print(f"  {mark} {p:5.1%}  {lab:22} [{flag}]  {tier}")
+    if n_hidden:
+        print(f"     (+{n_hidden} lower-probability candidate(s) below the noise floor)")
     lab0 = result["top"][0][0]
     _, pull0 = TIER.get(lab0, ("", False))
-    if pull0 or FAMILY[lab0] in ("handmade", "transitional"):
+    if pull0 or FAMILY[lab0] in ("handmade", "transitional") or result["family_soft"]:
         print("  ↳ resolution: PULL — backlit + pole-macro; confirm named type before pricing "
               "(method≠origin≠era; an unconfirmed rare type stays [BEST-CASE]).")
+    elif result.get("families_adj"):
+        from marble_prior import value_posture
+        vp = value_posture(result["age"])
+        print(f"  ↳ resolution: {vp['action']} (default {vp['tier']}); a named-pattern "
+              "or pontil tell upgrades it — method≠origin≠era.")
     else:
         print("  ↳ resolution: likely filler — jar/lot it unless size/UV/oxblood says otherwise.")
 
 
 def cmd_classify(args):
     clf = Classifier()
+    age = None if args.no_prior else args.age
+    if age is not None:
+        from marble_prior import describe
+        print(describe(age))
     if args.detect:
         # auto-crop every marble out of each photo, then classify each one
         from marble_crop import detect_and_crop
@@ -303,7 +405,7 @@ def cmd_classify(args):
         print(f"detected {len(marbles)} marble(s) across {len(args.images)} photo(s)")
         for tag, im in marbles:
             q = embed_images([im])[0]
-            _report(clf, clf.predict(q), [tag])
+            _report(clf, clf.predict(q, age=age, prior_strength=args.prior_strength), [tag])
         return
     pil = []
     for r in args.images:
@@ -317,7 +419,7 @@ def cmd_classify(args):
         raise SystemExit("No usable image.")
     q = embed_images(pil)
     qn = clf._norm(q.mean(0, keepdims=True))[0] if len(pil) > 1 else q[0]
-    _report(clf, clf.predict(qn), args.images)
+    _report(clf, clf.predict(qn, age=age, prior_strength=args.prior_strength), args.images)
 
 
 def cmd_eval(args):
@@ -349,6 +451,14 @@ def main():
     p.add_argument("images", nargs="+")
     p.add_argument("--detect", action="store_true",
                    help="auto-crop each marble from the photo(s) first (lib/marble_crop)")
+    p.add_argument("--age", default="estate-typical",
+                   help="operating prior age-confidence: 0..1 or a preset "
+                        "(dollar-store/no-provenance/estate-typical/old-collection/"
+                        "known-antique). Default estate-typical. See lib/marble_prior.py")
+    p.add_argument("--no-prior", action="store_true",
+                   help="raw CLIP likelihood only — no estate value-lean")
+    p.add_argument("--prior-strength", type=float, default=1.0,
+                   help="how hard the prior bites (0=ignore, 1=full Bayes, >1=stronger)")
     p.set_defaults(func=cmd_classify)
     p = sub.add_parser("eval", help="leave-one-out accuracy on the MCSA labels")
     p.add_argument("--w-proto", type=float, default=1.0)

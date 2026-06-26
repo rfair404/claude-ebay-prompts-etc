@@ -144,13 +144,64 @@ def crop_marble(bgr, circle, *, pad=0.15, mask_bg=True):
     return Image.fromarray(rgb)
 
 
-def detect_and_crop(path, **kw):
-    """Photo path -> [(circle, PIL.Image)] for each detected marble."""
+# --- CLIP "is this actually a marble?" gate ---------------------------------
+# The geometric detector can't tell a marble from anything else round-and-
+# textured: a coin (size reference) and a patch of background fabric both slipped
+# through and got indexed/priced as marbles. This semantic gate scores each crop
+# against marble vs not-marble text prompts in the SAME CLIP space and drops the
+# non-marbles. NON-MARBLE CROPS ARE NOT ACCEPTABLE — `tests/test_marble_gate.py`
+# pins the known false positives (coin, fabric) so a regression fails loudly.
+_MARBLE_PROMPTS = [
+    "a glass toy marble", "a round glass marble sphere",
+    "a colorful swirled glass marble", "a translucent glass shooter marble",
+    "a cat's-eye glass marble",
+]
+_NOT_MARBLE_PROMPTS = [
+    "a coin", "a metal coin", "a dime", "a silver disc",
+    "a piece of fabric", "cloth texture", "a woven textile background",
+    "a ruler", "a fingertip", "a human hand",
+    "an empty surface", "a blurry out-of-focus background", "a rock or pebble",
+]
+_GATE = {}
+
+
+def _gate_vecs():
+    if "pos" not in _GATE:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from vindex import embed_texts
+        _GATE["pos"] = embed_texts(_MARBLE_PROMPTS)
+        _GATE["neg"] = embed_texts(_NOT_MARBLE_PROMPTS)
+    return _GATE["pos"], _GATE["neg"]
+
+
+def is_marble(pil, *, margin=0.0):
+    """CLIP zero-shot gate. -> (ok, s_pos, s_neg). ok iff the crop is more like a
+    marble than like a coin / fabric / ruler / finger / background, by `margin`.
+    margin=0.0 ("more marble than not") cleanly rejects the known false positives
+    (coin -0.055, fabric -0.033) AND unreliable out-of-focus frames (which the
+    marble photo protocol says to discard), while passing every in-focus marble
+    (calibrated +0.018..+0.070). Raise margin to be stricter."""
+    from vindex import embed_images
+    pos, neg = _gate_vecs()
+    q = embed_images([pil])[0]
+    s_pos = float((pos @ q).max())
+    s_neg = float((neg @ q).max())
+    return (s_pos - s_neg) >= margin, s_pos, s_neg
+
+
+def detect_and_crop(path, *, gate=True, **kw):
+    """Photo path -> [(circle, PIL.Image)] for each detected marble.
+
+    With gate=True (default) every crop must pass the CLIP is_marble() check, so
+    coins/fabric/fingers that fool the circle detector are dropped."""
     mask_bg = kw.pop("mask_bg", True)
     pad = kw.pop("pad", 0.15)
     bgr = _load_bgr(path)
-    return [(c, crop_marble(bgr, c, pad=pad, mask_bg=mask_bg))
-            for c in detect_marbles(bgr, **kw)]
+    pairs = [(c, crop_marble(bgr, c, pad=pad, mask_bg=mask_bg))
+             for c in detect_marbles(bgr, **kw)]
+    if not gate:
+        return pairs
+    return [(c, im) for (c, im) in pairs if is_marble(im)[0]]
 
 
 def main():
@@ -163,6 +214,8 @@ def main():
     ap.add_argument("images", nargs="+")
     ap.add_argument("--out", default=None, help="dir for crops (default: <image_dir>/crops)")
     ap.add_argument("--no-mask", action="store_true", help="don't white-mask the background")
+    ap.add_argument("--no-gate", action="store_true",
+                    help="skip the CLIP is-this-a-marble gate (keep raw crops)")
     ap.add_argument("--min-frac", type=float, default=0.05)
     ap.add_argument("--max-frac", type=float, default=0.6)
     ap.add_argument("--circ", type=float, default=0.40)
@@ -175,7 +228,7 @@ def main():
         out.mkdir(parents=True, exist_ok=True)
         pairs = detect_and_crop(
             p, min_frac=args.min_frac, max_frac=args.max_frac, circ=args.circ,
-            max_n=args.max_n, mask_bg=not args.no_mask)
+            max_n=args.max_n, mask_bg=not args.no_mask, gate=not args.no_gate)
         print(f"{p.name}: {len(pairs)} marble(s)")
         for k, (c, im) in enumerate(pairs, 1):
             fn = out / f"{p.stem}_m{k:02d}.jpg"

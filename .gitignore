@@ -41,6 +41,9 @@ listings_ledger.csv
 *.webp
 *.tiff
 
+# ...except small, intentional test fixtures (regression assets must be tracked)
+!tests/fixtures/**
+
 # Inventory working files — never tracked (private business data + images)
 /inventory/
 
