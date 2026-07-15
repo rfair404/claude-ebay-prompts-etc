@@ -32,6 +32,10 @@ apify_runs/
 listings_log.txt
 listings_ledger.csv
 
+# Per-run working scratch: deferred-question log written by the pipeline phases
+# (SOFT-gate notes for the current shoot; regenerated each run, not source).
+NEEDS_REVIEW.md
+
 # Sample / shoot images — kept on disk, not version-controlled (heavy binaries)
 *.jpg
 *.jpeg

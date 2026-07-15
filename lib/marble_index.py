@@ -532,56 +532,146 @@ def cmd_next(args):
             _disable_self()
 
 
+_ANSWER_FIELDS = ("op_question", "answer", "answer_by", "answer_group",
+                  "answer_rep", "n_replies")
+
+
 def cmd_refresh(args):
-    """Catch up on NEW threads at the FRONT of the forum: crawl from page 1
-    (newest-first) and STOP as soon as a page contains no un-indexed topics —
-    i.e. once we've reached already-indexed territory. This is the cheap, run-it-
-    anytime sync for new posts (the `next` cursor only walks DEEP history, so it
-    won't pick up brand-new threads on page 1). `--max-new-pages` caps how far it
-    will scan before giving up if every page keeps showing new threads."""
+    """Catch up the FRONT of the forum — both NEW threads and NEW REPLIES to
+    existing threads — then stop at quiescent (unchanged) territory. Lists by
+    **last activity** (not creation) so a thread that just got an expert reply
+    surfaces at the front alongside brand-new threads.
+
+    - New thread  -> indexed normally (embeds OP images).
+    - Known thread with MORE replies than we stored -> its answer/consensus
+      metadata is updated IN PLACE (no new embeddings; OP images are unchanged).
+    Stops on the first page with no new AND no updated threads. `--max-new-pages`
+    caps the scan; `--new-only` skips the (heavier) reply re-check.
+
+    Note: reply count is read from the thread's first page, so growth past ~25
+    replies on a long thread may not register — fine for typical short ID threads."""
     with _single_writer("refresh") as ok:
         if not ok:
             return
         state = IDX.load_state(_default_state())
-        before = state["count"]
+        before_imgs = state["count"]
         known = set(state["indexed_topic_ids"])
-        total = 0
+        # stored reply count per thread (max across its image rows)
+        stored_reps = {}
+        if not args.new_only:
+            _, meta0 = IDX.load()
+            for m in meta0:
+                t = m["tid"]
+                stored_reps[t] = max(stored_reps.get(t, 0), m.get("n_replies") or 0)
+            del meta0
+
+        all_fresh = []
+        updates = {}   # tid -> (thread_meta, posts, turl, title)
         for page in range(1, args.max_new_pages + 1):
-            url = _listing_url(page, sort_by_creation=True)
+            url = _listing_url(page, sort_by_creation=False)   # last-activity order
             try:
                 topics = parse_listing(http_get(url), url)
             except Exception as e:
                 print(f"[refresh p{page}] listing failed: {e}", flush=True)
                 break
             fresh = [t for t in topics if t[0] not in known]
-            print(f"[refresh p{page}] {len(fresh)} new / {len(topics)} topics", flush=True)
-            if not fresh:
-                print("Reached already-indexed threads — sync complete.", flush=True)
-                break
-            total += crawl_topics(fresh, state)
+            page_updated = 0
+            if not args.new_only:
+                for tid, turl, title in topics:
+                    if tid not in known or tid in updates:
+                        continue
+                    try:
+                        tmeta, posts = _read_thread(http_get(turl), turl, title)
+                    except Exception:
+                        continue
+                    if (tmeta.get("n_replies") or 0) > stored_reps.get(tid, 0):
+                        updates[tid] = (tmeta, posts, turl, title)
+                        page_updated += 1
+            print(f"[refresh p{page}] {len(fresh)} new / {page_updated} updated "
+                  f"/ {len(topics)} topics", flush=True)
+            all_fresh.extend(fresh)
             known |= {t[0] for t in fresh}
+            if not fresh and page_updated == 0:
+                print("Reached unchanged threads — resync complete.", flush=True)
+                break
             pace(FAST_PAGE_DELAY if FAST else PAGE_DELAY)
-        print(f"\nRefresh done. +{total} images ({before} -> {state['count']}).", flush=True)
+
+        # Phase A: index the new threads (appends emb + meta + threads.jsonl).
+        added = crawl_topics(all_fresh, state) if all_fresh else 0
+
+        # Phase B: apply reply updates to existing meta IN PLACE. Reload meta AFTER
+        # the append above so the rewrite includes the newly-added rows.
+        if updates:
+            _, meta = IDX.load()
+            for m in meta:
+                u = updates.get(m["tid"])
+                if u:
+                    m.update({k: u[0][k] for k in _ANSWER_FIELDS})
+            IDX.save_meta(meta)
+            for tid, (_, posts, turl, title) in updates.items():
+                _dump_thread(tid, turl, title, posts)   # refreshed sidecar (last-wins)
+            IDX.save_state(state)
+
+        print(f"\nRefresh done. +{added} images ({before_imgs} -> {state['count']}), "
+              f"{len(updates)} thread(s) updated with new replies.", flush=True)
+
+
+# --- shared query/search helpers --------------------------------------------
+FIELD_SETS = {                       # --field choice -> meta keys to search
+    "all": ("title", "op_question", "answer"),
+    "question": ("title", "op_question"),
+    "answer": ("answer",),
+}
+
+
+def load_refs_aligned(refs):
+    """[path-or-url] -> [(ref, PIL)] for the refs that load (failures skipped).
+
+    Unlike _load_refs this KEEPS the ref identity, so a caller that indexes the
+    resulting embeddings by position can stay row-aligned (verify_batch pairs
+    each crop name to its embedding row — a silently-dropped ref would otherwise
+    shift every later crop onto the wrong embedding)."""
+    from PIL import Image
+    out = []
+    for ref in refs:
+        p = Path(ref)
+        try:
+            out.append((ref, Image.open(p).convert("RGB") if p.exists()
+                        else download_pil(ref)))
+        except Exception as e:
+            print(f"! could not load reference {ref}: {e}", file=sys.stderr)
+    return out
+
+
+def _load_refs(refs):
+    """[path-or-url] -> [PIL] for the ones that load. Raises if none do."""
+    pil = [im for _, im in load_refs_aligned(refs)]
+    if not pil:
+        raise SystemExit("No usable reference image.")
+    return pil
+
+
+def _text_matcher(terms, *, any_=False, regex=False, case=False):
+    """Build a hit(blob)->bool predicate from keyword terms. AND by default
+    (every term present); --any flips to OR; --regex treats terms as patterns."""
+    test = any if any_ else all
+    if regex:
+        flags = 0 if case else re.IGNORECASE
+        pats = [re.compile(t, flags) for t in terms]
+        return lambda blob: test(p.search(blob) for p in pats)
+    needles = terms if case else [t.lower() for t in terms]
+    return lambda blob: test(n in (blob if case else blob.lower()) for n in needles)
+
+
+def _row_blob(m, fields):
+    return " ".join(str(m.get(k) or "") for k in fields)
 
 
 def cmd_query(args):
     state = IDX.load_state(_default_state())
     IDX.check_model(state)
     emb, meta = IDX.load()
-    pil = []
-    for ref in args.images:
-        p = Path(ref)
-        try:
-            if p.exists():
-                from PIL import Image
-                pil.append(Image.open(p).convert("RGB"))
-            else:
-                pil.append(download_pil(ref))
-        except Exception as e:
-            print(f"! could not load reference {ref}: {e}", file=sys.stderr)
-    if not pil:
-        raise SystemExit("No usable reference image.")
-    q = embed_images(pil)                       # [r, D] normalised
+    q = embed_images(_load_refs(args.images))   # [r, D] normalised
     sims = emb @ q.T                            # [N, r] cosine
     score = sims.max(axis=1)                    # best across reference angles
     # best image per thread
@@ -614,6 +704,163 @@ def cmd_query(args):
     if args.json:
         out = [{"rank": r, "score": round(sc, 4), **m}
                for r, (sc, m) in enumerate(ranked, 1)]
+        Path(args.json).write_text(json.dumps(out, indent=2))
+        print(f"\nWrote {args.json}")
+
+
+def cmd_search(args):
+    """Keyword search the forum index TEXT (title + op_question + answer).
+
+    The text counterpart to `query`: use it when you have WORDS (a maker name, a
+    pattern term) rather than a photo. Pure grep over meta.jsonl — no model load,
+    no embeddings, no network. Dedups to one row per thread (keeping the
+    highest-rep answer as the thread's representative) and ranks by answer rep so
+    confirmed expert IDs surface first.
+
+    Defaults: ALL terms must match (AND), across title+op_question+answer.
+    Honesty note (same as query): a keyword hit is a CANDIDATE thread to read,
+    not an identification — trust the ANSWER, not the OP's title-guess, and judge
+    per specializations/marbles.md.
+    """
+    if not IDX.meta_p.exists():
+        raise SystemExit(f"Index '{IDX.dir.name}' is empty — build it first.")
+
+    fields = FIELD_SETS[args.field]
+    terms = args.query
+    hit = _text_matcher(terms, any_=args.any, regex=args.regex, case=args.case)
+
+    best = {}            # tid -> representative row (highest answer_rep seen)
+    n_rows = 0
+    with IDX.meta_p.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            m = json.loads(line)
+            n_rows += 1
+            if args.answered_only and not m.get("answer"):
+                continue
+            if args.min_rep and (m.get("answer_rep") or 0) < args.min_rep:
+                continue
+            if not hit(_row_blob(m, fields)):
+                continue
+            tid = m.get("tid")
+            prev = best.get(tid)
+            if prev is None or (m.get("answer_rep") or 0) > (prev.get("answer_rep") or 0):
+                best[tid] = m
+
+    ranked = sorted(best.values(), key=lambda m: (m.get("answer_rep") or 0),
+                    reverse=True)[: args.top]
+    join = "ANY" if args.any else "ALL"
+    print(f"\nForum keyword search ({join} of {terms} in '{args.field}') — "
+          f"{len(best)} thread(s) matched of {n_rows} images scanned.")
+    print("(title = OP's GUESS; trust the expert ANSWER below it)\n")
+    for rank, m in enumerate(ranked, 1):
+        ans = m.get("answer")
+        print(f"{rank:>2}. asked: \"{m.get('op_question') or m.get('title')}\"")
+        if ans:
+            print(f"     ANSWER ➜ {m.get('answer_by')} "
+                  f"({m.get('answer_group')}, rep {m.get('answer_rep')}): {ans}")
+        else:
+            print("     ANSWER ➜ (no replies yet — unresolved)")
+        print(f"     {m['turl']}")
+    if args.json:
+        out = [{"rank": r, **m} for r, m in enumerate(ranked, 1)]
+        Path(args.json).write_text(json.dumps(out, indent=2))
+        print(f"\nWrote {args.json}")
+
+
+def cmd_verify(args):
+    """Close the loop after a CLIP/forum guess: keyword-gate the index to the
+    suspected maker, then rank THOSE threads by VISUAL similarity to OUR photo.
+
+    The corroboration test is agreement between two independent signals:
+      • TEXT  — the thread names the maker (keyword hit)
+      • PHOTO — the thread's marble looks like ours (CLIP cosine)
+    A keyword thread that's also among the closest look-alikes in the whole
+    index = strong corroboration. Keyword threads that look nothing like ours =
+    the maker guess isn't visually supported.
+
+    Reuses emb.npy (the keyword threads are already embedded, row-aligned to
+    meta) — no re-download, no re-embed. Verdict is RELATIVE (keyword-best vs
+    global-best visual sim), so it needs no absolute cosine calibration.
+
+    Honesty (per specializations/marbles.md + forum-match-policy): this is a
+    CANDIDATE/corroboration signal, NOT an identification. "Corroborated" means
+    look here next, not "it's confirmed."
+    """
+    state = IDX.load_state(_default_state())
+    IDX.check_model(state)
+    emb, meta = IDX.load()
+    q = embed_images(_load_refs(args.images))   # [r, D] normalised
+    sims = (emb @ q.T).max(axis=1)              # [N] best across our angles
+
+    fields = FIELD_SETS[args.field]
+    hit = _text_matcher(args.maker, any_=args.any, regex=args.regex, case=args.case)
+
+    gbest = {}                  # tid -> best visual sim (ALL threads; baseline)
+    kbest = {}                  # tid -> (best visual sim, row) for keyword hits
+    for i, m in enumerate(meta):
+        tid = m.get("tid")
+        sc = float(sims[i])
+        if tid not in gbest or sc > gbest[tid]:
+            gbest[tid] = sc
+        if args.answered_only and not m.get("answer"):
+            continue
+        if args.min_rep and (m.get("answer_rep") or 0) < args.min_rep:
+            continue
+        if hit(_row_blob(m, fields)):
+            if tid not in kbest or sc > kbest[tid][0]:
+                kbest[tid] = (sc, m)
+
+    global_top = max(gbest.values()) if gbest else 0.0
+    if not kbest:
+        print(f"\nNo thread text matches {args.maker} (in '{args.field}') — "
+              f"the keyword finds nothing to compare against. "
+              f"The maker guess gets NO forum corroboration.")
+        return
+
+    ranked = sorted(kbest.values(), key=lambda x: x[0], reverse=True)
+    kw_top = ranked[0][0]
+    gap = global_top - kw_top
+    # within args.close of the GLOBAL closest look-alike = "strong" corroborator
+    n_strong = sum(1 for sc, _ in ranked if sc >= global_top - args.close)
+
+    if gap <= args.close:
+        verdict = (f"CORROBORATED — the best {args.maker} thread (sim {kw_top:.3f}) "
+                   f"is essentially the closest look-alike in the whole index "
+                   f"(global best {global_top:.3f}, gap {gap:.3f}).")
+    elif gap <= 2 * args.close:
+        verdict = (f"LEANS YES — {args.maker} threads sit near the visual top "
+                   f"(best {kw_top:.3f}, {gap:.3f} below the global best {global_top:.3f}).")
+    else:
+        verdict = (f"WEAK — {args.maker} threads are {gap:.3f} below the closest "
+                   f"look-alike (best {kw_top:.3f} vs global {global_top:.3f}); "
+                   f"the keyword and the photo DISAGREE. Re-check the maker.")
+
+    print(f"\nVerify '{' '.join(args.maker)}' against our marble — "
+          f"{len(kbest)} keyword thread(s) compared (of {len(gbest)} total).")
+    print(f"VERDICT: {verdict}")
+    print(f"({n_strong} keyword thread(s) within {args.close:.2f} sim of the "
+          f"global closest look-alike.)\n")
+    print("(candidate signal, NOT an ID — trust the expert ANSWER, judge per "
+          "specializations/marbles.md)\n")
+    for rank, (sc, m) in enumerate(ranked[: args.top], 1):
+        ans = m.get("answer")
+        tag = "◆ best" if rank == 1 else ("· strong" if sc >= global_top - args.close else "·")
+        print(f"{rank:>2}. {sc:.3f} {tag}  asked: \"{m.get('op_question') or m.get('title')}\"")
+        if ans:
+            print(f"     ANSWER ➜ {m.get('answer_by')} "
+                  f"({m.get('answer_group')}, rep {m.get('answer_rep')}): {ans}")
+        else:
+            print("     ANSWER ➜ (no replies yet — unresolved)")
+        print(f"     {m['turl']}")
+    if args.json:
+        out = {"maker": args.maker, "verdict": verdict,
+               "global_top": round(global_top, 4), "kw_top": round(kw_top, 4),
+               "gap": round(gap, 4), "n_strong": n_strong,
+               "results": [{"rank": r, "score": round(sc, 4), **m}
+                           for r, (sc, m) in enumerate(ranked[: args.top], 1)]}
         Path(args.json).write_text(json.dumps(out, indent=2))
         print(f"\nWrote {args.json}")
 
@@ -668,8 +915,10 @@ def main():
                    help="suppress per-topic lines; print a '.' heartbeat instead")
     p.set_defaults(func=cmd_next)
 
-    p = sub.add_parser("refresh", help="sync only new threads since last run")
+    p = sub.add_parser("refresh", help="sync new threads + new replies at the forum front")
     p.add_argument("--max-new-pages", type=int, default=10)
+    p.add_argument("--new-only", action="store_true",
+                   help="only index new threads; skip the reply re-check on known ones")
     p.add_argument("--polite", action="store_true",
                    help="enable the 'nice to the server' rate limiter "
                         "(off by default; also via MARBLE_POLITE=1)")
@@ -685,6 +934,56 @@ def main():
                         "match (corroboration count)")
     p.add_argument("--json", help="also write ranked results to this JSON file")
     p.set_defaults(func=cmd_query)
+
+    p = sub.add_parser("search", help="keyword-search thread text "
+                                      "(title + question + answer); no photo needed")
+    p.add_argument("query", nargs="+", help="keyword(s); ALL must match by default")
+    p.add_argument("--any", action="store_true",
+                   help="match if ANY term is present (OR) instead of ALL (AND)")
+    p.add_argument("--regex", action="store_true",
+                   help="treat each term as a regular expression")
+    p.add_argument("--case", action="store_true",
+                   help="case-sensitive (default: case-insensitive)")
+    p.add_argument("--field", choices=("all", "question", "answer"), default="all",
+                   help="where to search: all=title+question+answer (default), "
+                        "question=title+op_question, answer=expert reply only")
+    p.add_argument("--answered-only", action="store_true",
+                   help="skip unresolved threads (no expert answer yet)")
+    p.add_argument("--min-rep", type=float, default=0.0,
+                   help="require the answerer's reputation be >= this")
+    p.add_argument("--top", type=int, default=10)
+    p.add_argument("--json", help="also write ranked results to this JSON file")
+    p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("verify", help="gap-closer: keyword-gate to a suspected "
+                                      "maker, then rank those threads by visual "
+                                      "similarity to OUR photo (corroboration)")
+    p.add_argument("images", nargs="+", help="local path(s)/URL(s) of OUR marble")
+    p.add_argument("--maker", nargs="+", required=True, metavar="TERM",
+                   help="maker/keyword term(s) to gate the index on (ALL must "
+                        "match by default; --any for OR)")
+    p.add_argument("--any", action="store_true",
+                   help="match if ANY maker term is present (OR) instead of ALL")
+    p.add_argument("--regex", action="store_true",
+                   help="treat each --maker term as a regular expression")
+    p.add_argument("--case", action="store_true", help="case-sensitive match")
+    p.add_argument("--field", choices=("all", "question", "answer"), default="answer",
+                   help="where the maker keyword must appear. Default 'answer' "
+                        "matches the EXPERT's call, not the OP's (often wrong) "
+                        "title-guess — so an OP mis-guess can't fake corroboration. "
+                        "Use 'all' to also catch threads the expert confirmed with "
+                        "a bare 'Yes' (looser, but OP guesses leak in).")
+    p.add_argument("--answered-only", action="store_true",
+                   help="only compare against threads with an expert answer "
+                        "(implied when --field answer, which needs answer text)")
+    p.add_argument("--min-rep", type=float, default=0.0,
+                   help="require the answerer's reputation be >= this")
+    p.add_argument("--close", type=float, default=0.04,
+                   help="cosine window below the global-best look-alike that "
+                        "counts as a 'strong' corroborator")
+    p.add_argument("--top", type=int, default=8)
+    p.add_argument("--json", help="also write the verdict + ranked results here")
+    p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("status", help="index size + last sync")
     p.set_defaults(func=cmd_status)

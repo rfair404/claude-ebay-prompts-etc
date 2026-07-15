@@ -189,16 +189,62 @@ def is_marble(pil, *, margin=0.0):
     return (s_pos - s_neg) >= margin, s_pos, s_neg
 
 
-def detect_and_crop(path, *, gate=True, **kw):
+def _refine_circle(bgr, x, y, r, *, grow=1.5):
+    """Tighten an over-sized detection to the marble's actual extent.
+
+    Hough sometimes fits a circle larger than the marble, so the crop keeps a ring
+    of dark felt. The marble is the bright/saturated blob on the (dark) felt — re-
+    fit the radius to it. Conservative: only adjusts within a sane band [0.45r,
+    1.15r], else returns the original (so good detections are untouched and a real
+    big marble isn't shrunk)."""
+    import cv2
+    import numpy as np
+    H, W = bgr.shape[:2]
+    R = int(r * grow)
+    x0, y0 = max(0, int(x - R)), max(0, int(y - R))
+    x1, y1 = min(W, int(x + R)), min(H, int(y + R))
+    win = bgr[y0:y1, x0:x1]
+    if win.size == 0:
+        return (x, y, r)
+    hsv = cv2.cvtColor(win, cv2.COLOR_BGR2HSV)
+    sat, val = hsv[..., 1], hsv[..., 2]
+    border = np.concatenate([val[:3].ravel(), val[-3:].ravel(),
+                             val[:, :3].ravel(), val[:, -3:].ravel()])
+    bg = float(np.median(border))
+    fg = (((val.astype("int") - bg) > 25) | (sat > 55)).astype("uint8") * 255
+    k = max(3, int(r * 0.12) | 1)
+    fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((k, k), "uint8"))
+    fg = cv2.morphologyEx(fg, cv2.MORPH_CLOSE, np.ones((k, k), "uint8"))
+    cnts, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return (x, y, r)
+    cx, cy = (x1 - x0) / 2.0, (y1 - y0) / 2.0
+
+    def _dist(c):                              # contour nearest the window centre
+        m = cv2.moments(c)
+        if m["m00"] == 0:
+            return 1e9
+        return (m["m10"] / m["m00"] - cx) ** 2 + (m["m01"] / m["m00"] - cy) ** 2
+    (nx, ny), nr = cv2.minEnclosingCircle(min(cnts, key=_dist))
+    if not (0.45 * r <= nr <= 1.15 * r):       # ignore wild re-fits
+        return (x, y, r)
+    return (x0 + nx, y0 + ny, nr)
+
+
+def detect_and_crop(path, *, gate=True, refine=True, **kw):
     """Photo path -> [(circle, PIL.Image)] for each detected marble.
 
     With gate=True (default) every crop must pass the CLIP is_marble() check, so
-    coins/fabric/fingers that fool the circle detector are dropped."""
+    coins/fabric/fingers that fool the circle detector are dropped. With
+    refine=True (default) each circle is tightened to the marble so the crop
+    doesn't keep a ring of background."""
     mask_bg = kw.pop("mask_bg", True)
-    pad = kw.pop("pad", 0.15)
+    pad = kw.pop("pad", 0.10)
     bgr = _load_bgr(path)
-    pairs = [(c, crop_marble(bgr, c, pad=pad, mask_bg=mask_bg))
-             for c in detect_marbles(bgr, **kw)]
+    circles = detect_marbles(bgr, **kw)
+    if refine:
+        circles = [_refine_circle(bgr, *c) for c in circles]
+    pairs = [(c, crop_marble(bgr, c, pad=pad, mask_bg=mask_bg)) for c in circles]
     if not gate:
         return pairs
     return [(c, im) for (c, im) in pairs if is_marble(im)[0]]

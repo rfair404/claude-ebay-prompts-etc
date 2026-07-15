@@ -105,6 +105,29 @@ maker-attribution discipline below: still no inventing, still `[BEST-CASE]` +
 scenario bracket for value-swing inferences, still the maker-mark gate. If no
 module's triggers match, proceed with the general pass as normal.
 
+> ⛔ **Crop gate (marbles, bulk/group).** Before identifying a multi-marble shoot,
+> generate per-marble crops + the numbered contact sheet
+> (`tools/marble_triage.py <dir> --crops-only --expect N`), **show the user the
+> contact sheet, and STOP** — begin IDENTIFY only on their go-ahead. HARD
+> interactive stop; headless degrades to self-verify-count + log to
+> `NEEDS_REVIEW.md`. See the ⛔ CROP GATE block in
+> [`../specializations/marbles.md`](../specializations/marbles.md).
+
+> 🚫 **CLIP/forum-index DISABLED for IDENTIFY (marbles).** The forum CLIP index and
+> every tool that queries it are turned OFF for IDENTIFY — `lib/marble_index.py`,
+> `verify_batch` / `marble_triage` / `marble_matches` / `marble_colormatch` /
+> `marble_refset` — and the forum expert-answer text is not used to set the maker.
+> Do **not** run any of them during IDENTIFY: not for the maker/type, not as an
+> escalation, not as a colour-match "lead," not for corroboration. They proved
+> ineffective (CLIP = 224px, matches colour not seams) and are kept but dormant.
+> The maker/type comes from **photos + the module's tells ALONE**, staying
+> firmly-named or `Unknown`/`[BEST-CASE]`. Human reference-panel triangulation and
+> WebFetch of reference photos remain allowed. Run the CLIP/forum tools ONLY when
+> the user EXPLICITLY asks, as a separate colour-lead step outside the record. Full
+> rule: the 🚫 block in
+> [`../specializations/marbles.md`](../specializations/marbles.md). In-specialization
+> marbles only; other categories unchanged.
+
 ## Maker / brand attribution (work it HARD — high leverage)
 
 Brand is the single highest-leverage field: a confirmed maker changes the

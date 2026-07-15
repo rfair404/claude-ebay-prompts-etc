@@ -203,3 +203,15 @@ class VIndex:
         meta = [json.loads(l) for l in
                 self.meta_p.read_text(encoding="utf-8").splitlines() if l.strip()]
         return emb, meta
+
+    def save_meta(self, meta):
+        """Rewrite meta.jsonl from a full row list — for IN-PLACE metadata edits
+        (e.g. refreshed reply/answer fields). emb.npy is untouched, so the caller
+        MUST keep the same rows in the same order (only mutate fields) to stay
+        row-aligned with the embeddings. Atomic via temp-file replace."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.meta_p.with_name(self.meta_p.name + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            for r in meta:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        tmp.replace(self.meta_p)

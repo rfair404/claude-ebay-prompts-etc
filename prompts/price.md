@@ -333,6 +333,17 @@ A consolidated, click-through list so the user can open the comps directly.
 Exact/near-exact anchors first; include the price + a short title with each
 URL so the list is scannable on its own. Required on every item.
 
+**Chat presentation — thumbnail table (standing user convention).** Any time
+eBay comps are surfaced to the user in chat, ALSO render them as a visual table
+with columns **thumbnail · title (linked) · sold/delivered price** (+ a
+match/context/excluded tag). The saved comp JSON carries a `thumbnail`
+(`i.ebayimg.com/...`) per comp — use it. Terminal markdown won't reliably show
+remote images, so render the table via the visualize `show_widget` HTML tool
+(`<img src=thumbnail>`), not a plain markdown table. This is the chat layer; the
+text `price.txt` + `comps.csv` artifacts stay as specified above. Dial the query
+(material/size/origin qualifiers) for a tight exact-match cohort BEFORE showing
+the table.
+
     Comp URLs — Item <N> (open to verify):
       Exact / near-exact match:
         • $<price> — "<short title>" — <https://www.ebay.com/itm/...>

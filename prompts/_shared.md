@@ -155,6 +155,13 @@ stop-and-ask. Full contract in [RUN.md](../RUN.md); summary:
   Brand. A clear no-mark-likely exception may skip it (logged). Headless (no
   user to ask) → degrades to SOFT (`needs_followup_photo` + a `NEEDS_REVIEW.md`
   line, then proceed).
+- **HARD (interactive only) — stop and show:** the marble CROP gate — for a
+  bulk/group marble shoot, after generating the per-marble crops + numbered
+  contact sheet (`marble_triage --crops-only --expect N`), present the contact
+  sheet to the user and STOP; begin IDENTIFY only on their go-ahead. Headless
+  (no user) → SOFT: self-verify crop count == expected, log any mismatch to
+  `NEEDS_REVIEW.md`, then proceed. See
+  [marbles.md](../specializations/marbles.md) (⛔ CROP GATE).
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
   questions, unit_type ambiguity, INVESTIGATE open questions, working-
   price selection, lookup-value substitutions, missing required fields,
