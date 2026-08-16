@@ -44,6 +44,12 @@ NOT continue to the next phase):
     investigate <name>   → only INVESTIGATE  ([prompts/investigate.md](prompts/investigate.md)) → investigate.txt
     draft       <name>   → only DRAFT        ([prompts/draft.md](prompts/draft.md))          → draft.md (+ --record)
     review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md (HARD gate)
+    report               → only REPORT       ([prompts/report.md](prompts/report.md))        → performance numbers (+ docs/performance-<date>.md)
+
+**REPORT takes no shoot name** — it is account-wide, not per-item. "report",
+"how are we doing", "what did we actually make", "what sold this week" all land
+here. It is the only phase that reads eBay's *outcomes* rather than producing a
+listing, and it never publishes or edits anything.
 
 So "run identify sand-dollars" (or just "identify sand-dollars") runs IDENTIFY
 alone on `inventory/sand-dollars/` and stops — it does not roll on to PRICE. A
@@ -142,6 +148,18 @@ Load each prompt when you reach its phase.
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
 | DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` + `--record` → SKU stamped + ledger row (DRAFTED) |
 | REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `--review` → `review_card.md` (records+preflights) → (on approval) LIVE listing |
+| REPORT | [prompts/report.md](prompts/report.md) | `sales_ledger.csv`+`listings_ledger.csv`+drafts | printed numbers (+ `docs/performance-<date>.md`) |
+
+**REPORT closes the loop.** PRICE decides what to ask; REPORT measures what we
+actually got, and feeds the gap back. Its two commands:
+
+    python lib/sync_actuals.py --apply     # refresh actuals from the Fulfillment API
+    python lib/report.py --performance     # fees, ask-vs-actual, speed, categories
+
+`sync_actuals` exists because two local records are structurally incomplete:
+the listings ledger only knows the ASK (an accepted Best Offer never writes
+back), and the Inventory API is blind to anything listed by hand on eBay.com.
+Orders are the only source that sees every sale and the price actually paid.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 
