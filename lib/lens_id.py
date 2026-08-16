@@ -81,25 +81,93 @@ _SOURCE_NOISE = re.compile(r"^(ebay|etsy|mercari|poshmark|amazon|pinterest|reddi
 # 1) Host the image at a temporary public URL
 # ---------------------------------------------------------------------------
 
+def _multipart(field: str, data: bytes, extra: dict | None = None) -> tuple[bytes, str]:
+    """Build a multipart/form-data body carrying ONE image under `field`."""
+    boundary = "----lensidboundary7e3f"
+    body = b""
+    for k, v in (extra or {}).items():
+        body += (f"--{boundary}\r\n"
+                 f'Content-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n').encode()
+    body += (f"--{boundary}\r\n"
+             f'Content-Disposition: form-data; name="{field}"; filename="lens.jpg"\r\n'
+             f"Content-Type: image/jpeg\r\n\r\n").encode()
+    body += data + f"\r\n--{boundary}--\r\n".encode()
+    return body, f"multipart/form-data; boundary={boundary}"
+
+
+def verify_public_image(url: str, *, timeout: int = 60) -> None:
+    """Confirm `url` serves REAL IMAGE BYTES to an anonymous fetcher.
+
+    THIS IS THE GUARD THAT MATTERS. Google Lens fails SILENTLY when handed a
+    non-image: the actor returns an empty dataset with no error, which reads as
+    an authoritative "no visual matches found" when in fact Lens never saw the
+    photo. That is a false negative that can talk you out of a correct ID.
+
+    Root cause this defends against (observed 2026-07-21): tmpfiles.org began
+    serving an HTML interstitial at its /dl/ URL instead of the file, so every
+    Lens run in this repo silently scored 0 matches — including a control on an
+    image known to be indexed. Never host without verifying.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    resp = urllib.request.urlopen(req, timeout=timeout)
+    head = resp.read(12)
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    magic = (head[:3] == b"\xff\xd8\xff"              # JPEG
+             or head[:8] == b"\x89PNG\r\n\x1a\n"      # PNG
+             or head[:4] == b"RIFF")                  # WEBP
+    if not magic or not ctype.startswith("image/"):
+        raise RuntimeError(
+            f"host returned a NON-IMAGE for {url} (Content-Type={ctype!r}, "
+            f"first bytes={head[:8]!r}). Lens would have silently returned zero "
+            f"matches. Refusing to run — switch hosts.")
+
+
+def host_image_uguu(image_path: str | Path, *, timeout: int = 180) -> str:
+    """Upload to uguu.se; returns a direct URL that serves raw image bytes.
+
+    Files auto-expire in ~3h, satisfying "public briefly, not forever".
+    """
+    body, ctype = _multipart("files[]", Path(image_path).read_bytes())
+    req = urllib.request.Request("https://uguu.se/upload?output=text", data=body,
+                                 method="POST",
+                                 headers={"Content-Type": ctype, "User-Agent": _UA})
+    return urllib.request.urlopen(req, timeout=timeout).read().decode().strip()
+
+
 def host_image_tmpfiles(image_path: str | Path, *, timeout: int = 120) -> str:
     """Upload a local image to tmpfiles.org; return the direct-download URL.
 
-    tmpfiles auto-expires the file within ~1h (no delete token is issued), which
-    satisfies "public briefly, not forever". Raises on upload failure.
+    DEPRECATED as the primary host — as of 2026-07-21 tmpfiles serves an HTML
+    interstitial at /dl/ rather than the file. Kept as a fallback only, and the
+    caller MUST run verify_public_image() on whatever this returns.
     """
-    data = Path(image_path).read_bytes()
-    boundary = "----lensidboundary7e3f"
-    pre = (f"--{boundary}\r\n"
-           f'Content-Disposition: form-data; name="file"; filename="lens.jpg"\r\n'
-           f"Content-Type: image/jpeg\r\n\r\n").encode()
-    body = pre + data + f"\r\n--{boundary}--\r\n".encode()
+    body, ctype = _multipart("file", Path(image_path).read_bytes())
     req = urllib.request.Request(
         "https://tmpfiles.org/api/v1/upload", data=body, method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
-                 "User-Agent": _UA})
+        headers={"Content-Type": ctype, "User-Agent": _UA})
     resp = json.loads(urllib.request.urlopen(req, timeout=timeout).read())
     page_url = resp["data"]["url"]                     # https://tmpfiles.org/<id>/<name>
     return page_url.replace("tmpfiles.org/", "tmpfiles.org/dl/", 1)
+
+
+def host_image(image_path: str | Path) -> str:
+    """Host an image publicly and VERIFY it serves image bytes before returning.
+
+    Tries each host in order; a host that uploads but serves a non-image is
+    rejected and the next is tried. Raises if every host fails, because running
+    Lens on an unverified URL produces a confident, wrong "no matches" answer.
+    """
+    errors = []
+    for name, fn in (("uguu.se", host_image_uguu),
+                     ("tmpfiles.org", host_image_tmpfiles)):
+        try:
+            url = fn(image_path)
+            verify_public_image(url)
+            return url
+        except Exception as exc:                       # noqa: BLE001 - try next host
+            errors.append(f"{name}: {exc}")
+    raise RuntimeError("no image host served verifiable image bytes -> "
+                       + " | ".join(errors))
 
 
 # ---------------------------------------------------------------------------
@@ -132,18 +200,31 @@ def run_lens(image_urls, *, token: Optional[str] = None,
     actor = (actor or get_lens_actor()).replace("/", "~")
     endpoint = (f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
                 f"?token={token}")
-    search_types = ["all", "visual-match", "exact-match", "ai-mode"]
+    # "ai-mode" is REQUESTED FIRST but must DEGRADE GRACEFULLY. Verified
+    # 2026-07-21: including "ai-mode" makes borderline/google-lens return an
+    # EMPTY dataset — no error, no rows — which the parser then reports as an
+    # authoritative "no visual matches". Identical payload minus "ai-mode"
+    # returned 150 rows / 145 matches on the same image. So: ask for it, and if
+    # the run comes back empty, retry WITHOUT it before believing the zero.
+    core = ["all", "visual-match", "exact-match"]
     if include_ocr:
-        search_types.append("ocr")
-    payload = {
-        "searchTypes": search_types,
-        "imageUrls": [{"url": u} for u in image_urls],
-        "aiModeQuestions": [question],
-    }
-    req = urllib.request.Request(endpoint, data=json.dumps(payload).encode(),
-                                 method="POST",
-                                 headers={"Content-Type": "application/json"})
-    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+        core.append("ocr")
+
+    def _post(search_types):
+        payload = {
+            "searchTypes": search_types,
+            "imageUrls": [{"url": u} for u in image_urls],
+            "aiModeQuestions": [question],
+        }
+        req = urllib.request.Request(endpoint, data=json.dumps(payload).encode(),
+                                     method="POST",
+                                     headers={"Content-Type": "application/json"})
+        return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+
+    items = _post(core + ["ai-mode"])
+    if not items:
+        items = _post(core)          # ai-mode poisoned the run — take the visual data
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +430,7 @@ def lens_opinion(images, *, token: Optional[str] = None,
     hosted: list[str] = []
     for p in paths:
         try:
-            hosted.append(host_image_tmpfiles(p))
+            hosted.append(host_image(p))
         except Exception as e:  # noqa: BLE001
             return {"error": f"host failed for {p}: {e}", "images": [str(x) for x in paths]}
     try:
