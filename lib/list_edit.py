@@ -477,6 +477,10 @@ def _md_inline(text: str) -> str:
     """Escape HTML, then render the inline markdown the templates use."""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    # [label](http(s)://url) -> anchor. Runs after HTML-escape so the generated
+    # tag survives; only http(s) targets allowed (eBay permits links to other
+    # eBay listings/pages within a description).
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
     return text
 
 
@@ -561,8 +565,38 @@ def _build_inventory_item(draft: Draft, image_urls: list[str]) -> dict:
         pkg["dimensions"] = {"length": float(length), "width": float(width),
                              "height": float(depth), "unit": "INCH"}
     if pkg:
+        # packageType is REQUIRED for CALCULATED shipping (which includes every
+        # international/eIS quote). Domestic free-flat-rate never needed it, so
+        # it was omitted for months; moving a flat-rate media offer onto a
+        # calculated policy surfaced it as error 25002 / err:216314
+        # "Please provide a valid Shipping Package type".
+        pkg["packageType"] = _package_type(draft)
         item["packageWeightAndSize"] = pkg
     return item
+
+
+def _package_type(draft: Draft) -> str:
+    """eBay packageType for this item, inferred from the packed dimensions.
+
+    Only a rate-calculation hint — eBay uses weight+dims for the actual quote —
+    but it must be present and VALID or calculated/international shipping is
+    rejected.
+
+    MAILING_BOX is deliberately NOT used. eBay rejected it on every attempt
+    with `errorId 25101 — Invalid <ShippingPackage> (err:216305|MailingBoxes)`,
+    including on an obvious box (a 10x8x2 hardcover). PACKAGE_THICK_ENVELOPE
+    was accepted for the same item. Only these two values are known-good on
+    this account, so those are the only two emitted.
+    """
+    try:
+        dims = sorted(float(draft.get(f"shipping.package_in.{k}") or 0)
+                      for k in ("length", "width", "depth"))
+    except (TypeError, ValueError):
+        return "PACKAGE_THICK_ENVELOPE"
+    # flat AND large: catalogs, magazines, LPs — the one case for LARGE_ENVELOPE
+    if dims and dims[-1] >= 12 and dims[0] <= 1:
+        return "LARGE_ENVELOPE"
+    return "PACKAGE_THICK_ENVELOPE"
 
 
 def _build_offer(draft: Draft, sku: str, category_id: str,
@@ -632,6 +666,11 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
     # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
     policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup")
+    # Optional: an international (eBay International Shipping) policy — Worldwide
+    # shipToLocations, no region exclusions. Only items with
+    # `shipping.international: true` use it, and only if they clear the
+    # dangerous-goods gate in _international_blockers().
+    policies["fulfillment_international"] = _ebay_extra("fulfillment_policy_id_international")
     # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
     # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
     # listings need it; falls back to the default payment policy otherwise.
@@ -752,6 +791,95 @@ def _is_media_service(code: str) -> bool:
     return "media" in c  # USPSMedia / USPSMediaMail
 
 
+# Items eBay International Shipping REFUSES at the US hub. Offering
+# international on one of these yields a cancelled order plus a seller defect,
+# so these hard-block.
+#
+# Matched against the TITLE and item_specifics (type/material) ONLY — never the
+# body or condition text. That distinction is the whole design: condition prose
+# is full of words that look like hazmat but describe appearance. Scanning the
+# body flagged 46 of 209 drafts, essentially all false: "no PAINT loss" ->
+# flammable liquid, "LIGHTER shade" -> butane, a ceramic hen's "FEATHER"
+# detail -> CITES. Titles name what a thing IS; descriptions say what it looks
+# like.
+_DANGEROUS_GOODS_PATTERNS = (
+    (r"\bbutane\b|\blighter fluid\b|\b(cigarette |pocket |torch )?lighter\b|\bzippo\b",
+     "lighter / butane (flammable — eIS prohibited)"),
+    (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
+    (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",
+     "aerosol / compressed gas"),
+    (r"\bperfume\b|\bcologne\b|\beau de (toilette|parfum)\b",
+     "alcohol-based fragrance (flammable)"),
+    (r"\bgunpowder\b|\bammunition\b|\bammo\b|\bprimers\b|\bblack powder\b|\bflare\b",
+     "explosives / ammunition components"),
+)
+
+# Ambiguous in an antiques catalog: these words usually name a FORM, a COLOR or
+# a period style rather than the actual regulated substance — an empty antique
+# "whiskey jug" is stoneware, and "Ivory Cream" is a paint colour on faux grips.
+# Blocking on them was wrong 3 times out of 4 against real inventory, so they
+# WARN and ask for a human call instead.
+_DG_REVIEW_PATTERNS = (
+    (r"\bivory\b|\btortoise ?shell\b|\btaxidermy\b|\bwhalebone\b|\bscrimshaw\b|\bhorn\b",
+     "possible CITES / wildlife material — confirm it's faux or synthetic"),
+    (r"\bwine\b|\bwhiskey\b|\bwhisky\b|\bbourbon\b|\bliqueur\b|\bbeer\b",
+     "alcohol wording — confirm the vessel is EMPTY (an empty antique jug is fine)"),
+    (r"\bknife\b|\bknives\b|\bdagger\b|\bsword\b|\brazor\b",
+     "bladed item — legal in most destinations but some refuse; check before shipping"),
+)
+
+# If any of these appear, the material words above are describing an imitation,
+# so don't even raise the CITES review flag.
+_FAUX_RE = re.compile(r"\bfaux\b|\bimitation\b|\bsimulated\b|\brepro(duction)?\b"
+                      r"|\bresin\b|\bcelluloid\b|\bbakelite\b|\bplastic\b|\bstyle\b",
+                      re.I)
+
+_INTL_WEIGHT_WARN_OZ = 5 * 16   # ~5 lb
+
+
+def _international_blockers(draft: Draft) -> list[str]:
+    """Hard reasons this item cannot ship internationally. Empty = clear.
+
+    Scans title + item_specifics only (see _DANGEROUS_GOODS_PATTERNS).
+    """
+    parts = [str(draft.get("title") or "")]
+    for k in ("item_specifics.type", "item_specifics.material",
+              "item_specifics.subject"):
+        parts.append(str(draft.get(k) or ""))
+    haystack = " ".join(parts)
+    return [label for pattern, label in _DANGEROUS_GOODS_PATTERNS
+            if re.search(pattern, haystack, re.I)]
+
+
+def _international_warnings(draft: Draft) -> list[str]:
+    """Soft flags — surfaced at REVIEW, do NOT block. Judgement calls where the
+    right answer depends on the item, not a rule."""
+    out = []
+    parts = [str(draft.get("title") or "")]
+    for k in ("item_specifics.type", "item_specifics.material",
+              "item_specifics.subject"):
+        parts.append(str(draft.get(k) or ""))
+    haystack = " ".join(parts)
+    faux = bool(_FAUX_RE.search(haystack))
+    for pattern, label in _DG_REVIEW_PATTERNS:
+        if re.search(pattern, haystack, re.I):
+            if faux and "CITES" in label:
+                continue          # "Faux Stag ... Ivory Cream" is not ivory
+            out.append(label)
+    try:
+        lb = int(draft.get("shipping.weight.major_lb") or 0)
+        oz = int(draft.get("shipping.weight.minor_oz") or 0)
+        if lb * 16 + oz > _INTL_WEIGHT_WARN_OZ:
+            out.append(f"heavy ({lb} lb {oz} oz) — international postage may exceed "
+                       f"item value; worth checking before it sells")
+    except (TypeError, ValueError):
+        pass
+    if str(draft.get("shipping.fulfillment_mode") or "").upper() == "LOCAL_PICKUP":
+        out.append("item is flagged ship-risky (local pickup) — fragile/oversized "
+                   "pieces travel badly through the eIS hub")
+    return out
+
+
 def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
@@ -760,18 +888,47 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     1. If the draft is `fulfillment_mode: LOCAL_PICKUP` (DRAFT sets this for
        ship-risky items the user confirmed as local-pickup), use the
        local-pickup policy.
-    2. Else if `primary_service` is Media Mail (DRAFT sets this for
+    2. Else if `shipping.international: true` AND the item clears the
+       dangerous-goods / weight gate, use the international (eIS) policy.
+    3. Else if `primary_service` is Media Mail (DRAFT sets this for
        books/magazines/comics/music/movies) AND a media policy is configured,
        use it.
-    3. Else use the default (USPS Ground) policy.
+    4. Else use the default (USPS Ground) policy.
     Returns (chosen_fulfillment_id, messages).
+
+    International is OPT-IN per item, never global. eBay International Shipping
+    is an account-level enrollment, so the moment a listing uses a policy whose
+    shipToLocations include Worldwide, eIS offers it abroad — including for
+    items eIS will refuse at the hub. The gate below is what stops that.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
     pickup_fid = str(policies.get("fulfillment_local_pickup") or "")
+    intl_fid = str(policies.get("fulfillment_international") or "")
     mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
+    wants_intl = str(draft.get("shipping.international") or "").strip().lower() in (
+        "true", "yes", "1", "on")
     msgs: list[str] = []
+
+    if wants_intl and mode == "LOCAL_PICKUP":
+        wants_intl = False
+        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
+                    "ignored (a pickup-only item has nothing to ship).")
+    if wants_intl:
+        blockers = _international_blockers(draft)
+        if blockers:
+            wants_intl = False
+            msgs.append("shipping: INTERNATIONAL REFUSED — " + "; ".join(blockers) +
+                        ". eBay International Shipping rejects these at the US hub, "
+                        "which cancels the order and books a seller defect. Listing "
+                        "domestic-only. Override by clearing the matched wording or "
+                        "setting the policy id by hand if you know it's safe.")
+        elif not intl_fid:
+            wants_intl = False
+            msgs.append("shipping: international requested but "
+                        "ebay.fulfillment_policy_id_international is unset — "
+                        "listing domestic-only.")
 
     if mode == "LOCAL_PICKUP":
         if pickup_fid:
@@ -781,6 +938,18 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             msgs.append("shipping: item is LOCAL_PICKUP but ebay.fulfillment_policy_id_local_pickup "
                         "is unset — falling back to the default ground policy. Add a local-pickup "
                         "policy (see SETUP_EBAY_API.md) so ship-risky items list as pickup-only.")
+    elif wants_intl:
+        chosen, label = intl_fid, "international (eIS-enabled policy)"
+        for w in _international_warnings(draft):
+            msgs.append(f"shipping: INTERNATIONAL REVIEW — {w}")
+        if _is_media_service(want):
+            # USPS Media Mail is a domestic-only service, so an international
+            # policy can't carry it. Going international costs the media rate.
+            msgs.append("shipping: item wanted Media Mail but international was "
+                        "requested — Media Mail is DOMESTIC-ONLY, so this uses "
+                        "Ground Advantage domestically. If the media rate matters "
+                        "more than international reach, set shipping.international "
+                        "false, or create a media+worldwide policy.")
     elif _is_media_service(want):
         if media_fid:
             chosen, label = media_fid, "Media Mail (media policy)"
@@ -924,6 +1093,33 @@ def build_review_card(draft_path: Path,
     if not comps:
         comps = ["  • (no comp URLs found — see price.txt)"]
 
+    # International (eIS) eligibility — ALWAYS shown, whether or not the item
+    # opted in. The point is that a reviewer sees "this can never go abroad"
+    # BEFORE approving, so a gun-shaped butane lighter is caught at the gate
+    # rather than after an international buyer's order is cancelled at the hub.
+    intl_on = str(draft.get("shipping.international") or "").strip().lower() in (
+        "true", "yes", "1", "on")
+    intl_blockers = _international_blockers(draft)
+    intl_warnings = _international_warnings(draft)
+    if intl_blockers:
+        intl_lines = [f"  ✖ CANNOT SHIP INTERNATIONALLY — {'; '.join(intl_blockers)}"]
+        if intl_on:
+            intl_lines.append("  ✖ draft asks for international but it will be "
+                              "REFUSED and listed domestic-only — fix the draft.")
+        else:
+            intl_lines.append("  • correctly domestic-only. Do NOT set "
+                              "shipping.international true on this item.")
+    elif intl_warnings:
+        intl_lines = [f"  ⚠ {'ENABLED' if intl_on else 'eligible'} — needs a human call:"]
+        intl_lines += [f"      – {w}" for w in intl_warnings]
+    elif intl_on:
+        intl_lines = ["  ✓ ENABLED — ships worldwide via eBay International Shipping.",
+                      "  • delivered-price basis no longer holds: an overseas buyer "
+                      "pays eIS freight + duties on top of this price."]
+    else:
+        intl_lines = ["  • eligible, not enabled (shipping.international: false). "
+                      "Set true to offer it worldwide."]
+
     # Flags worth a human eye.
     flags: list[str] = []
     nr = shoot / "NEEDS_REVIEW.md"
@@ -950,6 +1146,8 @@ def build_review_card(draft_path: Path,
         f"Fulfillment: {fulfill}",
         "Preflight (condition / shipping / insurance):",
         *[f"  • {m}" for m in pf],
+        "International (eBay International Shipping):",
+        *intl_lines,
         "Comps (open to verify):",
         *comps,
         "Condition detail:",
@@ -1077,9 +1275,15 @@ _SYNC_FIELD_ALIASES = {
     "shipping": "shipping", "weight": "shipping", "dims": "shipping",
     "quantity": "quantity", "qty": "quantity",
     "bestoffer": "bestoffer", "best_offer": "bestoffer", "offer": "bestoffer",
+    # Re-resolve which fulfillment policy the offer points at. Needed on its own
+    # because the `shipping` group only touches packageWeightAndSize on the
+    # ITEM — the policy lives in listingPolicies on the OFFER, so flipping
+    # shipping.international has no effect without this.
+    "policies": "policies", "policy": "policies", "fulfillment": "policies",
+    "international": "policies", "intl": "policies",
 }
 _ITEM_SIDE = {"title", "description", "condition", "aspects", "photos", "shipping", "quantity"}
-_OFFER_SIDE = {"description", "price", "quantity", "bestoffer"}
+_OFFER_SIDE = {"description", "price", "quantity", "bestoffer", "policies"}
 # Keys accepted by PUT inventory_item / updateOffer — used to strip read-only
 # echo fields (offerId, listing, status, …) out of the GET response before PUT.
 _WRITABLE_ITEM_KEYS = ("availability", "condition", "conditionDescription",
@@ -1203,6 +1407,20 @@ def update_listing_fields(draft_path: Path, fields,
             else:
                 lp.pop("bestOfferTerms", None)
             changed.append("bestoffer")
+        if "policies" in offer_fields:
+            # Re-runs the same routing --sync uses (local pickup / international
+            # / media / default) and applies any change to the LIVE offer. The
+            # dangerous-goods gate runs here too, so an item that must not go
+            # abroad silently stays on the domestic policy.
+            pol_ids, _loc = _resolve_policies_and_location(creds)
+            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds)
+            lp = offer.setdefault("listingPolicies", {})
+            prev = lp.get("fulfillmentPolicyId")
+            lp["fulfillmentPolicyId"] = fid
+            changed.append(f"policies(fulfillment {prev}->{fid})"
+                           if prev != fid else "policies(unchanged)")
+            for m in pol_msgs:
+                print(f"  {m}")
         api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer, creds=creds)
 
     update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
@@ -1528,7 +1746,7 @@ def _cli() -> None:
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
     ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
-    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer.")
+    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")

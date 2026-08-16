@@ -123,6 +123,16 @@ shipping:
     length: 0                  # maxLen=5
     width:  0                  # maxLen=5
     depth:  0                  # maxLen=5
+  # Offer this item internationally via eBay International Shipping (eIS)?
+  # OPT-IN per item, default false. true routes the listing to the
+  # international fulfillment policy (Worldwide, no region exclusions); eIS
+  # itself is an account-level enrollment, not a policy field.
+  # Refused automatically for dangerous goods (butane/lithium/aerosol/ammo/
+  # fragrance); heavy, bladed and alcohol-worded items list but are flagged
+  # for a human call at REVIEW.
+  # NOTE: with international ON the delivered-price basis no longer holds —
+  # our free-shipping domestic price is NOT what an overseas buyer pays.
+  international: false
   free_shipping: true          # eBay form field [61] — default ON; ignored when LOCAL_PICKUP
   # CALCULATED | FLAT_RATE | FREE_FLAT_RATE
   # When free_shipping is true this is FREE_FLAT_RATE.
