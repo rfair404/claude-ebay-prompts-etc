@@ -20,6 +20,41 @@ Default to terse. A phase that finishes well says so in a few lines.
   reference adds information.
 - When in doubt, cut.
 
+### Showing comps to the user — HARD RULE (never optional)
+
+Any time you surface eBay comps / sold listings to the user in chat — in
+PRICE, in a comp walkthrough, in an answer to "what are the comps", anywhere —
+you MUST render them as a **visual thumbnail board** where EVERY comp shown has
+all three of:
+
+1. its **thumbnail image, EMBEDDED as a base64 `data:` URI** — download the
+   comp's `thumbnail` (`i.ebayimg.com/...`) yourself, resize small, and inline
+   it. **Do NOT use `<img src="https://i.ebayimg.com/...">`** — the widget /
+   artifact sandbox CSP blocks ALL remote image hosts, so a remote `src` renders
+   as a BROKEN image (this is the #1 failure the user has hit — do not repeat
+   it). Only self-contained `data:image/jpeg;base64,...` sources render.
+2. a **clickable link to the actual eBay listing** (`<a href>` to the comp's
+   real `https://www.ebay.com/itm/<id>` URL) so the user can open and verify it
+   themselves; and
+3. the **delivered price** (+ a match / ceiling / excluded tag where relevant).
+
+**How to deliver it (both work; images must be embedded either way):**
+- Build a **self-contained HTML file** (data-URI images + `<a>` links) and send
+  it with `SendUserFile(display:"render")` — lightest path, avoids inlining a
+  large payload; OR
+- inline the same self-contained HTML into the visualize `show_widget` tool.
+
+Generate the HTML with a small script straight from the saved comp JSON (it has
+`thumbnail` + `url` per comp) — fetch+resize+base64 each thumbnail, and use each
+comp's REAL `url` (never hand-write an item id / thumbnail — a fabricated link
+defeats the whole point). Never present comps as a text-only list, a plain
+markdown table, or with remote `<img src>` — the user has explicitly required
+seeing real thumbnails and clicking through to verify each listing. A
+price/number without its embedded thumbnail AND clickable listing is not an
+acceptable way to show a comp. The text `price.txt` / `comps.csv` artifacts are
+still written as specified in PRICE; this rule governs the CHAT layer, in every
+phase, on top of them.
+
 ## Confidence (commit, don't hedge)
 
 The old prompts manufactured doubt — 5-scenario brackets, "effectively
