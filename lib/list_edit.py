@@ -803,7 +803,15 @@ def _is_media_service(code: str) -> bool:
 # detail -> CITES. Titles name what a thing IS; descriptions say what it looks
 # like.
 _DANGEROUS_GOODS_PATTERNS = (
-    (r"\bbutane\b|\blighter fluid\b|\b(cigarette |pocket |torch )?lighter\b|\bzippo\b",
+    # "lighter" is an adjective at least as often as a noun in this inventory
+    # ("Lighter Blue Glaze", "lighter weight wool"), and an optional qualifier
+    # group made the bare word match — hard-blocking eIS on innocuous titles.
+    # Require either a qualifier, or the word used as a noun (not immediately
+    # followed by a colour/comparative).
+    (r"\bbutane\b|\blighter fluid\b|\bzippo\b"
+     r"|\b(cigarette|pocket|torch|butane|gas)\s+lighter\b"
+     r"|\blighters?\b(?!\s+(blue|green|red|brown|gray|grey|tan|shade|color|colour|"
+     r"weight|wood|finish|tone|version|than))",
      "lighter / butane (flammable — eIS prohibited)"),
     (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
     (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",

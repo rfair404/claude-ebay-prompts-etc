@@ -300,8 +300,11 @@ def report_performance(sales: list[dict], rows: list[dict], *, label: str = "") 
     gross = sum(_money(r["gross"]) for r in sales)
     fees = sum(_money(r["ebay_fee"]) for r in sales)
     net = sum(_money(r["net_before_postage"]) for r in sales)
+    # gross can legitimately be 0 (a fully-refunded window, a $0 replacement
+    # order), and crashing on the headline would hide the rest of the report.
+    fee_pct = f"{fees / gross * 100:.1f}%" if gross else "n/a"
     out = [f"PERFORMANCE — {len(sales)} sold line item(s){label}", "",
-           f"  gross ${gross:,.2f}   eBay fees ${fees:,.2f} ({fees/gross*100:.1f}%)   "
+           f"  gross ${gross:,.2f}   eBay fees ${fees:,.2f} ({fee_pct})   "
            f"net before postage ${net:,.2f}", ""]
 
     # --- fee reality ---------------------------------------------------------
