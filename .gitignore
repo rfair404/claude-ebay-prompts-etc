@@ -1,9 +1,96 @@
 # ebaybiz — gitignore
+#
+# THIS REPOSITORY IS PUBLIC. It holds the pipeline (prompts, lib, templates,
+# tests) and nothing else. Three classes of file must never reach it:
+#
+#   1. SECRETS      — API tokens and credentials.
+#   2. BUSINESS DATA — what we own, what we asked, what we were paid. Revenue,
+#                      sale prices, ledgers, and the reports built from them.
+#   3. HEAVY/GENERATED — shoot photos, similarity indexes, per-run phase output.
+#                      Regenerable, large, and specific to one operator's stock.
+#
+# When adding a rule, say which class it belongs to. When in doubt about a file
+# that contains numbers from real sales: it is business data, exclude it.
 
-# Live config holds API tokens — never commit. Use v2/lib/config.example.yaml
+# ---------------------------------------------------------------- 1. SECRETS
+# Live config holds API tokens — never commit. Use lib/config.example.yaml
 # as the template for new setups.
 /config.yaml
 /config.*.yaml
+*.token
+*.credentials.json
+
+# ---------------------------------------------------------- 2. BUSINESS DATA
+# eBay listings ledger — account/inventory activity, one row per listing with
+# our ask. Kept locally.
+listings_log.txt
+listings_ledger.csv
+
+# Sales ledger — what each item ACTUALLY sold for, plus eBay's fee and our net.
+# Written by lib/sync_actuals.py from the Fulfillment API. This is revenue data;
+# it is the single most sensitive file the pipeline produces.
+sales_ledger.csv
+
+# Any dated backup of the above (e.g. listings_ledger.backup-20260815.csv).
+*.backup-*.csv
+*_ledger.backup*.csv
+
+# Performance reports — REPORT-phase output. Gross, fees, net, per-category
+# medians and item-level sale prices. Regenerate with:
+#   python lib/report.py --performance
+# The *findings* that matter long-term get encoded into prompts/ instead, which
+# is what makes the reports themselves disposable.
+/docs/performance-*.md
+
+# Inventory working files — private business data + images (photos, per-item
+# phase output, comps, SKUs). The default content store; never tracked.
+/inventory/
+
+# Photos staged for sharing/consignment outside the pipeline.
+/share-inventory/
+
+# Sensitive business documents + correspondence — kept locally, not tracked.
+*.docx
+letters/
+
+# Entity formation docs — contain PII (legal name, home address). Local only.
+/formation/
+
+# ------------------------------------------------------- 3. HEAVY / GENERATED
+# Per-run phase output. These normally live under /inventory/ (already excluded
+# above), but a shoot directory can be pointed anywhere, so exclude the
+# artifacts by name too — they are regenerated on every run and are never source.
+NEEDS_REVIEW.md
+SOLD.md
+comps.csv
+comps_board.html
+crop_review.jpg
+no-exif/
+cropped/
+.orig/
+.orig-rot/
+
+# Apify raw evidence dumps + saved run results (kept locally; not for repo).
+apify_run*.json
+apify_run*.stderr.txt
+apify_runs/
+
+# Local scratch + generated similarity indexes (large/binary, regenerable).
+.scratch/
+/kb/index/
+
+# Shoot images — heavy binaries, kept on disk only.
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.heic
+*.webp
+*.tiff
+*.cxf
+
+# ...except small, intentional test fixtures (regression assets must be tracked).
+!tests/fixtures/**
 
 # Python
 __pycache__/
@@ -12,48 +99,9 @@ __pycache__/
 .venv/
 venv/
 
-# Local scratch + generated similarity indexes (large/binary, regenerable)
-.scratch/
-/kb/index/
-
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Apify raw evidence dumps + saved run results (kept locally; not for repo)
-apify_run*.json
-apify_run*.stderr.txt
-apify_runs/
-
-# eBay listings ledger (account/inventory activity — kept locally)
-listings_log.txt
-listings_ledger.csv
-
-# Per-run working scratch: deferred-question log written by the pipeline phases
-# (SOFT-gate notes for the current shoot; regenerated each run, not source).
-NEEDS_REVIEW.md
-
-# Sample / shoot images — kept on disk, not version-controlled (heavy binaries)
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.heic
-*.webp
-*.tiff
-
-# ...except small, intentional test fixtures (regression assets must be tracked)
-!tests/fixtures/**
-
-# Inventory working files — never tracked (private business data + images)
-/inventory/
-
-# Sensitive business documents + correspondence — kept locally, not tracked
-*.docx
-letters/
-
-# Entity formation docs — contain PII (legal name, home address). Local only.
-/formation/
