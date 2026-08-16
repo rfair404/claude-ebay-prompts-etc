@@ -170,6 +170,45 @@ def test_force_bypasses_the_guards():
     assert forced.shape[:2] != (H, W), "--force must crop even when unsafe"
 
 
+# --------------------------------------------------------------------------
+# --apply must never destroy the original. Two ways it did:
+#   1. the .orig/ backup was written through cv2 (re-encoded at q92), so the
+#      only surviving copy of the original was a generation-loss recompression;
+#   2. the backup was written unconditionally, so a SECOND --apply run copied
+#      the already-cropped file over the real backup.
+# --------------------------------------------------------------------------
+def _apply_dir():
+    """A shoot dir holding one crop-able frame: small off-centre subject."""
+    d = Path(tempfile.mkdtemp(prefix="center_crop_apply_"))
+    bgr = _felt()
+    cv2.rectangle(bgr, (120, 120), (360, 360), (200, 200, 200), -1)
+    p = d / "frame.jpg"
+    cv2.imwrite(str(p), bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return d, p
+
+
+def test_apply_backup_is_byte_identical_to_the_original():
+    d, p = _apply_dir()
+    original = p.read_bytes()
+    CC.main([str(d), "--apply"])
+    backup = d / ".orig" / p.name
+    assert backup.exists(), "--apply must back the original up"
+    assert backup.read_bytes() == original, (
+        "the .orig/ backup must be the ORIGINAL BYTES — writing it through the "
+        "encoder makes the only surviving copy a lossy recompression")
+
+
+def test_second_apply_does_not_clobber_the_backup():
+    d, p = _apply_dir()
+    original = p.read_bytes()
+    CC.main([str(d), "--apply"])
+    cropped = p.read_bytes()
+    assert cropped != original, "first --apply should have cropped in place"
+    CC.main([str(d), "--apply"])          # the file on disk is now the CROP
+    assert (d / ".orig" / p.name).read_bytes() == original, (
+        "a second --apply must not copy the cropped file over the real backup")
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

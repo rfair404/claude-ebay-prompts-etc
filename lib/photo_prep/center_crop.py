@@ -416,7 +416,18 @@ def main(argv=None):
             x0, y0, x1, y1 = box
             after = before[y0:y1, x0:x1]
             if args.apply:
-                _save_bgr(shoot / ".orig" / p.name, before)
+                # The backup must be the ORIGINAL BYTES, and must survive a
+                # re-run. Two traps here, both of which destroy the only copy
+                # of the original:
+                #   1. writing it with _save_bgr re-encodes at JPEG q92, so the
+                #      "backup" is a generation-loss recompression;
+                #   2. writing it unconditionally means a second --apply run
+                #      (the file on disk is now the CROP) copies the crop over
+                #      the real backup.
+                # copyfile + exists() closes both.
+                backup = shoot / ".orig" / p.name
+                if not backup.exists():
+                    shutil.copyfile(p, backup)
                 _save_bgr(p, after)
             else:
                 _save_bgr(out_dir / p.name, after)
