@@ -105,3 +105,9 @@ venv/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Historical business working data that predates the /inventory/ convention.
+# Removed from tracking 2026-08-15: real listing drafts, prices, eBay draft ids,
+# and the seller ZIP. Kept on disk; not for a public repo.
+/deprecated/PRL-batches/
+/deprecated/v1/draft_listings.md
