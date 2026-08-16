@@ -8,9 +8,23 @@ background fabric). If anyone weakens the gate, this test fails loudly.
 
 Run:  python tests/test_marble_gate.py     (standalone, prints a table)
   or: pytest tests/test_marble_gate.py
+
+INTEGRATION TEST — unlike the rest of the suite this one runs the real CLIP
+gate, so it needs `sentence-transformers` (and torch behind it) and, on a cold
+machine, downloads the model on first use. It is skipped rather than failed
+where that stack is absent: a contributor working on prompts or listing code
+should not have to install two gigabytes of ML to get a green suite, and CI
+should not depend on a model download. Install the stack to run it for real.
 """
 import sys
 from pathlib import Path
+
+import pytest
+
+pytest.importorskip(
+    "sentence_transformers",
+    reason="CLIP gate integration test — install sentence-transformers to run it",
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))

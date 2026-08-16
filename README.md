@@ -15,6 +15,16 @@ then load each phase prompt on demand. `RUN.md` is the single entry point
     list <photos-dir>   INVESTIGATE → DRAFT → REVIEW(gate)→publish  (listing)
     full <photos-dir>   all in order, ending at the REVIEW gate
 
+    report              account-wide: what we actually made       (no shoot dir)
+
+A single phase can be run alone by name (`identify <name>`, `price <name>`, …);
+see [`RUN.md`](RUN.md). **REPORT** ([`prompts/report.md`](prompts/report.md)) is
+the odd one out — it takes no shoot directory, reads eBay's *outcomes* rather
+than producing a listing, and never publishes or edits anything:
+
+    python lib/sync_actuals.py --apply     # actuals from the Fulfillment API
+    python lib/report.py --performance     # fees, ask-vs-actual, speed, categories
+
 ## What changed from v2
 
 **1 — Headless.** A single orchestrator ([`RUN.md`](RUN.md)) and an
@@ -24,10 +34,13 @@ approval). Every other old "ask the user" moment is now a SOFT gate —
 proceed with a documented default, append one line to
 `<shoot-dir>/NEEDS_REVIEW.md`, keep going. The user reviews that queue
 asynchronously instead of being interrupted. Notably: PRICE no longer
-waits for query approval and no longer gates on Apify (it runs
-automatically as Stage B of the comp hunt), and the working price is
-auto-adopted (Recommended tier, provisional) so the pipeline finishes
-straight through to the review card.
+waits for query approval and no longer gates on its comp source — Stage B
+runs automatically through the user's logged-in browser
+([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py); Apify was retired
+2026-08-15 after repeated silent blocking, see
+[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md)) — and the
+working price is auto-adopted (Recommended tier, provisional) so the pipeline
+finishes straight through to the review card.
 
 **2 — Fewer words, more confidence.** Shared rules were extracted to
 [`prompts/_shared.md`](prompts/_shared.md) (unit_type, fresh-investigation,
