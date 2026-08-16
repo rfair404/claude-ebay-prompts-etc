@@ -58,7 +58,7 @@ class ConfigError(RuntimeError):
 # Built-in defaults (last-resort fallbacks)
 # ---------------------------------------------------------------------------
 
-DEFAULT_APIFY_ACTOR = "automation-lab/ebay-sold-scraper"
+DEFAULT_APIFY_ACTOR = "cirkit/ebay-product-scraper"
 
 # Google Lens reverse-image actor (IDENTIFY's visual second opinion). Chosen for
 # reliability (high success rate) + AI-mode + visual/exact match buckets.
@@ -226,6 +226,25 @@ def get_apify_actor() -> str:
         return str(actor)
 
     return DEFAULT_APIFY_ACTOR
+
+
+def get_apify_enabled() -> bool:
+    """Is the Apify (Stage B scraping) backend enabled at all?
+
+    DISABLED by default as of 2026-08-15: Stage B now runs through the user's
+    logged-in browser (`lib/ebay_sold_browse.py`), which is not subject to
+    eBay's anti-bot blocks and returns richer data. Re-enable only by setting
+    `apify.enabled: true` in config.yaml (or APIFY_ENABLED=1).
+    """
+    env = os.environ.get("APIFY_ENABLED")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes", "on")
+
+    config = load_config()
+    val = _nested(config, "apify", "enabled")
+    if val is None:
+        return False
+    return bool(val)
 
 
 def get_lens_actor() -> str:

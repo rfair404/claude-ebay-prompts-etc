@@ -47,10 +47,9 @@ understates the comp by its shipping (often $10–25 on breakables / heavier ite
 and makes a fair price look like a push above the market. So:
 
 1. **Anchor on the DELIVERED price.** Stage B carries `total_price` =
-   `sold_price + shipping_cost`. The CLI (`apify_ebay.py`) computes and saves it
-   automatically (the currency normalizer scales it too); on the **MCP path**, parse
-   each comp's `shippingCost` yourself ("+$24.25 delivery" → 24.25, "Free delivery"
-   → 0) into `total_price` before writing the run JSON.
+   `sold_price + shipping_cost`. `lib/ebay_sold_browse.py` computes and saves it
+   automatically — the in-page extractor reads "+$24.25 delivery" → 24.25 and
+   "Free delivery" → 0 straight off the card, so `total_price` is always present.
 2. **Run the distribution on the delivered basis when the listing is free-shipping**
    (the default): `price_stats.py … --price-field total`. The delivered tiers are the
    headline and decide the sale price; an item-only run (`--price-field sold`) is at
@@ -59,7 +58,21 @@ and makes a fair price look like a push above the market. So:
    covers shipping exactly like the comps.)
 3. **Translate to NET-TO-US.** Free shipping means we absorb postage AND pay eBay
    fees on the full delivered amount: `net ≈ list − our_postage − fees`
-   (fees ≈ 13% + $0.40; postage from IDENTIFY's weight/dims). Surface net-to-us for
+   (postage from IDENTIFY's weight/dims). **Fee rate — measured, not assumed.**
+   This prompt used to say 13% + $0.40; across 92 real sales the account actually
+   paid **16.0% blended**, and the rate is regressive, so use the band:
+
+   | delivered price | fee rate to use |
+   |---|---|
+   | under $25 | 18% |
+   | $25–50 | 17.5% |
+   | $50–100 | 16.5% |
+   | $100–250 | 16.5% |
+   | $250+ | 15% |
+
+   Re-measure with `python lib/report.py --performance` (REPORT, Function 7) and
+   update this table when the bands move — never quote a net-to-us figure from a
+   remembered rate. Surface net-to-us for
    each candidate price so the user sees what each option actually returns — two
    listings at the same delivered price net differently if one ships a 1 lb item and
    the other a 10 lb one.
@@ -87,8 +100,8 @@ the plain distribution defaults:
    floor** (troy-oz × spot × purity) — price NEVER drops below melt. Record a
    one-line `Rarity:` verdict in price.txt.
 2. **Hunt the EXACT comp harder.** Do NOT settle for an era-peer on silver. Run
-   the full query ladder, and if Stage B (Apify) is thin, ESCALATE to Stage C
-   (Chrome eBay-sold) rather than falling back — an exact maker+pattern+form comp
+   the full query ladder, and if Stage B is thin, descend the ladder and widen
+   the bracket rather than falling back — an exact maker+pattern+form comp
    anchors the ceiling. Silver is identifiable; an exact match usually exists if
    you dig.
 3. **Push HIGH by default.** For silver the provisional working / list price is
@@ -119,36 +132,66 @@ stage is autonomous — PRICE never stops to ask.
    web + marketplaces. Tag `[A — WebSearch]`. **Log each usable hit to
    `<shoot-dir>/comps.csv` as stage A** (see "Saved comp artifacts").
 
-3. **Stage B — Apify eBay sold (DUAL QUERY — the v2 core).** The default
-   direct-eBay comp source; no gate. Tag `[B — Apify]`. ~$0.20/item. Run the
-   SAME query twice — `best_match` (representative body, `--max 30`) and
-   `price_high` (ceiling set, `--max 20`), both `--pages 2`. The dual pull is
-   what makes distribution pricing possible. Pick the path your environment
-   allows; exact commands live in "Tooling — CLI contracts" below.
-   - **MCP connector** (preferred; works with no egress): call the actor once
-     per sort, dump each raw result to `<shoot-dir>/raw_<sort>.json`, then
-     `apify_ebay.py --ingest` it. Run id = the MCP result's `runId`.
-   - **stdlib CLI** (shell + egress): one `apify_ebay.py` live run per sort.
-     Optionally `--sku`/`--title` to label the run in the Apify Console (else
-     it's labeled by the query; SKU is `list_edit.py`'s 8-hex hash, or use the
-     working title / shoot-folder name since PRICE precedes DRAFT).
-   - **Currency sanity:** genuine USD prices cluster on .99/.95/.00/.50; each
-     save's `charm_price_share` / `currency_leak_suspected` flags a leak. The
-     US-proxy actor makes leaks unlikely (the old caffein.dev actor leaked
-     BRL/CZK at ~5× mislabeled USD — why we switched). On a suspected leak
-     prefer Stage C; trust the price pattern, never a `currency`/`USD` label.
-   - **Run the distribution engine** on the two saved JSONs (`--price-field
-     total` for free-ship — the default), fold its block into `price.txt`,
-     adopt its tiers. **No shell?** Do the filtering + percentiles by hand per
-     [docs/price-strategy-v2.md](../docs/price-strategy-v2.md) (Conservative=25th
-     pct · Recommended=median · Push-high=vetted ceiling else 90th pct; drop
-     single-bid auctions & <50-feedback sellers; flag >2.5× median); show work.
-   - **Proof-of-run is mandatory:** record both run ids AND both saved JSON
-     paths in the Research log — never report B as "ran" without run ids.
-   - **If NEITHER path is available** (no Apify MCP tool AND no
-     shell/egress — e.g. a sandbox whose proxy 403s `api.apify.com`):
-     record `B — UNAVAILABLE: <reason>` in the Research log and fall through
-     to Stage C. Do NOT silently skip B.
+3. **Stage B — eBay sold via the LOGGED-IN BROWSER (DUAL QUERY — the v2 core).**
+   The default direct-eBay comp source; no gate. Tag `[B — Browser]`. **Free.**
+
+   > **APIFY IS DISABLED** (2026-08-15, `apify.enabled: false`). Every actor
+   > we depended on was eventually blocked or deleted, and a blocked actor
+   > returns 0 items with a SUCCEEDED status — indistinguishable from a thin
+   > market. Calling it now raises `ApifyDisabledError`. Do not re-enable it
+   > to "just get comps"; use the browser.
+
+   **The anonymous in-app browser does NOT work for this** — eBay serves it a
+   "Security Measure / verify yourself" CAPTCHA. Never try to solve it. Use
+   **claude-in-chrome** (the user's real, logged-in Chrome), which is not
+   challenged.
+
+   Procedure:
+   1. `python lib/ebay_sold_browse.py "<query>" --urls [--ladder]` — prints
+      the `best_match` (representative body) and `price_high` (**ceiling,
+      delivered basis**) URLs.
+   2. Navigate **claude-in-chrome** to each URL.
+   3. Run the in-page extractor: `python lib/ebay_sold_browse.py --js` prints
+      it; paste that into `javascript_tool`. It returns
+      `{ok, header, n, rows:[…]}` — one row per real sold listing, with the
+      item URL and thumbnail.
+   4. Save that JSON and
+      `python lib/ebay_sold_browse.py "<query>" --ingest-json <file> --sort <sort>`
+      → writes a run JSON in the SAME shape the Apify path produced.
+   5. `price_stats.py` and `comps_csv.py` consume it unchanged.
+   6. **ALWAYS give the user both URLs in your reply** so they can browse the
+      identical comp set themselves. This is not optional — they price with
+      you, not after you.
+
+   `--parse <textfile>` is a fallback for when JS execution isn't available.
+   It cannot recover item URLs or thumbnails; prefer the extractor.
+
+   What the browser gives that no actor did: **`Best offer accepted`** — a
+   sale at that flag means the ASK was not the clearing price, so treat it as
+   a **soft** ceiling, not a hard one. Also delivered shipping, seller
+   feedback score + %, bid counts, item URLs and thumbnails. Measured on a
+   live 60-comp page: every field populated, 0 missing.
+
+   **Anti-scrape traps the extractor already handles — do not "simplify" them
+   away.** eBay salts results with placeholder cards pointing at a FAKE item
+   id (`/itm/123456`); the extractor requires a >=9-digit id. eBay also
+   renders "Sponsored" REVERSED as `derosnopS`, so it can't be string-matched
+   — and it appears on nearly every card, so it is useless as a filter.
+   Finally, adjacent spans have no whitespace between them, so raw
+   `textContent` welds them ("Sell one like this" + seller name →
+   `thiscelticitaliansilver`); the extractor joins leaf nodes with newlines
+   instead.
+
+   **If the browser path is unavailable** (no Chrome MCP in this environment):
+   record `B — UNAVAILABLE: no logged-in browser` in the Research log and fall
+   through to Stage A only. Do NOT silently skip B, and do NOT re-enable Apify.
+
+   **Zero comps.** With the browser there is no silent-block ambiguity — you
+   can SEE the page. If the extractor returns `challenge:true`, eBay served a
+   verification page: do NOT solve it, reload in Chrome and retry. If it
+   returns `n:0` on a page that visibly has results, the `li.s-card` selector
+   has drifted again — fix the extractor, don't guess a price. A real 0 on a
+   page that says "0 results" is a genuinely thin market: descend the ladder.
 
 4. **Thin results → broaden the query (query ladder, NOT a new draft).** The
    comp *search query* is internal to PRICE; broadening it never changes the
@@ -204,18 +247,26 @@ commit to it.
 
 Everything PRICE needs from `lib/` is below — treat it as the interface and
 don't open the implementation files (reading them is wasted tokens). Stage B
-runs the Actor `automation-lab/ebay-sold-scraper` (US residential proxy → native
-USD; configurable via `apify.ebay_actor`), twice per item (`best_match` +
-`price_high`), and every save runs the charm-price currency check + flags a
-suspected FX leak. Two execution paths: the **MCP connector** (restricted /
-no-egress envs — brokered outside the sandbox) and the **stdlib CLI** (shell +
-egress to `api.apify.com` + Apify token). Neither available ⇒ Stage B
-`UNAVAILABLE` → Chrome (Stage C).
+runs twice per item (`best_match` + `price_high`) through the user's logged-in
+Chrome; every save runs the charm-price currency check + flags a suspected FX
+leak. No token, no cost, no actor. No Chrome MCP ⇒ Stage B `UNAVAILABLE`.
 
-`python lib/apify_ebay.py` — run OR ingest a sold-comp search:
-- live run: `"<query>" --sort <best_match|price_high> --max <30|20> --pages 2 --save-dir <shoot-dir> [--sku <sku> --title "<title>"]`
-- ingest (MCP path): `--ingest <shoot-dir>/raw_<sort>.json --save-dir <shoot-dir>` — normalizes the MCP tool's raw items into the canonical saved JSON, no live call.
-- both print `Apify run: <id>` + `Saved results: <path>`. Saved JSON has a `comps` list with `sold_price`, `total_price` (=sold+shipping), `shipping_cost`, `title`, `url`, `condition`, `sold_date`, `listing_type`, `bids_count`, `seller_feedback_score`, plus top-level `charm_price_share` / `currency_leak_suspected`.
+`python lib/ebay_sold_browse.py` — eBay sold comps via the browser:
+- URLs: `"<query>" --urls [--ladder] [--condition <new|used>]` — prints the
+  `best_match` + `price_high` sold-search URLs. **Give these to the user.**
+- extractor: `--js` — prints the in-page JS. Paste into claude-in-chrome's
+  `javascript_tool` on each loaded page; returns `{ok, header, n, rows:[…]}`.
+  If it returns `challenge:true`, eBay wants verification — do NOT solve it.
+- ingest: `"<query>" --ingest-json <file> --sort <best_match|price_high> [--page N] --save-dir <shoot-dir>`
+  → prints a field-coverage line (urls / delivered / seller / Best-Offer-accepted
+  / auctions) and `Saved results: <path>`.
+- fallback: `--parse <pagetext.txt>` when JS isn't available (no URLs/thumbnails).
+- Saved JSON has a `comps` list with `sold_price`, `total_price` (=sold+shipping),
+  `shipping_cost`, `title`, `url`, `item_id`, `thumbnail`, `sold_date`,
+  `listing_type`, `bids_count`, `bo_accepted`, `seller_username`,
+  `seller_feedback_score`/`_pct`, plus top-level `charm_price_share` /
+  `currency_leak_suspected`. Same shape the Apify path wrote, so `price_stats.py`
+  and `comps_csv.py` are unchanged.
 
 `python lib/price_stats.py` — distribution tiers from the saved JSON(s):
 - `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>]`
@@ -225,7 +276,7 @@ egress to `api.apify.com` + Apify token). Neither available ⇒ Stage B
 
 The user reviews the raw research, so each stage persists its comps:
 
-- **Stage B (Apify)** → **two** JSONs, one per sort, saved beside `price.txt`
+- **Stage B (Browser)** → **two** JSONs, one per sort, saved beside `price.txt`
   by `--save-dir <shoot-dir>` (live run auto-saves; MCP path saves via
   `--ingest`). `price_stats.py` reads both.
 - **Stages A (WebSearch) and C (Chrome)** → rows in **`<shoot-dir>/comps.csv`**,
@@ -266,13 +317,16 @@ research happened, not just the comps that survived. Stages A and B run on
 EVERY item; C is conditional. Each stage is `RAN` (with proof) /
 `SKIPPED` / `UNAVAILABLE` (with a reason) / `NOT TRIGGERED` (C only).
 
-(Note: "Stage A/B/C" = the search METHOD — WebSearch / Apify / Chrome.
+(Note: "Stage A/B" = the search METHOD — WebSearch / logged-in Chrome.
 Don't confuse with the comp-quality "Tier A/B/C" further down.)
 
     Research log — Item <N>
       A · WebSearch : RAN — query "<q>" — <n> hits — <one-line finding> — logged to comps.csv
       B · Apify     : RAN via <MCP|CLI> — query "<q>" — best_match run <id> (<n>) + price_high run <id> (<n>) — USD-validated (charm <x>%) — saved 2 JSONs — price_stats n_kept=<n>, conf=<good|partial|thin>
                       [ALT] UNAVAILABLE — <no Apify MCP tool AND no shell/egress | api.apify.com egress blocked (sandbox proxy) | no token | CurrencyLeakError>
+                      [ALT] THIN (verified) — 0 comps, control query "<q>" returned <n> — backend healthy, market genuinely empty
+                      [ALT] BLOCKED — 0 comps AND control query "<q>" returned <n> (< 5) — backend down, NOT thin; Stage B contributes NO tier
+                      [NOTE] served by FALLBACK <actor> — primary returned 0 (silently blocked)
                       (run ids come from each sort's MCP result / CLI `Apify run:` line; no `pip install` needed)
       C · Chrome    : NOT TRIGGERED — confidence OK (price_stats conf good/partial)
                       [ALT] RAN — <low-confidence trigger: conf=thin or dispersion too wide> — <n> rows — logged to comps.csv
@@ -333,16 +387,24 @@ A consolidated, click-through list so the user can open the comps directly.
 Exact/near-exact anchors first; include the price + a short title with each
 URL so the list is scannable on its own. Required on every item.
 
-**Chat presentation — thumbnail table (standing user convention).** Any time
-eBay comps are surfaced to the user in chat, ALSO render them as a visual table
-with columns **thumbnail · title (linked) · sold/delivered price** (+ a
-match/context/excluded tag). The saved comp JSON carries a `thumbnail`
-(`i.ebayimg.com/...`) per comp — use it. Terminal markdown won't reliably show
-remote images, so render the table via the visualize `show_widget` HTML tool
-(`<img src=thumbnail>`), not a plain markdown table. This is the chat layer; the
-text `price.txt` + `comps.csv` artifacts stay as specified above. Dial the query
+**Chat presentation — thumbnail board (HARD RULE — see [_shared.md](_shared.md)
+"Showing comps to the user").** Any time eBay comps are surfaced to the user in
+chat — the PRICE output, a comp walkthrough, or any answer that quotes comps —
+you MUST render them as a visual board where EVERY comp carries all three:
+**its thumbnail image EMBEDDED as a base64 `data:` URI** (download + resize +
+inline — NOT `<img src="https://i.ebayimg.com/...">`, which the sandbox CSP
+blocks into a broken image), **a clickable link to the real eBay listing**
+(`<a href>` to the comp's genuine `https://www.ebay.com/itm/<id>` — never a
+hand-written id), and **the delivered price** (+ a match/ceiling/excluded tag).
+Deliver as a self-contained HTML file via `SendUserFile(display:"render")`, or
+inline the same self-contained HTML into `show_widget`. A plain markdown table,
+a text list, or remote-`src` images are NOT acceptable — the user requires
+seeing real thumbnails and clicking through to verify each listing himself.
+Build the HTML with a small script straight from the saved comp JSON (it has
+`thumbnail` + `url` per comp). This is the chat layer; the text `price.txt` +
+`comps.csv` artifacts stay as specified above. Dial the query
 (material/size/origin qualifiers) for a tight exact-match cohort BEFORE showing
-the table.
+the board.
 
     Comp URLs — Item <N> (open to verify):
       Exact / near-exact match:
