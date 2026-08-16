@@ -25,6 +25,7 @@ files in this directory — it is the single source of truth for what's active.
 |---|---|---|
 | [marbles.md](marbles.md) | marble, marbles, shooter, swirl, sulphide, agate (as a marble), "glass ball" toy, marble lot/jar/collection | active |
 | [jewelry.md](jewelry.md) | ring, necklace, pendant, locket, bracelet, bangle, brooch/pin, earrings, cufflinks, chain, charm, parure; precious-metal marks (10k/14k/18k, 375/585/750, sterling/925, plat/950, "gold filled"/GF/vermeil); costume jewelry, rhinestone, signed maker (Tiffany/Cartier/Trifari/etc.); a gemstone **set in / sold as jewelry** (diamond, sapphire, jade, agate-as-gemstone, etc.) | active (v1, partial — see module header) |
+| [silverplate.md](silverplate.md) | silverplate/"silver plate"/EPNS/EP/A1/AA/"triple plate"/"quadruple plate"; plated flatware & serving pieces & hollowware; "service for 8/12", flatware set, gravy ladle, cold-meat fork, sugar shell; maker lines 1847 Rogers Bros / Wm Rogers (& Son) / Wm A Rogers / Holmes & Edwards / Oneida Community / Tudor Plate / International Silver (`IS`). **Carve-out:** solid STERLING/925 flatware → jewelry.md silver-decode + PRICE sterling rules, NOT here | active (v1) |
 
 _Add a row per new module. Triggers should be specific enough not to fire on
 unrelated items (e.g. "agate" alone is also a gemstone — qualify it)._
