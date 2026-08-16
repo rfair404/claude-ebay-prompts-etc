@@ -9,6 +9,55 @@ pricing. Read the prior phases' files, render the template, validate
 against its constraints, write one self-contained local file. **Local
 file only — no eBay calls, no publishing** (firewall, per _shared).
 
+## Pre-DRAFT photo touch-up (MANDATORY — run before selecting `photos:`)
+
+Raw shots aren't listing-ready: EXIF-rotated, unevenly lit backdrops, and items
+framed off-center (the user shoots off-center for focus/lighting, but the eBay
+thumbnail crops to frame center — so the item looks off). Touch up every photo
+first. All `lib/photo_prep/` tools are non-destructive (each writes to a subdir /
+backs up), so DRAFT still renders `photos:` from listing-ready files.
+
+Run the sequence (skip a step when it doesn't apply):
+
+1. **EXIF / orientation** — always. Removes the false Orientation tag so viewers
+   show the upright stored pixels; strips metadata.
+       python -m lib.photo_prep.strip_exif <shoot-dir>            # -> <shoot-dir>/no-exif/
+2. **Backdrop cleanup — only for near-white/seamless backdrops** (NOT dark-felt
+   shots; the corner-sampling logic is tuned for light backgrounds). Evens
+   lighting/shadow, then trims the border to the subject.
+       python -m lib.photo_prep.even_background <dir>            # -> uniform backdrop
+       python -m lib.photo_prep.trim_whitespace <dir>           # -> <dir>/trimmed/
+3. **Center-crop — always.** Centers the item on its focal point at an
+   eBay-friendly aspect (square 1:1 default). Finds the subject by
+   background-contrast (works on dark felt AND light box interiors) and unions
+   ALL foreground pieces so a pair/set stays whole.
+       python -m lib.photo_prep.center_crop <dir> --check        # per-photo verdict + reason
+       python -m lib.photo_prep.center_crop <dir> --apply        # recenter in place (backs up to .orig/)
+   `--apply` overwrites in place so DRAFT's lexicographic photo picker uses the
+   centered files with no other change; default (no `--apply`) writes to
+   `cropped/`. Tunables: `--aspect 4:5`/`orig`, `--pad 0.12`, `--threshold` (flag
+   cutoff, default 6%). Writes a `crop_review.jpg` before|after contact sheet.
+   The tool REFUSES a crop it can't make safely (subject fills the frame, nothing
+   detected, detector locked onto a logo/fragment, or the crop would cut the
+   item): it prints `SKIPPED <reason>`, passes the original through untouched,
+   and labels that row on the review sheet. Expect a lot of skips on macro-heavy
+   shoots — that's the tool working. `--force` crops anyway; don't, unattended.
+
+Chaining: each tool reads a dir and writes a subdir — point the next step at the
+previous output (or run `strip_exif` + `center_crop --apply` in place for the
+common dark-felt case). See [[feedback_center_crop_before_draft]].
+
+**Touch-up-check first (per [[feedback_crop_check_first]] ethos):** eyeball
+`crop_review.jpg` (and any trimmed output) before drafting. center_crop now
+self-skips the known misfires, but it is a backstop, not a substitute — the other
+steps have no such guard, and a crop can still be merely ugly rather than unsafe.
+If a step misfired — mis-detected focal point on a busy background, subject that
+fills the frame, or a text-macro (e.g. a box-logo close-up that gets zoomed into
+and cut off) — DON'T ship it: keep that original for that photo, and in attended
+mode show the user the sheet and ask. Never draft on a bad touch-up. Attended: review, then
+`--apply`. Headless: `--apply` and append a NEEDS_REVIEW line noting the pass ran
+so misfires surface at REVIEW.
+
 ## Inputs
 
 1. `identify.txt` — structured fields (unit_type, qty, category, weight,
@@ -84,6 +133,28 @@ down to it.
   the user reviews and accepts offers manually.
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
+**Net-floor check (MANDATORY — the floor is a price we AGREE to, not a
+formality).** An auto-decline figure is a standing offer to sell at that number,
+so before writing it, compute what we'd actually keep if a buyer hit it exactly:
+
+    net_at_floor = floor − fee(floor) − our_postage
+
+using PRICE's **measured fee band** (16–18% depending on size — see
+[price.md](price.md); it is NOT 13%) and the REAL postage for this item
+(Media Mail only if it's a book with no advertising; magazines and anything with
+ads ship Ground Advantage at 2–3× the cost). If `net_at_floor` is implausibly
+thin for the handling — packing, a trip to the mailbox, and the return risk —
+**raise the floor until it isn't**, and say so in `meta.notes`.
+
+This exists because it was gotten wrong: two magazine lots went live with floors
+set from the Recommended tier under the old 13% fee assumption, and at those
+floors an accepted offer netted **$13.46 and $9.67** on heavy Ground Advantage
+parcels. Both were raised at the REPORT phase (2026-08-15). The failure mode is
+specific — a low floor looks generous and costs nothing until someone takes it.
+
+Postage weighs most on cheap heavy things, so the check bites hardest exactly
+where the old rule was loosest: sub-$50 lots of paper.
+
 **shipping:** weight/dims from IDENTIFY (round up); `free_shipping` true →
 `domestic_shipping_type` FREE_FLAT_RATE; `primary_service` per Service
 map; `handling_time_days` 1; `item_location_zip` blank. **Set
@@ -115,6 +186,40 @@ fulfillment policy. Decide `fulfillment_mode`:
   known. Add a short closing line to the description body: *"Local pickup only
   — <location_hint>. Not local? Message me for a freight quote."* Log the
   decision (+ trigger) in `meta.notes`.
+
+**Carrier-check gate — FedEx vs USPS (SOFT — suggest, never auto-switch).**
+Default carrier is the USPS policy. But at DRAFT, evaluate whether this item
+should go FedEx instead. **Trigger the FedEx check when ANY of these is true:**
+- estimated **packed weight > 5 lb**, OR
+- **any side > 24 in** (long/oversized), OR
+- **very fragile** (glass, thin porcelain, etc.), OR
+- **item value > $200** (price or working price).
+
+When triggered, do this:
+1. **Estimate the FedEx cost** for the packed weight/dims to the buyer (assume an
+   average CONUS zone ~4–5 unless a real destination is known; FedEx Home
+   Delivery / Ground Economy). Note it's an ESTIMATE (no live FedEx rate API
+   here) and show the assumptions (weight, dims, zone). The account's FedEx
+   policy is **`fulfillment_policy_id` 292460878014** ("FedEx SmartPost / Ground
+   Economy") — reference it by id.
+2. **Add the DRIVE COST to FedEx's effective cost.** The seller's nearest FedEx
+   drop-off is **~30 min away (≈1 hr round-trip)**; USPS is picked up free from
+   home, so USPS pays no drive. Factor the round-trip drive (gas + the seller's
+   time) into FedEx's total so a small label saving that the drive eats up does
+   NOT count as cheaper. State the drive adjustment you used.
+3. **Compare FedEx (label + drive) vs the USPS estimate.** Recommend the **FedEx
+   policy** only when FedEx is genuinely cheaper after the drive, OR when USPS
+   can't handle the item (oversize / >70 lb). Otherwise keep USPS.
+4. **Never auto-switch.** Suggest it and let the user choose. If they accept,
+   set the offer's fulfillment policy to the FedEx id at LIST time (a `--review`/
+   publish-time policy override); log the decision + the two estimates in
+   `meta.notes`, and append a NEEDS_REVIEW line so it surfaces at REVIEW.
+
+**Always, on the DRY RUN** (`--list`/`--publish` without `--confirm`, and in the
+REVIEW card): if the FedEx estimate (incl. drive) is **less than USPS** for this
+item, SURFACE the FedEx estimated price and recommend switching — even if the
+item didn't hit a trigger above. The user wants to see any FedEx saving before
+publishing.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.
