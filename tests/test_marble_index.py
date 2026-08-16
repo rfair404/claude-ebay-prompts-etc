@@ -204,10 +204,18 @@ def test_verify_no_keyword_match_returns_early_without_json():
     meta = [_row(1, ans="Akro Agate", rep=5.0)]
     jf = Path(tempfile.mkdtemp(prefix="mi_v0_")) / "out.json"
     _tmp_index_with(meta, emb=emb)
+    # Restore every patched attribute: leaving _load_refs stubbed leaks into the
+    # rest of the session, and the next test to exercise the real _load_refs
+    # silently tests the stub instead (it returns ["dummy"] and never raises).
+    orig_embed, orig_load, orig_check = MI.embed_images, MI._load_refs, MI.IDX.check_model
     MI.embed_images = lambda pil: np.asarray([[1.0, 0.0]], dtype="float32")
     MI._load_refs = lambda refs: ["dummy"]
     MI.IDX.check_model = lambda state: None
-    MI.cmd_verify(_args(json=str(jf), maker=["vitro"], field="answer"))
+    try:
+        MI.cmd_verify(_args(json=str(jf), maker=["vitro"], field="answer"))
+    finally:
+        MI.embed_images, MI._load_refs = orig_embed, orig_load
+        MI.IDX.check_model = orig_check
     assert not jf.exists(), "no-match path returns before writing JSON"
 
 
