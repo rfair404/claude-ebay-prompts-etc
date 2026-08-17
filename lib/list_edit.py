@@ -435,9 +435,40 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 # Photo upload
 # ---------------------------------------------------------------------------
 
+def _assert_photos_cleared(photo_paths: list[Path]) -> None:
+    """The PREP gate, enforced in code at the point of no return.
+
+    Every path that puts a photo on eBay funnels through `upload_photos_to_eps`,
+    so this is the one place worth guarding. A prompt instruction is not a
+    control: the sideways-photo incident happened with the rules already written
+    down. This refuses to upload photos that were not prepped AND explicitly
+    approved — the same shape as the `--confirm` guard on publishing.
+
+    Shoots with no PREP manifest at all are legacy (photos came from the old
+    `no-exif/` chain). Those are refused too, with the command to fix them,
+    because "every image goes through the filter" is the whole point.
+    """
+    if not photo_paths:
+        return
+    from photo_prep.prep import PrepGateError, assert_approved
+
+    # `listing/` is PREP's output; the rest are the old chain's intermediates.
+    # All of them sit one level under the shoot, so the shoot is their parent —
+    # otherwise the error tells you to go and prep `no-exif/` itself.
+    _SUBDIRS = {"listing", "no-exif", "evened", "trimmed", "cropped", ".orig"}
+    shoots = {p.parent.parent if p.parent.name in _SUBDIRS else p.parent
+              for p in photo_paths}
+    for shoot in sorted(shoots):
+        try:
+            assert_approved(shoot)
+        except PrepGateError as e:
+            raise SystemExit(f"[PREP GATE] {e}") from None
+
+
 def upload_photos_to_eps(photo_paths: list[Path],
                          creds: Optional[EbayCredentials] = None) -> list[str]:
     """Upload each photo to EPS (in order); return EPS URLs in the same order."""
+    _assert_photos_cleared(photo_paths)
     creds = creds or load_credentials()
     urls: list[str] = []
     for ph in photo_paths:

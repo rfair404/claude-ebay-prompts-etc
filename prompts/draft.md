@@ -9,13 +9,37 @@ pricing. Read the prior phases' files, render the template, validate
 against its constraints, write one self-contained local file. **Local
 file only — no eBay calls, no publishing** (firewall, per _shared).
 
-## Pre-DRAFT photo touch-up (MANDATORY — run before selecting `photos:`)
+## Photos come from PREP — DRAFT does not touch them up
 
-Raw shots aren't listing-ready: EXIF-rotated, unevenly lit backdrops, and items
-framed off-center (the user shoots off-center for focus/lighting, but the eBay
-thumbnail crops to frame center — so the item looks off). Touch up every photo
-first. All `lib/photo_prep/` tools are non-destructive (each writes to a subdir /
-backs up), so DRAFT still renders `photos:` from listing-ready files.
+Photo preparation is its own phase now: **[PREP](prep.md)**, run after IDENTIFY.
+It handles orientation, crop, backdrop and the subject pass in one pass, writes
+`<shoot-dir>/listing/`, and stops at a HARD approval gate.
+
+**DRAFT's job here is only to point `photos:` at the prepped files:**
+
+    python -m lib.photo_prep.prep <shoot-dir> --repoint-draft --apply-repoint
+
+That maps each existing entry to its prepped counterpart **in the same order** —
+entry one is the eBay gallery image and the list is often not lexicographic.
+
+If PREP has not been run, stop and run it; do not fall back to the old tools.
+`upload_photos_to_eps` enforces this in code, so an unprepped or unapproved
+shoot cannot publish regardless of what this prompt says.
+
+<details>
+<summary>The old hand-chained sequence (superseded — kept for one-off use)</summary>
+
+The steps below ran as a chain: `strip_exif` → `even_background` →
+`trim_whitespace` → `center_crop`, each writing a subdirectory. **Do not run
+them as a chain any more.** Four subdirectories that all look plausible, plus a
+lexicographic photo picker at the end, is where 66 sideways photos hid until
+buyers complained. PREP replaces the whole sequence with one output directory
+and a manifest recording what was done to each frame.
+
+The individual tools still work for a quick one-off, and `orient.py`'s manifest
+is read *and written* by PREP so a rotation recorded in either is the call in
+both. What must not happen is running both on one shoot and then guessing which
+directory the draft points at.
 
 > ⛔ **The orientation test is CONTENT, not metadata.** "Would a buyer see this
 > the right way up?" is the only question that matters, and it cannot be answered
@@ -76,19 +100,17 @@ Run the sequence (skip a step when it doesn't apply):
    shoots — that's the tool working. `--force` crops anyway; don't, unattended.
 
 Chaining: each tool reads a dir and writes a subdir — point the next step at the
-previous output (or run `strip_exif` + `center_crop --apply` in place for the
-common dark-felt case). See [[feedback_center_crop_before_draft]].
+previous output. See [[feedback_center_crop_before_draft]].
 
-**Touch-up-check first (per [[feedback_crop_check_first]] ethos):** eyeball
-`crop_review.jpg` (and any trimmed output) before drafting. center_crop now
-self-skips the known misfires, but it is a backstop, not a substitute — the other
-steps have no such guard, and a crop can still be merely ugly rather than unsafe.
-If a step misfired — mis-detected focal point on a busy background, subject that
-fills the frame, or a text-macro (e.g. a box-logo close-up that gets zoomed into
-and cut off) — DON'T ship it: keep that original for that photo, and in attended
-mode show the user the sheet and ask. Never draft on a bad touch-up. Attended: review, then
-`--apply`. Headless: `--apply` and append a NEEDS_REVIEW line noting the pass ran
-so misfires surface at REVIEW.
+</details>
+
+**Check the photos before drafting (per [[feedback_crop_check_first]] ethos):**
+eyeball `<shoot-dir>/.prep/prep_review.jpg`. PREP self-skips the known misfires
+and prints the reason on each row, but that is a backstop, not a substitute — a
+crop can be merely ugly rather than unsafe, and a look can be wrong for the item
+without any rule catching it. Never draft on a bad pass: re-run PREP, `--pick`
+the other look, or record a different rotation. The approval that PREP's gate
+wants is the user's, on that sheet.
 
 ## Inputs
 

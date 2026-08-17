@@ -26,7 +26,7 @@ never version-controlled). Only treat `<name>` as a different location if it
 isn't found under `inventory/`, or the user gives an explicit path.
 
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
-    list  <photos-dir>   → INVESTIGATE → DRAFT → REVIEW(gate)→publish (post-buy: listing)
+    list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish
     full  <photos-dir>   → all in order, ending at the REVIEW gate
 
 If no mode is given: a single-item or grouped shoot of items the user
@@ -39,6 +39,7 @@ pipeline. But a **phase keyword runs ONLY that one prompt and stops** (it does
 NOT continue to the next phase):
 
     identify    <name>   → only IDENTIFY     ([prompts/identify.md](prompts/identify.md))    → identify.txt
+    prep        <name>   → only PREP         ([prompts/prep.md](prompts/prep.md))            → listing/ (HARD gate)
     price       <name>   → only PRICE        ([prompts/price.md](prompts/price.md))          → price.txt (+ comps.csv)
     curate      <name>   → only CURATE       ([prompts/curate.md](prompts/curate.md))        → review.md
     investigate <name>   → only INVESTIGATE  ([prompts/investigate.md](prompts/investigate.md)) → investigate.txt
@@ -77,7 +78,16 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    "ok"/"looks good"/silence. (This replaced the old absolute no-publish
    firewall — publishing is now gated here, not forbidden.)
 
-2. **The IDENTIFY maker-mark gate (interactive only).** In a gate category —
+2. **The PREP photo gate.** After IDENTIFY, PREP prepares every frame and
+   STOPS with a before|after sheet. Photos go live ONLY after the user approves
+   that sheet. Unlike the maker-mark gate this does NOT degrade in a headless
+   run — it halts, because a bad photo is the one error buyers see first and 66
+   sideways ones shipped while the rules said otherwise. It is enforced in code
+   too: `upload_photos_to_eps` refuses photos that are not prepped and approved,
+   and an approval goes stale the moment a source or output file changes.
+   Flip it to soft only when the user says so.
+
+3. **The IDENTIFY maker-mark gate (interactive only).** In a gate category —
    jewelry, precious metals, glass, pottery/ceramics (editable list in
    [prompts/identify.md](prompts/identify.md)) — when a maker's mark is plausibly
    present but undecisive from the photos, IDENTIFY STOPS and asks the user to
@@ -88,8 +98,10 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    it degrades to the SOFT path — `needs_followup_photo` + a `NEEDS_REVIEW.md`
    line — and the run proceeds.
 
-REVIEW is the only thing that stops a **headless** run (the maker-mark gate
-above is interactive-only). PRICE's Apify call (Stage B) used to
+**PREP and REVIEW both stop a headless run** — PREP because photos are the first
+thing a buyer judges and the rules alone did not hold, REVIEW because it is what
+authorises publishing. The maker-mark gate above is interactive-only and
+degrades. PRICE's Apify call (Stage B) used to
 be a second HARD gate; it no longer is — Apify runs automatically as part
 of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
 confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
@@ -143,6 +155,7 @@ Load each prompt when you reach its phase.
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
+| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate) |
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
@@ -226,6 +239,10 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
+2b. PREP → `--check`, read the rotation sheet at full size, record every
+   unresolved frame with `--rotate`, `--apply`, then present
+   `.prep/prep_review.jpg` and STOP for approval (HARD gate). On approval,
+   `--approve`. Photos land in `listing/`; INVESTIGATE still reads the originals.
 3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
    → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
    adopt Recommended tier as provisional working price; write `price.txt`.
@@ -233,8 +250,9 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 4. CURATE (plan mode) → write `review.md`.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.
-6. DRAFT (list mode) → render template, run the pre-write validation
-   pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
+6. DRAFT (list mode) → point `photos:` at the prepped files
+   (`prep --repoint-draft --apply-repoint`), render template, run the
+   pre-write validation pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
    to stamp the item's SKU into the draft and create its lifecycle ledger
    record (status DRAFTED). Do this for EVERY draft, and again after any edit.
 7. REVIEW (list mode) → `python lib/list_edit.py --review <shoot-dir>` — one

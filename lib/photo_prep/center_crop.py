@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Center the item in each product photo (the pre-DRAFT crop-check).
+"""SUPERSEDED by lib/photo_prep/prep.py (the PREP phase).
+
+Kept because it still works standalone and PREP reuses parts of it, but do NOT
+run this as part of the old `strip_exif -> even_background -> trim_whitespace ->
+center_crop` chain any more. Four subdirectories that all looked plausible, plus
+a lexicographic photo picker at the end, is where 66 sideways photos hid until
+buyers complained. PREP does the whole job into ONE output directory
+(`<shoot>/listing/`) with a manifest recording what was done to each frame, and
+`upload_photos_to_eps` will not publish photos that did not come through it.
+
+Center the item in each product photo (the pre-DRAFT crop-check).
 
 We shoot some items deliberately off-center (better focus / lighting), but an
 off-center subject looks bad in an eBay gallery — the thumbnail crops to the

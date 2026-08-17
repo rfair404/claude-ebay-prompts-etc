@@ -1,4 +1,14 @@
-"""Even out the near-white backdrop around the subject.
+"""SUPERSEDED by lib/photo_prep/prep.py (the PREP phase).
+
+Kept because it still works standalone and PREP reuses parts of it, but do NOT
+run this as part of the old `strip_exif -> even_background -> trim_whitespace ->
+center_crop` chain any more. Four subdirectories that all looked plausible, plus
+a lexicographic photo picker at the end, is where 66 sideways photos hid until
+buyers complained. PREP does the whole job into ONE output directory
+(`<shoot>/listing/`) with a manifest recording what was done to each frame, and
+`upload_photos_to_eps` will not publish photos that did not come through it.
+
+Even out the near-white backdrop around the subject.
 
 Sub-step of PHOTO PREP. Detects background regions using the same
 corner-sampling + LAB-distance logic as `trim_whitespace`, then replaces
@@ -30,7 +40,7 @@ import numpy as np
 from PIL import Image
 import pillow_heif
 
-from trim_whitespace import (
+from .trim_whitespace import (
     CORNER_PATCH_PCT,
     DEFAULT_FUZZINESS,
     DEFAULT_WORKER_CAP,
