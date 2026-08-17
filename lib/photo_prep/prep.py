@@ -732,6 +732,37 @@ def run_sheet(shoot: Path, quiet: bool = False) -> dict:
     return m
 
 
+def match_prepped(entry: str, photos: dict) -> Optional[str]:
+    """Find the prepped counterpart of one of a draft's photo entries.
+
+    Draft photo lists carry the naming of whatever workflow produced them, and
+    three conventions are live in this repo at once:
+
+        "DSC_0050.JPG"                     the source frame
+        "listing-photos/01_P8140022.jpg"   an earlier prepped set, index-prefixed
+        "no-exif/ZZ150038r.JPG"            orient.py's rotated variant, 'r' suffix
+
+    All three name the same source frame. Matching the exact stem alone refuses
+    the last two — 9 of 33 drafts in the first fan-out — and "no prepped file"
+    is a confusing way to say "this draft uses the older naming".
+    """
+    import re
+    stems = {Path(n).stem.lower(): n for n in photos}
+    raw = Path(entry).stem
+    seen = set()
+    for cand in (raw,
+                 re.sub(r"^\d+[_-]", "", raw),                        # 01_X -> X
+                 re.sub(r"r$", "", raw),                              # Xr   -> X
+                 re.sub(r"r$", "", re.sub(r"^\d+[_-]", "", raw))):
+        key = cand.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if key in stems:
+            return stems[key]
+    return None
+
+
 def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
     """Point the draft's `photos:` list at the prepped files, IN THE SAME ORDER.
 
@@ -740,6 +771,10 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
     with its fifth file by name. Rewriting the list by globbing `listing/` would
     silently change the gallery image on a live listing, so each existing entry
     is mapped to its own prepped counterpart and the sequence is preserved.
+
+    Both YAML list styles appear in these drafts (block `- "x"` and flow
+    `["a", "b"]`); the rewrite keeps whichever the draft already used, so the
+    diff is the paths and nothing else.
 
     Dry run unless `apply`.
     """
@@ -753,17 +788,19 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
         raise SystemExit("no preset adopted yet — run --apply first")
 
     text = draft.read_text(encoding="utf-8")
-    block = re.search(r'^photos:\n((?:[ \t]*-[ \t]*"[^"]+"\n)+)', text, re.M)
-    if not block:
+    block = re.search(r'^photos:[ \t]*\n((?:[ \t]*-[ \t]*"[^"]+"[ \t]*\n)+)', text, re.M)
+    flow = None if block else re.search(r'^photos:[ \t]*\[([^\]]*)\][ \t]*$', text, re.M)
+    if not block and not flow:
         raise SystemExit("could not find a photos: list in draft.md")
 
-    entries = re.findall(r'-[ \t]*"([^"]+)"', block.group(1))
+    entries = re.findall(r'"([^"]+)"', (block or flow).group(1))
+    if not entries:
+        raise SystemExit("photos: list is empty")
+
     mapping, missing = [], []
     for e in entries:
-        stem = Path(e).stem
-        rec = m["photos"].get(f"{stem}.JPG") or m["photos"].get(f"{stem}.jpg") \
-            or next((r for n, r in m["photos"].items() if Path(n).stem == stem), None)
-        out = (rec or {}).get("output")
+        key = match_prepped(e, m["photos"])
+        out = (m["photos"].get(key) or {}).get("output") if key else None
         if not out:
             missing.append(e)
         mapping.append((e, out))
@@ -771,11 +808,16 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
     if missing:
         raise SystemExit(f"no prepped file for: {', '.join(missing)}")
 
-    new_block = "photos:\n" + "".join(f'  - "{o}"\n' for _e, o in mapping)
-    updated = text[:block.start()] + new_block + text[block.end():]
+    if block:
+        indent = re.match(r'[ \t]*', block.group(1)).group(0) or "  "
+        rendered = "photos:\n" + "".join(f'{indent}- "{o}"\n' for _e, o in mapping)
+        updated = text[:block.start()] + rendered + text[block.end():]
+    else:
+        joined = ", ".join(f'"{o}"' for _e, o in mapping)
+        updated = text[:flow.start()] + f"photos: [{joined}]" + text[flow.end():]
 
     for old, new in mapping:
-        print(f"  {old:34} -> {new}")
+        print(f"  {old:40} -> {new}")
     if apply:
         draft.write_text(updated, encoding="utf-8")
         print(f"  draft.md repointed ({len(mapping)} photos, order preserved)")

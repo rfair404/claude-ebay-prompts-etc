@@ -717,6 +717,48 @@ def test_recorded_rotations_mirror_into_orientation_json():
         assert O.recorded_looks(shoot) == {"IMG_0.jpg": 90}
 
 
+def test_repoint_matches_the_three_live_naming_conventions():
+    """9 of 33 drafts in the first fan-out could not be repointed.
+
+    Draft photo lists carry the naming of whatever workflow produced them, and
+    three conventions are live at once. All three name the same source frame.
+    """
+    photos = {"P8140022.JPG": {}, "ZZ150038.JPG": {}, "DSC_0050.JPG": {}}
+    cases = [
+        ("DSC_0050.JPG", "DSC_0050.JPG"),                        # source frame
+        ("listing-photos/01_P8140022.jpg", "P8140022.JPG"),      # index-prefixed
+        ("no-exif/ZZ150038r.JPG", "ZZ150038.JPG"),               # orient.py 'r'
+        ("listing/DSC_0050.jpg", "DSC_0050.JPG"),                # PREP's own output
+        ("something-else.JPG", None),                            # genuinely absent
+    ]
+    for entry, want in cases:
+        assert P.match_prepped(entry, photos) == want, entry
+
+
+def test_repoint_handles_both_yaml_list_styles_and_keeps_order():
+    """Entry one is the eBay gallery image; reordering changes a live listing."""
+    import re
+    for style, text in [
+        ("block", 'title: x\nphotos:\n  - "b.JPG"\n  - "a.JPG"\n\nnext: y\n'),
+        ("flow",  'title: x\nphotos: ["b.JPG", "a.JPG"]\n\nnext: y\n'),
+    ]:
+        with tempfile.TemporaryDirectory() as td:
+            shoot = Path(td) / "s"
+            shoot.mkdir()
+            (shoot / "draft.md").write_text(text, encoding="utf-8")
+            m = P.load_manifest(shoot)
+            m["chosen_preset"] = "punch"
+            m["photos"] = {"a.JPG": {"output": "listing/a.jpg"},
+                           "b.JPG": {"output": "listing/b.jpg"}}
+            P.save_manifest(shoot, m)
+
+            mapping = P.run_repoint_draft(shoot, apply=True)
+            assert [o for _e, o in mapping] == ["listing/b.jpg", "listing/a.jpg"], style
+            out = (shoot / "draft.md").read_text(encoding="utf-8")
+            assert re.search(r'listing/b\.jpg.*listing/a\.jpg', out, re.S), style
+            assert "next: y" in out and "title: x" in out, f"{style}: clobbered the draft"
+
+
 def test_prep_phase_prompt_exists_and_is_wired():
     """PREP is only a phase if the runbook and DRAFT actually point at it."""
     prompt = ROOT / "prompts" / "prep.md"
