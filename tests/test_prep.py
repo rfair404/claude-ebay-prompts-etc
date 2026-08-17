@@ -753,10 +753,35 @@ def test_repoint_handles_both_yaml_list_styles_and_keeps_order():
             P.save_manifest(shoot, m)
 
             mapping = P.run_repoint_draft(shoot, apply=True)
-            assert [o for _e, o in mapping] == ["listing/b.jpg", "listing/a.jpg"], style
+            assert [o for _e, o, _c in mapping] == ["listing/b.jpg", "listing/a.jpg"], style
             out = (shoot / "draft.md").read_text(encoding="utf-8")
             assert re.search(r'listing/b\.jpg.*listing/a\.jpg', out, re.S), style
             assert "next: y" in out and "title: x" in out, f"{style}: clobbered the draft"
+
+
+def test_repoint_preserves_per_frame_comments():
+    """Block entries carry annotations documenting what each frame IS —
+    `- "P6150001.JPG"   # hero - full-form ornament, front`. They are the only
+    record of why the photo order is what it is. A rewrite that drops them
+    silently destroys that, and the entries also failed to parse at all."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        (shoot / "draft.md").write_text(
+            'photos:\n'
+            '  - "a.JPG"      # hero - front\n'
+            '  - "b.JPG"      # maker mark\n'
+            '\nnext: y\n', encoding="utf-8")
+        m = P.load_manifest(shoot)
+        m["chosen_preset"] = "punch"
+        m["photos"] = {"a.JPG": {"output": "listing/a.jpg"},
+                       "b.JPG": {"output": "listing/b.jpg"}}
+        P.save_manifest(shoot, m)
+        P.run_repoint_draft(shoot, apply=True)
+        out = (shoot / "draft.md").read_text(encoding="utf-8")
+        assert "# hero - front" in out and "# maker mark" in out, out
+        assert "listing/a.jpg" in out and "listing/b.jpg" in out
+        assert "next: y" in out
 
 
 def test_prep_phase_prompt_exists_and_is_wired():

@@ -788,35 +788,42 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
         raise SystemExit("no preset adopted yet — run --apply first")
 
     text = draft.read_text(encoding="utf-8")
-    block = re.search(r'^photos:[ \t]*\n((?:[ \t]*-[ \t]*"[^"]+"[ \t]*\n)+)', text, re.M)
+    # A block entry may carry a trailing comment, and those comments document
+    # what each frame IS ("# hero — full-form ornament, front"). They are the
+    # only record of why the order is what it is, so they are matched, kept, and
+    # re-emitted beside the new path rather than dropped.
+    block = re.search(r'^photos:[ \t]*\n((?:[ \t]*-[ \t]*"[^"]+"[^\n]*\n)+)', text, re.M)
     flow = None if block else re.search(r'^photos:[ \t]*\[([^\]]*)\][ \t]*$', text, re.M)
     if not block and not flow:
         raise SystemExit("could not find a photos: list in draft.md")
 
-    entries = re.findall(r'"([^"]+)"', (block or flow).group(1))
+    if block:
+        entries = re.findall(r'-[ \t]*"([^"]+)"([^\n]*)', block.group(1))
+    else:
+        entries = [(p, "") for p in re.findall(r'"([^"]+)"', flow.group(1))]
     if not entries:
         raise SystemExit("photos: list is empty")
 
     mapping, missing = [], []
-    for e in entries:
+    for e, comment in entries:
         key = match_prepped(e, m["photos"])
         out = (m["photos"].get(key) or {}).get("output") if key else None
         if not out:
             missing.append(e)
-        mapping.append((e, out))
+        mapping.append((e, out, comment))
 
     if missing:
         raise SystemExit(f"no prepped file for: {', '.join(missing)}")
 
     if block:
         indent = re.match(r'[ \t]*', block.group(1)).group(0) or "  "
-        rendered = "photos:\n" + "".join(f'{indent}- "{o}"\n' for _e, o in mapping)
+        rendered = "photos:\n" + "".join(f'{indent}- "{o}"{c}\n' for _e, o, c in mapping)
         updated = text[:block.start()] + rendered + text[block.end():]
     else:
-        joined = ", ".join(f'"{o}"' for _e, o in mapping)
+        joined = ", ".join(f'"{o}"' for _e, o, _c in mapping)
         updated = text[:flow.start()] + f"photos: [{joined}]" + text[flow.end():]
 
-    for old, new in mapping:
+    for old, new, _c in mapping:
         print(f"  {old:40} -> {new}")
     if apply:
         draft.write_text(updated, encoding="utf-8")
