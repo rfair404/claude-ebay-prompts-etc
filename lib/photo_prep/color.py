@@ -664,7 +664,15 @@ def correct(bgr: np.ndarray,
             eff = ident + strength * (lut - ident)
             lifted = _apply_luma_lut(work, np.clip(eff, 0, 255))
             a3 = alpha[..., None]
-            work = work * (1.0 - a3) + lifted * a3
+            # Blend in place. Written out longhand because the natural
+            # expression — work*(1-a3) + lifted*a3 — allocates two more
+            # full-resolution float32 arrays, and at 4928x3264 each one is
+            # 193 MB. Seven such copies per frame times six workers is 8 GB,
+            # which is how this stage came to swap a 16 GB machine to a halt.
+            lifted -= work
+            lifted *= a3
+            work += lifted
+            del lifted, a3
         if is_sweep:
             work = _bg_neutralize(work, obj_alpha[..., None],
                                   cfg["bg_neutralize"] * strength)
@@ -689,6 +697,8 @@ def correct(bgr: np.ndarray,
             work = np.where(subj[..., None], np.clip(work, lo, hi), work)
 
         clip1, crush1 = _damage(rgb0, work, subj)
+        if out is not work:
+            del out          # release the previous attempt before keeping this one
         attempts.append(dict(strength=round(strength, 3),
                              new_clipped=clip1, new_crushed=crush1))
         if clip1 <= budget and crush1 <= budget:

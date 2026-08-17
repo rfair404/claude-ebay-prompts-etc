@@ -792,38 +792,51 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
     # what each frame IS ("# hero — full-form ornament, front"). They are the
     # only record of why the order is what it is, so they are matched, kept, and
     # re-emitted beside the new path rather than dropped.
-    block = re.search(r'^photos:[ \t]*\n((?:[ \t]*-[ \t]*"[^"]+"[^\n]*\n)+)', text, re.M)
+    # Entries may be quoted or bare — both are live in these drafts, and a
+    # parser that only reads quoted ones reports "could not find a photos:
+    # list", which reads as a missing key rather than a quoting difference.
+    # That refused 6 listings on the second fan-out.
+    block = re.search(
+        r'^photos:[ \t]*\n((?:[ \t]*-[ \t]*(?:"[^"]+"|[^\s#][^\n#]*?)[ \t]*(?:#[^\n]*)?\n)+)',
+        text, re.M)
     flow = None if block else re.search(r'^photos:[ \t]*\[([^\]]*)\][ \t]*$', text, re.M)
     if not block and not flow:
         raise SystemExit("could not find a photos: list in draft.md")
 
     if block:
-        entries = re.findall(r'-[ \t]*"([^"]+)"([^\n]*)', block.group(1))
+        entries = []
+        for line in block.group(1).splitlines():
+            m2 = re.match(r'[ \t]*-[ \t]*(?:"([^"]+)"|([^\s#][^\n#]*?))[ \t]*(#[^\n]*)?$', line)
+            if m2:
+                entries.append((m2.group(1) or m2.group(2), m2.group(3) or "",
+                                bool(m2.group(1))))
     else:
-        entries = [(p, "") for p in re.findall(r'"([^"]+)"', flow.group(1))]
+        entries = [(p, "", True) for p in re.findall(r'"([^"]+)"', flow.group(1))]
     if not entries:
         raise SystemExit("photos: list is empty")
 
     mapping, missing = [], []
-    for e, comment in entries:
+    for e, comment, quoted in entries:
         key = match_prepped(e, m["photos"])
         out = (m["photos"].get(key) or {}).get("output") if key else None
         if not out:
             missing.append(e)
-        mapping.append((e, out, comment))
+        mapping.append((e, out, comment, quoted))
 
     if missing:
         raise SystemExit(f"no prepped file for: {', '.join(missing)}")
 
     if block:
         indent = re.match(r'[ \t]*', block.group(1)).group(0) or "  "
-        rendered = "photos:\n" + "".join(f'{indent}- "{o}"{c}\n' for _e, o, c in mapping)
+        rendered = "photos:\n" + "".join(
+            f'{indent}- ' + (f'"{o}"' if q else o) + (f'  {c}' if c else '') + '\n'
+            for _e, o, c, q in mapping)
         updated = text[:block.start()] + rendered + text[block.end():]
     else:
-        joined = ", ".join(f'"{o}"' for _e, o, _c in mapping)
+        joined = ", ".join(f'"{o}"' for _e, o, _c, _q in mapping)
         updated = text[:flow.start()] + f"photos: [{joined}]" + text[flow.end():]
 
-    for old, new, _c in mapping:
+    for old, new, _c, _q in mapping:
         print(f"  {old:40} -> {new}")
     if apply:
         draft.write_text(updated, encoding="utf-8")

@@ -753,7 +753,7 @@ def test_repoint_handles_both_yaml_list_styles_and_keeps_order():
             P.save_manifest(shoot, m)
 
             mapping = P.run_repoint_draft(shoot, apply=True)
-            assert [o for _e, o, _c in mapping] == ["listing/b.jpg", "listing/a.jpg"], style
+            assert [o for _e, o, _c, _q in mapping] == ["listing/b.jpg", "listing/a.jpg"], style
             out = (shoot / "draft.md").read_text(encoding="utf-8")
             assert re.search(r'listing/b\.jpg.*listing/a\.jpg', out, re.S), style
             assert "next: y" in out and "title: x" in out, f"{style}: clobbered the draft"
