@@ -17,11 +17,43 @@ thumbnail crops to frame center — so the item looks off). Touch up every photo
 first. All `lib/photo_prep/` tools are non-destructive (each writes to a subdir /
 backs up), so DRAFT still renders `photos:` from listing-ready files.
 
+> ⛔ **The orientation test is CONTENT, not metadata.** "Would a buyer see this
+> the right way up?" is the only question that matters, and it cannot be answered
+> from EXIF. A clean metadata pass is necessary and nowhere near sufficient: a
+> phone held at an angle, a book laid on its side, a box shot end-on all produce
+> files that are correct by their EXIF and wrong on the page. Buyers complained
+> about exactly this, and it was declared fixed twice on the strength of the
+> metadata alone. **Never call photos good without looking at them, and never at
+> thumbnail size** — a whole batch was passed off small tiles with every frame
+> still rotated. See step 1b.
+
 Run the sequence (skip a step when it doesn't apply):
 
-1. **EXIF / orientation** — always. Removes the false Orientation tag so viewers
-   show the upright stored pixels; strips metadata.
+1. **EXIF / orientation** — always. Bakes any real Orientation tag into the
+   pixels (`exif_transpose`), then strips metadata, so a viewer needs no tag to
+   get it right.
        python -m lib.photo_prep.strip_exif <shoot-dir>            # -> <shoot-dir>/no-exif/
+       python -m lib.photo_prep.strip_exif <shoot-dir> --force    # after fixing a bug: stale
+                                                                 # outputs are NEWER than their
+                                                                 # sources and are skipped otherwise
+
+1b. **Orientation review — ALWAYS, and a HUMAN rules on it.** Step 1 only fixes
+   photos whose camera told the truth. For the rest:
+   - Build a numbered contact sheet of the SHIPPED files (`no-exif/`, opened with
+     NO transpose), frame numbers matching this draft's `photos:` order.
+   - Any frame that isn't obviously right: render it at **all four rotations side
+     by side** and pick by eye. Text baseline is the strongest cue (which way
+     would you tilt your head to read it), then how the object naturally sits.
+   - Record the call — never rotate a shipped file in place:
+         python -m lib.photo_prep.orient <shoot-dir> --set "1=180,2=ccw,3=cw"
+     It writes `<shoot-dir>/orientation.json` (degrees CW) and REBUILDS
+     `no-exif/` from the source every time, so a wrong call cannot stack and a
+     later strip_exif cannot silently revert a human's decision.
+   - **Show the user the sheet and get their ruling BEFORE anything publishes.**
+     They are looking at the real listings; you are not.
+   - On a flat lay with objects at odds, no rotation makes everything upright.
+     Pick the hero and SAY which secondary item stays inverted — that is a
+     re-shoot issue, not a rotation one. Don't claim the frame is perfect.
 2. **Backdrop cleanup — only for near-white/seamless backdrops** (NOT dark-felt
    shots; the corner-sampling logic is tuned for light backgrounds). Evens
    lighting/shadow, then trims the border to the subject.

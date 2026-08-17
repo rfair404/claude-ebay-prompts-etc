@@ -4,11 +4,23 @@ Strips EXIF metadata from every JPG/HEIC image in a shoot directory.
 Writes the stripped copies to `<shoot-dir>/no-exif/`; originals are
 untouched.
 
-Why strip EXIF (and not auto-orient first): on the user's camera, the
-stored pixels are already upright but the EXIF Orientation tag is a
-false claim — viewers that honor it display the image rotated. Removing
-the tag makes viewers fall back to the stored pixel orientation, which
-is correct. No pixel rotation is performed by this script.
+**Orientation is BAKED before the tag is removed.** This is the whole
+correctness question for this script, and it was got wrong: the original
+version deleted the Orientation tag without rotating the pixels, on the
+assumption that the tag was always a false claim by one camera. That holds
+for the Olympus (writes Orientation=1) and is flatly wrong for the phone
+(writes Orientation=6 = "rotate 90° CW"). Deleting a TRUE tag ships a
+sideways photo — 66 of them across 9 live listings before this was found,
+and buyers complained.
+
+So: `ImageOps.exif_transpose()` first (a no-op when Orientation is 1 or
+absent), then strip. The stored pixels are then upright on their own and a
+viewer needs no tag to get it right — which is the actual goal.
+
+This cannot catch a photo whose pixels are sideways while the tag says
+normal (camera held rotated, nothing to correct against). That failure mode
+is invisible to metadata and needs a look at the content; see the DRAFT
+photo touch-up step.
 
 CLI:
     python strip_exif.py <shoot-dir> [--workers N] [--quiet]
@@ -24,7 +36,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageOps
 import pillow_heif
 
 # Register pillow-heif's opener so PIL.Image.open handles .heic/.heif.
@@ -43,6 +55,7 @@ class FileResult:
     skipped: bool          # True when output existed and was up-to-date
     stripped_bytes: int    # size of the EXIF block removed (0 if none)
     error: str | None      # populated if save failed
+    rotated: bool = False  # True when a real Orientation tag was baked in
 
 
 def _output_path(src: Path, out_dir: Path) -> Path:
@@ -60,37 +73,65 @@ def _pil_format_for(src: Path) -> str:
     raise ValueError(f"Unsupported extension for {src.name}")
 
 
-def _strip_one(args: tuple[Path, Path]) -> FileResult:
+def _strip_one(args: tuple[Path, Path, bool]) -> FileResult:
     """Worker function — strip EXIF from one file.
 
     Pure function so it can be pickled and run in a multiprocessing.Pool.
     """
-    src, out_dir = args
+    src, out_dir, force = args
     dst = _output_path(src, out_dir)
 
     # Idempotency check: skip if output exists and is at least as new as source.
-    if dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
+    # --force overrides it, which is what you need after fixing a bug in this
+    # script: the stale outputs are NEWER than their sources, so a plain re-run
+    # would skip every one of them and quietly change nothing.
+    if not force and dst.exists() and dst.stat().st_mtime >= src.stat().st_mtime:
         return FileResult(src, dst, skipped=True, stripped_bytes=0, error=None)
 
     try:
+        rotated = False
         with Image.open(src) as img:
             # Measure the original EXIF size so we can report what we stripped.
             original_exif = img.info.get("exif", b"")
             stripped_bytes = len(original_exif) if original_exif else 0
 
+            # BAKE the orientation before dropping the tag. A no-op when
+            # Orientation is 1 or absent; when it is 3/6/8 this is the only
+            # thing standing between a true tag and a sideways listing photo.
+            #
+            # Read the tag to decide whether anything moved: exif_transpose
+            # returns a NEW image object even when it applies no transform, so
+            # an identity check (`out is not img`) reports every single file as
+            # rotated and silently costs the lossless save path below.
+            orientation = img.getexif().get(274)          # 274 = Orientation
+            rotated = orientation in (2, 3, 4, 5, 6, 7, 8)
+            # Only substitute the transposed copy when it is actually needed.
+            # exif_transpose returns a plain Image that has dropped the source's
+            # quantization tables, so saving it with quality='keep' below fails
+            # and leaves a ZERO-BYTE file — which is how this was caught.
+            out = ImageOps.exif_transpose(img) if rotated else img
+
             fmt = _pil_format_for(src)
             save_kwargs: dict = {"format": fmt, "exif": b""}
             if fmt == "JPEG":
-                # quality='keep' re-encodes at the source's exact quality
-                # and quantization tables; subsampling='keep' preserves
-                # chroma layout. Together they make the re-save effectively
-                # lossless for JPGs.
-                save_kwargs["quality"] = "keep"
-                save_kwargs["subsampling"] = "keep"
+                if rotated:
+                    # A transposed image no longer carries the source's
+                    # quantization tables, so quality='keep' is not available.
+                    # 95 + 4:4:4 keeps the re-encode visually lossless.
+                    save_kwargs["quality"] = 95
+                    save_kwargs["subsampling"] = 0
+                else:
+                    # quality='keep' re-encodes at the source's exact quality
+                    # and quantization tables; subsampling='keep' preserves
+                    # chroma layout. Together they make the re-save effectively
+                    # lossless for JPGs.
+                    save_kwargs["quality"] = "keep"
+                    save_kwargs["subsampling"] = "keep"
 
-            img.save(dst, **save_kwargs)
+            out.save(dst, **save_kwargs)
 
-        return FileResult(src, dst, skipped=False, stripped_bytes=stripped_bytes, error=None)
+        return FileResult(src, dst, skipped=False, stripped_bytes=stripped_bytes,
+                          error=None, rotated=rotated)
 
     except Exception as e:
         return FileResult(src, dst, skipped=False, stripped_bytes=0, error=str(e))
@@ -112,6 +153,7 @@ def strip_directory(
     shoot_dir: Path,
     workers: int | None = None,
     quiet: bool = False,
+    force: bool = False,
 ) -> list[FileResult]:
     """Run the EXIF-strip pass across every supported image in shoot_dir.
 
@@ -134,7 +176,7 @@ def strip_directory(
         workers = min(os.cpu_count() or 1, DEFAULT_WORKER_CAP)
     workers = max(1, workers)
 
-    work_items = [(src, out_dir) for src in sources]
+    work_items = [(src, out_dir, force) for src in sources]
 
     started_at = time.monotonic()
     results: list[FileResult] = []
@@ -181,7 +223,10 @@ def _print_summary(results: list[FileResult], out_dir: Path, elapsed: float) -> 
     errored  = sum(1 for r in results if r.error)
     total_bytes_stripped = sum(r.stripped_bytes for r in results if not r.error)
 
+    rotated = sum(1 for r in results if getattr(r, "rotated", False))
     parts = [f"Stripped {stripped}"]
+    if rotated:
+        parts.append(f"ROTATED {rotated} (real Orientation tag baked into pixels)")
     if skipped:
         parts.append(f"skipped {skipped}")
     if errored:
@@ -210,12 +255,17 @@ def _cli() -> None:
                              f"{DEFAULT_WORKER_CAP})).")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress per-file progress; only print final summary.")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-strip even when the output is newer than the source "
+                             "(use after fixing this script; stale outputs would "
+                             "otherwise be skipped).")
     args = parser.parse_args()
 
     results = strip_directory(
         shoot_dir=args.shoot_dir,
         workers=args.workers,
         quiet=args.quiet,
+        force=args.force,
     )
 
     # Non-zero exit if any file failed, so shell pipelines can detect it.
