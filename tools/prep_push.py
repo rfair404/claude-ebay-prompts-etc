@@ -110,6 +110,13 @@ def push_one(shoot: Path, go: bool, listing_id: str = "") -> dict:
             res["steps"].append("draft.md restored from backup")
             return res
         if label == "update" and go:
+            if "[SKIP]" in out:
+                # The sold-item guard refused. Not a failure of this batch — it
+                # is the guard doing its job — but it must never read as success.
+                res["error"] = f"skipped, not sellable: {tail[:160]}"
+                shutil.copyfile(bak, shoot / "draft.md")
+                res["steps"].append("draft.md restored; listing left untouched")
+                return res
             if "[OK] updated" not in out:
                 res["error"] = f"update did not confirm an upload: {tail[:200]}"
                 return res

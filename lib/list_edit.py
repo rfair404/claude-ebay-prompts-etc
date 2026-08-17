@@ -1355,12 +1355,65 @@ def _canonical_sync_fields(fields) -> set[str]:
     return out
 
 
+class ListingNotSellable(RuntimeError):
+    """The SKU's offer is not live — updating it could resurrect a sold item."""
+
+
+def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
+    """Ask eBay — not the local ledger — whether this SKU is still on sale.
+
+    The ledger cannot answer this. An accepted Best Offer never writes back to
+    it, and `sync_actuals` exists precisely because orders are the only record
+    that sees every sale. So a sold item can sit in the ledger as PUBLISHED for
+    hours, and a batch update will happily write to it.
+
+    Returns {sellable, status, quantity, offer_id, listing_id, reason}.
+    """
+    try:
+        d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}",
+                     creds=creds)
+    except EbayAPIError as e:
+        if e.status == 404:
+            return dict(sellable=False, status="NO_OFFER", quantity=0, offer_id=None,
+                        listing_id=None, reason="no offer exists for this SKU")
+        raise
+    offers = d.get("offers") or []
+    if not offers:
+        return dict(sellable=False, status="NO_OFFER", quantity=0, offer_id=None,
+                    listing_id=None, reason="no offer exists for this SKU")
+    o = offers[0]
+    status = str(o.get("status") or "").upper()
+    qty = o.get("availableQuantity")
+    qty = int(qty) if qty is not None else None
+    listing = (o.get("listing") or {})
+    lstatus = str(listing.get("listingStatus") or "").upper()
+
+    reason = ""
+    if status != "PUBLISHED":
+        reason = f"offer status is {status or 'unknown'}, not PUBLISHED"
+    elif lstatus and lstatus not in ("ACTIVE",):
+        reason = f"listing status is {lstatus}, not ACTIVE"
+    elif qty == 0:
+        reason = "availableQuantity is 0 — the item has sold out"
+    return dict(sellable=not reason, status=status or lstatus or "unknown",
+                quantity=qty, offer_id=o.get("offerId"),
+                listing_id=listing.get("listingId"), reason=reason)
+
+
 def update_listing_fields(draft_path: Path, fields,
-                          creds: Optional[EbayCredentials] = None) -> list[str]:
+                          creds: Optional[EbayCredentials] = None,
+                          allow_not_sellable: bool = False) -> list[str]:
     """Update ONLY the named field groups on an existing eBay item/offer.
 
     GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
     current eBay value. Never publishes. Returns the list of fields changed.
+
+    REFUSES a SKU whose offer is not currently live, unless explicitly
+    overridden. Writing to a sold-out inventory item is not harmless: this
+    function used to round-trip `availability` on every update, so a PUT could
+    hand eBay a positive quantity for an item that had already sold and get the
+    listing resurrected as a new one. That happened on a real SKU. Checking the
+    ledger is not sufficient — an accepted Best Offer never writes back to it.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -1373,12 +1426,27 @@ def update_listing_fields(draft_path: Path, fields,
     offer_fields = canon & _OFFER_SIDE
     changed: list[str] = []
 
+    state = offer_sellable_state(sku, creds)
+    if not state["sellable"] and not allow_not_sellable:
+        raise ListingNotSellable(
+            f"SKU {sku} is not on sale — {state['reason']}. Refusing to update it; "
+            f"writing to a sold item can relist it as a new listing. "
+            f"(offer {state['offer_id']}, listing {state['listing_id']}) "
+            f"Pass --allow-not-sellable only if you know the offer is live.")
+
     if item_fields:
         try:
             cur = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
         except EbayAPIError as e:
             raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
         item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
+        # Do NOT hand `availability` back unless the caller actually asked to
+        # change quantity. Round-tripping it is what lets a PUT restock — and
+        # therefore relist — an item that has already sold. Omitting the key
+        # leaves eBay's current value alone, which is the whole point of a
+        # field-scoped update.
+        if "quantity" not in item_fields:
+            item.pop("availability", None)
         product = item.setdefault("product", {})
         if "title" in item_fields:
             product["title"] = str(draft.get("title")); changed.append("title")
@@ -1785,6 +1853,8 @@ def _cli() -> None:
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
     ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
+    ap.add_argument("--allow-not-sellable", action="store_true",
+                    help="update even if the SKU's offer is not live (DANGEROUS: writing to a sold item can relist it)")
     ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
@@ -1898,7 +1968,12 @@ def _cli() -> None:
                       "No implicit 'all' — that's what --sync/--list are for.")
                 sys.exit(1)
             field_list = [f for f in args.fields.split(",") if f.strip()]
-            changed = update_listing_fields(Path(args.update), field_list)
+            try:
+                changed = update_listing_fields(Path(args.update), field_list,
+                                                allow_not_sellable=args.allow_not_sellable)
+            except ListingNotSellable as e:
+                print(f"[SKIP] {e}")
+                sys.exit(2)
             if changed:
                 print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
             else:
