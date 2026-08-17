@@ -114,6 +114,16 @@ def _subject_region(bgr: np.ndarray, bbox: tuple, pad: float = 0.04) -> np.ndarr
     return bgr[y0:y1, x0:x1]
 
 
+def _thumb(bgr: np.ndarray, long_side: int = 640) -> np.ndarray:
+    """A small copy for the contact sheets — full-res frames held per shoot ran
+    to hundreds of MB, and a 90-degree turn on a thumbnail is exact anyway."""
+    import cv2
+    h, w = bgr.shape[:2]
+    s = min(1.0, long_side / max(h, w))
+    return (cv2.resize(bgr, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+            if s < 1.0 else bgr)
+
+
 def _sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -521,7 +531,13 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
             "output": prev.get("output"),
             "out_sha256": prev.get("out_sha256"),
         }
-        thumbs.append((path.name, upright, v))
+        # Keep only the CAMERA-corrected thumbnail. The subject rotation is
+        # applied when the sheet is built, AFTER corroboration has had its say —
+        # capturing the rotated image here rendered a frame at an angle that was
+        # subsequently downgraded to ASK and never applied, so the sheet showed a
+        # rotation the manifest did not have. Whoever judges that sheet is then
+        # confirming something that is not what will ship.
+        thumbs.append((path.name, _thumb(cam)))
 
         if not quiet:
             rot = f"exif {v.exif_angle}+subj {v.subject_angle}={v.applied}"
@@ -538,7 +554,7 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
     m["approved_at"] = None
     save_manifest(shoot, m)
 
-    _rotation_sheet(thumbs, shoot / ".prep" / "rotation_sheet.jpg")
+    _rotation_sheet(thumbs, photos, shoot / ".prep" / "rotation_sheet.jpg")
     return m
 
 
@@ -686,6 +702,33 @@ def run_pick(shoot: Path, preset: str, quiet: bool = False,
         print(f"  {'default' if auto else 'picked'} '{preset}' — "
               f"{len(rows)} photos copied to {out_dir}")
         print(f"  review: {shoot / '.prep' / 'prep_review.jpg'}")
+    return m
+
+
+def run_sheet(shoot: Path, quiet: bool = False) -> dict:
+    """Rebuild the rotation sheet from the manifest. No segmentation.
+
+    Cheap enough to re-run over a whole batch, which matters because the sheet is
+    the artefact a human judges from: if it ever disagrees with the manifest, the
+    answer they give is an answer to the wrong question.
+    """
+    m = load_manifest(shoot)
+    photos = m.get("photos") or {}
+    if not photos:
+        raise SystemExit("nothing planned — run --check first")
+    thumbs = []
+    for name, rec in photos.items():
+        src = shoot / name
+        if not src.exists():
+            continue
+        cam = orientmod.rotate_bgr(_load_bgr(src),
+                                   rec["orientation"].get("exif_angle", 0))
+        thumbs.append((name, _thumb(cam)))
+    out = shoot / ".prep" / "rotation_sheet.jpg"
+    _rotation_sheet(thumbs, photos, out)
+    if not quiet:
+        asks = [n for n, r in photos.items() if r["orientation"]["needs_ask"]]
+        print(f"  {shoot.name}: sheet rebuilt ({len(thumbs)} frames, {len(asks)} ASK) -> {out}")
     return m
 
 
@@ -891,15 +934,28 @@ def _label(width: int, text: str, colour=(235, 235, 235), h: int = 24) -> np.nda
     return bar
 
 
-def _rotation_sheet(thumbs, out_path: Path, cell: int = 300, cols: int = 4) -> None:
-    """Every frame as it will be rotated — the sheet the orientation call reads."""
+def _rotation_sheet(thumbs, photos: dict, out_path: Path,
+                    cell: int = 300, cols: int = 4) -> None:
+    """Every frame exactly as the manifest says it will be rotated.
+
+    Reads the FINAL state rather than the in-loop verdict, so a reading that
+    corroboration downgraded shows un-rotated and flagged, not applied. The
+    label carries the downgraded proposal so the reason is visible.
+    """
     import cv2
     if not thumbs:
         return
     tiles = []
-    for name, img, v in thumbs:
-        colour = (120, 200, 255) if v.needs_ask else (200, 235, 200)
-        tag = "ASK" if v.needs_ask else f"{v.applied}deg {v.source}"
+    for name, cam in thumbs:
+        o = (photos.get(name) or {}).get("orientation", {})
+        img = orientmod.rotate_bgr(cam, o.get("subject_angle", 0))
+        ask = o.get("needs_ask")
+        colour = (120, 200, 255) if ask else (200, 235, 200)
+        if ask:
+            prop = o.get("osd_proposal")
+            tag = "ASK" + (f" (OSD guessed {prop}deg, not corroborated)" if prop else "")
+        else:
+            tag = f"{o.get('applied', 0)}deg {o.get('source', '?')}"
         tiles.append(np.vstack([_label(cell, f"{name}  {tag}", colour), _fit(img, cell)]))
     # Captions wrap, so tiles differ in height; pad to the row's tallest before
     # hstack (which would otherwise raise).
@@ -1019,6 +1075,8 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="render listing/ + the review sheet")
     ap.add_argument("--pick", metavar="PRESET",
                     help="adopt a preset for the shoot (copies it into listing/)")
+    ap.add_argument("--sheet", action="store_true",
+                    help="rebuild the rotation sheet from the manifest (no segmentation)")
     ap.add_argument("--repoint-draft", action="store_true",
                     help="point draft.md's photos: list at listing/ (order preserved). Dry run unless --apply-repoint.")
     ap.add_argument("--apply-repoint", action="store_true",
@@ -1040,6 +1098,9 @@ def main(argv=None) -> int:
     if args.rotate:
         m = run_rotate(shoot, args.rotate)
         _print_status(shoot, m)
+        return 0
+    if args.sheet:
+        run_sheet(shoot, quiet=args.quiet)
         return 0
     if args.repoint_draft:
         run_repoint_draft(shoot, apply=args.apply_repoint)

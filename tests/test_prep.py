@@ -558,6 +558,40 @@ def test_a_lone_osd_rotation_is_downgraded_to_ask():
     assert o["osd_proposal"] == 180, "the proposal must survive for whoever looks"
 
 
+def test_the_rotation_sheet_cannot_disagree_with_the_manifest():
+    """Caught mid-batch on a real shoot.
+
+    The sheet was built from the in-loop verdict objects, and corroboration
+    mutates the manifest afterwards — so a downgraded OSD reading was RENDERED
+    at 180 and labelled `180deg osd` while the manifest said applied=0, ASK.
+    Whoever judges that sheet is answering a question about an image that will
+    never ship, and `--rotate` is relative to what the sheet showed. Silent, and
+    exactly the class of bug this stage exists to stop.
+    """
+    photos = {
+        "a.jpg": {"orientation": {"subject_angle": 0, "applied": 0, "exif_angle": 0,
+                                  "source": "unresolved", "needs_ask": True,
+                                  "osd_proposal": 180, "notes": []}},
+        "b.jpg": {"orientation": {"subject_angle": 90, "applied": 90, "exif_angle": 0,
+                                  "source": "exif+vision", "needs_ask": False,
+                                  "notes": []}},
+    }
+    base, _ = _scene(bg=200, subject=60, box=(100, 100, 300, 200))
+    thumbs = [("a.jpg", base), ("b.jpg", base)]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "rotation_sheet.jpg"
+        P._rotation_sheet(thumbs, photos, out, cell=120, cols=2)
+        assert out.exists() and out.stat().st_size > 0
+
+    # The un-corroborated frame must be drawn at the manifest's angle (0), not
+    # at the proposal, and the label must say why it is being asked about.
+    drawn = P.orientmod.rotate_bgr(base, photos["a.jpg"]["orientation"]["subject_angle"])
+    assert np.array_equal(drawn, base), "ASK frame must render un-rotated"
+    turned = P.orientmod.rotate_bgr(base, photos["b.jpg"]["orientation"]["subject_angle"])
+    assert turned.shape[:2] == base.shape[:2][::-1], "resolved frame renders turned"
+
+
 def test_two_agreeing_osd_readings_are_kept():
     """The esquire shoot: two frames independently read 270 and both were right."""
     def rec(angle, source):
