@@ -1440,13 +1440,19 @@ def update_listing_fields(draft_path: Path, fields,
         except EbayAPIError as e:
             raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
         item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
-        # Do NOT hand `availability` back unless the caller actually asked to
-        # change quantity. Round-tripping it is what lets a PUT restock — and
-        # therefore relist — an item that has already sold. Omitting the key
-        # leaves eBay's current value alone, which is the whole point of a
-        # field-scoped update.
-        if "quantity" not in item_fields:
-            item.pop("availability", None)
+        # `availability` MUST stay in the payload. This PUT is a full replace of
+        # the inventory item, not a merge: omitting the key does not "leave
+        # eBay's value alone", it sets the quantity to zero and drops the
+        # listing to OUT_OF_STOCK. Removing it took five live listings out of
+        # search before that was understood.
+        #
+        # The sold-item relist is prevented by the guard above instead, which is
+        # the right place for it: refuse to write to an offer that is not live,
+        # rather than write a deliberately incomplete item.
+        if "availability" not in item and "quantity" not in item_fields:
+            raise ValueError(
+                f"SKU {sku}: eBay returned no availability block; refusing to "
+                f"PUT an inventory item that would zero the quantity")
         product = item.setdefault("product", {})
         if "title" in item_fields:
             product["title"] = str(draft.get("title")); changed.append("title")

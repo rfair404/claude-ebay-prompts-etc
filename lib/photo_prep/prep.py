@@ -136,10 +136,42 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# Where a shoot's source frames may live when the originals are gone, in the
+# order we would rather have them. `listing-photos/` and `no-exif/` hold derived
+# copies from earlier workflows — EXIF already baked, otherwise full size — and
+# for several live listings they are the ONLY surviving frames. Preferring the
+# originals and falling back to these is what lets those listings be processed
+# at all; refusing them just leaves the listing unfixed.
+SOURCE_FALLBACKS = ("listing-photos", "no-exif")
+
+
 def find_images(shoot: Path) -> list[Path]:
-    """Top-level images only — never recurse into listing/ or .prep/."""
-    return sorted(p for p in shoot.iterdir()
-                  if p.is_file() and p.suffix.lower() in IMG_EXTS)
+    """The shoot's source frames. Top-level originals win.
+
+    Never recurses into listing/ or .prep/ — those are our own output, and
+    reading them back would compound a correction on top of a correction.
+    """
+    out, seen = [], set()
+    for p in sorted(shoot.iterdir()):
+        if p.is_file() and p.suffix.lower() in IMG_EXTS:
+            out.append(p)
+            seen.add(p.stem.lower())
+
+    # UNION, not either/or. j-crew/6 keeps 5 originals at the top level while
+    # the other 7 frames of the same listing survive only in no-exif/ — an
+    # all-or-nothing fallback silently processed 5 of 12 and the repoint then
+    # refused, which is right but leaves the listing stuck. Add any fallback
+    # frame whose stem is not already covered by an original.
+    for sub in SOURCE_FALLBACKS:
+        d = shoot / sub
+        if not d.is_dir():
+            continue
+        for p in sorted(d.iterdir()):
+            if (p.is_file() and p.suffix.lower() in IMG_EXTS
+                    and p.stem.lower() not in seen):
+                out.append(p)
+                seen.add(p.stem.lower())
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +508,10 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
     ask_dir.mkdir(parents=True, exist_ok=True)
 
     for path in images:
+        # Key by the path relative to the shoot, not the bare filename: when the
+        # originals are gone the source lives in a subdirectory, and `shoot /
+        # key` has to resolve back to the actual file at --apply and gate time.
+        key = path.relative_to(shoot).as_posix()
         bgr = _load_bgr(path)
         exif_tag = orientmod.exif_orientation(path)
 
@@ -491,10 +527,10 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         # orient.py tool stores the same quantity (degrees CW on top of the EXIF
         # bake), so its manifest counts as an answer here — a rotation the user
         # already called there must not come back as a fresh ASK.
-        prev = prior.get(path.name, {})
+        prev = prior.get(key, {}) or prior.get(path.name, {})
         vision = prev.get("orientation", {}).get("vision_angle")
         if vision is None:
-            vision = looks.get(path.name)
+            vision = looks.get(key) or looks.get(path.name)
         v = orientmod.resolve(path.name, exif_tag, osd, vision)
 
         # Segmentation is rotation-invariant — turn the mask with the image.
@@ -506,9 +542,9 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
 
         if v.needs_ask:
             orientmod.four_way_panel(bgr, ask_dir / f"{path.stem}_rotation.jpg",
-                                     f"{path.name} — which is upright?")
+                                     f"{key} — which is upright?")
 
-        photos[path.name] = {
+        photos[key] = {
             "src_sha256": _sha256(path),
             "src_size": [int(bgr.shape[1]), int(bgr.shape[0])],
             "orientation": {
@@ -537,11 +573,11 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         # subsequently downgraded to ASK and never applied, so the sheet showed a
         # rotation the manifest did not have. Whoever judges that sheet is then
         # confirming something that is not what will ship.
-        thumbs.append((path.name, _thumb(cam)))
+        thumbs.append((key, _thumb(cam)))
 
         if not quiet:
             rot = f"exif {v.exif_angle}+subj {v.subject_angle}={v.applied}"
-            print(f"  {path.name:28} {rot:<26} {v.source:<12} "
+            print(f"  {key:28} {rot:<26} {v.source:<12} "
                   f"{'crop' if crop['applied'] else 'no crop: ' + crop['reason'][:36]:<48} "
                   f"bg={stats.bg_class}" + ("  [ASK]" if v.needs_ask else ""))
 

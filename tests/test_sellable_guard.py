@@ -13,6 +13,12 @@ are covered here.
      GET the inventory item, copied the quantity, and PUT it back. On a sold-out
      SKU that hands eBay a positive quantity, and eBay relists.
 
+The first attempt at (2) removed `availability` from the payload, which was
+wrong in a worse way: the PUT is a full REPLACE, not a merge, so omitting the
+key zeroes the quantity and drops a live listing to OUT_OF_STOCK. It did that to
+five real listings. The key must always be sent; the sold-item case is handled
+by the guard in (1) instead, which refuses the write outright.
+
 Run:  python tests/test_sellable_guard.py
   or: pytest tests/test_sellable_guard.py
 """
@@ -113,8 +119,13 @@ def test_update_refuses_a_sold_sku_and_writes_nothing():
         f"a refused update must not write: {calls}"
 
 
-def test_update_does_not_round_trip_availability():
-    """The restock that relists. Only a quantity update may touch it."""
+def test_update_always_sends_availability():
+    """Omitting it is not "leave eBay's value alone" — it is "set it to zero".
+
+    The inventory-item PUT is a full replace. Dropping `availability` took five
+    live listings to OUT_OF_STOCK with soldQuantity 0. The quantity must ride
+    along on every update; the sold-item case is refused by the guard instead.
+    """
     import tempfile
     inv = {"availability": {"shipToLocationAvailability": {"quantity": 1}},
            "condition": "USED_EXCELLENT",
@@ -136,8 +147,8 @@ def test_update_does_not_round_trip_availability():
     puts = [c for c in calls if c[0] == "PUT" and "/inventory_item/" in c[1]]
     assert len(puts) == 1, puts
     body = puts[0][2]
-    assert "availability" not in body, \
-        "photo-only update must not hand eBay a quantity — that is what relists a sold item"
+    assert body.get("availability") == inv["availability"], (
+        "the PUT is a full replace - dropping availability zeroes the quantity")
     assert body["product"]["imageUrls"] == ["https://eps/new.jpg"]
 
 
