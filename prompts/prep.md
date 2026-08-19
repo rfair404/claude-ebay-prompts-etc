@@ -47,12 +47,20 @@ picture you scroll past in a viewer is not a surface anyone can decide on. The
 JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and are
 the fallback when a page cannot be published.
 
-Two things that page must never do, both learned by getting them wrong:
+**Every frame opens.** Clicking a card photo opens it full size, and the arrow
+keys step frame to frame without closing it — the thumbnail is enough to make
+the call, but the detail is what the call rests on (wear, a soft edge, whether
+the backdrop lift crept onto the item). Anything that looks clickable has to be
+clickable; anything that is not gets no affordance.
+
+Things that page must never do, all learned by getting them wrong:
 **never wire a control with an inline `onclick`** — the script does not reliably
 run in global scope, so the page renders perfectly and every button silently
 does nothing; use `addEventListener` and delegation. And **never render a lone
 option as a button** — a frame that refuses a crop has nothing to choose
-between, so it gets a reason and no button row at all.
+between, so it gets a reason and no button row at all. And **never assume a key
+event landed on an element** — it can land on the document, which has no
+`closest()`, and the whole handler dies silently.
 
     python -m lib.photo_prep.prep <shoot> --check          # plan everything, render nothing
 

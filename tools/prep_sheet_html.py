@@ -39,11 +39,16 @@ from lib.photo_prep import orientation as orientmod          # noqa: E402
 from lib.photo_prep import stages as stagemod                # noqa: E402
 from lib.photo_prep.prep import _load_bgr, load_manifest     # noqa: E402
 
-LONG = 560
+# One encode serves both the card thumbnail and the full-size preview, so it has
+# to be big enough to open. The colour stage carries three images per frame, so
+# step down there rather than shipping a 12 MB page.
+LONG = 1000
+LONG_DENSE = 760
 QUALITY = 72
 
 
-def _uri(img, long_edge=LONG) -> str:
+def _uri(img, long_edge=None) -> str:
+    long_edge = long_edge or _uri.long
     h, w = img.shape[:2]
     s = long_edge / max(h, w)
     if s < 1:
@@ -53,6 +58,9 @@ def _uri(img, long_edge=LONG) -> str:
     if not ok:
         raise RuntimeError("could not encode a thumbnail")
     return "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode()
+
+
+_uri.long = LONG
 
 
 def _frames(shoot: Path, m: dict):
@@ -135,6 +143,7 @@ def _cards_crop(shoot, m):
 
 def _cards_color(shoot, m):
     cards, rendered = [], 0
+    _uri.long = LONG_DENSE
     presets = list(colormod.PRESETS)
     for name, rec in _frames(shoot, m):
         opts = [{"label": "as shot", "value": "__none__",
@@ -160,6 +169,7 @@ def _cards_color(shoot, m):
             "why": f"spread {plan.get('bg_iqr', 0):.0f}",
             "options": opts,
         })
+    _uri.long = LONG
     return cards, rendered
 
 
@@ -242,14 +252,16 @@ header{position:sticky;top:0;z-index:20;background:var(--surface);
 h1{font-size:17px;font-weight:700;letter-spacing:-.01em;margin:0}
 .shoot{font-size:12px;color:var(--muted);
   font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
-.tabs{display:flex;gap:2px;max-width:1500px;margin:10px auto 0}
+.tabs{display:flex;gap:3px;max-width:1500px;margin:10px auto 0}
 .tab{appearance:none;background:none;font:inherit;font-size:11px;font-weight:600;
   letter-spacing:.07em;text-transform:uppercase;color:var(--muted);cursor:pointer;
   padding:9px 14px;border:1px solid transparent;border-bottom:2px solid transparent;
   display:flex;align-items:center;gap:7px}
-.tab:hover{color:var(--ink)}
+.tab:hover{color:var(--ink);background:var(--sunk)}
 .tab:focus-visible{outline:2px solid var(--loupe);outline-offset:-2px}
-.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--loupe)}
+.tab{border-radius:3px 3px 0 0;transition:background .12s ease,color .12s ease}
+.tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--loupe);
+  background:var(--ground)}
 .tab .n{font-family:"JetBrains Mono",monospace;font-size:10px;opacity:.65}
 .tab .st{font-size:9.5px;padding:1px 6px;border-radius:2px;border:1px solid currentColor;
   letter-spacing:.05em}
@@ -278,7 +290,14 @@ main{max-width:1500px;margin:0 auto;padding:20px 20px 128px}
 .tag.held{color:var(--held)}
 .tag.ask{color:var(--loupe)}
 
-.stage{aspect-ratio:1/1;background:var(--sunk);display:grid;place-items:center;padding:8px}
+.stage{aspect-ratio:1/1;background:var(--sunk);display:grid;place-items:center;padding:8px;
+  position:relative;cursor:zoom-in}
+.stage::after{content:"922";position:absolute;top:7px;right:7px;width:22px;height:22px;
+  display:grid;place-items:center;font-size:13px;border-radius:2px;opacity:0;
+  background:var(--surface);color:var(--ink);border:1px solid var(--rule);
+  transition:opacity .15s ease}
+.card:hover .stage::after,.stage:focus-visible::after{opacity:1}
+.stage:focus-visible{outline:2px solid var(--loupe);outline-offset:-2px}
 .stage img{max-width:100%;max-height:100%;display:block;transition:transform .18s ease}
 @media (prefers-reduced-motion:reduce){.stage img{transition:none}}
 
@@ -304,7 +323,7 @@ footer{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surfac
 .frow{max-width:1500px;margin:0 auto;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
 .count{font-size:12.5px;color:var(--muted);white-space:nowrap}
 .count b{color:var(--changed);font-variant-numeric:tabular-nums}
-.cmd{flex:1 1 380px;min-width:0;overflow-x:auto;background:var(--sunk);border:1px solid var(--rule);
+.cmd{cursor:text;flex:1 1 380px;min-width:0;overflow-x:auto;background:var(--sunk);border:1px solid var(--rule);
   border-radius:2px;padding:9px 11px;font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;
   font-size:11.5px;white-space:pre;color:var(--ink)}
 button.act{font:inherit;font-size:12px;font-weight:600;letter-spacing:.03em;padding:9px 14px;
@@ -313,6 +332,23 @@ button.act{font:inherit;font-size:12px;font-weight:600;letter-spacing:.03em;padd
 button.act.ghost{background:none;color:var(--ink)}
 button.act:focus-visible{outline:2px solid var(--loupe);outline-offset:2px}
 button.act[disabled]{opacity:.4;cursor:not-allowed}
+
+#lb{position:fixed;inset:0;z-index:60;background:rgba(8,9,10,.93);display:none;
+  grid-template-rows:auto 1fr auto;padding:14px 18px 20px}
+#lb.on{display:grid}
+#lb .lbtop{display:flex;align-items:center;gap:12px;color:#ECEBE7}
+#lb .lbname{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:13px;
+  font-weight:600}
+#lb .lbwhich{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:#94969D}
+#lb .lbshut{margin-left:auto}
+#lb .lbwrap{display:grid;place-items:center;min-height:0;padding:12px 0}
+#lb img{max-width:100%;max-height:100%;object-fit:contain}
+#lb .lbfoot{display:flex;align-items:center;justify-content:center;gap:14px;color:#94969D;
+  font-size:12px}
+#lb button{appearance:none;background:none;border:1px solid #3A3D42;color:#ECEBE7;font:inherit;
+  font-size:12px;font-weight:600;padding:7px 13px;border-radius:2px;cursor:pointer}
+#lb button:hover{border-color:#5FB3CE;color:#5FB3CE}
+#lb button:focus-visible{outline:2px solid #5FB3CE;outline-offset:2px}
 </style>
 
 <header>
@@ -328,6 +364,20 @@ button.act[disabled]{opacity:.4;cursor:not-allowed}
 <main>
   <div id="panel"></div>
 </main>
+
+<div id="lb" role="dialog" aria-modal="true" aria-label="Full frame">
+  <div class="lbtop">
+    <span class="lbname" id="lbname"></span>
+    <span class="lbwhich" id="lbwhich"></span>
+    <button class="lbshut" data-lb="shut">Close &nbsp;Esc</button>
+  </div>
+  <div class="lbwrap"><img id="lbimg" alt=""></div>
+  <div class="lbfoot">
+    <button data-lb="prev">&larr; Previous</button>
+    <span id="lbpos"></span>
+    <button data-lb="next">Next &rarr;</button>
+  </div>
+</div>
 
 <footer>
   <div class="frow">
@@ -410,7 +460,8 @@ function cardHTML(S, c){
   const row = c.options.length > 1 ? '<div class="opts">' + opts + '</div>' : "";
   return '<div class="card ' + (edited ? "edited" : "") + '">'
     + '<div class="cap"><span class="nm">' + c.name + '</span>' + tag + '</div>'
-    + '<div class="stage"><img src="' + (opt.img || c.base) + '" alt="' + c.name
+    + '<div class="stage" role="button" tabindex="0" data-open="' + esc(c.name)
+    + '" title="Open full size"><img src="' + (opt.img || c.base) + '" alt="' + c.name
     + '" style="' + spin + '"></div>'
     + row
     + '<div class="note">' + c.note + (c.why ? " · " + c.why : "") + '</div></div>';
@@ -460,6 +511,21 @@ function esc(v){ return String(v).replace(/&/g, "&amp;").replace(/'/g, "&#39;")
   .replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
 
 document.addEventListener("click", e => {
+  const lbBtn = e.target.closest("[data-lb]");
+  if (lbBtn) {
+    const w = lbBtn.dataset.lb;
+    if (w === "shut") lbShut(); else lbStep(w === "next" ? 1 : -1);
+    return;
+  }
+  if (lbLive()) {
+    // Anywhere off the picture closes it.
+    if (!e.target.closest("#lbimg")) lbShut();
+    return;
+  }
+
+  const opener = e.target.closest("[data-open]");
+  if (opener) { lbOpen(opener.dataset.open); return; }
+
   const tab = e.target.closest("[data-tab]");
   if (tab) { go(tab.dataset.tab); return; }
 
@@ -481,6 +547,15 @@ document.addEventListener("click", e => {
     return;
   }
 
+  if (e.target.closest("#cmd")) {
+    const sel = window.getSelection();
+    const rng = document.createRange();
+    rng.selectNodeContents(document.getElementById("cmd"));
+    sel.removeAllRanges();
+    sel.addRange(rng);
+    return;
+  }
+
   if (e.target.closest("#reset")) {
     const S = D.stages[active];
     S.cards.forEach(c => picks[active].set(c.name, c.proposed));
@@ -489,13 +564,70 @@ document.addEventListener("click", e => {
   }
 });
 
-// Left/right arrows move between tabs; the whole review is keyboard-reachable.
+// ---- full-size preview ----------------------------------------------------
+// The thumbnail is the decision, but the detail is what the decision rests on —
+// wear, a soft edge, whether the backdrop lift touched the item. So the card
+// photo opens, and steps frame to frame without closing.
+let lbAt = -1;
+
+function lbOpen(name){
+  const S = D.stages[active];
+  lbAt = S.cards.findIndex(c => c.name === name);
+  if (lbAt < 0) return;
+  lbDraw();
+  document.getElementById("lb").classList.add("on");
+  document.querySelector('[data-lb="shut"]').focus();
+}
+
+function lbDraw(){
+  const S = D.stages[active];
+  const c = S.cards[lbAt];
+  const cur = S.shootwide ? wide[active] : picks[active].get(c.name);
+  const opt = c.options.find(o => o.value === cur) || c.options[0];
+  const img = document.getElementById("lbimg");
+  img.src = opt.img || c.base;
+  img.alt = c.name;
+  img.style.transform = opt.rotate ? "rotate(" + opt.rotate + "deg)" : "";
+  // A 90 turn swaps the axes, and the box does not turn with the picture.
+  img.style.maxHeight = opt.rotate % 180 ? "72vw" : "100%";
+  img.style.maxWidth = opt.rotate % 180 ? "72vh" : "100%";
+  document.getElementById("lbname").textContent = c.name;
+  document.getElementById("lbwhich").textContent = opt.label + " · " + c.note;
+  document.getElementById("lbpos").textContent = (lbAt + 1) + " of " + S.cards.length;
+}
+
+function lbStep(d){
+  const n = D.stages[active].cards.length;
+  lbAt = (lbAt + d + n) % n;
+  lbDraw();
+}
+
+function lbShut(){
+  document.getElementById("lb").classList.remove("on");
+  lbAt = -1;
+}
+
+function lbLive(){ return lbAt >= 0; }
+
+// Arrow keys: frames while the preview is open, tabs while it is not.
 document.addEventListener("keydown", e => {
+  if (lbLive() && e.key === "Escape") { lbShut(); return; }
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-  if (e.target.closest("input, textarea")) return;
+  // A key event can land on the document itself, which has no closest().
+  if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+  if (lbLive()) { lbStep(e.key === "ArrowRight" ? 1 : -1); return; }
   const i = D.order.indexOf(active);
   const n = (i + (e.key === "ArrowRight" ? 1 : D.order.length - 1)) % D.order.length;
   go(D.order[n]);
+});
+
+// Enter or Space on a focused photo opens it, same as a click.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const st = e.target && e.target.closest && e.target.closest("[data-open]");
+  if (!st) return;
+  e.preventDefault();
+  lbOpen(st.dataset.open);
 });
 
 render();
