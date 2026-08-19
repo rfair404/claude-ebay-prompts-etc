@@ -17,25 +17,26 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ## The review is STAGED, and interactive. Always.
 
-Three corrections, in this order, and **you do not move on until the operator
+Four corrections, in this order, and **you do not move on until the operator
 says the current one is right**:
 
-    1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
+    1. ORIENTATION  ->  2. UNSKEW  ->  3. CROP  ->  4. COLOUR / touch-up
 
-This ordering is not a preference, it is a dependency. A crop is only meaningful
-once the frame is the right way up. A colour judgement is only meaningful on the
-framing that will actually ship. Shown together, a bad crop and a bad rotation
-look the same on the page and neither can be answered.
+This ordering is not a preference, it is a dependency. Squaring up is only
+meaningful once the frame is the right way up. A crop is only meaningful on the
+shape that will ship — a box measured on skewed pixels describes a frame that is
+about to change. A colour judgement is only meaningful on the final framing.
+Shown together, a bad crop and a bad rotation look the same on the page and
+neither can be answered.
 
 Each stage shows **a card per photo with a thumbnail for every option at that
 stage, side by side**, current choice ruled green. The operator is picking from
 pictures, never reading a description of a picture.
 
-**Present it as the Frame Check page, every time — orientation, crop AND
-colour.** This is the settled format. Do not hand over a JPEG contact sheet, do
-not describe the frames in prose, and do not invent a different layout for the
-crop or colour stage: all three use the same page, the same card, the same
-controls.
+**Present it as the Frame Check page, every time — orientation, unskew, crop
+AND colour.** This is the settled format. Do not hand over a JPEG contact sheet,
+do not describe the frames in prose, and do not invent a different layout for
+any stage: all four use the same page, the same card, the same controls.
 
     python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
 
@@ -75,9 +76,60 @@ Rules that follow from getting it wrong, in order of how much they cost:
    copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
 5. **Anything that looks clickable must be clickable**; anything that is not
    gets no affordance.
+6. **Never hand-list the options in CSS.** The rule that decides which picture a
+   card shows matches on the option's **index**, generated up to `MAX_OPTS` — not
+   on its value. An earlier version spelled the values out (`"0"`, `"90"`, `"on"`,
+   `"off"`, `"studio"`, `"punch"`), so the day the colour stage grew `half`,
+   `tenth` and `crisp`, picking any of the three matched no rule: the card went
+   blank and the full-size preview opened empty, on the stage the operator uses
+   most. A stage must be able to add an option without anyone remembering to edit
+   a stylesheet. Held by `tests/test_prep_sheet_html.py`, which fails if the rules
+   go back to being hand-listed or a stage outgrows the generated range.
+
+**Verify the page in a browser before handing it over** — every option on every
+card, checking that the picture changes in BOTH the card and the full-size
+preview. Both bugs above rendered perfectly and did nothing; neither is visible
+in the markup, and neither would have shipped if one pass had actually clicked
+through the options. `tests/test_prep_sheet_html.py` covers the generator; the
+click-through covers the page.
 
 The JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and
 are the fallback when no page can be published.
+
+## Unskew: what counts as crooked
+
+A framed picture, a magazine, a book, a record sleeve, a certificate, a box —
+the object is a rectangle and the buyer knows it, so a couple of degrees off
+square reads as a cheap listing before they have read a word. The orientation
+stage only turns in multiples of 90°; this is the stage that fixes the rest.
+
+It measures the item's own outline, fits a quad to it, and warps the frame so
+the item's edges meet the picture's. Two refusals, both reported per frame:
+
+- **Not a rectangle.** A marble, a jug, a heap of flatware — there is no square
+  to restore, and a quad fitted to one is noise. Measured as how completely the
+  outline fills the smallest rotated rectangle around it: a book scores ~0.97,
+  an ellipse cannot beat 0.79, and the line is 0.88.
+- **Angled on purpose.** Past ~18° of tilt or a quarter of keystone, the angle
+  IS the shot — a raking-light pass across a surface, a three-quarter view
+  showing depth — and flattening it destroys what the frame was taken for.
+
+`--unskew NAME=on` overrides the FIRST of those only: it says "this is a
+rectangle", which a mat, a mount or a soft shadow can easily cost a real frame.
+It is not consent to flatten a deliberately angled shot — the magnitude guards
+stay armed either way. `--unskew NAME=off` leaves a frame's geometry alone.
+Changing the unskew throws away any crop box pinned to the old geometry, because
+that box describes pixels that no longer exist.
+
+The warp carries the whole frame, backdrop included, so the crop stage still has
+something to work with, and the canvas grows to hold every source pixel —
+squaring up never crops. The wedges of new canvas outside the original frame are
+filled by replicating the edge; that only ever lands on backdrop beyond where
+the photograph reached, never on the item.
+
+Proportions come from the item's own opposite edges, so a 12x9 painting comes
+out 4:3. Stretching a slightly trapezoidal frame into a "nicer" rectangle is the
+same class of lie as smoothing a scratch out of the paint.
 
 ## The looks
 
@@ -161,6 +213,7 @@ in either tool is the call in both.
 | `strip_exif` | PREP bakes EXIF internally; `no-exif/` is legacy output |
 | `even_background`, `trim_whitespace` | PREP's backdrop pass (mask-driven, works on dark felt too) |
 | `center_crop` | PREP's crop (its safety guards are reused, not reimplemented) |
+| (nothing did this) | PREP's unskew — no earlier step squared a crooked rectangle |
 | `orient.py --set` | still works; PREP reads AND writes its manifest |
 | DRAFT step 1/1b/2/3 | this prompt |
 

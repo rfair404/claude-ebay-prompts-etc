@@ -52,6 +52,22 @@ LONG = 820
 LONG_DENSE = 640          # the colour stage carries three pictures per frame
 QUALITY = 70
 
+# How many options one card may offer. The picture-switching CSS is generated
+# up to this many indexes; going over it raises rather than silently rendering
+# a card that cannot show what the operator picked.
+MAX_OPTS = 16
+
+
+def _pick_rules() -> str:
+    """`.card:has(.pick.iN:checked) .v[data-i="N"]{display:block}` for every N.
+
+    Generated, never hand-listed. This selects the picture in the card AND the
+    copy inside the full-size `.big` preview, because both live inside `.card`.
+    """
+    sel = ",\n".join(f'.card:has(.pick.i{j}:checked) .v[data-i="{j}"]'
+                     for j in range(MAX_OPTS))
+    return sel + "{display:block}"
+
 
 def _uri(img, long_edge: int) -> str:
     h, w = img.shape[:2]
@@ -260,21 +276,28 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
 
         if o["img"]:
             vars_.append(f"{var}:url({o['img']})")
-            pics.append(f'<div class="v" data-v="{_esc(o["value"])}" role="img"'
+            pics.append(f'<div class="v" data-i="{j}" data-v="{_esc(o["value"])}" role="img"'
                         f' aria-label="{_esc(card["name"])} — {_esc(o["label"])}"'
                         f' style="background-image:var({var});{spin}"></div>')
             mini = f'<span class="mini" style="background-image:var({var});{spin}"></span>'
         else:
-            pics.append(f'<div class="v nopic" data-v="{_esc(o["value"])}">'
+            pics.append(f'<div class="v nopic" data-i="{j}" data-v="{_esc(o["value"])}">'
                         f'No preview — PREP did not work out this framing.<br>'
                         f'Pick it and it gets rendered.</div>')
             mini = '<span class="mini nopic">?</span>'
 
+        # The index class is what the CSS matches on; the value is for the
+        # command the page writes out. Keep both — see __PICKRULES__.
         opts.append(
-            f'<label class="opt"><input type="radio" name="{fid}" class="{cls}"'
+            f'<label class="opt"><input type="radio" name="{fid}" class="{cls} i{j}"'
             f' value="{_esc(o["value"])}"{" checked" if on else ""}'
             f' data-frame="{_esc(card["name"])}">'
             f'{mini}<span>{_esc(o["label"])}</span></label>')
+
+    if len(card["options"]) > MAX_OPTS:
+        raise RuntimeError(
+            f'{card["name"]}: {len(card["options"])} options at stage {stage}, '
+            f"but only {MAX_OPTS} index rules are generated. Raise MAX_OPTS.")
 
     why = f' · {_esc(card["why"])}' if card["why"] else ""
     return f'''<div class="card" id="card_{fid}" style="{";".join(vars_)}">
@@ -368,6 +391,7 @@ def build(shoot: Path, out: Path) -> Path:
             .replace("__SHOOT__", _esc(sp))
             .replace("__STAGES__", json.dumps(list(stagemod.STAGES)))
             .replace("__TABS__", "".join(tabs))
+            .replace("__PICKRULES__", _pick_rules())
             .replace("__PANELS__", "".join(panels)))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page, encoding="utf-8")
@@ -494,16 +518,14 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 .say textarea:focus{outline:2px solid var(--loupe);outline-offset:-1px}
 .card:has(textarea:not(:placeholder-shown)){border-color:var(--changed)}
 
-/* Which picture a card shows is decided here, from the checked radio. */
-.card:has(.pick[value="0"]:checked) .v[data-v="0"],
-.card:has(.pick[value="90"]:checked) .v[data-v="90"],
-.card:has(.pick[value="180"]:checked) .v[data-v="180"],
-.card:has(.pick[value="270"]:checked) .v[data-v="270"],
-.card:has(.pick[value="on"]:checked) .v[data-v="on"],
-.card:has(.pick[value="off"]:checked) .v[data-v="off"],
-.card:has(.pick[value="__none__"]:checked) .v[data-v="__none__"],
-.card:has(.pick[value="studio"]:checked) .v[data-v="studio"],
-.card:has(.pick[value="punch"]:checked) .v[data-v="punch"]{display:block}
+/* Which picture a card shows is decided here, from the checked radio.
+   Matched on the option's INDEX, never on its value. An earlier version listed
+   the values by hand — "0","90","on","off","studio","punch" — so the day the
+   colour stage grew `half`, `tenth` and `crisp`, picking any of the three
+   matched no rule, the card went blank and the full-size preview opened empty.
+   A stage may add an option whenever it likes; indexes are generated, so it
+   cannot outrun this block again. */
+__PICKRULES__
 
 .big{position:fixed;inset:0;z-index:60;background:rgba(8,9,10,.94);display:none;
   grid-template-rows:auto 1fr auto;padding:14px 18px 20px;gap:10px}
