@@ -1,0 +1,824 @@
+<title>Pop's Games Thank-You Cards</title>
+<style>
+/* ============================================================
+   PAGE CHROME — theme-aware (the proof-sheet surround)
+   Card faces below are deliberately NOT theme-aware: they are
+   ink on paper and must print identically in any viewer theme.
+   ============================================================ */
+:root{
+  --bg:#e8e0d1;
+  --bg-panel:#f6f1e6;
+  --bg-sunk:#ded4c1;
+  --fg:#2b241c;
+  --fg-dim:#6d6152;
+  --line:#c8bca5;
+  --accent:#a8322b;
+  --focus:#1e3a5c;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#22201c;
+    --bg-panel:#2c2925;
+    --bg-sunk:#191714;
+    --fg:#ece3d2;
+    --fg-dim:#9a8f7e;
+    --line:#413c34;
+    --accent:#d9836a;
+    --focus:#d19a38;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#22201c;
+  --bg-panel:#2c2925;
+  --bg-sunk:#191714;
+  --fg:#ece3d2;
+  --fg-dim:#9a8f7e;
+  --line:#413c34;
+  --accent:#d9836a;
+  --focus:#d19a38;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--bg);
+  color:var(--fg);
+  font-family:Georgia,"Times New Roman",serif;
+  margin:0;
+  padding:2.5rem 1.25rem 5rem;
+  line-height:1.5;
+}
+.wrap{max-width:1120px;margin:0 auto}
+
+header.masthead{
+  border-top:3px solid var(--fg);
+  border-bottom:1px solid var(--line);
+  padding:1rem 0 1.25rem;
+  margin-bottom:2rem;
+}
+.eyebrow{
+  font-family:"Courier New",monospace;
+  font-size:.72rem;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  color:var(--fg-dim);
+  margin:0 0 .5rem;
+}
+h1{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+  font-size:clamp(1.8rem,5vw,2.9rem);
+  line-height:1.02;
+  letter-spacing:-.02em;
+  margin:0 0 .6rem;
+  text-wrap:balance;
+}
+.lede{
+  max-width:62ch;
+  margin:0;
+  color:var(--fg-dim);
+  font-size:1.02rem;
+}
+
+/* ---- controls ---- */
+.controls{
+  background:var(--bg-panel);
+  border:1px solid var(--line);
+  border-radius:2px;
+  padding:1.1rem 1.15rem;
+  margin-bottom:2.25rem;
+  display:grid;
+  gap:1rem;
+  grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+  align-items:end;
+}
+.field{display:flex;flex-direction:column;gap:.35rem}
+.field label{
+  font-family:"Courier New",monospace;
+  font-size:.68rem;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--fg-dim);
+}
+.field input{
+  font:inherit;
+  font-size:.95rem;
+  padding:.5rem .6rem;
+  background:var(--bg-sunk);
+  color:var(--fg);
+  border:1px solid var(--line);
+  border-radius:2px;
+}
+.field input:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+.btn{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+  font-size:.78rem;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+  padding:.62rem .9rem;
+  background:var(--fg);
+  color:var(--bg-panel);
+  border:none;
+  border-radius:2px;
+  cursor:pointer;
+}
+.btn:hover{background:var(--accent)}
+.btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.btn.ghost{
+  background:transparent;
+  color:var(--fg);
+  border:1px solid var(--line);
+  font-family:"Courier New",monospace;
+  font-size:.7rem;
+  letter-spacing:.12em;
+  padding:.42rem .6rem;
+}
+.btn.ghost:hover{background:var(--fg);color:var(--bg-panel)}
+
+.hint{
+  font-family:"Courier New",monospace;
+  font-size:.72rem;
+  color:var(--fg-dim);
+  grid-column:1/-1;
+  margin:0;
+  line-height:1.6;
+}
+
+/* ---- gallery ---- */
+.gallery{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+  gap:2.25rem 1.75rem;
+  margin:0 0 3rem;
+  padding:0;
+  list-style:none;
+}
+.slot{display:flex;flex-direction:column;gap:.6rem;align-items:flex-start}
+.cwrap{container-type:inline-size;width:100%;aspect-ratio:1/1}
+.plate{display:flex;align-items:baseline;gap:.5rem;width:100%}
+.plate .no{
+  font-family:"Courier New",monospace;
+  font-size:.72rem;
+  color:var(--fg-dim);
+  font-variant-numeric:tabular-nums;
+}
+.plate .nm{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+  font-size:.82rem;
+  letter-spacing:.02em;
+  text-transform:uppercase;
+}
+.slot p.note{margin:0;font-size:.86rem;color:var(--fg-dim);line-height:1.45}
+
+/* ============================================================
+   CARD FACES — fixed ink-on-paper colors, sized off --w
+   1em == --w / 16, so every card scales exactly to 2in on print
+   ============================================================ */
+.card{
+  --paper:#f1e6cc;
+  --paper-d:#e7d9b9;
+  --red:#a8322b;
+  --navy:#1e3a5c;
+  --gold:#d19a38;
+  --ink:#2b241c;
+  --spruce:#2f6a5e;
+  width:100%;
+  height:100%;
+  font-size:20px;      /* fallback if container queries are unavailable */
+  font-size:6.25cqw;   /* 1em == card width / 16 */
+  position:relative;
+  overflow:hidden;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:Georgia,"Times New Roman",serif;
+  line-height:1.2;
+  isolation:isolate;
+}
+.card *{box-sizing:border-box}
+.card .abs{position:absolute;inset:0}
+
+/* shared micro-type */
+.k{font-family:"Courier New",monospace;letter-spacing:.14em;text-transform:uppercase}
+.heavy{font-family:"Arial Black","Helvetica Neue",sans-serif;font-weight:900}
+
+/* ---------- 01 SUNBURST ---------- */
+.c-sun{background:var(--paper)}
+.c-sun .rays{
+  position:absolute;left:-30%;right:-30%;top:-45%;bottom:-25%;
+  background:repeating-conic-gradient(from 0deg at 50% 62%,
+    rgba(168,50,43,.92) 0 4.6deg, rgba(168,50,43,0) 4.6deg 11deg);
+}
+.c-sun .fade{
+  position:absolute;inset:0;
+  background:radial-gradient(circle at 50% 62%, rgba(241,230,204,.95) 0 14%, rgba(241,230,204,0) 46%);
+}
+.c-sun .band{
+  position:absolute;left:-8%;right:-8%;top:44%;
+  background:var(--navy);
+  transform:rotate(-3.2deg);
+  padding:.34em 0;
+  text-align:center;
+  box-shadow:0 .08em 0 rgba(43,36,28,.35);
+}
+.c-sun .band span{
+  color:var(--paper);
+  font-size:1.42em;
+  letter-spacing:.1em;
+  display:inline-block;
+}
+.c-sun .star{
+  position:absolute;top:.65em;left:0;right:0;text-align:center;
+  color:var(--gold);font-size:1em;text-shadow:0 0 .1em rgba(43,36,28,.4);
+}
+.c-sun .foot{
+  position:absolute;left:0;right:0;bottom:.85em;text-align:center;
+}
+.c-sun .nm{font-size:.86em;letter-spacing:.2em;color:var(--navy);font-family:Georgia,serif;font-weight:700;text-transform:uppercase}
+.c-sun .tg{font-size:.6em;color:var(--ink);margin-top:.35em;opacity:.8}
+.c-sun .st{font-size:.58em;color:var(--red);margin-top:.2em}
+
+/* ---------- 02 TICKET ---------- */
+.c-tkt{background:var(--gold);color:var(--ink)}
+.c-tkt .perf{
+  position:absolute;top:0;bottom:0;width:.5em;
+  background:radial-gradient(circle at 50% 50%, var(--paper) 42%, rgba(0,0,0,0) 43%) 0 0/.5em .62em repeat-y;
+}
+.c-tkt .perf.l{left:-.11em}
+.c-tkt .perf.r{right:-.11em}
+.c-tkt .frame{
+  position:absolute;inset:.55em .8em;
+  border:.09em solid var(--ink);
+  padding:.5em .4em;
+  display:flex;flex-direction:column;justify-content:space-between;text-align:center;
+}
+.c-tkt .top{font-size:.62em;letter-spacing:.2em}
+.c-tkt .big{font-size:1.5em;letter-spacing:.02em;line-height:.95;color:var(--ink)}
+.c-tkt .big em{display:block;font-style:normal;font-size:.42em;letter-spacing:.26em;margin-top:.5em;font-family:"Courier New",monospace}
+.c-tkt .rule{border-top:.055em dashed rgba(43,36,28,.55);margin:.1em .2em}
+.c-tkt .bot{font-size:.58em;letter-spacing:.14em;display:flex;justify-content:space-between;align-items:baseline;gap:.4em}
+.c-tkt .bot .sn{opacity:.65}
+
+/* ---------- 03 RIBBON ---------- */
+.c-rib{background:var(--paper)}
+.c-rib .frame{position:absolute;inset:.42em;border:.13em double var(--navy)}
+.c-rib .inner{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15em;padding:1.1em .9em}
+.c-rib .nm{font-size:.72em;letter-spacing:.24em;text-transform:uppercase;color:var(--navy);font-weight:700}
+.c-rib .ribbon{
+  position:absolute;left:-.5em;right:-.5em;top:38%;
+  background:var(--red);
+  color:var(--paper);
+  text-align:center;
+  padding:.3em 0;
+  clip-path:polygon(0 0,100% 0,100% 100%,0 100%,.55em 50%);
+  box-shadow:0 .06em .12em rgba(43,36,28,.25);
+}
+.c-rib .ribbon i{font-size:1.36em;font-style:italic;letter-spacing:.02em}
+.c-rib .tails{position:absolute;left:.1em;right:.1em;top:38%;height:2.1em;z-index:-1}
+.c-rib .tg{position:absolute;left:0;right:0;bottom:1.5em;text-align:center;font-size:.56em;letter-spacing:.18em;color:var(--ink);opacity:.85}
+.c-rib .st{position:absolute;left:0;right:0;bottom:.95em;text-align:center;font-size:.55em;color:var(--red)}
+.c-rib .cnr{position:absolute;color:var(--gold);font-size:.6em}
+.c-rib .cnr.a{top:.72em;left:.8em}
+.c-rib .cnr.b{top:.72em;right:.8em}
+.c-rib .cnr.c{bottom:.72em;left:.8em}
+.c-rib .cnr.d{bottom:.72em;right:.8em}
+
+/* ---------- 04 PRIZE SEAL ---------- */
+.c-seal{background:var(--navy)}
+.c-seal svg{position:absolute;inset:0;width:100%;height:100%}
+.c-seal .mid{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;gap:.12em;
+}
+.c-seal .mid .s{color:var(--red);font-size:1.1em;line-height:1}
+.c-seal .mid .t{font-size:.84em;letter-spacing:.13em;color:var(--navy);font-family:"Arial Black","Helvetica Neue",sans-serif}
+.c-seal .mid .u{font-size:.5em;letter-spacing:.2em;color:var(--ink);font-family:"Courier New",monospace;opacity:.8}
+
+/* ---------- 05 TRADE CARD ---------- */
+.c-trade{background:var(--paper);--brown:#5c3f22}
+.c-trade .o{position:absolute;inset:.34em;border:.14em solid var(--brown)}
+.c-trade .i{position:absolute;inset:.62em;border:.035em solid var(--brown);opacity:.75}
+.c-trade .body{
+  position:absolute;inset:.62em;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;gap:.34em;padding:.5em .55em;color:var(--brown);
+}
+.c-trade .orn{font-size:.72em;line-height:1;opacity:.8}
+.c-trade .nm{font-size:.8em;letter-spacing:.26em;text-transform:uppercase;font-weight:700;position:relative}
+.c-trade .hr{width:62%;height:.03em;background:var(--brown);opacity:.6}
+.c-trade .it{font-style:italic;font-size:.66em;line-height:1.35;max-width:11em}
+.c-trade .st{font-size:.52em;letter-spacing:.12em;font-family:"Courier New",monospace;opacity:.9}
+.c-trade .cn{position:absolute;font-size:.42em;color:var(--brown);opacity:.7}
+.c-trade .cn.a{top:.78em;left:1em}
+.c-trade .cn.b{top:.78em;right:1em}
+.c-trade .cn.c{bottom:.78em;left:1em}
+.c-trade .cn.d{bottom:.78em;right:1em}
+
+/* ---------- 06 TOY BLOCKS ---------- */
+.c-blk{background:var(--paper)}
+.c-blk .dots{position:absolute;inset:0;background:radial-gradient(circle,rgba(43,36,28,.13) 22%,rgba(0,0,0,0) 23%) 0 0/.42em .42em}
+.c-blk .row{position:absolute;left:0;right:0;top:1.5em;display:flex;justify-content:center;gap:.4em}
+.c-blk .b{
+  width:2.5em;height:2.5em;display:flex;align-items:center;justify-content:center;
+  color:var(--paper);font-size:1em;border-radius:.14em;
+  box-shadow:inset 0 0 0 .16em rgba(241,230,204,.5), .1em .12em 0 rgba(43,36,28,.28);
+}
+.c-blk .b span{font-size:1.5em;line-height:1}
+.c-blk .b1{background:var(--red);transform:rotate(-6deg)}
+.c-blk .b2{background:var(--navy);transform:rotate(2.5deg)}
+.c-blk .b3{background:var(--gold);transform:rotate(7deg)}
+.c-blk .b3 span{color:var(--ink)}
+.c-blk .foot{position:absolute;left:0;right:0;bottom:1em;text-align:center}
+.c-blk .ty{font-size:1.24em;color:var(--navy);letter-spacing:.01em;font-family:"Arial Black","Helvetica Neue",sans-serif}
+.c-blk .nm{font-size:.62em;letter-spacing:.22em;text-transform:uppercase;color:var(--red);margin-top:.4em;font-weight:700}
+.c-blk .tg{font-size:.5em;letter-spacing:.16em;color:var(--ink);opacity:.75;margin-top:.3em;font-family:"Courier New",monospace}
+
+/* ---------- 07 MARQUEE ---------- */
+.c-mrq{background:var(--navy)}
+.c-mrq .bulbs{
+  position:absolute;inset:0;
+  background:radial-gradient(circle at 50% 50%, var(--gold) 33%, rgba(209,154,56,.18) 34%, rgba(0,0,0,0) 55%) 0 0/.52em .52em;
+}
+.c-mrq .panel{
+  position:absolute;inset:.72em;background:var(--paper);
+  border:.06em solid rgba(43,36,28,.35);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:.22em;padding:.5em;
+}
+.c-mrq .ty{font-size:1.32em;color:var(--red);letter-spacing:.02em;line-height:.98}
+.c-mrq .bar{width:70%;height:.06em;background:var(--navy);opacity:.75;margin:.16em 0}
+.c-mrq .nm{font-size:.66em;letter-spacing:.24em;text-transform:uppercase;color:var(--navy);font-weight:700}
+.c-mrq .tg{font-size:.5em;letter-spacing:.18em;color:var(--ink);opacity:.8;font-family:"Courier New",monospace}
+.c-mrq .st{font-size:.5em;letter-spacing:.06em;color:var(--red);font-family:"Courier New",monospace;margin-top:.1em}
+
+/* ---------- 08 POSTMARK ---------- */
+.c-stp{background:var(--paper)}
+.c-stp .stamp{position:absolute;inset:.34em;background:var(--red)}
+.c-stp .pf{position:absolute;background-repeat:repeat}
+.c-stp .pf.h{left:-.15em;right:-.15em;height:.44em;
+  background:radial-gradient(circle at 50% 50%, var(--paper) 44%, rgba(0,0,0,0) 45%) 0 0/.44em .44em}
+.c-stp .pf.v{top:-.15em;bottom:-.15em;width:.44em;
+  background:radial-gradient(circle at 50% 50%, var(--paper) 44%, rgba(0,0,0,0) 45%) 0 0/.44em .44em}
+.c-stp .pf.t{top:-.22em}.c-stp .pf.bm{bottom:-.22em}
+.c-stp .pf.l{left:-.22em}.c-stp .pf.r{right:-.22em}
+.c-stp .face{
+  position:absolute;inset:.9em;background:var(--paper);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:.18em;padding:.4em;
+}
+.c-stp .ty{font-size:1.02em;color:var(--red);letter-spacing:.03em;line-height:1}
+.c-stp .nm{font-size:.6em;letter-spacing:.22em;text-transform:uppercase;color:var(--ink);font-weight:700;margin-top:.18em}
+.c-stp .tg{font-size:.48em;letter-spacing:.16em;color:var(--ink);opacity:.7;font-family:"Courier New",monospace}
+.c-stp .den{position:absolute;top:1.15em;left:1.2em;font-size:.5em;color:var(--ink);opacity:.55;font-family:"Courier New",monospace;letter-spacing:.1em}
+.c-stp .mark{position:absolute;right:.4em;bottom:.42em;width:6.4em;height:6.4em;opacity:.42;transform:rotate(-14deg)}
+
+/* ---------- 09 PENNANT ---------- */
+.c-pen{background:var(--paper)}
+.c-pen .stripes{position:absolute;inset:0;
+  background:repeating-linear-gradient(48deg, rgba(30,58,92,.075) 0 .12em, rgba(0,0,0,0) .12em .58em)}
+.c-pen .pn{
+  position:absolute;left:-.3em;top:1.35em;width:13.4em;height:4.3em;
+  background:var(--red);
+  clip-path:polygon(0 0,100% 50%,0 100%);
+  display:flex;align-items:center;
+  transform:rotate(-4deg);
+  box-shadow:.08em .1em 0 rgba(43,36,28,.22);
+}
+.c-pen .pole{position:absolute;left:-.3em;top:1.35em;width:.42em;height:4.3em;background:var(--navy);transform:rotate(-4deg);transform-origin:center;z-index:2}
+.c-pen .pn span{
+  color:var(--paper);font-size:.72em;letter-spacing:.16em;text-transform:uppercase;
+  font-family:"Arial Black","Helvetica Neue",sans-serif;padding-left:1.5em;
+}
+.c-pen .ty{
+  position:absolute;left:0;right:.9em;bottom:1.9em;text-align:right;
+  font-size:1.34em;color:var(--navy);font-style:italic;letter-spacing:-.01em;
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+}
+.c-pen .tg{position:absolute;left:0;right:.95em;bottom:1.15em;text-align:right;font-size:.5em;letter-spacing:.2em;color:var(--ink);opacity:.75;font-family:"Courier New",monospace}
+.c-pen .st{position:absolute;left:0;right:.95em;bottom:.6em;text-align:right;font-size:.5em;color:var(--red);font-family:"Courier New",monospace}
+
+/* ---------- 10 LETTERPRESS ---------- */
+.c-lp{background:var(--paper-d)}
+.c-lp .body{position:absolute;inset:0;padding:1.5em 1.35em 1.25em;display:flex;flex-direction:column;justify-content:space-between}
+.c-lp .ty{position:relative;font-size:2.05em;line-height:.92;letter-spacing:-.025em;color:var(--ink)}
+.c-lp .ty .ghost{position:absolute;left:.045em;top:.04em;color:var(--red);opacity:.55;z-index:-1}
+.c-lp .ty i{font-style:italic}
+.c-lp .low{display:flex;flex-direction:column;gap:.34em}
+.c-lp .hr{width:2.6em;height:.07em;background:var(--red)}
+.c-lp .nm{font-size:.58em;letter-spacing:.26em;text-transform:uppercase;color:var(--ink);font-weight:700}
+.c-lp .tg{font-size:.5em;letter-spacing:.2em;color:var(--ink);opacity:.65;font-family:"Courier New",monospace}
+.c-lp .st{font-size:.5em;letter-spacing:.04em;color:var(--red);font-family:"Courier New",monospace}
+
+/* ============================================================
+   PRINT — 12-up imposition on US Letter, exact 2in cards
+   ============================================================ */
+.sheet{display:none}
+.sheet .cwrap{width:2in;height:2in}
+
+@media print{
+  @page{size:letter portrait;margin:.45in}
+  body{background:#fff;padding:0;margin:0}
+  .masthead,.controls,.gallery,.colophon,.screen-only{display:none !important}
+  .sheet{
+    display:grid;
+    grid-template-columns:repeat(3,2in);
+    grid-auto-rows:2in;
+    gap:.2in;
+    justify-content:center;
+    align-content:start;
+  }
+  .sheet .card{outline:.4pt dotted rgba(43,36,28,.5);outline-offset:0}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+
+.colophon{
+  border-top:1px solid var(--line);
+  padding-top:1.25rem;
+  color:var(--fg-dim);
+  font-size:.9rem;
+  max-width:62ch;
+}
+.colophon h2{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+  font-size:.82rem;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--fg);margin:0 0 .6rem;
+}
+.colophon ul{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.4rem}
+
+@media (prefers-reduced-motion:no-preference){
+  .slot .card{transition:transform .18s ease}
+  .slot:hover .card{transform:translateY(-2px)}
+}
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Proof sheet &middot; ten designs &middot; 2&Prime; square</p>
+    <h1>Pop&rsquo;s Games Thank-You Cards</h1>
+    <p class="lede">Ten packing-slip thank-yous in a vintage toy-shop register &mdash; flat spot inks on cream stock, each built on a different piece of old print vernacular. Set your details once below and every card updates. Print 12-up on Letter.</p>
+  </header>
+
+  <section class="controls screen-only" aria-label="Card details">
+    <div class="field">
+      <label for="f-name">Shop name</label>
+      <input id="f-name" type="text" value="POP'S GAMES" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-tag">Tagline</label>
+      <input id="f-tag" type="text" value="BUY &middot; SELL &middot; TRADE" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-store">Store line</label>
+      <input id="f-store" type="text" value="ebay.com/str/popsgames" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-print">Print</label>
+      <button class="btn" id="f-print" type="button">Print all ten &rarr;</button>
+    </div>
+    <p class="hint">The store line is a placeholder &mdash; drop in your real eBay URL before printing. Each card also has its own &ldquo;12 of this one&rdquo; button.</p>
+  </section>
+
+  <ul class="gallery" id="gallery">
+
+    <!-- 01 SUNBURST -->
+    <li class="slot">
+      <div class="card c-sun">
+        <div class="rays"></div>
+        <div class="fade"></div>
+        <div class="star">&#9733;</div>
+        <div class="band"><span class="heavy">THANK YOU</span></div>
+        <div class="foot">
+          <div class="nm" data-f="name">POP'S GAMES</div>
+          <div class="tg k" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+          <div class="st k" data-f="store">ebay.com/str/popsgames</div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">01</span><span class="nm">Sunburst</span></div>
+      <p class="note">Circus-poster rays with a navy band. The loudest of the ten &mdash; good on top of a box where it has to be seen.</p>
+      <button class="btn ghost" type="button" data-print="0">Print 12 of this</button>
+    </li>
+
+    <!-- 02 TICKET -->
+    <li class="slot">
+      <div class="card c-tkt">
+        <div class="perf l"></div>
+        <div class="perf r"></div>
+        <div class="frame">
+          <div class="top k" data-f="name">POP'S GAMES</div>
+          <div>
+            <div class="big heavy">THANK<br>YOU</div>
+            <div class="rule" style="margin-top:.5em"></div>
+          </div>
+          <div class="bot k">
+            <span data-f="tag">BUY &middot; SELL &middot; TRADE</span>
+            <span class="sn">No.&nbsp;1042</span>
+          </div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">02</span><span class="nm">Ticket</span></div>
+      <p class="note">Mustard stub with punched perforations and a serial number. Reads as an admission ticket, which is exactly the toy-shop note you want.</p>
+      <button class="btn ghost" type="button" data-print="1">Print 12 of this</button>
+    </li>
+
+    <!-- 03 RIBBON -->
+    <li class="slot">
+      <div class="card c-rib">
+        <div class="frame"></div>
+        <span class="cnr a">&#10022;</span><span class="cnr b">&#10022;</span>
+        <span class="cnr c">&#10022;</span><span class="cnr d">&#10022;</span>
+        <div class="inner">
+          <div class="nm" data-f="name">POP'S GAMES</div>
+        </div>
+        <div class="ribbon"><i>Thank you</i></div>
+        <div class="tg k" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+        <div class="st k" data-f="store">ebay.com/str/popsgames</div>
+      </div>
+      <div class="plate"><span class="no">03</span><span class="nm">Ribbon</span></div>
+      <p class="note">Notched banner across a double-ruled frame. The most classically &ldquo;shop&rdquo; of the set &mdash; works for any category, not just games.</p>
+      <button class="btn ghost" type="button" data-print="2">Print 12 of this</button>
+    </li>
+
+    <!-- 04 PRIZE SEAL -->
+    <li class="slot">
+      <div class="card c-seal" data-seal>
+        <div class="mid">
+          <div class="s">&#9733;</div>
+          <div class="t">THANK YOU</div>
+          <div class="u" data-f="store">ebay.com/str/popsgames</div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">04</span><span class="nm">Prize seal</span></div>
+      <p class="note">Scalloped award medal on navy, shop name curved around the rim. The one that looks like it came off a carnival prize.</p>
+      <button class="btn ghost" type="button" data-print="3">Print 12 of this</button>
+    </li>
+
+    <!-- 05 TRADE CARD -->
+    <li class="slot">
+      <div class="card c-trade">
+        <div class="o"></div>
+        <div class="i"></div>
+        <span class="cn a">&#10022;</span><span class="cn b">&#10022;</span>
+        <span class="cn c">&#10022;</span><span class="cn d">&#10022;</span>
+        <div class="body">
+          <div class="orn">&#10087;</div>
+          <div class="nm" data-f="name">POP'S GAMES</div>
+          <div class="hr"></div>
+          <div class="it">With our thanks<br>for your patronage.</div>
+          <div class="hr"></div>
+          <div class="st" data-f="store">ebay.com/str/popsgames</div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">05</span><span class="nm">Trade card</span></div>
+      <p class="note">Victorian merchant's card in brown ink. Quiet and grown-up &mdash; the one to use for the antique-mall side of the business.</p>
+      <button class="btn ghost" type="button" data-print="4">Print 12 of this</button>
+    </li>
+
+    <!-- 06 TOY BLOCKS -->
+    <li class="slot">
+      <div class="card c-blk">
+        <div class="dots"></div>
+        <div class="row">
+          <div class="b b1"><span class="heavy">P</span></div>
+          <div class="b b2"><span class="heavy">O</span></div>
+          <div class="b b3"><span class="heavy">P</span></div>
+        </div>
+        <div class="foot">
+          <div class="ty">THANK YOU!</div>
+          <div class="nm" data-f="name">POP'S GAMES</div>
+          <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">06</span><span class="nm">Toy blocks</span></div>
+      <p class="note">Three alphabet blocks spelling P-O-P. The friendliest card of the ten and the one that reads instantly as a toy shop.</p>
+      <button class="btn ghost" type="button" data-print="5">Print 12 of this</button>
+    </li>
+
+    <!-- 07 MARQUEE -->
+    <li class="slot">
+      <div class="card c-mrq">
+        <div class="bulbs"></div>
+        <div class="panel">
+          <div class="ty heavy">THANK<br>YOU</div>
+          <div class="bar"></div>
+          <div class="nm" data-f="name">POP'S GAMES</div>
+          <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+          <div class="st" data-f="store">ebay.com/str/popsgames</div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">07</span><span class="nm">Marquee</span></div>
+      <p class="note">Bulb-lit sign border. Nods at the arcade without going 8-bit &mdash; the bridge between the toy-shop look and the games side.</p>
+      <button class="btn ghost" type="button" data-print="6">Print 12 of this</button>
+    </li>
+
+    <!-- 08 POSTMARK -->
+    <li class="slot">
+      <div class="card c-stp" data-mark>
+        <div class="stamp">
+          <div class="pf h t"></div><div class="pf h bm"></div>
+          <div class="pf v l"></div><div class="pf v r"></div>
+        </div>
+        <div class="face">
+          <div class="ty heavy">THANK YOU</div>
+          <div class="nm" data-f="name">POP'S GAMES</div>
+          <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+        </div>
+        <div class="den">&#9733;</div>
+      </div>
+      <div class="plate"><span class="no">08</span><span class="nm">Postmark</span></div>
+      <p class="note">Perforated stamp with a cancellation ring struck across it. The most on-the-nose card for something arriving in the mail.</p>
+      <button class="btn ghost" type="button" data-print="7">Print 12 of this</button>
+    </li>
+
+    <!-- 09 PENNANT -->
+    <li class="slot">
+      <div class="card c-pen">
+        <div class="stripes"></div>
+        <div class="pn"><span data-f="name">POP'S GAMES</span></div>
+        <div class="pole"></div>
+        <div class="ty">Thank you!</div>
+        <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+        <div class="st" data-f="store">ebay.com/str/popsgames</div>
+      </div>
+      <div class="plate"><span class="no">09</span><span class="nm">Pennant</span></div>
+      <p class="note">Felt souvenir pennant on pinstriped stock. Off-center on purpose &mdash; it breaks up a stack of otherwise centered cards.</p>
+      <button class="btn ghost" type="button" data-print="8">Print 12 of this</button>
+    </li>
+
+    <!-- 10 LETTERPRESS -->
+    <li class="slot">
+      <div class="card c-lp">
+        <div class="body">
+          <div class="ty">
+            <span class="ghost" aria-hidden="true">Thank<br><i>you.</i></span>
+            Thank<br><i>you.</i>
+          </div>
+          <div class="low">
+            <div class="hr"></div>
+            <div class="nm" data-f="name">POP'S GAMES</div>
+            <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+            <div class="st" data-f="store">ebay.com/str/popsgames</div>
+          </div>
+        </div>
+      </div>
+      <div class="plate"><span class="no">10</span><span class="nm">Off-register</span></div>
+      <p class="note">A red plate printed a hair out of alignment behind the black &mdash; the letterpress mistake, on purpose. Cheapest to print well and the one that ages best.</p>
+      <button class="btn ghost" type="button" data-print="9">Print 12 of this</button>
+    </li>
+
+  </ul>
+
+  <section class="colophon screen-only">
+    <h2>Printing notes</h2>
+    <ul>
+      <li>Sheet is 12-up on US Letter &mdash; three across, four down, 2&Prime; squares with a &frac15;&Prime; gutter and a dotted cut guide on every card.</li>
+      <li>In the print dialog set scale to <strong>100%</strong> (not &ldquo;fit to page&rdquo;) or the squares come out under 2&Prime;, and turn on <strong>background graphics</strong> or the ink drops out entirely.</li>
+      <li>Cardstock at 65&ndash;110&nbsp;lb cover holds the flat color best. A paper trimmer beats scissors across a dotted guide.</li>
+      <li>Cards 04, 07 and 08 lay down a lot of navy and red &mdash; if your printer struggles with heavy coverage, 05 and 10 use the least ink by a wide margin.</li>
+    </ul>
+  </section>
+</div>
+
+<div class="sheet" id="sheet" aria-hidden="true"></div>
+
+<script>
+(function(){
+  var gallery = document.getElementById('gallery');
+  var sheet   = document.getElementById('sheet');
+  var inputs  = { name:document.getElementById('f-name'),
+                  tag: document.getElementById('f-tag'),
+                  store:document.getElementById('f-store') };
+
+  /* every card sits in its own size container so 1em == card width / 16 */
+  Array.prototype.forEach.call(gallery.querySelectorAll('.card'), function(c){
+    var w = document.createElement('div');
+    w.className = 'cwrap';
+    c.parentNode.insertBefore(w, c);
+    w.appendChild(c);
+  });
+
+  /* ---- generated artwork: scalloped seal + cancellation ring ---- */
+  var NS = 'http://www.w3.org/2000/svg';
+
+  function scallopPath(cx, cy, r, teeth, depth){
+    var d = '', i, a, b, mx, my, ax, ay, bx, by;
+    for(i = 0; i < teeth; i++){
+      a = (i / teeth) * Math.PI * 2 - Math.PI / 2;
+      b = ((i + 1) / teeth) * Math.PI * 2 - Math.PI / 2;
+      ax = cx + Math.cos(a) * r;  ay = cy + Math.sin(a) * r;
+      bx = cx + Math.cos(b) * r;  by = cy + Math.sin(b) * r;
+      mx = cx + Math.cos((a + b) / 2) * (r + depth);
+      my = cy + Math.sin((a + b) / 2) * (r + depth);
+      if(i === 0){ d += 'M' + ax.toFixed(2) + ' ' + ay.toFixed(2); }
+      d += 'Q' + mx.toFixed(2) + ' ' + my.toFixed(2) + ' ' + bx.toFixed(2) + ' ' + by.toFixed(2);
+    }
+    return d + 'Z';
+  }
+
+  function el(name, attrs){
+    var n = document.createElementNS(NS, name), k;
+    for(k in attrs){ n.setAttribute(k, attrs[k]); }
+    return n;
+  }
+
+  function buildSeal(card){
+    var svg = el('svg', {viewBox:'0 0 200 200', 'aria-hidden':'true'});
+    svg.appendChild(el('path', {d:scallopPath(100,100,74,26,7), fill:'#f1e6cc'}));
+    svg.appendChild(el('circle',{cx:100,cy:100,r:66,fill:'none',stroke:'#a8322b','stroke-width':2.2}));
+    svg.appendChild(el('circle',{cx:100,cy:100,r:44,fill:'none',stroke:'#1e3a5c','stroke-width':1,
+                                 'stroke-dasharray':'1.5 4','stroke-linecap':'round'}));
+    var defs = el('defs',{});
+    defs.appendChild(el('path',{id:'sealArc', d:'M100,100 m-55,0 a55,55 0 1,1 110,0 a55,55 0 1,1 -110,0', fill:'none'}));
+    svg.appendChild(defs);
+    var t = el('text',{fill:'#1e3a5c','font-size':'15','font-family':'Georgia, serif',
+                       'font-weight':'700','letter-spacing':'2.6'});
+    var tp = el('textPath',{href:'#sealArc', startOffset:'50%', 'text-anchor':'middle'});
+    tp.setAttribute('xlink:href','#sealArc');
+    tp.setAttribute('data-f','name');
+    tp.setAttribute('data-pre','★ ');
+    tp.setAttribute('data-post',' ★');
+    t.appendChild(tp);
+    svg.appendChild(t);
+    card.insertBefore(svg, card.firstChild);
+  }
+
+  function buildMark(card){
+    var svg = el('svg',{viewBox:'0 0 200 200','aria-hidden':'true',class:'mark'});
+    svg.appendChild(el('circle',{cx:100,cy:100,r:84,fill:'none',stroke:'#2b241c','stroke-width':4}));
+    svg.appendChild(el('circle',{cx:100,cy:100,r:74,fill:'none',stroke:'#2b241c','stroke-width':1.6}));
+    var y, i;
+    for(i = 0; i < 4; i++){
+      y = 88 + i * 8;
+      svg.appendChild(el('line',{x1:40,y1:y,x2:160,y2:y,stroke:'#2b241c','stroke-width':3.4}));
+    }
+    var defs = el('defs',{});
+    defs.appendChild(el('path',{id:'markArc', d:'M100,100 m-63,0 a63,63 0 1,1 126,0', fill:'none'}));
+    svg.appendChild(defs);
+    var t = el('text',{fill:'#2b241c','font-size':'17','font-family':'"Courier New", monospace','letter-spacing':'1.5'});
+    var tp = el('textPath',{href:'#markArc', startOffset:'50%','text-anchor':'middle'});
+    tp.setAttribute('xlink:href','#markArc');
+    tp.setAttribute('data-f','name');
+    t.appendChild(tp);
+    svg.appendChild(t);
+    card.appendChild(svg);
+  }
+
+  var sealCard = gallery.querySelector('[data-seal]');
+  var markCard = gallery.querySelector('[data-mark]');
+  if(sealCard){ buildSeal(sealCard); }
+  if(markCard){ buildMark(markCard); }
+
+  /* ---- live text ---- */
+  function apply(){
+    var vals = { name:inputs.name.value, tag:inputs.tag.value, store:inputs.store.value };
+    var nodes = document.querySelectorAll('[data-f]'), i, n, v;
+    for(i = 0; i < nodes.length; i++){
+      n = nodes[i];
+      v = vals[n.getAttribute('data-f')];
+      if(v === undefined){ continue; }
+      n.textContent = (n.getAttribute('data-pre') || '') + v + (n.getAttribute('data-post') || '');
+    }
+  }
+  Object.keys(inputs).forEach(function(k){ inputs[k].addEventListener('input', apply); });
+
+  /* ---- imposition ---- */
+  var SLOTS = 12;
+
+  /* the gallery is display:none while printing, so each clone needs to own
+     the arc paths its textPath points at rather than share the original's */
+  function uniquify(node, n){
+    Array.prototype.forEach.call(node.querySelectorAll('[id]'), function(d){
+      var old = d.id, fresh = old + '-' + n, i, tps;
+      d.id = fresh;
+      tps = node.querySelectorAll('textPath');
+      for(i = 0; i < tps.length; i++){
+        if((tps[i].getAttribute('href') || '') === '#' + old){
+          tps[i].setAttribute('href', '#' + fresh);
+          tps[i].setAttribute('xlink:href', '#' + fresh);
+        }
+      }
+    });
+    return node;
+  }
+  function buildSheet(only){
+    var cards = gallery.querySelectorAll('.card'), i, src, w;
+    sheet.innerHTML = '';
+    for(i = 0; i < SLOTS; i++){
+      src = (only === null) ? cards[i % cards.length] : cards[only];
+      w = document.createElement('div');
+      w.className = 'cwrap';
+      w.appendChild(uniquify(src.cloneNode(true), i));
+      sheet.appendChild(w);
+    }
+    apply();
+  }
+
+  document.getElementById('f-print').addEventListener('click', function(){
+    buildSheet(null);
+    window.print();
+  });
+  gallery.addEventListener('click', function(e){
+    var b = e.target.closest('[data-print]');
+    if(!b){ return; }
+    buildSheet(parseInt(b.getAttribute('data-print'), 10));
+    window.print();
+  });
+  window.addEventListener('afterprint', function(){ buildSheet(null); });
+
+  buildSheet(null);
+  apply();
+})();
+</script>

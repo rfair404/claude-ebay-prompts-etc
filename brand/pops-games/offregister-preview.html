@@ -1,0 +1,242 @@
+<title>Pop's Games Off-Register Sheet</title>
+<style>
+/* ---------- page chrome (theme-aware) ---------- */
+:root{
+  --bg:#e9e4da; --panel:#f7f4ee; --sunk:#ded8cc;
+  --fg:#221f1a; --dim:#6b6357; --line:#c6bfb1;
+  --accent:#a8322b; --focus:#1e3a5c;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#201e1a; --panel:#2b2823; --sunk:#181613;
+    --fg:#ece5d7; --dim:#968d7d; --line:#3f3a32;
+    --accent:#d9836a; --focus:#d19a38;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#201e1a; --panel:#2b2823; --sunk:#181613;
+  --fg:#ece5d7; --dim:#968d7d; --line:#3f3a32;
+  --accent:#d9836a; --focus:#d19a38;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;padding:2.5rem 1.25rem 4rem;
+  background:var(--bg);color:var(--fg);
+  font-family:Georgia,"Times New Roman",serif;line-height:1.5;
+}
+.wrap{max-width:960px;margin:0 auto}
+.eyebrow{
+  font-family:"Courier New",monospace;font-size:.72rem;letter-spacing:.22em;
+  text-transform:uppercase;color:var(--dim);margin:0 0 .5rem;
+}
+h1{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;
+  font-size:clamp(1.7rem,4.5vw,2.6rem);line-height:1.04;letter-spacing:-.02em;
+  margin:0 0 .6rem;text-wrap:balance;
+}
+.lede{max-width:60ch;margin:0 0 2rem;color:var(--dim)}
+header{border-top:3px solid var(--fg);border-bottom:1px solid var(--line);padding:1rem 0 1.25rem;margin-bottom:2rem}
+
+.controls{
+  background:var(--panel);border:1px solid var(--line);border-radius:2px;
+  padding:1.1rem 1.15rem;margin-bottom:2rem;display:grid;gap:1rem;
+  grid-template-columns:repeat(auto-fit,minmax(200px,1fr));align-items:end;
+}
+.field{display:flex;flex-direction:column;gap:.35rem}
+.field label{font-family:"Courier New",monospace;font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.field input,.field select{
+  font:inherit;font-size:.95rem;padding:.5rem .6rem;
+  background:var(--sunk);color:var(--fg);border:1px solid var(--line);border-radius:2px;
+}
+.field input:focus-visible,.field select:focus-visible,.btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.btn{
+  font-family:"Arial Black","Helvetica Neue",sans-serif;font-size:.78rem;letter-spacing:.06em;
+  text-transform:uppercase;padding:.62rem .9rem;background:var(--fg);color:var(--panel);
+  border:none;border-radius:2px;cursor:pointer;
+}
+.btn:hover{background:var(--accent)}
+.hint{grid-column:1/-1;margin:0;font-family:"Courier New",monospace;font-size:.72rem;color:var(--dim);line-height:1.6}
+
+.preview{display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;margin-bottom:2.5rem}
+.pv-card{width:300px;flex:0 0 auto;box-shadow:0 2px 14px rgba(0,0,0,.22)}
+.pv-note{flex:1 1 260px;min-width:240px;color:var(--dim);font-size:.92rem}
+.pv-note h2{font-family:"Arial Black","Helvetica Neue",sans-serif;font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;color:var(--fg);margin:0 0 .6rem}
+.pv-note ul{margin:0;padding-left:1.1rem;display:flex;flex-direction:column;gap:.45rem}
+
+/* ---------- the card: black + red on bare white ---------- */
+.cwrap{container-type:inline-size;width:100%;aspect-ratio:1/1;background:#fff}
+.card{
+  width:100%;height:100%;position:relative;overflow:hidden;
+  background:#fff;color:#141210;
+  font-family:Georgia,"Times New Roman",serif;line-height:1.2;
+  font-size:18.75px;    /* fallback */
+  font-size:6.25cqw;    /* 1em == card width / 16 */
+}
+.card .body{position:absolute;inset:0;padding:1.55em 1.35em 1.3em;display:flex;flex-direction:column;justify-content:space-between}
+.card .ty{position:relative;font-size:2.05em;line-height:.92;letter-spacing:-.025em;color:#141210;z-index:1}
+.card .ty .ghost{position:absolute;left:.05em;top:.042em;color:#c0392f;z-index:-1}
+.card .ty i{font-style:italic}
+.card .low{display:flex;flex-direction:column;gap:.36em}
+.card .hr{width:2.6em;height:.075em;background:#a8322b}
+.card .nm{font-size:.62em;letter-spacing:.26em;text-transform:uppercase;font-weight:700;color:#141210}
+.card .tg{font-size:.56em;letter-spacing:.2em;color:#4a443c;font-family:"Courier New",monospace}
+.card .st{font-size:.56em;letter-spacing:.04em;color:#a8322b;font-family:"Courier New",monospace}
+
+/* ---------- imposition: 20-up, butted, shared cuts ---------- */
+.sheet{display:none}
+.grid{display:grid;grid-template-columns:repeat(4,2in);grid-auto-rows:2in}
+.grid .cwrap{width:2in;height:2in}
+
+/* cut guides — hairlines are SHARED between neighbours, never doubled */
+.mode-grid .grid .cwrap{box-shadow:inset -.25pt 0 0 #b9b9b9, inset 0 -.25pt 0 #b9b9b9}
+.mode-grid .grid{box-shadow:inset .25pt 0 0 #b9b9b9, inset 0 .25pt 0 #b9b9b9}
+.tick{position:absolute;background:#9a9a9a}
+.mode-grid .tick,.mode-none .tick{display:none}
+
+.plate{position:relative;width:8in;margin:0 auto}
+
+@media print{
+  @page{size:letter portrait;margin:.5in .25in}
+  body{background:#fff;color:#000;padding:0;margin:0}
+  .screen-only{display:none !important}
+  .sheet{display:block}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
+</style>
+
+<div class="wrap screen-only">
+  <header>
+    <p class="eyebrow">Off-register &middot; 20-up &middot; 2&Prime; square</p>
+    <h1>Pop&rsquo;s Games Off-Register Sheet</h1>
+    <p class="lede">Card 10 with the cream stock dropped &mdash; black and red on bare white, so your laser only lays down the two inks that carry the design. Twenty to a Letter sheet, butted edge to edge so every cut is one straight pass.</p>
+  </header>
+
+  <section class="controls" aria-label="Card details">
+    <div class="field">
+      <label for="f-name">Shop name</label>
+      <input id="f-name" type="text" value="POP'S GAMES" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-tag">Tagline</label>
+      <input id="f-tag" type="text" value="BUY &middot; SELL &middot; TRADE" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-store">Store line</label>
+      <input id="f-store" type="text" value="ebay.com/str/popsgames" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="f-mode">Cut guides</label>
+      <select id="f-mode">
+        <option value="grid" selected>Hairline grid (shared)</option>
+        <option value="ticks">Corner ticks only</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-print">Print</label>
+      <button class="btn" id="f-print" type="button">Print the sheet &rarr;</button>
+    </div>
+    <p class="hint">Store line is a placeholder &mdash; swap in your real eBay URL before you print.</p>
+  </section>
+
+  <section class="preview">
+    <div class="cwrap pv-card">
+      <div class="card">
+        <div class="body">
+          <div class="ty">
+            <span class="ghost" aria-hidden="true">Thank<br><i>you.</i></span>
+            Thank<br><i>you.</i>
+          </div>
+          <div class="low">
+            <div class="hr"></div>
+            <div class="nm" data-f="name">POP'S GAMES</div>
+            <div class="tg" data-f="tag">BUY &middot; SELL &middot; TRADE</div>
+            <div class="st" data-f="store">ebay.com/str/popsgames</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="pv-note">
+      <h2>How it prints</h2>
+      <ul>
+        <li><strong>20 per sheet</strong> &mdash; 4 across &times; 5 down, no gutters. Cards share edges, so trimming is 3 vertical cuts and 4 horizontal, plus the outer border.</li>
+        <li><strong>Scale must be 100%.</strong> &ldquo;Fit to page&rdquo; will shrink the squares under 2&Prime; and throw the cut spacing off.</li>
+        <li><strong>Background graphics on</strong> &mdash; the red plate is a background color on the ghost layer and will drop out otherwise.</li>
+        <li>White is bare paper here, so pick the stock you want the card to be. 65&ndash;80&nbsp;lb cover feeds through most color lasers without curling.</li>
+        <li>Hairline guides print at 0.25&nbsp;pt light grey. If your trimmer has a good scale, switch to corner ticks and the cards come out with nothing on them at all.</li>
+      </ul>
+    </div>
+  </section>
+</div>
+
+<div class="sheet mode-grid" id="sheet" aria-hidden="true">
+  <div class="plate" id="plate">
+    <div class="grid" id="grid"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var inputs = { name:document.getElementById('f-name'),
+                 tag: document.getElementById('f-tag'),
+                 store:document.getElementById('f-store') };
+  var modeSel = document.getElementById('f-mode');
+  var sheet = document.getElementById('sheet');
+  var plate = document.getElementById('plate');
+  var grid  = document.getElementById('grid');
+  var src   = document.querySelector('.pv-card .card');
+
+  var COLS = 4, ROWS = 5, CARD = 2; /* inches */
+
+  /* ---- fill the sheet ---- */
+  var i, w;
+  for(i = 0; i < COLS * ROWS; i++){
+    w = document.createElement('div');
+    w.className = 'cwrap';
+    w.appendChild(src.cloneNode(true));
+    grid.appendChild(w);
+  }
+
+  /* ---- corner ticks: short marks just inside every cut line, so they
+         always land inside the printable area of a laser ---- */
+  function tick(css){
+    var t = document.createElement('div');
+    t.className = 'tick';
+    t.setAttribute('style', css);
+    plate.appendChild(t);
+  }
+  var LEN = '.1in', TH = '.25pt', c, r;
+  for(c = 0; c <= COLS; c++){
+    var x = (c * CARD) + 'in';
+    tick('left:' + x + ';top:0;width:' + TH + ';height:' + LEN);
+    tick('left:' + x + ';top:' + (ROWS * CARD) + 'in;width:' + TH + ';height:' + LEN + ';transform:translateY(-.1in)');
+  }
+  for(r = 0; r <= ROWS; r++){
+    var y = (r * CARD) + 'in';
+    tick('top:' + y + ';left:0;height:' + TH + ';width:' + LEN);
+    tick('top:' + y + ';left:' + (COLS * CARD) + 'in;height:' + TH + ';width:' + LEN + ';transform:translateX(-.1in)');
+  }
+
+  /* ---- live text ---- */
+  function apply(){
+    var vals = { name:inputs.name.value, tag:inputs.tag.value, store:inputs.store.value };
+    var nodes = document.querySelectorAll('[data-f]'), j, n, v;
+    for(j = 0; j < nodes.length; j++){
+      n = nodes[j];
+      v = vals[n.getAttribute('data-f')];
+      if(v !== undefined){ n.textContent = v; }
+    }
+  }
+  Object.keys(inputs).forEach(function(k){ inputs[k].addEventListener('input', apply); });
+
+  function setMode(){
+    sheet.className = 'sheet mode-' + modeSel.value;
+  }
+  modeSel.addEventListener('change', setMode);
+
+  document.getElementById('f-print').addEventListener('click', function(){ window.print(); });
+
+  setMode();
+  apply();
+})();
+</script>
