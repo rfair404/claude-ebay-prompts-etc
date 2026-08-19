@@ -837,6 +837,8 @@ def test_stages_run_in_order_and_cannot_be_skipped():
     assert "orientation" in S.stage_blocker(m, "crop")
     assert S.stage_blocker(m, "color")
     S.stage_state(m)["orientation"]["approved"] = True
+    assert "unskew" in S.stage_blocker(m, "crop")
+    S.stage_state(m)["unskew"]["approved"] = True
     assert S.stage_blocker(m, "crop") is None
     assert "crop" in S.stage_blocker(m, "color")
 
@@ -850,6 +852,7 @@ def test_approving_a_stage_invalidates_the_later_ones():
                                      "crop": {"applied": False}}}
         P.save_manifest(shoot, m)
         P.run_approve_stage(shoot, "orientation")
+        P.run_approve_stage(shoot, "unskew")
         P.run_approve_stage(shoot, "crop")
         m = P.load_manifest(shoot)
         assert m["stages"]["crop"]["approved"]
@@ -872,6 +875,40 @@ def test_a_stage_cannot_be_approved_while_frames_are_outstanding():
             assert "outstanding" in str(e)
 
 
+def test_a_vivid_object_in_the_backdrop_is_not_neutralised():
+    """The christmas-train failure, in miniature.
+
+    On ZZ170057 the segmenter kept the reindeer and handed the entire red car
+    body to the backdrop. Neutralising duly drove it toward grey and 38% of the
+    red's saturation went with it — measured, not guessed. `_protect_objects`
+    could not save it because it only tested LUMA, and the car sits at roughly
+    the brightness of the cloth.
+
+    Cloth is nearly colourless; paint is not. So a large, strongly coloured
+    region outside the mask is an object, whatever its brightness.
+    """
+    img, _ = _scene(bg=60, subject=60, noise=2)            # item luma == backdrop luma
+    img[300:700, 350:850] = (40, 45, 200)                  # a vivid red block, BGR
+    mask = np.zeros((H, W), np.uint8)                      # mask misses it entirely
+
+    out, _rep = C.correct(img, mask, sweep=True, bg_class="dark", preset="crisp")
+
+    def sat(im):
+        return float(cv2.cvtColor(im[320:680, 370:830], cv2.COLOR_BGR2HSV)[:, :, 1].mean())
+
+    before, after = sat(img), sat(out)
+    assert after > before * 0.9, (
+        f"the red block was neutralised: saturation {before:.0f} -> {after:.0f}")
+
+
+def test_the_chroma_bar_sits_between_cloth_and_paint():
+    """Measured on real frames: true backdrop reaches chroma 24 at p99, painted
+    red starts at 54. The bar has to sit in that gap with margin on both sides —
+    too low and felt gets protected from its own blur, too high and paint is
+    treated as cloth again."""
+    assert 24 < C.CHROMA_OBJECT_MIN < 54
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
@@ -885,3 +922,169 @@ if __name__ == "__main__":
             print(f"FAIL  {fn.__name__}: {e}")
     print(f"{len(fns) - bad}/{len(fns)} passed")
     sys.exit(1 if bad else 0)
+
+
+def test_warm_metal_on_dark_cloth_defaults_to_crisp():
+    """The keys-shoot rule. Brass on navy is where white balance does damage:
+    the cloth's chroma sits on WB_MAX_CHROMA, so the gain fires on some frames
+    and not others, and what it lifts is green — the opposite of brass. Measured
+    on goodwill/keys: punch moved the item's mean colour by 21/255 and reversed
+    its channel order on the worst frame. A cool or neutral item on the same
+    cloth is unaffected and keeps punch."""
+    img, mask = _fuzzy_scene(subject=(80, 120, 170))        # BGR: warm brass
+    warm = C.subject_warmth(img, mask)
+    assert warm["warm"] is True, warm
+    assert warm["r_minus_b"] >= C.WARM_SUBJECT_MIN_RB, warm
+    assert C.default_preset_for("dark", warm_subject=True) == "crisp"
+
+    cool, _ = _fuzzy_scene(subject=(170, 120, 80))[0], None  # BGR: cool blue item
+    assert C.subject_warmth(cool, mask)["warm"] is False
+    assert C.default_preset_for("dark", warm_subject=False) == "punch"
+    # A warm item on a white sweep is NOT the failing case — white balance off a
+    # real grey sweep is the correction working as intended.
+    assert C.default_preset_for("light", warm_subject=True) == "studio"
+
+
+def test_crisp_keeps_the_cameras_colour_on_the_item():
+    """`crisp` gives up exactly one thing — the global white-balance gain — and
+    that is what protects the item's hue. It must land closer to the camera file
+    than punch does, and must not reorder the channels."""
+    img, mask = _fuzzy_scene(subject=(80, 120, 170))
+    src = img[mask > 0].reshape(-1, 3).mean(axis=0)          # BGR
+    out_crisp, rep = C.correct(img, mask, bg_class="dark", sweep=True, preset="crisp")
+    out_punch, _ = C.correct(img, mask, bg_class="dark", sweep=True, preset="punch")
+    assert "off" in rep["wb_note"], rep["wb_note"]
+
+    got = out_crisp[mask > 0].reshape(-1, 3).mean(axis=0)
+    hit = out_punch[mask > 0].reshape(-1, 3).mean(axis=0)
+    # R-B is the warmth of the metal; crisp must preserve it better than punch.
+    assert abs((got[2] - got[0]) - (src[2] - src[0])) <= abs((hit[2] - hit[0]) - (src[2] - src[0]))
+    assert np.argsort(got).tolist() == np.argsort(src).tolist(), (src, got)
+
+
+# ---------------------------------------------------------------------------
+# unskew — square up a rectangle, refuse everything that is not one
+# ---------------------------------------------------------------------------
+
+from lib.photo_prep import unskew as U                     # noqa: E402
+
+
+class _M:
+    """The two fields unskew.plan reads off a SubjectMask."""
+    def __init__(self, mask):
+        self.mask = mask
+
+
+def _quad_scene(quad, bg=30, subject=200):
+    """A filled quadrilateral on a flat backdrop, plus its mask."""
+    img = np.full((H, W, 3), bg, np.uint8)
+    mask = np.zeros((H, W), np.uint8)
+    q = np.array(quad, np.int32).reshape(-1, 1, 2)
+    cv2.fillPoly(img, [q], (subject, subject, subject))
+    cv2.fillPoly(mask, [q], 255)
+    return img, mask
+
+
+def _tilted_rect(cx, cy, w, h, deg):
+    a = np.radians(deg)
+    R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+    pts = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
+    return (pts @ R.T + (cx, cy)).tolist()
+
+
+def test_unskew_squares_a_tilted_frame():
+    """A rectangle rotated 4 degrees is the whole point of the stage."""
+    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 4.0))
+    sk = U.plan(img, _M(mask))
+    assert sk.applied, sk.reason
+    assert 3.0 <= sk.tilt_deg <= 5.0, sk.tilt_deg
+    assert sk.fill > U.MIN_FILL, sk.fill
+
+    out = U.apply(img, sk)
+    after = U.plan(out, _M(U.apply_mask(mask, sk)))
+    assert not after.applied and "already square" in after.reason, after.reason
+
+
+def test_unskew_leaves_a_frame_that_is_already_square():
+    img, mask = _quad_scene([[300, 250], [900, 250], [900, 700], [300, 700]])
+    sk = U.plan(img, _M(mask))
+    assert not sk.applied and "already square" in sk.reason, sk.reason
+    assert np.array_equal(U.apply(img, sk), img), "a no-op must not resample"
+
+
+def test_unskew_refuses_a_round_item():
+    """A marble has no square to restore; a quad fitted to it is noise.
+
+    This is the guard that keeps the stage out of the way of every non-flat
+    item in the inventory.
+    """
+    img = np.full((H, W, 3), 30, np.uint8)
+    mask = np.zeros((H, W), np.uint8)
+    cv2.ellipse(img, (600, 450), (260, 210), 12, 0, 360, (200, 200, 200), -1)
+    cv2.ellipse(mask, (600, 450), (260, 210), 12, 0, 360, 255, -1)
+    sk = U.plan(img, _M(mask))
+    assert not sk.applied, sk.reason
+    assert "not a rectangle" in sk.reason, sk.reason
+    assert sk.fill < U.MIN_FILL, sk.fill
+
+
+def test_unskew_refuses_a_deliberately_angled_shot():
+    """Steep keystone is a three-quarter view, not a mistake. Squaring it would
+    throw away the shot the photographer meant to take."""
+    img, mask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
+    sk = U.plan(img, _M(mask))
+    assert not sk.applied, sk.reason
+    assert "on purpose" in sk.reason or "not a rectangle" in sk.reason, sk.reason
+
+
+def test_unskew_keeps_the_items_own_proportions():
+    """The destination rectangle is measured from the item's opposite edges, so
+    a 4:3 painting comes out 4:3 — the correction restores a rectangle, it does
+    not invent a nicer one."""
+    img, mask = _quad_scene(_tilted_rect(600, 450, 640, 480, 3.0))
+    sk = U.plan(img, _M(mask))
+    assert sk.applied, sk.reason
+    (x0, y0), (x1, _), (_, y2), _ = sk.dst
+    assert abs(((x1 - x0) / (y2 - y0)) - 4 / 3) < 0.03, sk.dst
+
+
+def test_unskew_never_crops():
+    """The canvas grows to hold every source pixel. A stage that silently ate
+    the corners of a frame would be indistinguishable from a bad crop."""
+    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
+    sk = U.plan(img, _M(mask))
+    assert sk.applied, sk.reason
+    out = U.apply(img, sk)
+    assert out.shape[0] >= H and out.shape[1] >= W, out.shape
+    assert (out.shape[0] * out.shape[1]) / (H * W) <= U.MAX_CANVAS_GROWTH
+
+
+def test_unskew_operator_on_waives_only_the_shape_test():
+    """`--unskew NAME=on` says "this is a rectangle" — a mount, a mat or a
+    shadow can easily cost a real frame its shape score. It must not become a
+    licence to flatten a shot that was angled on purpose."""
+    # A tilted rectangle with a bite out of one side: unambiguously tilted,
+    # but too ragged to pass the shape test on its own.
+    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
+    notch = np.array([[600, 200], [960, 250], [900, 700]], np.int32)
+    cv2.fillPoly(img, [notch], (30, 30, 30))
+    cv2.fillPoly(mask, [notch], 0)
+
+    free = U.plan(img, _M(mask))
+    assert not free.applied and "not a rectangle" in free.reason, free.reason
+    forced = U.plan(img, _M(mask), rectangular=True)
+    assert forced.applied, forced.reason
+    assert 4.0 <= forced.tilt_deg <= 6.0, forced.tilt_deg
+
+    steep, smask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
+    over = U.plan(steep, _M(smask), rectangular=True)
+    assert not over.applied, "a forced unskew must still obey the magnitude guards"
+
+
+def test_unskew_runs_before_crop_in_the_stage_order():
+    """Order is a dependency, not a preference: a crop box measured on skewed
+    pixels describes a frame that is about to change shape."""
+    from lib.photo_prep import stages as S
+    assert S.STAGES == ("orientation", "unskew", "crop", "color")
+    assert S.STAGES.index("unskew") < S.STAGES.index("crop")
+    assert S.stage_blocker({}, "crop"), "crop must not open before unskew is approved"

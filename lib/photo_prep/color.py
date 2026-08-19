@@ -81,6 +81,14 @@ _POP = {
     "gentle": dict(sat=1.06, scurve=0.12, unsharp=0.30),
     "strong": dict(sat=1.14, scurve=0.25, unsharp=0.55),
 }
+# A backdrop is cloth, and cloth is nearly colourless. Measured across the
+# christmas-train shoot, max(RGB)-min(RGB) over TRUE backdrop reaches only 24 at
+# the 99th percentile, while painted red starts at 54 and sits around 100-160.
+# The gap is wide and clean, so chroma identifies "this is the item" wherever
+# luma cannot — which is the case that broke: on ZZ170057 the segmenter kept the
+# reindeer and handed the entire red car to the backdrop, and the neutralise
+# pass duly drove it toward grey, costing 38% of the red's saturation.
+CHROMA_OBJECT_MIN = 40.0
 HALO_CAP = 20.0   # max unsharp over/undershoot, in luma units, per pixel
 DIFFUSE_LONG = 1400   # resolution the backdrop blur is computed at (see _bg_diffuse)
 ANALYZE_LONG = 1000   # resolution the backdrop STATISTICS are measured at (see analyze)
@@ -157,15 +165,28 @@ DEFAULT_PRESET_BY_BACKDROP = {"dark": "punch", "light": "studio", "other": "stud
 # A cool or neutral item on the same cloth does not have this problem: a green
 # lift on steel or on white porcelain is a small, honest cast correction. So the
 # switch is keyed on the item's own warmth, not on the backdrop alone.
-WARM_SUBJECT_MIN_RB = 12.0   # mean R minus mean B over the item, 0-255
+WARM_SUBJECT_MIN_RB = 12.0   # mean R minus mean B over the item's COLOURED part
+
+# Neutral things share the frame with the item constantly — the scale rule laid
+# alongside, a white tag, a steel fitting — and the subject mask swallows them.
+# Measured on goodwill/keys: including them, the five ruler frames read R-B 4
+# against 20-21 for the key-only frames, i.e. the ruler alone would have flipped
+# the shoot's verdict. Excluding pixels with no colour in them fixes it at the
+# source — those same ruler frames then read 34-39, in line with the rest of the
+# shoot — because a grey object contributes nothing to a question about hue.
+WARM_SAT_FLOOR = 0.10        # (max-min)/max per pixel; below this it is grey
 
 
 def subject_warmth(bgr: np.ndarray, mask: np.ndarray) -> dict:
     """How warm the ITEM's own colour is — the brass/gold test.
 
-    Measured over the brighter half of the subject: shadowed metal is nearly
-    black and its channel ratios are sensor noise, while the lit half carries
-    the colour a buyer actually sees. Returns the mean RGB, R-B, and the verdict.
+    Measured over the lit, COLOURED part of the subject: shadowed metal is
+    nearly black and its channel ratios are sensor noise, and grey pixels (a
+    ruler, a steel fitting, a white tag caught by the mask) carry no hue to
+    average. What is left is the colour a buyer actually sees.
+
+    Returns the mean RGB of that part, R-B, how much of the lit subject was
+    coloured at all, and the verdict.
     """
     import cv2
 
@@ -189,11 +210,21 @@ def subject_warmth(bgr: np.ndarray, mask: np.ndarray) -> dict:
 
     lum = subj.mean(axis=1)
     lit = subj[lum >= np.median(lum)]
-    mean = lit.mean(axis=0)
+
+    hi, lo = lit.max(axis=1), lit.min(axis=1)
+    sat = (hi - lo) / np.maximum(hi, 1.0)
+    coloured = lit[sat >= WARM_SAT_FLOOR]
+    coloured_frac = float(coloured.shape[0]) / float(lit.shape[0])
+    if coloured.shape[0] < 64:          # a genuinely grey item: not warm, no verdict to make
+        return dict(r_minus_b=0.0, mean_rgb=[0, 0, 0], pixels=int(lit.shape[0]),
+                    coloured_frac=round(coloured_frac, 3), warm=False)
+
+    mean = coloured.mean(axis=0)
     r_minus_b = float(mean[0] - mean[2])
     return dict(r_minus_b=round(r_minus_b, 2),
                 mean_rgb=[int(v) for v in mean],
-                pixels=int(lit.shape[0]),
+                pixels=int(coloured.shape[0]),
+                coloured_frac=round(coloured_frac, 3),
                 warm=r_minus_b >= WARM_SUBJECT_MIN_RB)
 
 
@@ -507,6 +538,13 @@ def _protect_objects(rgbf: np.ndarray, alpha: np.ndarray) -> np.ndarray:
     reliably: lint is a few pixels across, a ruler is thousands. So anything in
     the backdrop that deviates from it and forms a large connected region is
     protected; the small stuff is left for the blur.
+
+    Deviation is measured two ways, because one is not enough. LUMA catches a
+    steel ruler on dark felt. It does NOT catch a vivid object of roughly the
+    same brightness as the cloth — and that is exactly what a red-painted toy
+    car on grey-navy felt is. CHROMA catches that: cloth is nearly colourless
+    and paint is not (see CHROMA_OBJECT_MIN). Either signal, on a large enough
+    region, marks an object.
     """
     import cv2
     h, w = alpha.shape[:2]
@@ -521,7 +559,13 @@ def _protect_objects(rgbf: np.ndarray, alpha: np.ndarray) -> np.ndarray:
 
     base = float(np.median(lum[bg]))
     spread = max(6.0, float(np.percentile(lum[bg], 75) - np.percentile(lum[bg], 25)))
-    deviant = ((np.abs(lum - base) > 2.5 * spread) & bg).astype(np.uint8)
+    off_luma = np.abs(lum - base) > 2.5 * spread
+
+    small_rgb = cv2.resize(rgbf, (sw, sh), interpolation=cv2.INTER_AREA)
+    chroma = small_rgb.max(axis=2) - small_rgb.min(axis=2)
+    off_colour = chroma > CHROMA_OBJECT_MIN
+
+    deviant = ((off_luma | off_colour) & bg).astype(np.uint8)
 
     n, labels, stats, _ = cv2.connectedComponentsWithStats(deviant, 8)
     area_min = 0.004 * sh * sw          # ~0.4% of the frame reads as an object
