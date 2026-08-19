@@ -14,10 +14,19 @@ the viewer the operator actually uses — the failure mode of script-dependent U
 is a page that looks finished and does nothing, and it cost two rounds to find
 because it was verified over localhost instead of where it runs.
 
-So selection is native radio inputs, the shown picture is a CSS `:has()` rule,
-tab switching is a radio group, and the full-size preview is `:target`. None of
-that can be broken by a sandbox that dislikes script. JavaScript is layered on
-top for one job only — assembling the command and copying it — and the page is
+So every piece of state is a native radio or checkbox at the TOP of its
+container, and everything it drives is reached with the plain sibling
+combinator `~`. Three mechanisms were tried and abandoned, each dying in the
+preview frame while working in a normal tab:
+
+  * a JS-built DOM — script never ran;
+  * `:target` for the previews and the Accept panel — a URL fragment never
+    lands in a sandboxed frame, so both controls were dead;
+  * `:has()` for selection, tabs and chips — a 2022 selector, and where it is
+    missing the page draws perfectly and answers nothing.
+
+What is left needs no script, no URL and no selector newer than CSS2.
+JavaScript is layered on top for one job only — assembling the command and copying it — and the page is
 fully usable when it never runs, because every choice is legible on the page and
 can be read back in words.
 
@@ -59,14 +68,42 @@ MAX_OPTS = 16
 
 
 def _pick_rules() -> str:
-    """`.card:has(.pick.iN:checked) .v[data-i="N"]{display:block}` for every N.
+    """Everything the checked radio drives, matched by INDEX and reached by `~`.
 
-    Generated, never hand-listed. This selects the picture in the card AND the
-    copy inside the full-size `.big` preview, because both live inside `.card`.
+    Two properties, both learned the hard way:
+
+    * Matched on the option's index, never on its value. The values used to be
+      hand-listed, so when the colour stage grew `half`, `tenth` and `crisp`,
+      picking any of the three matched no rule and the card went blank.
+    * Reached with the plain sibling combinator, never `:has()`. `:has()` is a
+      2022 selector; where it is missing the page renders perfectly and responds
+      to nothing — the exact failure this file's header already describes twice.
+      So every radio sits at the TOP of its card and everything it controls is a
+      following sibling.
     """
-    sel = ",\n".join(f'.card:has(.pick.i{j}:checked) .v[data-i="{j}"]'
-                     for j in range(MAX_OPTS))
-    return sel + "{display:block}"
+    out = []
+    for j in range(MAX_OPTS):
+        pick = f".pick.i{j}:checked"
+        out.append(f'{pick} ~ .stage .v[data-i="{j}"],\n'
+                   f'{pick} ~ .big .bigwrap .v[data-i="{j}"]{{display:block}}')
+        out.append(f"{pick} ~ .opts .opt.o{j}{{border-color:var(--ships);"
+                   f"color:var(--ships);box-shadow:inset 0 0 0 1px var(--ships)}}")
+        out.append(f"{pick}:not(.proposed) ~ .opts .opt.o{j}{{border-color:var(--changed);"
+                   f"color:var(--changed);box-shadow:inset 0 0 0 1px var(--changed)}}")
+    return "\n".join(out)
+
+
+def _tab_rules() -> str:
+    """Which tab reads as current — one rule per stage, generated from STAGES.
+
+    Also `~`, not `:has()`, and for the same reason: the tab radios sit above
+    both <header> and <main> so a plain sibling combinator reaches the tab face
+    and the panel alike.
+    """
+    return "\n".join(
+        f".tabin.tab-{s}:checked ~ header .tabface.tf-{s}"
+        "{color:var(--ink);background:var(--ground)}"
+        for s in stagemod.STAGES)
 
 
 def _uri(img, long_edge: int) -> str:
@@ -206,8 +243,15 @@ def _cards_crop(shoot, m):
 def _cards_color(shoot, m):
     cards, rendered = [], 0
     for name, rec in _frames(shoot, m):
-        opts = [{"label": "as shot", "value": "__none__",
-                 "img": _uri(_shipping(shoot, name, rec), LONG_DENSE), "spin": 0}]
+        # The uncorrected frame. Its value must be a preset `--pick` accepts:
+        # this chip used to emit the sentinel `__none__`, so accepting the stage
+        # with it selected wrote `--pick __none__` and prep answered "unknown
+        # preset". `asshot` became a real preset later, which is what this is —
+        # so name it that, and step aside if the real one has been rendered.
+        opts = []
+        if "asshot" not in colormod.PRESETS:
+            opts.append({"label": "as shot", "value": "asshot",
+                         "img": _uri(_shipping(shoot, name, rec), LONG_DENSE), "spin": 0})
         for p in colormod.PRESETS:
             entry = (rec.get("presets") or {}).get(p) or {}
             path = shoot / entry.get("path", "")
@@ -218,7 +262,7 @@ def _cards_color(shoot, m):
         plan = rec.get("color_plan") or {}
         cards.append({
             "name": name,
-            "chosen": m.get("chosen_preset") or "__none__",
+            "chosen": m.get("chosen_preset") or "asshot",
             "status": "ships" if plan.get("is_sweep", True) else "held",
             "note": (f"backdrop {plan.get('bg_class_effective', '?')} "
                      f"(luma {plan.get('bg_luma', 0):.0f})"
@@ -267,7 +311,7 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
     with three pictures per frame, would not have fit at all.
     """
     fid = f"{SLUG[stage]}{idx}"
-    vars_, pics, opts = [], [], []
+    vars_, pics, opts, radios = [], [], [], []
     for j, o in enumerate(card["options"]):
         on = o["value"] == card["chosen"]
         cls = "pick" + (" proposed" if on else "")
@@ -286,12 +330,16 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
                         f'Pick it and it gets rendered.</div>')
             mini = '<span class="mini nopic">?</span>'
 
-        # The index class is what the CSS matches on; the value is for the
-        # command the page writes out. Keep both — see __PICKRULES__.
-        opts.append(
-            f'<label class="opt"><input type="radio" name="{fid}" class="{cls} i{j}"'
+        # The radio lives at the TOP of the card, not inside its chip, so that
+        # everything it controls is a FOLLOWING SIBLING and plain `~` can reach
+        # it. The chip is a <label for>, which clicks through to it exactly the
+        # same way. See __PICKRULES__ for why `:has()` is not used here.
+        radios.append(
+            f'<input type="radio" name="{fid}" class="{cls} i{j}" id="{fid}_o{j}"'
             f' value="{_esc(o["value"])}"{" checked" if on else ""}'
-            f' data-frame="{_esc(card["name"])}">'
+            f' data-frame="{_esc(card["name"])}">')
+        opts.append(
+            f'<label class="opt o{j}" for="{fid}_o{j}">'
             f'{mini}<span>{_esc(o["label"])}</span></label>')
 
     if len(card["options"]) > MAX_OPTS:
@@ -301,21 +349,24 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
 
     why = f' · {_esc(card["why"])}' if card["why"] else ""
     return f'''<div class="card" id="card_{fid}" style="{";".join(vars_)}">
+  {"".join(radios)}
+  <input type="checkbox" class="zoomin" id="zoom_{fid}" aria-label="Open {_esc(card["name"])} full size">
   <div class="cap"><span class="nm">{_esc(card["name"])}</span>
     <span class="tag {card["status"]} t-auto">{card["status"]}</span>
     <span class="tag changed t-edit">changed</span></div>
-  <a class="stage" href="#big_{fid}" title="Open full size">{"".join(pics)}
-    <span class="zoom" aria-hidden="true">&#10530;</span></a>
+  <label class="stage" for="zoom_{fid}" title="Open full size">{"".join(pics)}
+    <span class="zoom" aria-hidden="true">&#10530;</span></label>
   <div class="opts">{"".join(opts)}</div>
   <div class="note">{_esc(card["note"])}{why}</div>
   <label class="say"><span>Something else about this frame</span>
     <textarea rows="2" data-frame="{_esc(card["name"])}"
       placeholder="e.g. the smokestack is clipped, or crop tighter on the cab"></textarea></label>
   <div class="big" id="big_{fid}">
-    <a class="shut" href="#card_{fid}">Close</a>
+    <label class="shut" for="zoom_{fid}">Close</label>
     <div class="bigwrap">{"".join(pics)}</div>
     <div class="bigcap">{_esc(card["name"])}</div>
   </div>
+  <div class="rim" aria-hidden="true"></div>
 </div>'''
 
 
@@ -334,13 +385,16 @@ def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
   <p class="lede">{_esc(BLURB[stage])}</p>
   {notice}
   <div class="grid">{body}</div>
+  <!-- the checkbox is a SIBLING of .send, not nested in .accept, or `~` cannot
+       reach it and the Accept panel never opens -->
+  <input type="checkbox" class="sendin" id="sendin-{stage}" aria-label="Accept {stage}">
   <div class="accept">
     <div class="acc-txt"><b>Happy with this stage?</b> Accept it as shown. Anything
       you changed above, and anything you typed in a box, rides along.</div>
-    <a class="btn primary" href="#send-{stage}">Accept {stage}</a>
+    <label class="btn primary" for="sendin-{stage}">Accept {stage}</label>
   </div>
   <div class="send" id="send-{stage}">
-    <a class="shut" href="#panel-{stage}">Close</a>
+    <label class="shut" for="sendin-{stage}">Close</label>
     <div class="sendbox">
       <h2>Send this back</h2>
       <p>Copy this into the chat. It is the exact command, and any notes you typed
@@ -373,14 +427,19 @@ def build(shoot: Path, out: Path) -> Path:
 
     first = next((s for s in stagemod.STAGES if not approved[s] and built[s][0]),
                  stagemod.STAGES[0])
-    tabs, panels = [], []
+    tabs, panels, tabins = [], [], []
     for i, s in enumerate(stagemod.STAGES):
         ready, cards, locked = built[s]
         word = "approved" if approved[s] else ("your call" if ready else "not yet")
         kind = "done" if approved[s] else ("wait" if ready else "lock")
+        # The tab radios are hoisted to the very top of <body>, above <header>
+        # and <main>, so `~` reaches both the tab face and the panel. Nothing
+        # here may depend on `:has()`.
+        tabins.append(
+            f'<input type="radio" name="stage" class="tabin tab-{s}" id="tab-{s}"'
+            f' value="{s}"{" checked" if s == first else ""}>')
         tabs.append(
-            f'<label class="tab"><input type="radio" name="stage" class="tabin"'
-            f' value="{s}"{" checked" if s == first else ""}>'
+            f'<label class="tab tabface tf-{s}" for="tab-{s}">'
             f'<span class="n">{i + 1}</span><span>{s}</span>'
             f'<span class="st {kind}">{word}</span></label>')
         prev = stagemod.STAGES[i - 1] if i else None
@@ -390,6 +449,8 @@ def build(shoot: Path, out: Path) -> Path:
     page = (TEMPLATE
             .replace("__SHOOT__", _esc(sp))
             .replace("__STAGES__", json.dumps(list(stagemod.STAGES)))
+            .replace("__TABRULES__", _tab_rules())
+            .replace("__TABINS__", "".join(tabins))
             .replace("__TABS__", "".join(tabs))
             .replace("__PICKRULES__", _pick_rules())
             .replace("__PANELS__", "".join(panels)))
@@ -452,16 +513,17 @@ header{position:sticky;top:0;z-index:20;background:var(--surface);
 .tab .st.wait{color:var(--changed)}
 .tab .st.lock{color:var(--muted)}
 .tabin{position:absolute;width:1px;height:1px;opacity:0;margin:0}
-.tab:has(.tabin:checked){color:var(--ink);background:var(--ground);
+__TABRULES__
+.tabface.is-on{color:var(--ink);background:var(--ground);
   border-bottom-color:var(--loupe)}
 .tab:focus-within{outline:2px solid var(--loupe);outline-offset:-2px}
 
 main{max-width:1500px;margin:0 auto;padding:20px 20px 40px}
 .panel{display:none}
-body:has(.tabin[value="orientation"]:checked) #panel-orientation,
-body:has(.tabin[value="unskew"]:checked) #panel-unskew,
-body:has(.tabin[value="crop"]:checked) #panel-crop,
-body:has(.tabin[value="color"]:checked) #panel-color{display:block}
+.tabin.tab-orientation:checked ~ main #panel-orientation,
+.tabin.tab-unskew:checked ~ main #panel-unskew,
+.tabin.tab-crop:checked ~ main #panel-crop,
+.tabin.tab-color:checked ~ main #panel-color{display:block}
 
 .lede{color:var(--muted);font-size:13.5px;max-width:70ch;margin:0 0 16px}
 .notice{border:1px solid var(--changed);border-left-width:3px;border-radius:2px;
@@ -474,7 +536,7 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 .card{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
   box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;
   scroll-margin-top:120px}
-.card:has(.pick:checked:not(.proposed)){border-color:var(--changed);
+.pick:checked:not(.proposed) ~ .rim{box-shadow:inset 0 0 0 2px var(--changed);
   box-shadow:0 0 0 1px var(--changed),var(--shadow)}
 .cap{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--rule)}
 .nm{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:12px;font-weight:600}
@@ -485,8 +547,8 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 .tag.answered{color:var(--loupe)}
 .tag.changed{color:var(--changed)}
 .t-edit{display:none}
-.card:has(.pick:checked:not(.proposed)) .t-auto{display:none}
-.card:has(.pick:checked:not(.proposed)) .t-edit{display:block}
+.pick:checked:not(.proposed) ~ .cap .t-auto{display:none}
+.pick:checked:not(.proposed) ~ .cap .t-edit{display:block}
 
 .stage{aspect-ratio:1/1;background:var(--sunk);display:grid;place-items:center;padding:8px;
   position:relative;cursor:zoom-in;text-decoration:none}
@@ -495,7 +557,7 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 .zoom{position:absolute;top:7px;right:7px;width:22px;height:22px;display:grid;
   place-items:center;font-size:13px;border-radius:2px;opacity:0;background:var(--surface);
   color:var(--ink);border:1px solid var(--rule);transition:opacity .15s ease}
-.card:hover .zoom,.stage:focus .zoom{opacity:1}
+.card:hover .zoom,.zoomin:focus-visible ~ .stage .zoom{opacity:1}
 .nopic{color:var(--muted);font-size:12px;text-align:center;padding:16px;line-height:1.45}
 
 .opts{display:flex;gap:6px;padding:9px;border-top:1px solid var(--rule);flex-wrap:wrap}
@@ -510,10 +572,7 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
   place-items:center;overflow:hidden;background-size:contain;background-repeat:no-repeat;
   background-position:center}
 .opt .mini.nopic{font-size:16px;padding:0}
-.opt:has(input:checked){border-color:var(--ships);color:var(--ships);
-  box-shadow:inset 0 0 0 1px var(--ships)}
-.card:has(.pick:checked:not(.proposed)) .opt:has(input:checked){border-color:var(--changed);
-  color:var(--changed);box-shadow:inset 0 0 0 1px var(--changed)}
+/* chip highlighting is generated per index in __PICKRULES__ */
 
 .note{padding:8px 11px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--rule)}
 .say{display:block;padding:0 11px 11px}
@@ -522,7 +581,7 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 .say textarea{width:100%;font:inherit;font-size:12px;color:var(--ink);background:var(--sunk);
   border:1px solid var(--rule);border-radius:2px;padding:6px 8px;resize:vertical}
 .say textarea:focus{outline:2px solid var(--loupe);outline-offset:-1px}
-.card:has(textarea:not(:placeholder-shown)){border-color:var(--changed)}
+
 
 /* Which picture a card shows is decided here, from the checked radio.
    Matched on the option's INDEX, never on its value. An earlier version listed
@@ -533,9 +592,20 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
    cannot outrun this block again. */
 __PICKRULES__
 
+/* Opening a picture and opening the Accept panel are CHECKBOXES, not `:target`.
+   Both were `<a href="#id">` + `:target`, which needs a URL fragment to land —
+   and inside the sandboxed preview frame the operator actually reads these
+   pages in, fragment navigation never fires. The full-size view and the Accept
+   button were both dead there while working perfectly in a normal tab, which is
+   the worst kind of bug: unreproducible everywhere except where it matters.
+   A checkbox toggled by its own label needs no URL, no history entry and no
+   script, so it behaves the same in a tab, in a file preview and offline. */
+.zoomin,.sendin{position:absolute;width:1px;height:1px;opacity:0;margin:0;pointer-events:none}
+
 .big{position:fixed;inset:0;z-index:60;background:rgba(8,9,10,.94);display:none;
   grid-template-rows:auto 1fr auto;padding:14px 18px 20px;gap:10px}
-.big:target{display:grid}
+.zoomin:checked ~ .big{display:grid}
+.zoomin:focus-visible ~ .stage{outline:2px solid var(--loupe);outline-offset:2px}
 .bigwrap{display:grid;place-items:center;min-height:0}
 .bigwrap .v{width:min(100%,86vh);aspect-ratio:1/1;display:none;background-size:contain;
   background-repeat:no-repeat;background-position:center}
@@ -558,7 +628,8 @@ __PICKRULES__
 
 .send{position:fixed;inset:0;z-index:70;background:rgba(8,9,10,.94);display:none;
   grid-template-rows:auto 1fr;padding:14px 18px 20px}
-.send:target{display:grid}
+.sendin:checked ~ .send{display:grid}
+.sendin:focus-visible ~ .accept .btn{outline:2px solid var(--loupe);outline-offset:2px}
 .sendbox{background:var(--surface);border:1px solid var(--rule);border-radius:3px;
   padding:22px;max-width:70ch;margin:auto;width:100%}
 .sendbox h2{margin:0 0 6px;font-size:16px}
@@ -570,6 +641,7 @@ __PICKRULES__
 .copy{margin-left:0}
 </style>
 
+__TABINS__
 <header>
   <div class="hrow">
     <h1>Frame Check</h1>
@@ -582,8 +654,8 @@ __PICKRULES__
 
 <script>
 /* Everything above works with this block deleted: selection is radio inputs, the
-   shown picture is a CSS :has() rule, the tabs are a radio group, the previews
-   are :target. This adds one thing — writing the command out of what is on the
+   shown picture, the tab, the chip highlight, the full-size preview and the
+   Accept panel are all `input:checked ~ ...` rules — CSS2 combinators only. This adds one thing — writing the command out of what is on the
    page — and if it never runs, the page still reviews. */
 (function(){
   function cmdFor(stage){
