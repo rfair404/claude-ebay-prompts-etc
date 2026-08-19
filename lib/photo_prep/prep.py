@@ -88,8 +88,17 @@ def _load_bgr(path: Path) -> np.ndarray:
     non-ASCII Windows paths work.
     """
     from PIL import Image
-    import pillow_heif
-    pillow_heif.register_heif_opener()
+    # HEIC support is optional. The import used to be unconditional, so a
+    # JPEG-only workflow — and CI, which has no reason to install a HEIC
+    # library — died on `import pillow_heif` before it ever opened a file.
+    # Register the opener when it is available and carry on when it is not:
+    # every other format PIL handles natively is unaffected.
+    try:
+        import pillow_heif
+    except ModuleNotFoundError:
+        pass
+    else:
+        pillow_heif.register_heif_opener()
     with Image.open(path) as im:
         rgb = np.array(im.convert("RGB"))
     return rgb[:, :, ::-1].copy()
@@ -640,7 +649,12 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
         cp = rec.get("color_plan") or {}
         sweep = bool(cp.get("is_sweep", pre_stats.is_sweep))
         eff_class = cp.get("bg_class_effective", pre_stats.bg_class)
-        crop = plan_crop(img, sm, aspect, pad, pre_stats, sweep)
+        # An operator override is an answer, not a proposal — re-planning here
+        # would silently throw away the call made at the crop stage, which is
+        # the one the sheet was approved on.
+        prior_crop = rec.get("crop") or {}
+        crop = (prior_crop if prior_crop.get("operator")
+                else plan_crop(img, sm, aspect, pad, pre_stats, sweep))
         rec["crop"] = crop
         if crop["applied"]:
             x0, y0, x1, y1 = crop["box"]
@@ -651,6 +665,11 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
         # expensive step by a wide margin, so offering three looks costs barely
         # more than offering one — and the comparison is only meaningful if the
         # geometry is identical across them.
+        # How warm the item itself is, off the same mask the colour pass uses.
+        # Cheap (a statistic on a 1000px copy) and it decides which look the
+        # shoot defaults to — see color.WARM_SUBJECT_MIN_RB.
+        rec["subject_warmth"] = colormod.subject_warmth(img, sm.mask)
+
         rec["presets"] = {}
         variants = {}
         for pname in colormod.PRESETS:
@@ -694,10 +713,23 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
     # approval gate is untouched, so this decides what gets SHOWN at the gate,
     # never what gets published.
     shoot_class = (m.get("backdrop") or {}).get("class")
-    default = colormod.default_preset_for(shoot_class)
+    # One verdict for the shoot, not per frame: a macro and a full view of the
+    # same brass key must not land on different looks. The median is the vote —
+    # one frame whose mask caught mostly cloth cannot swing it.
+    warmths = [float((r.get("subject_warmth") or {}).get("r_minus_b", 0.0))
+               for _, _, _, r in rows
+               if (r.get("subject_warmth") or {}).get("pixels", 0) >= 64]
+    shoot_rb = float(np.median(warmths)) if warmths else 0.0
+    warm = shoot_rb >= colormod.WARM_SUBJECT_MIN_RB
+    m["subject_warmth"] = dict(median_r_minus_b=round(shoot_rb, 2),
+                               frames=len(warmths), warm=warm)
+    default = colormod.default_preset_for(shoot_class, warm_subject=warm)
+    save_manifest(shoot, m)
     m = run_pick(shoot, default, quiet=True, auto=True)
     if not quiet:
-        print(f"  default look for a {shoot_class or 'mixed'} backdrop: "
+        warm_note = (f", warm-metal subject (median R-B {shoot_rb:.0f})" if warm
+                     else f" (median R-B {shoot_rb:.0f})")
+        print(f"  default look for a {shoot_class or 'mixed'} backdrop{warm_note}: "
               f"{default} (--pick {'|'.join(colormod.PRESETS)} to change)")
     return m
 
@@ -955,6 +987,31 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
     return m
 
 
+def _replan_crop(shoot: Path, m: dict, name: str, rec: dict, pad: float) -> dict:
+    """Recompute ONE frame's crop box at the operator's pad.
+
+    The sweep test is what refused the crop in the first place, and an operator
+    override is precisely the statement that this frame does have a backdrop to
+    trim — a black cloth lit unevenly reads as "no sweep" (high IQR) even when
+    there is nothing behind the item but cloth. So the sweep guard is the one
+    that yields. Every other guard still stands: the override says the frame is
+    worth reframing, not that a crop which would cut the item, split the
+    detectors or land under the resolution floor is acceptable.
+    """
+    from .center_crop import _parse_aspect
+
+    aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
+    img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
+    sm = mask_for(img)
+    stats = colormod.analyze(img, sm.mask)
+    crop = plan_crop(img, sm, aspect, pad, stats, sweep=True)
+    crop["operator"] = True
+    crop["_operator_pad"] = pad
+    crop["reason"] = (f"operator: recrop at pad {pad}" if crop["applied"]
+                      else f"operator recrop refused — {crop['reason']}")
+    return crop
+
+
 def run_set_crop(shoot: Path, pairs: list) -> dict:
     """Override the crop decision for named frames: off | on | pad<float>."""
     m = load_manifest(shoot)
@@ -970,12 +1027,10 @@ def run_set_crop(shoot: Path, pairs: list) -> dict:
         val = val.strip().lower()
         if val == "off":
             rec["crop"] = {"applied": False, "reason": "operator: keep as shot",
-                           "box": None}
+                           "box": None, "operator": True}
         elif val == "on" or val.startswith("pad"):
             pad = float(val[3:]) if val.startswith("pad") and val[3:] else                 float(m["settings"].get("pad", DEFAULT_PAD))
-            rec.setdefault("crop", {})["_operator_pad"] = pad
-            rec["crop"]["applied"] = None      # recomputed on the next --apply-crop
-            rec["crop"]["reason"] = f"operator: recrop at pad {pad}"
+            rec["crop"] = _replan_crop(shoot, m, key, rec, pad)
         else:
             raise SystemExit(f"{name}: expected off|on|pad<float>, got {val!r}")
         print(f"  {key}: crop -> {val}")

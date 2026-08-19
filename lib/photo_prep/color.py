@@ -115,6 +115,17 @@ PRESETS = {
     "half":    dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
                     wb=True, k=0.5,
                     label="studio at half strength — every move halved"),
+    # The camera's colour profile, kept. Backdrop work runs at full strength —
+    # tone curve, neutralise, blur — and the item is sharpened harder than any
+    # other look, but nothing touches its colour: no white balance, no
+    # saturation, no contrast curve. Measured on the keys shoot (navy felt,
+    # chroma straddling WB_MAX_CHROMA): punch moved the metal's mean by 21 of
+    # 255 and reversed its channel order, rendering copper as green-gold; this
+    # look moves it by 5, uniformly across R, G and B, which is sharpening
+    # rather than a tint. Reach for it whenever the ground is a coloured cloth.
+    "crisp":   dict(pop="off", bg_neutralize=1.0, bg_diffuse=1.0, sharpen=0.85,
+                    wb=False,
+                    label="camera colour kept; backdrop cleaned, item sharpened hard"),
 }
 
 # Which look a shoot gets without anyone choosing. Dark cloth takes `punch`:
@@ -128,9 +139,74 @@ PRESETS = {
 DEFAULT_PRESET = "studio"
 DEFAULT_PRESET_BY_BACKDROP = {"dark": "punch", "light": "studio", "other": "studio"}
 
+# ...with one exception, and it is the combination that broke: a WARM-METAL item
+# on a DARK cloth defaults to `crisp` instead.
+#
+# Why this pairing specifically. A dark cloth is rarely a true grey — felt is
+# navy, charcoal, deep green — and its chroma lands right on WB_MAX_CHROMA, so
+# white balance fires on some frames of a shoot and skips others. The gain it
+# then applies is a green/blue lift, which is the exact opposite of what brass,
+# bronze and gold are made of, and the item is where the eye goes. Measured on
+# the goodwill/keys shoot (brass keys on navy felt): white balance fired on 7 of
+# 22 frames; on the worst, `punch` moved the item's mean colour by 21 of 255 and
+# reversed its channel order, rendering copper as green-gold, while the other 15
+# frames of the SAME keys were left alone — so the set did not even match
+# itself. `crisp` renders the same frame at a drift of 4 with red still leading
+# green by 13.
+#
+# A cool or neutral item on the same cloth does not have this problem: a green
+# lift on steel or on white porcelain is a small, honest cast correction. So the
+# switch is keyed on the item's own warmth, not on the backdrop alone.
+WARM_SUBJECT_MIN_RB = 12.0   # mean R minus mean B over the item, 0-255
 
-def default_preset_for(bg_class: Optional[str]) -> str:
-    """The preset a shoot on this kind of backdrop gets by default."""
+
+def subject_warmth(bgr: np.ndarray, mask: np.ndarray) -> dict:
+    """How warm the ITEM's own colour is — the brass/gold test.
+
+    Measured over the brighter half of the subject: shadowed metal is nearly
+    black and its channel ratios are sensor noise, while the lit half carries
+    the colour a buyer actually sees. Returns the mean RGB, R-B, and the verdict.
+    """
+    import cv2
+
+    if mask is None or bgr is None:
+        return dict(r_minus_b=0.0, mean_rgb=[0, 0, 0], pixels=0, warm=False)
+
+    long_side = max(bgr.shape[:2])
+    if long_side > ANALYZE_LONG:                       # a statistic, not a render
+        s = ANALYZE_LONG / float(long_side)
+        small = cv2.resize(bgr, (0, 0), fx=s, fy=s, interpolation=cv2.INTER_AREA)
+        m = cv2.resize(mask, (small.shape[1], small.shape[0]),
+                       interpolation=cv2.INTER_NEAREST)
+    else:
+        small, m = bgr, mask
+
+    rgb = small[:, :, ::-1].astype(np.float32)
+    subj = rgb[m > 0]
+    if subj.shape[0] < 64:                             # mask failed; no verdict
+        return dict(r_minus_b=0.0, mean_rgb=[0, 0, 0], pixels=int(subj.shape[0]),
+                    warm=False)
+
+    lum = subj.mean(axis=1)
+    lit = subj[lum >= np.median(lum)]
+    mean = lit.mean(axis=0)
+    r_minus_b = float(mean[0] - mean[2])
+    return dict(r_minus_b=round(r_minus_b, 2),
+                mean_rgb=[int(v) for v in mean],
+                pixels=int(lit.shape[0]),
+                warm=r_minus_b >= WARM_SUBJECT_MIN_RB)
+
+
+def default_preset_for(bg_class: Optional[str],
+                       warm_subject: bool = False) -> str:
+    """The preset a shoot on this kind of backdrop gets by default.
+
+    `warm_subject` comes from `subject_warmth` aggregated over the shoot — brass,
+    bronze, gold, gilt, copper. On a dark ground it selects the look that leaves
+    the item's colour exactly as the camera recorded it.
+    """
+    if warm_subject and bg_class == "dark":
+        return "crisp"
     return DEFAULT_PRESET_BY_BACKDROP.get(bg_class or "", DEFAULT_PRESET)
 
 

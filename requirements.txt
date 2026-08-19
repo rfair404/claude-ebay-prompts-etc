@@ -14,6 +14,7 @@
 sentence-transformers>=5.6.0   # CLIP ViT-B/32 embeddings (vindex core)
 torch>=2.12.1                  # CPU build is sufficient
 Pillow>=12.2.0                 # image decode
+pillow-heif>=0.16.0            # optional: HEIC/HEIF decode (prep degrades without it)
 numpy>=2.4.6                   # embedding math / storage
 lxml>=6.1.1                    # HTML parsing (crawlers)
 opencv-python-headless>=4.13.0 # marble_crop.py auto-crop (Hough + contour blobs)
