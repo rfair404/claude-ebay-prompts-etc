@@ -93,6 +93,7 @@ from ebay_client import (
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
+    get_condition_names,
     get_category_suggestions,
     get_fulfillment_policies,
     get_inventory_locations,
@@ -304,6 +305,8 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
+        elif shown:
+            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:                       # PUBLISHED / ENDED / DELETED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
@@ -827,6 +830,25 @@ _COND_ID_TO_ENUM = {
     3000: "USED_EXCELLENT", 4000: "USED_VERY_GOOD", 5000: "USED_GOOD",
     6000: "USED_ACCEPTABLE", 7000: "FOR_PARTS_OR_NOT_WORKING",
 }
+# The new-ladder rungs resolve to a name only via the per-category lookup
+# (ebay_client.get_condition_names); 2990/3010 are deliberately NOT added to the
+# global table above, because their meaning is category-dependent.
+# eBay's NEWER three-rung used ladder, used by jewelry and a growing set of
+# categories. Our enum ids (3000/4000/5000/6000) predate it and do not line up:
+# on this ladder id 3000 is "Pre-owned - Good", so an item we grade
+# USED_EXCELLENT is ADVERTISED as "Pre-owned - Good" — a rung below what it is —
+# and 2990 ("Pre-owned - Excellent") cannot be reached at all, because the Sell
+# API takes an enum NAME (see the payload build) and we have no name for 2990.
+# Measured live on categories 262008 and 262011.
+#
+# NOT fixed here on purpose. Reaching 2990 needs the Sell API's own enum for it
+# (likely PRE_OWNED_EXCELLENT) verified against eBay's current enum list, not
+# guessed — a wrong enum fails the publish outright, and these run against LIVE
+# listings. Until then the reporting is at least honest: the preflight prints
+# the label the BUYER sees, from the per-category lookup, so nobody reads
+# "USED_EXCELLENT" and assumes that is what is on the page.
+_NEW_USED_LADDER = {2990, 3000, 3010}
+
 _COND_FAMILIES = (
     [1000, 1500, 1750, 2750],          # new-ish
     [2000, 2010, 2020, 2030, 2500],    # refurbished
@@ -1109,14 +1131,20 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     if not allowed:
         msgs.append(f"condition: {cur} (category condition metadata unavailable — left as-is)")
     else:
+        names = get_condition_names(category_id, creds=creds)
         new_enum, reason = _remap_condition_for_category(cur, allowed)
+        shown = names.get(_COND_ENUM_TO_ID.get(new_enum, -1))
         if reason:
-            msgs.append(reason)
+            # Say what the BUYER will see, not what our enum is called: the two
+            # disagree on every category using eBay's three-tier used ladder.
+            msgs.append(reason + (f' -> buyer sees "{shown}"' if shown else ""))
             if apply:
                 _set_draft_condition(draft_path, new_enum)
                 draft.frontmatter["condition"] = new_enum
                 notes = str(draft.get("meta.notes") or "")
                 update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
+        elif shown:
+            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:
             msgs.append(f"condition: {cur} OK for category")
 
