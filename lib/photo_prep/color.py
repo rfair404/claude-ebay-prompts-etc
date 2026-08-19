@@ -139,6 +139,16 @@ PRESETS = {
     "tenth":   dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
                     wb=True, k=0.10,
                     label="studio at 10% — cast and gradient off, felt kept"),
+    # The escape hatch: ship the frame exactly as the camera recorded it.
+    # k=0 multiplies every move by zero — white balance, tone curve, neutralise,
+    # blur, pop and sharpen alike — so the output is the input, byte for byte in
+    # everything but JPEG re-encoding. Added when a mask failure greyed a fairy
+    # doll's magenta wings on a live listing: the right answer to a correction
+    # that cannot be trusted on a given shoot is no correction, not a gentler
+    # one. Orientation and crop are unaffected; those are not colour claims.
+    "asshot":  dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
+                    wb=True, k=0.0,
+                    label="as shot — no colour correction at all"),
     "crisp":   dict(pop="off", bg_neutralize=1.0, bg_diffuse=1.0, sharpen=0.85,
                     wb=False,
                     label="camera colour kept; backdrop cleaned, item sharpened hard"),
@@ -867,7 +877,18 @@ def correct(bgr: np.ndarray,
         # damages the subject.
         out, strength, new_clip, new_crush = rgb0, 0.0, 0, 0
 
-    out_u8 = np.clip(out, 0, 255).astype(np.uint8)
+    # A zero-strength look must be a true passthrough. Every knob is already
+    # multiplied by 0 above, so the loop returns the input — but it returns it
+    # through float32 and back, which rounds a million pixels by one grey level.
+    # "As shot" has to mean as shot, so hand back the original array itself.
+    if float(cfg.get("k", 1.0)) == 0.0:
+        # NB out_u8 is RGB here — the return flips it back to BGR — so the
+        # passthrough has to hand over an RGB copy. Handing over `bgr` itself
+        # sails through every test that only checks "did the pixels move" and
+        # ships the frame with its red and blue channels swapped.
+        out_u8 = bgr[:, :, ::-1].copy()
+    else:
+        out_u8 = np.clip(out, 0, 255).astype(np.uint8)
     after = analyze(out_u8[:, :, ::-1], mask)
 
     report = dict(

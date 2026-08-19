@@ -81,7 +81,8 @@ from pathlib import Path
 from typing import Optional
 
 from config import ConfigError, config_path, load_config
-from draft_io import Draft, parse_draft, resolve_photo_paths, update_meta
+from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
+                       update_meta)
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -319,6 +320,38 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         return None
 
 
+def set_hero_photo(draft_path: Path, name: str) -> list[str]:
+    """Move one photo to the front of the draft's `photos:` list.
+
+    Entry one is eBay's gallery image — the frame a buyer judges the listing by
+    before reading a word — so which photo leads is a decision worth making
+    deliberately and cheaply, the same way PREP makes orientation and crop
+    deliberate. Everything else keeps its relative order, so promoting a frame
+    never silently reshuffles the rest.
+
+    `name` matches on the full entry, the file name, or the stem, case-blind.
+    Returns the new order.
+    """
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    photos = [str(p) for p in (draft.frontmatter.get("photos") or [])]
+    if not photos:
+        raise SystemExit(f"{draft_path}: the draft has no photos to reorder.")
+
+    want = name.strip().lower()
+    hit = next((p for p in photos
+                if want in (p.lower(), Path(p).name.lower(), Path(p).stem.lower())), None)
+    if hit is None:
+        raise SystemExit(f"no photo matching {name!r} in the draft. Have: "
+                         + ", ".join(Path(p).name for p in photos))
+
+    order = [hit] + [p for p in photos if p != hit]
+    if order == photos:
+        return photos
+    set_photo_order(draft_path, order)
+    return order
+
+
 def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
     """DRAFT-time, no credentials: compute the SKU (deterministic hash of
     title+folder), stamp it into the draft's frontmatter, and create the
@@ -523,19 +556,37 @@ def _body_to_html(md: str) -> str:
     markdown body collapses into one run-on paragraph (newlines and `#`/`-`
     markers are ignored). This restores the intended structure. Stdlib-only —
     no markdown dependency, matching the rest of lib/.
+
+    A wrapped line CONTINUES what it is wrapping. Draft bodies are written at a
+    sane column width, so a long bullet spills onto the next line — and that
+    continuation line does not start with `-`. Treating it as a new block was
+    the bug a buyer saw: the list closed after the first line, the remainder of
+    the sentence became its own paragraph, and the next bullet opened a fresh
+    list. On a live listing it read as line breaks landing mid-sentence.
+
+    So a non-blank line that starts no new construct is appended to whatever is
+    currently open — the bullet, or the paragraph — which is also what standard
+    markdown does with lazy continuation.
     """
     lines = (md or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
     in_ul = False
     para: list[str] = []
+    li: list[str] = []
 
     def flush_para() -> None:
         if para:
             out.append("<p>" + " ".join(_md_inline(p) for p in para) + "</p>")
             para.clear()
 
+    def flush_li() -> None:
+        if li:
+            out.append("<li>" + " ".join(_md_inline(x) for x in li) + "</li>")
+            li.clear()
+
     def close_ul() -> None:
         nonlocal in_ul
+        flush_li()
         if in_ul:
             out.append("</ul>")
             in_ul = False
@@ -555,10 +606,13 @@ def _body_to_html(md: str) -> str:
             out.append(f"<h{level}>{_md_inline(m_h.group(2))}</h{level}>")
         elif m_li:
             flush_para()
+            flush_li()
             if not in_ul:
                 out.append("<ul>")
                 in_ul = True
-            out.append(f"<li>{_md_inline(m_li.group(1))}</li>")
+            li.append(m_li.group(1))
+        elif li:
+            li.append(stripped)          # the bullet wraps — keep it in the bullet
         else:
             close_ul()
             para.append(stripped)
@@ -1854,6 +1908,8 @@ def _cli() -> None:
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
     ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
+    ap.add_argument("--set-hero", nargs=2, metavar=("TARGET", "PHOTO"),
+                    help="move PHOTO to the front of the draft's photos list (eBay gallery image)")
     ap.add_argument("--review", metavar="TARGET", help="One step: record + preflight + build the REVIEW decision card. Stops for approval; does NOT publish.")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
@@ -1914,6 +1970,13 @@ def _cli() -> None:
             print(f"Preflight {args.preflight}:")
             for m in preflight_listing(Path(args.preflight)):
                 print(f"  {m}")
+            return
+        if args.set_hero:
+            target, photo = args.set_hero
+            order = set_hero_photo(Path(target), photo)
+            print(f"[OK] hero -> {order[0]}")
+            for i, p in enumerate(order[1:], 2):
+                print(f"  {i}. {p}")
             return
         if args.review:
             card, path = build_review_card(Path(args.review))

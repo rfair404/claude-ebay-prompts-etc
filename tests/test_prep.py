@@ -463,6 +463,8 @@ def test_every_preset_blurs_backdrop_fuzz_in_proportion_to_its_strength():
     img, mask = _fuzzy_scene()
     before = float(img[:200, :200].astype(float).std())
     for name, cfg in C.PRESETS.items():
+        if float(cfg.get("k", 1.0)) == 0.0:
+            continue          # a zero-strength look is a deliberate passthrough
         out, _ = C.correct(img, mask, preset=name)
         after = float(out[:200, :200].astype(float).std())
         k = float(cfg.get("k", 1.0))
@@ -493,6 +495,26 @@ def test_reduced_strength_looks_stay_derived_from_studio():
         assert look.get("k") == k, name
         for knob in ("pop", "bg_neutralize", "bg_diffuse", "sharpen", "wb"):
             assert look[knob] == studio[knob], f"{name} drifted from studio on {knob}"
+
+
+def test_asshot_changes_nothing():
+    """k=0 has to mean untouched, not merely gentle.
+
+    It is the answer when a shoot's mask cannot be trusted — a fairy doll whose
+    magenta wings fell outside it and were neutralised to grey on a live
+    listing. A passthrough that still nudges the pixels would not be one.
+    """
+    img, mask = _scene(bg=40, subject=(30, 60, 210))       # a vivid BLUE subject
+    out, rep = C.correct(img, mask, preset="asshot")
+    assert np.array_equal(out, img), "asshot altered the pixels"
+    assert rep["strength"] == 0.0
+
+    # Channel order, explicitly. The passthrough short-circuit writes into an
+    # RGB-space buffer that the caller flips back to BGR; handing it the BGR
+    # array instead passes any "did the pixels move" check and ships the frame
+    # with red and blue swapped. A grey test fixture cannot see that.
+    b, g, r = out[:, :, 0].mean(), out[:, :, 1].mean(), out[:, :, 2].mean()
+    assert r > b, f"red and blue look swapped: B={b:.0f} G={g:.0f} R={r:.0f}"
 
 
 def test_a_weaker_preset_moves_the_backdrop_less():
