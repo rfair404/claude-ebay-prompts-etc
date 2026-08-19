@@ -449,14 +449,42 @@ def test_every_preset_keeps_the_item_off_the_rails():
         assert rep["subject_newly_crushed"] == 0, name
 
 
-def test_both_presets_blur_backdrop_fuzz():
-    """The ask: fuzz on the black cloth should go, without touching the item."""
+def test_every_preset_blurs_backdrop_fuzz_in_proportion_to_its_strength():
+    """The ask: fuzz on the black cloth should go, without touching the item.
+
+    The bar scales with the look. A preset that declares itself half strength
+    (`k`) is supposed to do half as much — holding it to the full-strength bar
+    would just be a test asserting that `half` is not half. So: every preset
+    must at least halve the fuzz, and a preset running at full strength must
+    take it under a third.
+    """
     img, mask = _fuzzy_scene()
     before = float(img[:200, :200].astype(float).std())
-    for name in C.PRESETS:
+    for name, cfg in C.PRESETS.items():
         out, _ = C.correct(img, mask, preset=name)
         after = float(out[:200, :200].astype(float).std())
-        assert after < before / 3, f"{name} left the fuzz: {after:.1f} vs {before:.1f}"
+        bar = before / 3 if cfg.get("k", 1.0) >= 1.0 else before / 2
+        assert after < bar, f"{name} left the fuzz: {after:.1f} vs {before:.1f}"
+
+
+def test_half_is_studio_with_every_move_halved():
+    """`half` must stay derived from studio, not drift into its own numbers."""
+    studio, half = C.PRESETS["studio"], C.PRESETS["half"]
+    assert half.get("k") == 0.5
+    for knob in ("pop", "bg_neutralize", "bg_diffuse", "sharpen", "wb"):
+        assert half[knob] == studio[knob], f"half drifted from studio on {knob}"
+
+
+def test_a_weaker_preset_moves_the_backdrop_less():
+    """Ordering is the whole point: half < studio <= punch on backdrop travel."""
+    img, mask = _fuzzy_scene()
+    start = float(img[:200, :200].astype(float).mean())
+    moved = {}
+    for name in ("half", "studio", "punch"):
+        out, _ = C.correct(img, mask, preset=name)
+        moved[name] = abs(float(out[:200, :200].astype(float).mean()) - start)
+    assert moved["half"] < moved["studio"], moved
+    assert moved["studio"] <= moved["punch"] + 1e-6, moved
 
 
 def test_dark_cloth_defaults_to_punch():

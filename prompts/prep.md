@@ -86,8 +86,15 @@ push, never in what they may touch.
 
 | Preset | Backdrop | Item |
 |---|---|---|
+| `half` | studio at half strength — every move halved | half the pop and sharpen |
 | `studio` | neutralised to true black/white, fuzz blurred | sharpened |
 | `punch` | same | stronger contrast and colour |
+
+`half` is not a fourth set of numbers to keep in step. It is studio with `k=0.5`,
+the same multiplier the rail guard already backs off with, so it halves the
+white-balance gain, the backdrop curve, the neutralise, the blur, the pop and
+the sharpen together. Reach for it when a look reads washed out: the wash comes
+from the correction, so less correction is less wash.
 
 **Default: `punch` on a dark or navy cloth, `studio` on a light sweep.** A
 deepened backdrop gives the item something to separate against, so the extra

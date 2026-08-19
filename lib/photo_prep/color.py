@@ -92,11 +92,29 @@ ANALYZE_LONG = 1000   # resolution the backdrop STATISTICS are measured at (see 
 # touch: the backdrop may be re-toned, neutralised and blurred, and the item may
 # be sharpened and given contrast. No preset denoises, smooths or retouches the
 # item — that stays out of reach at every level, because it is what hides wear.
+#
+# `wb` is the one switch that reaches the ITEM's colour. White balance is a
+# whole-frame gain — it has to be, a cast is in every pixel — so on a coloured
+# cloth whose chroma slips under WB_MAX_CHROMA it re-tints the goods along with
+# the backdrop. A look that sets wb=False keeps every backdrop operation and
+# gives up only that global gain.
 PRESETS = {
     "studio":  dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
+                    wb=True,
                     label="backdrop neutralised + fuzz blurred; item sharpened"),
     "punch":   dict(pop="strong", bg_neutralize=1.0, bg_diffuse=1.0, sharpen=0.65,
+                    wb=True,
                     label="as studio, with stronger item contrast and colour"),
+    # Studio with every move halved. Not a fourth set of numbers to keep in
+    # step: `k` is the same multiplier the rail guard already backs off with,
+    # so `half` is literally studio at 0.5 — half the white-balance gain, half
+    # the backdrop curve, half the neutralise, half the blur, half the pop and
+    # half the sharpen. Added because studio read as washed out on the
+    # christmas-train shoot, and the wash comes from the correction: less
+    # correction, less wash.
+    "half":    dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
+                    wb=True, k=0.5,
+                    label="studio at half strength — every move halved"),
 }
 
 # Which look a shoot gets without anyone choosing. Dark cloth takes `punch`:
@@ -633,7 +651,10 @@ def correct(bgr: np.ndarray,
     rgb0 = bgr[:, :, ::-1].astype(np.float32)
     subj = mask > 0
 
-    gains, wb_note = _white_balance_gains(st, bg_class)
+    if cfg.get("wb", True):
+        gains, wb_note = _white_balance_gains(st, bg_class)
+    else:
+        gains, wb_note = np.ones(3, np.float32), "off (preset keeps item colour as shot)"
     lut = _backdrop_lut(st, sweep, bg_class)
 
     # Backdrop operations are gated on there BEING a backdrop, exactly like the
@@ -660,7 +681,9 @@ def correct(bgr: np.ndarray,
     clip0, crush0 = _at_rails(rgb0, subj)
     budget = max(4, int(CLIP_TOLERANCE * max(st.subject_pixels, 1)))
 
-    strength, attempts = 1.0, []
+    # A preset may start below full strength (`k`). The rail guard walks it
+    # further down from wherever it starts; it never walks it up.
+    strength, attempts = float(cfg.get("k", 1.0)), []
     out, new_clip, new_crush = rgb0, 0, 0
     for _ in range(MAX_BACKOFF + 1):
         work = rgb0 * (1.0 + strength * (gains - 1.0))[None, None, :]
