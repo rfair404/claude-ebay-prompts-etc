@@ -617,7 +617,9 @@ def test_pick_is_required_before_approval():
             P.run_approve(shoot)
             raise AssertionError("approving without a chosen look must fail")
         except SystemExit as e:
-            assert "no preset picked" in str(e)
+            # The staged review now blocks first — you cannot reach the preset
+            # question until orientation, crop and colour are each signed off.
+            assert "not approved yet" in str(e) or "no preset picked" in str(e)
 
 
 def test_pick_copies_the_chosen_look_and_voids_approval():
@@ -792,6 +794,54 @@ def test_prep_phase_prompt_exists_and_is_wired():
     assert "prompts/prep.md" in run, "RUN.md does not reference the PREP prompt"
     draft = (ROOT / "prompts" / "draft.md").read_text(encoding="utf-8")
     assert "--repoint-draft" in draft, "DRAFT does not point photos: at listing/"
+
+
+# ---------------------------------------------------------------------------
+# staged review — orientation, then crop, then colour
+# ---------------------------------------------------------------------------
+
+def test_stages_run_in_order_and_cannot_be_skipped():
+    """A crop judged on a frame that is still going to be rotated is a
+    judgement about an image that will not exist."""
+    from lib.photo_prep import stages as S
+    m = {"photos": {}}
+    assert S.stage_blocker(m, "orientation") is None
+    assert "orientation" in S.stage_blocker(m, "crop")
+    assert S.stage_blocker(m, "color")
+    S.stage_state(m)["orientation"]["approved"] = True
+    assert S.stage_blocker(m, "crop") is None
+    assert "crop" in S.stage_blocker(m, "color")
+
+
+def test_approving_a_stage_invalidates_the_later_ones():
+    """Revisiting orientation must not leave a crop sign-off standing."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        m = P.load_manifest(shoot)
+        m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": False},
+                                     "crop": {"applied": False}}}
+        P.save_manifest(shoot, m)
+        P.run_approve_stage(shoot, "orientation")
+        P.run_approve_stage(shoot, "crop")
+        m = P.load_manifest(shoot)
+        assert m["stages"]["crop"]["approved"]
+        P.run_approve_stage(shoot, "orientation")      # revisit the first
+        m = P.load_manifest(shoot)
+        assert not m["stages"]["crop"]["approved"], "later stages must reset"
+
+
+def test_a_stage_cannot_be_approved_while_frames_are_outstanding():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        m = P.load_manifest(shoot)
+        m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": True},
+                                     "crop": {"applied": False}}}
+        P.save_manifest(shoot, m)
+        try:
+            P.run_approve_stage(shoot, "orientation")
+            raise AssertionError("an unresolved frame must block the stage")
+        except SystemExit as e:
+            assert "outstanding" in str(e)
 
 
 if __name__ == "__main__":

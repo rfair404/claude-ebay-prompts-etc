@@ -64,6 +64,7 @@ import numpy as np
 
 from . import color as colormod
 from . import orientation as orientmod
+from . import stages as stagemod
 from . import subject as subjectmod
 from .subject import mask_for
 
@@ -477,7 +478,16 @@ def _unify_backdrop(photos: dict, quiet: bool = False) -> Optional[dict]:
             continue
         near = abs(cp["bg_luma"] - shoot_luma) <= SHOOT_LUMA_TOL
         smooth = cp.get("bg_rough", 999.0) <= rough_max
-        if near and smooth:
+        # A frame may only join the shoot's backdrop if it would have been
+        # ELIGIBLE to seed it. bg_rough catches high-frequency texture, but it
+        # is blind to a BIMODAL background — an open box where the "backdrop"
+        # is half cream card and half dark felt reads smooth yet has a huge
+        # interquartile spread. Measured: floating-opal ZZ150038 had bg_iqr
+        # 111.5 against a BG_IQR_MAX of 35, was promoted to "dark sweep"
+        # anyway, and had its cream card normalised from luma 103 down to 22.
+        # Re-applying the seed gate here is the whole fix.
+        unimodal = cp["bg_iqr"] <= colormod.BG_IQR_MAX
+        if near and smooth and unimodal:
             cp["bg_class_effective"] = shoot_class
             cp["is_sweep"] = True
             promoted.append(n)
@@ -882,6 +892,99 @@ def run_repoint_draft(shoot: Path, apply: bool = False) -> list:
     return mapping
 
 
+def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
+    """Open one review stage: build its sheet and report what it is waiting on.
+
+    Refuses to open a stage whose predecessor is not approved. That ordering is
+    the point of the split — a crop judged on a frame that is still going to be
+    rotated is a judgement about an image that will not exist.
+    """
+    m = load_manifest(shoot)
+    if not m.get("photos"):
+        raise SystemExit("nothing planned — run --check first")
+    blocked = stagemod.stage_blocker(m, stage)
+    if blocked:
+        raise SystemExit(f"cannot open '{stage}': {blocked}")
+
+    if stage == "color" and not any((r.get("presets") or {})
+                                    for r in m["photos"].values()):
+        raise SystemExit("colour has not been rendered yet — run --apply-color first")
+
+    out = shoot / ".prep" / f"stage_{stagemod.STAGES.index(stage) + 1}_{stage}.jpg"
+    stagemod.SHEET_BUILDERS[stage](shoot, m, out)
+    pending = stagemod.unresolved_for(m, stage)
+    save_manifest(shoot, m)
+    if not quiet:
+        st = stagemod.stage_state(m)[stage]
+        print("")
+        print(stagemod.STAGE_LABEL[stage])
+        print(f"  sheet: {out}")
+        print(f"  approved: {st['approved']}")
+        if pending:
+            print(f"  waiting on {len(pending)}:")
+            for x in pending[:12]:
+                print(f"     {x}")
+        else:
+            print("  nothing outstanding — approve with "
+                  f"--approve-stage {stage} once the sheet looks right")
+    return m
+
+
+def run_approve_stage(shoot: Path, stage: str) -> dict:
+    """Record the operator's sign-off on ONE stage."""
+    m = load_manifest(shoot)
+    blocked = stagemod.stage_blocker(m, stage)
+    if blocked:
+        raise SystemExit(f"cannot approve '{stage}': {blocked}")
+    pending = stagemod.unresolved_for(m, stage)
+    if pending:
+        raise SystemExit(
+            f"cannot approve '{stage}' - {len(pending)} outstanding: "
+            + "; ".join(pending[:12]))
+    st = stagemod.stage_state(m)
+    st[stage] = {"approved": True, "approved_at": _now()}
+    # A later stage's approval cannot survive an earlier one being revisited.
+    for later in stagemod.STAGES[stagemod.STAGES.index(stage) + 1:]:
+        st[later] = {"approved": False, "approved_at": None}
+    m["approved"] = False
+    m["approved_at"] = None
+    save_manifest(shoot, m)
+    nxt = stagemod.STAGES[stagemod.STAGES.index(stage) + 1:] or None
+    print(f"APPROVED stage '{stage}' at {st[stage]['approved_at']}")
+    print(f"  next: --stage {nxt[0]}" if nxt else "  all stages approved — --apply writes listing/")
+    return m
+
+
+def run_set_crop(shoot: Path, pairs: list) -> dict:
+    """Override the crop decision for named frames: off | on | pad<float>."""
+    m = load_manifest(shoot)
+    for pair in pairs:
+        if "=" not in pair:
+            raise SystemExit(f"--crop wants NAME=off|on|pad0.20, got {pair!r}")
+        name, val = pair.rsplit("=", 1)
+        key = next((k for k in m["photos"] if k.lower() == name.lower()
+                    or Path(k).stem.lower() == name.lower()), None)
+        if key is None:
+            raise SystemExit(f"no such photo in the manifest: {name}")
+        rec = m["photos"][key]
+        val = val.strip().lower()
+        if val == "off":
+            rec["crop"] = {"applied": False, "reason": "operator: keep as shot",
+                           "box": None}
+        elif val == "on" or val.startswith("pad"):
+            pad = float(val[3:]) if val.startswith("pad") and val[3:] else                 float(m["settings"].get("pad", DEFAULT_PAD))
+            rec.setdefault("crop", {})["_operator_pad"] = pad
+            rec["crop"]["applied"] = None      # recomputed on the next --apply-crop
+            rec["crop"]["reason"] = f"operator: recrop at pad {pad}"
+        else:
+            raise SystemExit(f"{name}: expected off|on|pad<float>, got {val!r}")
+        print(f"  {key}: crop -> {val}")
+    stagemod.stage_state(m)["crop"] = {"approved": False, "approved_at": None}
+    m["approved"] = False
+    save_manifest(shoot, m)
+    return m
+
+
 def run_approve(shoot: Path) -> dict:
     """Stamp approval. Refuses while anything is unresolved."""
     m = load_manifest(shoot)
@@ -896,6 +999,14 @@ def run_approve(shoot: Path) -> dict:
         raise SystemExit(
             "cannot approve — orientation unresolved for: " + ", ".join(asks) +
             "\nsee .prep/ask/ and record the answer with --rotate NAME=DEG")
+
+    unapproved = [st for st in stagemod.STAGES
+                  if not stagemod.stage_state(m)[st]["approved"]]
+    if unapproved:
+        raise SystemExit(
+            "these review stages are not approved yet: " + ", ".join(unapproved)
+            + "  open the first one with --stage "
+            + unapproved[0])
 
     if not m.get("chosen_preset"):
         raise SystemExit(
@@ -1173,6 +1284,12 @@ def main(argv=None) -> int:
     ap.add_argument("--apply", action="store_true", help="render listing/ + the review sheet")
     ap.add_argument("--pick", metavar="PRESET",
                     help="adopt a preset for the shoot (copies it into listing/)")
+    ap.add_argument("--stage", metavar="NAME",
+                    help="open a review stage: orientation | crop | color")
+    ap.add_argument("--approve-stage", metavar="NAME",
+                    help="sign off ONE stage (orientation | crop | color)")
+    ap.add_argument("--crop", nargs="+", metavar="NAME=off|on|padF",
+                    help="override the crop decision for named frames")
     ap.add_argument("--sheet", action="store_true",
                     help="rebuild the rotation sheet from the manifest (no segmentation)")
     ap.add_argument("--repoint-draft", action="store_true",
@@ -1196,6 +1313,15 @@ def main(argv=None) -> int:
     if args.rotate:
         m = run_rotate(shoot, args.rotate)
         _print_status(shoot, m)
+        return 0
+    if args.stage:
+        run_stage(shoot, args.stage, quiet=args.quiet)
+        return 0
+    if args.approve_stage:
+        run_approve_stage(shoot, args.approve_stage)
+        return 0
+    if args.crop:
+        run_set_crop(shoot, args.crop)
         return 0
     if args.sheet:
         run_sheet(shoot, quiet=args.quiet)

@@ -43,7 +43,12 @@ LIGHT_BG_MIN = 150.0
 DARK_BG_MAX = 80.0
 
 WHITE_TARGET = 250.0     # not 255: leave headroom so the sweep keeps its texture
-BLACK_TARGET = 15.0      # not 0: pure black flattens the item's silhouette
+BLACK_TARGET = 26.0      # not 0: pure black flattens the item's silhouette.
+                         # Was 15.0 — too aggressive on naturally-lit felt:
+                         # measured a 31.6-luma ground pulled to 14.8, with
+                         # pure-black pixels going 0.58% -> 3.82%. 26 still
+                         # normalises across frames but leaves felt reading
+                         # as felt rather than as a hole.
 WB_CLAMP = 0.15          # max per-channel gain deviation
 WB_MIN_BG_LUMA = 25.0    # below this the bg channel ratios are sensor noise
 
