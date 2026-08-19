@@ -76,6 +76,17 @@ Rules that follow from getting it wrong, in order of how much they cost:
    copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
 5. **Anything that looks clickable must be clickable**; anything that is not
    gets no affordance.
+0. **Nothing may depend on a modern selector, a URL or a script.** Three
+   mechanisms have been tried and abandoned, each of which worked perfectly in a
+   normal tab and was dead in the frame the operator reads these pages in: a
+   JS-built DOM (script never ran), `:target` for the previews and the Accept
+   panel (a URL fragment never lands in a sandboxed frame), and `:has()` for
+   selection, tabs and chips (a 2022 selector — where it is missing the page
+   draws perfectly and answers nothing). Every piece of state is a native input
+   at the TOP of its container and everything it drives is a following sibling
+   reached by `~`, which has worked since CSS2. A control whose input is nested
+   inside the thing it styles cannot work — that is how the Accept button
+   shipped inert. Held by `tests/test_prep_sheet_html.py`.
 6. **Never hand-list the options in CSS.** The rule that decides which picture a
    card shows matches on the option's **index**, generated up to `MAX_OPTS` — not
    on its value. An earlier version spelled the values out (`"0"`, `"90"`, `"on"`,
