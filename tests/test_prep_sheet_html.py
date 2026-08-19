@@ -102,3 +102,17 @@ def test_the_page_still_works_without_javascript():
         "the DOM must be rendered from Python, not built in the browser"
     assert 'type="radio"' in P._card_html("color", _card(3), 0)
     assert ".big:target{display:grid}" in P.TEMPLATE
+
+
+def test_the_page_declares_its_encoding_before_any_non_ascii():
+    """The sheet is written UTF-8 and is routinely opened straight off disk,
+    where there is no HTTP charset header to fall back on. Without the meta the
+    browser guesses windows-1252 and every `·` in the notes renders `Â·` — a
+    page that reads as broken, which is the one thing this surface cannot look
+    like. It has to come first: a late declaration is ignored once the parser
+    has already committed."""
+    head = P.TEMPLATE[:200].lower()
+    assert '<meta charset="utf-8">' in head
+    first_non_ascii = next((i for i, ch in enumerate(P.TEMPLATE) if ord(ch) > 127), None)
+    if first_non_ascii is not None:
+        assert P.TEMPLATE.index('<meta charset="utf-8">') < first_non_ascii

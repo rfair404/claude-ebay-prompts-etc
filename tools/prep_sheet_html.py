@@ -398,7 +398,13 @@ def build(shoot: Path, out: Path) -> Path:
     return out
 
 
-TEMPLATE = r"""<title>Frame Check</title>
+# `<meta charset>` FIRST, before anything with a non-ASCII byte in it. The page
+# is written UTF-8, but a file opened from disk carries no HTTP charset header,
+# so without this the browser falls back to windows-1252 and every `·` in the
+# notes renders as `Â·`. It read as a broken page, which is exactly the thing
+# this sheet cannot afford to look like.
+TEMPLATE = r"""<meta charset="utf-8">
+<title>Frame Check</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
