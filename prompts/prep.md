@@ -31,77 +31,53 @@ Each stage shows **a card per photo with a thumbnail for every option at that
 stage, side by side**, current choice ruled green. The operator is picking from
 pictures, never reading a description of a picture.
 
-**Present it as the interactive console, every time.** Build the page and give
-the user the link — do not hand over a JPEG contact sheet and do not describe
-the frames in prose:
+**Present it as the Frame Check page, every time — orientation, crop AND
+colour.** This is the settled format. Do not hand over a JPEG contact sheet, do
+not describe the frames in prose, and do not invent a different layout for the
+crop or colour stage: all three use the same page, the same card, the same
+controls.
 
     python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
 
-then publish that file as an artifact and link it. One page, three tabs in
-order, a card per frame; clicking an option marks it changed and the bar at the
-bottom writes the exact override command to paste back. Republish the SAME file
-path after every change so the link never moves.
+then publish that file as an artifact and give the user the link. Republish the
+SAME file path after every change so the link never moves.
 
-Why not the sheet: a fourteen-frame shoot renders a 4,000px-tall JPEG, and a
-picture you scroll past in a viewer is not a surface anyone can decide on. The
-JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and are
-the fallback when a page cannot be published.
+What the page must have, on every stage:
 
-**Every frame opens.** Clicking a card photo opens it full size, and the arrow
-keys step frame to frame without closing it — the thumbnail is enough to make
-the call, but the detail is what the call rests on (wear, a soft edge, whether
-the backdrop lift crept onto the item). Anything that looks clickable has to be
-clickable; anything that is not gets no affordance.
+| | |
+|---|---|
+| **A card per frame** | one picture per card, big enough to judge |
+| **Every option side by side** | as clickable thumbnails, current one ruled green |
+| **An override on every card** | including frames the pipeline refused — a card you cannot argue with is not a review. A refused crop still offers *force a crop* |
+| **A free-text box on every card** | the options only cover the overrides we thought of; "the smokestack is clipped" has to have somewhere to go. Typed notes ride along with the command |
+| **An Accept button per stage** | says plainly that it sends the stage as shown, with any changes and notes attached |
+| **Click any picture to open it full size** | the thumbnail is enough to make the call, the detail is what the call rests on |
+| **The exact command, copyable** | the page cannot reach the CLI; a fake Apply button would be worse than admitting that |
 
-Things that page must never do, all learned by getting them wrong:
-**never wire a control with an inline `onclick`** — the script does not reliably
-run in global scope, so the page renders perfectly and every button silently
-does nothing; use `addEventListener` and delegation. And **never render a lone
-option as a button** — a frame that refuses a crop has nothing to choose
-between, so it gets a reason and no button row at all. And **never assume a key
-event landed on an element** — it can land on the document, which has no
-`closest()`, and the whole handler dies silently.
+**The page must work with JavaScript switched off.** This is the rule that cost
+the most to learn. Selection is native radio inputs, the picture shown is a CSS
+`:has()` rule, the tabs are a radio group, the full-size preview is `:target`.
+Script is layered on top for one job — assembling the command — and the page is
+fully usable when it never runs. Two versions built the DOM in JS and routed
+every click through a handler; both rendered perfectly and neither responded to
+a single click in the viewer the operator actually uses. Script-dependent UI
+fails as a page that looks finished and does nothing.
 
-    python -m lib.photo_prep.prep <shoot> --check          # plan everything, render nothing
+Rules that follow from getting it wrong, in order of how much they cost:
 
-    # --- stage 1 ------------------------------------------------------------
-    python -m lib.photo_prep.prep <shoot> --stage orientation
-    #   -> .prep/stage_1_orientation.jpg : every frame at +0/+90/+180/+270
-    python -m lib.photo_prep.prep <shoot> --rotate NAME=DEG …    # fix what is wrong
-    python -m lib.photo_prep.prep <shoot> --approve-stage orientation
+1. **No inline `onclick`, and no JS-built DOM.** Render the markup from Python.
+2. **Never assume a key event landed on an element** — it can land on the
+   document, which has no `closest()`, and the handler dies silently.
+3. **Never render a lone option as a button.** One option is not a choice; it
+   reads as broken. Give it a real alternative or no button row at all.
+4. **Write each image's bytes once**, as a CSS custom property on the card, and
+   paint the thumbnail, the option chip and the full-size preview from it. Three
+   copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
+5. **Anything that looks clickable must be clickable**; anything that is not
+   gets no affordance.
 
-    # --- stage 2 ------------------------------------------------------------
-    python -m lib.photo_prep.prep <shoot> --stage crop
-    #   -> .prep/stage_2_crop.jpg : upright frame with the box drawn, and the result
-    python -m lib.photo_prep.prep <shoot> --crop NAME=off|on|pad0.20
-    python -m lib.photo_prep.prep <shoot> --approve-stage crop
-
-    # --- stage 3 ------------------------------------------------------------
-    python -m lib.photo_prep.prep <shoot> --apply          # render every look
-    python -m lib.photo_prep.prep <shoot> --stage color
-    #   -> .prep/stage_3_color.jpg : final framing, then each look, adopted one green
-    python -m lib.photo_prep.prep <shoot> --pick studio|punch
-    python -m lib.photo_prep.prep <shoot> --approve-stage color
-
-    # --- then, and only then -------------------------------------------------
-    python -m lib.photo_prep.prep <shoot> --approve        # the publish gate
-    python -m lib.photo_prep.prep <shoot> --repoint-draft --apply-repoint
-
-**Enforced, not merely described.** A stage refuses to open until the one before
-it is approved. Approving a stage clears the sign-off on every later stage, so
-revisiting orientation cannot leave a stale crop approval standing. `--apply`
-refuses to write `listing/` until all three are approved, and the publish gate
-sits on top of that.
-
-**How to run it with a human.** Show the stage sheet. Say what is proposed and
-what you are unsure about. Wait. Apply their corrections, rebuild the sheet, show
-it again. Repeat until they say it is right — then approve that stage and move
-on. Do not batch the three stages into one question, and do not approve a stage
-on their behalf because it "looks fine".
-
-This replaces the old single-sheet flow. It exists because judging all three at
-once is what let sideways photos through: the reviewer sees a busy sheet, the
-crop looks plausible, and the rotation is never actually examined.
+The JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and
+are the fallback when no page can be published.
 
 ## The looks
 

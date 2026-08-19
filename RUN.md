@@ -245,8 +245,10 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
 2b. PREP → `--check`, then `python tools/prep_sheet_html.py <shoot>` and publish
-   `.prep/review.html` as an artifact — that page IS the review surface, not a
-   JPEG and not a prose description. Then walk the three staged reviews in
+   `.prep/review.html` as an artifact — that page IS the review surface for all
+   three stages, not a JPEG and not a prose description. Card per frame, every
+   option side by side, an override and a free-text box on every card, and an
+   Accept button per stage. Then walk the three staged reviews in
    order, STOPPING for the user at each one (HARD gate). Never batch them into
    one question:
    `--stage orientation` (fix with `--rotate NAME=DEG`) → `--approve-stage
