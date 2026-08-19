@@ -288,7 +288,7 @@ BLURB = {
     "color": ("One look ships for the whole shoot. Compare on any frame; the pick "
               "applies everywhere."),
 }
-FLAG = {"orientation": "--rotate", "unskew": "--unskew", "crop": "--crop",
+FLAG = {"orientation": "--set-rotate", "unskew": "--unskew", "crop": "--crop",
         "color": "--pick"}
 SLUG = {"orientation": "o", "unskew": "u", "crop": "c", "color": "k"}
 

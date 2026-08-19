@@ -1259,8 +1259,20 @@ def run_approve(shoot: Path) -> dict:
     return m
 
 
-def run_rotate(shoot: Path, pairs: list[str]) -> dict:
-    """Record looked-at orientation answers (`NAME=90`)."""
+def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
+    """Record looked-at orientation answers (`NAME=90`).
+
+    Two forms, and the difference matters:
+
+      --rotate      DEG is RELATIVE to what the sheet currently shows. That is
+                    the frame the answer was given against, so a human reading a
+                    sheet does no arithmetic.
+      --set-rotate  DEG is the ABSOLUTE subject angle. This is what a generated
+                    command must use: a relative command is not idempotent, and
+                    a page that hands the operator `NAME=270` twice moves the
+                    frame twice. That happened — the same pasted line took a
+                    catalog spread from applied 0 to 270 on its second run.
+    """
     m = load_manifest(shoot)
     for pair in pairs:
         if "=" not in pair:
@@ -1281,15 +1293,15 @@ def run_rotate(shoot: Path, pairs: list[str]) -> dict:
         # the arithmetic by hand against a rotation you cannot see, which is a
         # good way to record a confident wrong number. 0 is a real answer here:
         # "looked at it, it is upright."
-        subject = ((o.get("subject_angle") or 0) + deg) % 360
+        subject = deg if absolute else ((o.get("subject_angle") or 0) + deg) % 360
         o["vision_angle"] = subject
         o["subject_angle"] = subject
         o["applied"] = ((o.get("exif_angle") or 0) + subject) % 360
         o["source"] = "exif+vision" if o.get("exif_angle") else "vision"
         o["needs_ask"] = False
         m["photos"][key]["status"] = "SHIP"
-        print(f"  {key}: +{deg}° → subject {subject}°, total applied "
-              f"{o['applied']}° (recorded look)")
+        print(f"  {key}: {'=' if absolute else '+'}{deg}° → subject {subject}°, "
+              f"total applied {o['applied']}° (recorded look)")
 
     # A rotation change invalidates the rendered files and any approval.
     m["approved"] = False
@@ -1541,7 +1553,8 @@ def main(argv=None) -> int:
     ap.add_argument("--apply-repoint", action="store_true",
                     help="actually write draft.md for --repoint-draft")
     ap.add_argument("--approve", action="store_true", help="stamp approval (explicit operator yes only)")
-    ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer")
+    ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
+    ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
     ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help="margin around the subject (default 0.12)")
@@ -1556,6 +1569,8 @@ def main(argv=None) -> int:
 
     if args.rotate:
         m = run_rotate(shoot, args.rotate)
+    if getattr(args, "set_rotate", None):
+        m = run_rotate(shoot, args.set_rotate, absolute=True)
         _print_status(shoot, m)
         return 0
     if args.stage:

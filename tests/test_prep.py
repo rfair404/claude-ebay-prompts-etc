@@ -987,6 +987,34 @@ def test_redaction_guard_reaches_the_fallback_directories():
         assert got == {"label_REDACTED.jpg"}, got
 
 
+def test_set_rotate_is_absolute_and_rotate_is_relative():
+    """A generated command must be safe to paste twice.
+
+    --rotate is relative on purpose: a human answering a contact sheet should
+    not do arithmetic against a rotation they cannot see. But the review page
+    generates its command from the angle it displays, and a relative command
+    run twice moves the frame twice — it took a catalog spread from applied 0
+    to 270 on the second paste of an identical line.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        m = P.load_manifest(shoot)
+        m["photos"] = {"IMG_0.jpg": {"orientation": {"exif_angle": 90, "subject_angle": 0,
+                                                     "applied": 90, "needs_ask": True}}}
+        P.save_manifest(shoot, m)
+
+        P.run_rotate(shoot, ["IMG_0.jpg=270"])                      # relative
+        assert P.load_manifest(shoot)["photos"]["IMG_0.jpg"]["orientation"]["subject_angle"] == 270
+        P.run_rotate(shoot, ["IMG_0.jpg=270"])                      # relative again: moves
+        assert P.load_manifest(shoot)["photos"]["IMG_0.jpg"]["orientation"]["subject_angle"] == 180
+
+        for _ in range(3):                                          # absolute: settles
+            P.run_rotate(shoot, ["IMG_0.jpg=270"], absolute=True)
+            o = P.load_manifest(shoot)["photos"]["IMG_0.jpg"]["orientation"]
+            assert o["subject_angle"] == 270, o
+            assert o["applied"] == 0, o                             # 90 exif + 270 subject
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
