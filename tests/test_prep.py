@@ -452,19 +452,24 @@ def test_every_preset_keeps_the_item_off_the_rails():
 def test_every_preset_blurs_backdrop_fuzz_in_proportion_to_its_strength():
     """The ask: fuzz on the black cloth should go, without touching the item.
 
-    The bar scales with the look. A preset that declares itself half strength
-    (`k`) is supposed to do half as much — holding it to the full-strength bar
-    would just be a test asserting that `half` is not half. So: every preset
-    must at least halve the fuzz, and a preset running at full strength must
-    take it under a third.
+    The bar scales with the look, because a preset that declares itself a
+    fraction of studio (`k`) is supposed to do that fraction as much — holding
+    a 10% look to the full-strength bar would only assert that 10% is not 10%.
+
+    So: a full-strength preset must take the fuzz under a third, and a reduced
+    one must still visibly cut it, by at least half of what its strength claims.
+    No preset may ever ADD fuzz, at any strength.
     """
     img, mask = _fuzzy_scene()
     before = float(img[:200, :200].astype(float).std())
     for name, cfg in C.PRESETS.items():
         out, _ = C.correct(img, mask, preset=name)
         after = float(out[:200, :200].astype(float).std())
-        bar = before / 3 if cfg.get("k", 1.0) >= 1.0 else before / 2
-        assert after < bar, f"{name} left the fuzz: {after:.1f} vs {before:.1f}"
+        k = float(cfg.get("k", 1.0))
+        bar = before / 3 if k >= 1.0 else before * (1.0 - 0.5 * k)
+        assert after <= before, f"{name} ADDED fuzz: {after:.1f} vs {before:.1f}"
+        assert after < bar, (f"{name} (k={k}) left the fuzz: {after:.1f} vs "
+                             f"{before:.1f}, bar {bar:.1f}")
 
 
 def test_half_is_studio_with_every_move_halved():
@@ -475,15 +480,30 @@ def test_half_is_studio_with_every_move_halved():
         assert half[knob] == studio[knob], f"half drifted from studio on {knob}"
 
 
+def test_reduced_strength_looks_stay_derived_from_studio():
+    """`half` and `tenth` are studio at a multiplier, not their own numbers.
+
+    The whole point of `k` is that one edit to studio carries to both. A knob
+    copied by hand drifts, and the ladder the operator picked off stops meaning
+    what it meant.
+    """
+    studio = C.PRESETS["studio"]
+    for name, k in (("half", 0.5), ("tenth", 0.10)):
+        look = C.PRESETS[name]
+        assert look.get("k") == k, name
+        for knob in ("pop", "bg_neutralize", "bg_diffuse", "sharpen", "wb"):
+            assert look[knob] == studio[knob], f"{name} drifted from studio on {knob}"
+
+
 def test_a_weaker_preset_moves_the_backdrop_less():
     """Ordering is the whole point: half < studio <= punch on backdrop travel."""
     img, mask = _fuzzy_scene()
     start = float(img[:200, :200].astype(float).mean())
     moved = {}
-    for name in ("half", "studio", "punch"):
+    for name in ("tenth", "half", "studio", "punch"):
         out, _ = C.correct(img, mask, preset=name)
         moved[name] = abs(float(out[:200, :200].astype(float).mean()) - start)
-    assert moved["half"] < moved["studio"], moved
+    assert moved["tenth"] < moved["half"] < moved["studio"], moved
     assert moved["studio"] <= moved["punch"] + 1e-6, moved
 
 

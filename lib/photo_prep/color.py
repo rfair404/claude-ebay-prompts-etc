@@ -131,6 +131,14 @@ PRESETS = {
     # 255 and reversed its channel order, rendering copper as green-gold; this
     # look moves it by 5, uniformly across R, G and B, which is sharpening
     # rather than a tint. Reach for it whenever the ground is a coloured cloth.
+    # Studio at a tenth. Chosen off the measured ladder (100/50/25/12.5/6/3)
+    # on the christmas-train shoot: the operator wanted the felt left alone and
+    # only the cast and the lighting gradient taken off. At this strength the
+    # backdrop moves about 4 luma of the ~28 that full strength moves, and the
+    # item is left essentially as shot.
+    "tenth":   dict(pop="gentle", bg_neutralize=1.0, bg_diffuse=0.85, sharpen=0.45,
+                    wb=True, k=0.10,
+                    label="studio at 10% — cast and gradient off, felt kept"),
     "crisp":   dict(pop="off", bg_neutralize=1.0, bg_diffuse=1.0, sharpen=0.85,
                     wb=False,
                     label="camera colour kept; backdrop cleaned, item sharpened hard"),
