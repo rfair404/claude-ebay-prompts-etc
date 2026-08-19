@@ -3,7 +3,7 @@
 
 A fourteen-frame shoot makes a contact sheet 4,000px tall, and a picture you
 scroll past in a viewer is not a surface anyone can decide on. This renders the
-review as a page: three tabs in the order the work happens, a card per frame,
+review as a page: one tab per stage in the order the work happens, a card per frame,
 every option beside it, click the one you want.
 
   THE CORE OF THIS PAGE RUNS WITHOUT JAVASCRIPT, ON PURPOSE.
@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import base64
 import html
+import json
 import sys
 from pathlib import Path
 
@@ -37,10 +38,12 @@ sys.path.insert(0, str(ROOT))
 
 import cv2                                                   # noqa: E402
 
+import numpy as np                                           # noqa: E402
 from lib.photo_prep import color as colormod                 # noqa: E402
 from lib.photo_prep import orientation as orientmod          # noqa: E402
+from lib.photo_prep import unskew as skewmod                 # noqa: E402
 from lib.photo_prep import stages as stagemod                # noqa: E402
-from lib.photo_prep.prep import _load_bgr, load_manifest     # noqa: E402
+from lib.photo_prep.prep import _load_bgr, load_manifest, prepared   # noqa: E402
 
 # One encode per distinct picture serves the card, the option thumbnail and the
 # full-size preview. Rotations reuse the same bytes and are turned in CSS, so a
@@ -69,6 +72,12 @@ def _frames(shoot: Path, m: dict):
 
 
 def _upright(shoot: Path, name: str, rec: dict):
+    """The frame as the crop and colour stages see it: turned, then squared."""
+    return prepared(shoot, name, rec)
+
+
+def _turned(shoot: Path, name: str, rec: dict):
+    """Turned but NOT squared — what the unskew stage is deciding about."""
     return orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
 
 
@@ -108,6 +117,45 @@ def _cards_orientation(shoot, m):
             "why": (o.get("notes") or [""])[0],
             "options": [{"label": f"+{a}", "value": str(a), "img": base, "spin": a}
                         for a in (0, 90, 180, 270)],
+        })
+    return cards
+
+
+def _cards_unskew(shoot, m):
+    """Two pictures per card: the edges PREP measured, and the squared result.
+
+    The quad is the point. A two-degree correction is invisible as a before and
+    after pair at card size, but an outline that does not sit on the item's own
+    edges is obvious at a glance — the operator is checking the measurement, not
+    squinting at the fix.
+    """
+    import cv2
+
+    cards = []
+    for name, rec in _frames(shoot, m):
+        turned = _turned(shoot, name, rec)
+        sk = skewmod.from_dict(rec.get("unskew"))
+
+        drawn = turned.copy()
+        if sk.quad:
+            cv2.polylines(drawn, [np.array(sk.quad, np.int32).reshape(-1, 1, 2)], True,
+                          (120, 220, 90) if sk.applied else (255, 200, 120),
+                          max(3, int(0.004 * max(turned.shape[:2]))), cv2.LINE_AA)
+        opts = [{"label": "as shot", "value": "off", "img": _uri(drawn, LONG), "spin": 0}]
+        if sk.applied:
+            opts.insert(0, {"label": "squared", "value": "on",
+                            "img": _uri(skewmod.apply(turned, sk), LONG), "spin": 0})
+        else:
+            opts.append({"label": "square it up", "value": "on", "img": None, "spin": 0})
+        cards.append({
+            "name": name,
+            "chosen": "on" if sk.applied else "off",
+            "status": "ships" if sk.applied else "held",
+            "note": ("squared up" if sk.applied
+                     else "left as shot — " + (sk.reason or "no reason recorded")),
+            "why": (f"tilt {sk.tilt_deg:.2f}° · keystone {sk.keystone:.3f} · "
+                    f"rectangular {sk.fill:.2f}"),
+            "options": opts,
         })
     return cards
 
@@ -170,14 +218,19 @@ BLURB = {
     "orientation": ("Every frame turned the way it will ship. Pick a different turn to "
                     "override it. Nothing was guessed — a frame with no readable text "
                     "gets no automatic answer, so it was looked at by hand."),
+    "unskew": ("Rectangular items squared up to the picture edge — frames, books, "
+               "magazines, sleeves. The green outline is the edges PREP measured: if it "
+               "sits on the item's own edges the correction is right. Round or "
+               "deliberately angled frames are left alone, and each says why."),
     "crop": ("How each frame will be framed. A frame that refuses a crop says why; "
              "those refusals are deliberate, and a detail macro with no studio behind "
              "it is supposed to refuse. You can force one anyway."),
     "color": ("One look ships for the whole shoot. Compare on any frame; the pick "
               "applies everywhere."),
 }
-FLAG = {"orientation": "--rotate", "crop": "--crop", "color": "--pick"}
-SLUG = {"orientation": "o", "crop": "c", "color": "k"}
+FLAG = {"orientation": "--rotate", "unskew": "--unskew", "crop": "--crop",
+        "color": "--pick"}
+SLUG = {"orientation": "o", "unskew": "u", "crop": "c", "color": "k"}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +341,7 @@ def build(shoot: Path, out: Path) -> Path:
     color_cards, rendered = _cards_color(shoot, m)
     built = {
         "orientation": (True, _cards_orientation(shoot, m), ""),
+        "unskew": (True, _cards_unskew(shoot, m), ""),
         "crop": (True, _cards_crop(shoot, m), ""),
         "color": (rendered > 0, color_cards if rendered else [],
                   "The looks are not rendered yet. Approve crop, then run --apply, "
@@ -312,6 +366,7 @@ def build(shoot: Path, out: Path) -> Path:
 
     page = (TEMPLATE
             .replace("__SHOOT__", _esc(sp))
+            .replace("__STAGES__", json.dumps(list(stagemod.STAGES)))
             .replace("__TABS__", "".join(tabs))
             .replace("__PANELS__", "".join(panels)))
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -374,6 +429,7 @@ header{position:sticky;top:0;z-index:20;background:var(--surface);
 main{max-width:1500px;margin:0 auto;padding:20px 20px 40px}
 .panel{display:none}
 body:has(.tabin[value="orientation"]:checked) #panel-orientation,
+body:has(.tabin[value="unskew"]:checked) #panel-unskew,
 body:has(.tabin[value="crop"]:checked) #panel-crop,
 body:has(.tabin[value="color"]:checked) #panel-color{display:block}
 
@@ -531,7 +587,7 @@ body:has(.tabin[value="color"]:checked) #panel-color{display:block}
   }
 
   function refresh(){
-    var stages = ["orientation", "crop", "color"];
+    var stages = __STAGES__;   // generated from stages.STAGES, never hand-listed
     for (var i = 0; i < stages.length; i++) {
       var panel = document.getElementById("panel-" + stages[i]);
       if (!panel) continue;
