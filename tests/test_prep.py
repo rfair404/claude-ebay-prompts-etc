@@ -951,6 +951,42 @@ def test_the_chroma_bar_sits_between_cloth_and_paint():
     assert 24 < C.CHROMA_OBJECT_MIN < 54
 
 
+def test_a_redacted_frame_replaces_its_original():
+    """The un-redacted frame must never reach the shipping directory.
+
+    A mailing label gets redacted to `<stem>_REDACTED.jpg` alongside the
+    original. PREP was preparing BOTH and writing both into listing/ — the
+    directory DRAFT reads and the uploader ships from. The draft happened to
+    point at the redacted one, so nothing leaked; but one lexicographic photo
+    picker or one re-run of an older draft and a customer's home address goes
+    public. The redacted copy replaces its original; it is not an extra frame.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        img = np.full((60, 80, 3), 200, np.uint8)
+        for n in ("cover.jpg", "label.jpg", "label_REDACTED.jpg", "back.jpg"):
+            cv2.imwrite(str(shoot / n), img)
+
+        got = {p.name for p in P.find_images(shoot)}
+        assert "label.jpg" not in got, f"the un-redacted original survived: {got}"
+        assert "label_REDACTED.jpg" in got, got
+        assert {"cover.jpg", "back.jpg"} <= got, got
+
+
+def test_redaction_guard_reaches_the_fallback_directories():
+    """no-exif/ holds copies of the same frames — the guard must cover them too."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        (shoot / "no-exif").mkdir(parents=True)
+        img = np.full((60, 80, 3), 200, np.uint8)
+        cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img)
+        cv2.imwrite(str(shoot / "no-exif" / "label.jpg"), img)
+
+        got = {p.name for p in P.find_images(shoot)}
+        assert got == {"label_REDACTED.jpg"}, got
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
