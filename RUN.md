@@ -78,9 +78,14 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    "ok"/"looks good"/silence. (This replaced the old absolute no-publish
    firewall — publishing is now gated here, not forbidden.)
 
-2. **The PREP photo gate.** After IDENTIFY, PREP prepares every frame and
-   STOPS with a before|after sheet. Photos go live ONLY after the user approves
-   that sheet. Unlike the maker-mark gate this does NOT degrade in a headless
+2. **The PREP photo gate — three stages, three approvals.** After IDENTIFY,
+   PREP walks the operator through **orientation, then crop, then colour**, in
+   that order, one sheet per stage, each sheet showing every option for that
+   stage side by side as thumbnails. You do not move to the next stage until the
+   user says the current one is right, and the code enforces it: a stage will not
+   open until its predecessor is approved, approving a stage clears every later
+   sign-off, and `--apply` refuses to write `listing/` until all three are in.
+   Photos go live ONLY after the user approves. Unlike the maker-mark gate this does NOT degrade in a headless
    run — it halts, because a bad photo is the one error buyers see first and 66
    sideways ones shipped while the rules said otherwise. It is enforced in code
    too: `upload_photos_to_eps` refuses photos that are not prepped and approved,
@@ -155,7 +160,7 @@ Load each prompt when you reach its phase.
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
-| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate) |
+| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → crop → colour, each approved) |
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
@@ -239,10 +244,13 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-2b. PREP → `--check`, read the rotation sheet at full size, record every
-   unresolved frame with `--rotate`, `--apply`, then present
-   `.prep/prep_review.jpg` and STOP for approval (HARD gate). On approval,
-   `--approve`. Photos land in `listing/`; INVESTIGATE still reads the originals.
+2b. PREP → `--check`, then the three staged reviews, in order, STOPPING for the
+   user at each one (HARD gate). Never batch them into one question:
+   `--stage orientation` (fix with `--rotate NAME=DEG`) → `--approve-stage
+   orientation` → `--stage crop` (`--crop NAME=off|on|padF`) → `--approve-stage
+   crop` → `--apply` → `--stage color` (`--pick studio|punch`) →
+   `--approve-stage color` → `--approve`. Photos land in `listing/`;
+   INVESTIGATE still reads the originals.
 3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
    → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
    adopt Recommended tier as provisional working price; write `price.txt`.

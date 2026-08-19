@@ -15,54 +15,62 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ---
 
-## The one command
+## The review is STAGED, and interactive. Always.
 
-    python -m lib.photo_prep.prep <shoot-dir> --check     # analyse; render nothing
-    python -m lib.photo_prep.prep <shoot-dir> --rotate NAME=DEG …   # record a look
-    python -m lib.photo_prep.prep <shoot-dir> --apply     # render both looks, adopt the default
-    python -m lib.photo_prep.prep <shoot-dir> --pick punch|studio   # override the default
-    python -m lib.photo_prep.prep <shoot-dir> --repoint-draft --apply-repoint
-    python -m lib.photo_prep.prep <shoot-dir> --approve   # HARD gate — explicit user yes ONLY
+Three corrections, in this order, and **you do not move on until the operator
+says the current one is right**:
 
-This **replaces** the old hand-chained sequence (`strip_exif` → `even_background`
-→ `trim_whitespace` → `center_crop`). Do not run those as a chain any more; see
-"What replaced what" below.
+    1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
 
----
+This ordering is not a preference, it is a dependency. A crop is only meaningful
+once the frame is the right way up. A colour judgement is only meaningful on the
+framing that will actually ship. Shown together, a bad crop and a bad rotation
+look the same on the page and neither can be answered.
 
-## Procedure
+Each stage renders ONE full sheet: a row per photo, and **a thumbnail for every
+option at that stage, side by side**, with the current choice ruled in green. The
+operator is picking from pictures, never reading a description of a picture.
 
-1. **`--check`.** Reads EXIF, segments each frame, runs page-orientation
-   detection on the cropped subject, plans the crop and the colour move. Writes
-   the manifest, `rotation_sheet.jpg`, and a four-way panel per unresolved frame.
+    python -m lib.photo_prep.prep <shoot> --check          # plan everything, render nothing
 
-2. **Read `rotation_sheet.jpg` yourself, at full size.** This is not optional and
-   it is not delegable to metadata. The test is **"would a buyer see this the
-   right way up?"** — a phone held at an angle, a book on its side and a box shot
-   end-on all produce files that are perfect by their EXIF and wrong on the page.
-   For anything doubtful, open its panel in `.prep/ask/` and pick from the four
-   rotations rather than describing the problem.
+    # --- stage 1 ------------------------------------------------------------
+    python -m lib.photo_prep.prep <shoot> --stage orientation
+    #   -> .prep/stage_1_orientation.jpg : every frame at +0/+90/+180/+270
+    python -m lib.photo_prep.prep <shoot> --rotate NAME=DEG …    # fix what is wrong
+    python -m lib.photo_prep.prep <shoot> --approve-stage orientation
 
-3. **Record every unresolved frame** with `--rotate NAME=DEG`, where DEG is
-   relative to what the sheet just showed you. **`0` is a real answer** —
-   "looked at it, it is upright" — and it is what clears the frame. Frames left
-   unresolved block approval, by design.
+    # --- stage 2 ------------------------------------------------------------
+    python -m lib.photo_prep.prep <shoot> --stage crop
+    #   -> .prep/stage_2_crop.jpg : upright frame with the box drawn, and the result
+    python -m lib.photo_prep.prep <shoot> --crop NAME=off|on|pad0.20
+    python -m lib.photo_prep.prep <shoot> --approve-stage crop
 
-4. **`--apply`.** Renders every frame through every preset and adopts the
-   backdrop's default (see below). Writes `prep_presets.jpg` (original beside
-   each look) and `prep_review.jpg` (before | after for the adopted look).
+    # --- stage 3 ------------------------------------------------------------
+    python -m lib.photo_prep.prep <shoot> --apply          # render every look
+    python -m lib.photo_prep.prep <shoot> --stage color
+    #   -> .prep/stage_3_color.jpg : final framing, then each look, adopted one green
+    python -m lib.photo_prep.prep <shoot> --pick studio|punch
+    python -m lib.photo_prep.prep <shoot> --approve-stage color
 
-5. **Show the user `prep_review.jpg` and STOP.** This is a HARD gate. Surface the
-   photo count, the crop count, and anything the report flags. On their explicit
-   approval, run `--approve`. Nothing else counts as approval — not "ok", not
-   "looks good", not silence.
+    # --- then, and only then -------------------------------------------------
+    python -m lib.photo_prep.prep <shoot> --approve        # the publish gate
+    python -m lib.photo_prep.prep <shoot> --repoint-draft --apply-repoint
 
-6. **`--repoint-draft`** before DRAFT renders `photos:`, so the draft points at
-   `listing/`. It maps each existing entry to its own prepped counterpart and
-   **preserves order** — entry one is the eBay gallery image, and a draft's list
-   is often not lexicographic. Dry run unless `--apply-repoint`.
+**Enforced, not merely described.** A stage refuses to open until the one before
+it is approved. Approving a stage clears the sign-off on every later stage, so
+revisiting orientation cannot leave a stale crop approval standing. `--apply`
+refuses to write `listing/` until all three are approved, and the publish gate
+sits on top of that.
 
----
+**How to run it with a human.** Show the stage sheet. Say what is proposed and
+what you are unsure about. Wait. Apply their corrections, rebuild the sheet, show
+it again. Repeat until they say it is right — then approve that stage and move
+on. Do not batch the three stages into one question, and do not approve a stage
+on their behalf because it "looks fine".
+
+This replaces the old single-sheet flow. It exists because judging all three at
+once is what let sideways photos through: the reviewer sees a busy sheet, the
+crop looks plausible, and the rotation is never actually examined.
 
 ## The looks
 
