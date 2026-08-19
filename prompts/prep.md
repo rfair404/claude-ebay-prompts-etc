@@ -27,9 +27,32 @@ once the frame is the right way up. A colour judgement is only meaningful on the
 framing that will actually ship. Shown together, a bad crop and a bad rotation
 look the same on the page and neither can be answered.
 
-Each stage renders ONE full sheet: a row per photo, and **a thumbnail for every
-option at that stage, side by side**, with the current choice ruled in green. The
-operator is picking from pictures, never reading a description of a picture.
+Each stage shows **a card per photo with a thumbnail for every option at that
+stage, side by side**, current choice ruled green. The operator is picking from
+pictures, never reading a description of a picture.
+
+**Present it as the interactive console, every time.** Build the page and give
+the user the link — do not hand over a JPEG contact sheet and do not describe
+the frames in prose:
+
+    python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
+
+then publish that file as an artifact and link it. One page, three tabs in
+order, a card per frame; clicking an option marks it changed and the bar at the
+bottom writes the exact override command to paste back. Republish the SAME file
+path after every change so the link never moves.
+
+Why not the sheet: a fourteen-frame shoot renders a 4,000px-tall JPEG, and a
+picture you scroll past in a viewer is not a surface anyone can decide on. The
+JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and are
+the fallback when a page cannot be published.
+
+Two things that page must never do, both learned by getting them wrong:
+**never wire a control with an inline `onclick`** — the script does not reliably
+run in global scope, so the page renders perfectly and every button silently
+does nothing; use `addEventListener` and delegation. And **never render a lone
+option as a button** — a frame that refuses a crop has nothing to choose
+between, so it gets a reason and no button row at all.
 
     python -m lib.photo_prep.prep <shoot> --check          # plan everything, render nothing
 

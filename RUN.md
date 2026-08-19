@@ -244,8 +244,11 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-2b. PREP → `--check`, then the three staged reviews, in order, STOPPING for the
-   user at each one (HARD gate). Never batch them into one question:
+2b. PREP → `--check`, then `python tools/prep_sheet_html.py <shoot>` and publish
+   `.prep/review.html` as an artifact — that page IS the review surface, not a
+   JPEG and not a prose description. Then walk the three staged reviews in
+   order, STOPPING for the user at each one (HARD gate). Never batch them into
+   one question:
    `--stage orientation` (fix with `--rotate NAME=DEG`) → `--approve-stage
    orientation` → `--stage crop` (`--crop NAME=off|on|padF`) → `--approve-stage
    crop` → `--apply` → `--stage color` (`--pick studio|punch`) →
