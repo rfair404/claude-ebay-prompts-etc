@@ -21,11 +21,33 @@ FAST = "--fast" in sys.argv
 SLOW = {"test_marble_gate"}            # loads CLIP
 
 
+def _needs_fixtures(fn) -> bool:
+    """True for a pytest-style test that takes a fixture (monkeypatch, tmp_path).
+
+    This runner calls tests with no arguments. Such a test raised TypeError and
+    was reported as a FAILURE, which is a lie — the test is fine, this runner
+    just cannot supply what it asks for. Two of them sat red in every run.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    return any(p.default is inspect.Parameter.empty
+               and p.kind in (p.POSITIONAL_OR_KEYWORD, p.POSITIONAL_ONLY)
+               for p in sig.parameters.values())
+
+
 def _run_module(mod):
     fns = [v for k, v in sorted(vars(mod).items())
            if k.startswith("test_") and callable(v)]
-    failed = 0
+    failed = skipped = 0
     for fn in fns:
+        if _needs_fixtures(fn):
+            skipped += 1
+            print(f"SKIP  {fn.__name__} (needs a pytest fixture — run under pytest)")
+            continue
         try:
             fn()
             print(f"PASS  {fn.__name__}")
@@ -33,7 +55,8 @@ def _run_module(mod):
             failed += 1
             print(f"FAIL  {fn.__name__}: {e}")
             traceback.print_exc()
-    print(f"{len(fns) - failed}/{len(fns)} passed")
+    tail = f", {skipped} skipped" if skipped else ""
+    print(f"{len(fns) - failed - skipped}/{len(fns) - skipped} passed{tail}")
     return failed
 
 

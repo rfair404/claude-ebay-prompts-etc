@@ -1058,21 +1058,6 @@ def test_recording_a_rotation_invalidates_the_approvals():
             assert not m["stages"][st]["approved"], f"{st} stayed approved"
 
 
-if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
-    bad = 0
-    for fn in fns:
-        try:
-            fn()
-            print(f"PASS  {fn.__name__}")
-        except Exception as e:                              # noqa: BLE001
-            bad += 1
-            print(f"FAIL  {fn.__name__}: {e}")
-    print(f"{len(fns) - bad}/{len(fns)} passed")
-    sys.exit(1 if bad else 0)
-
-
 def test_warm_metal_on_dark_cloth_defaults_to_crisp():
     """The keys-shoot rule. Brass on navy is where white balance does damage:
     the cloth's chroma sits on WB_MAX_CHROMA, so the gain fires on some frames
@@ -1084,14 +1069,14 @@ def test_warm_metal_on_dark_cloth_defaults_to_crisp():
     warm = C.subject_warmth(img, mask)
     assert warm["warm"] is True, warm
     assert warm["r_minus_b"] >= C.WARM_SUBJECT_MIN_RB, warm
-    assert C.default_preset_for("dark", warm_subject=True) == "crisp"
+    assert C.default_preset_for("dark", warm_subject=True, new_item=False) == "crisp"
 
     cool, _ = _fuzzy_scene(subject=(170, 120, 80))[0], None  # BGR: cool blue item
     assert C.subject_warmth(cool, mask)["warm"] is False
-    assert C.default_preset_for("dark", warm_subject=False) == "punch"
+    assert C.default_preset_for("dark", warm_subject=False, new_item=False) == "punch"
     # A warm item on a white sweep is NOT the failing case — white balance off a
     # real grey sweep is the correction working as intended.
-    assert C.default_preset_for("light", warm_subject=True) == "studio"
+    assert C.default_preset_for("light", warm_subject=True, new_item=False) == "studio"
 
 
 def test_crisp_keeps_the_cameras_colour_on_the_item():
@@ -1237,3 +1222,18 @@ def test_unskew_runs_before_crop_in_the_stage_order():
     assert S.STAGES == ("orientation", "unskew", "crop", "color")
     assert S.STAGES.index("unskew") < S.STAGES.index("crop")
     assert S.stage_blocker({}, "crop"), "crop must not open before unskew is approved"
+
+
+if __name__ == "__main__":
+    fns = [v for k, v in sorted(globals().items())
+           if k.startswith("test_") and callable(v)]
+    bad = 0
+    for fn in fns:
+        try:
+            fn()
+            print(f"PASS  {fn.__name__}")
+        except Exception as e:                              # noqa: BLE001
+            bad += 1
+            print(f"FAIL  {fn.__name__}: {e}")
+    print(f"{len(fns) - bad}/{len(fns)} passed")
+    sys.exit(1 if bad else 0)
