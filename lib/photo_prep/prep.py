@@ -671,8 +671,44 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
     return m
 
 
-def run_apply(shoot: Path, quiet: bool = False) -> dict:
-    """Render listing/ from the manifest's decisions + the review sheet."""
+def _already_listed(shoot: Path) -> bool:
+    """Has this shoot ever been to eBay?
+
+    `crisp` is the house default for NEW items only. An item already live was
+    photographed, corrected and published under whatever look was current then,
+    and re-rendering it into a different one silently changes the pictures a
+    buyer may already have seen. Existing items keep their look unless someone
+    picks a new one on purpose.
+
+    A draft carrying an offer id is the evidence. No draft, or a draft that has
+    never synced, means new.
+    """
+    draft = shoot / "draft.md"
+    if not draft.exists():
+        return True
+    try:
+        head = draft.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return False
+    for key in ("ebay_offer_id:", "ebay_inventory_sku:"):
+        for line in head.splitlines():
+            if line.strip().startswith(key):
+                val = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if val and val.lower() not in ("null", "none", ""):
+                    return True
+    return False
+
+
+def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
+    """Render listing/ from the manifest's decisions + the review sheet.
+
+    `only` restricts which presets are rendered. Rendering all six exists so the
+    operator can compare looks at the gate; a batch that has already decided —
+    printed media is always `asshot` — spends five sixths of its time producing
+    images nothing will read. At ~64s per frame per preset that is the
+    difference between a 3-hour run and a 17-hour one. The gate is unchanged for
+    anyone who does not pass this: default is still every preset.
+    """
     from .center_crop import _parse_aspect
 
     m = load_manifest(shoot)
@@ -736,7 +772,7 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
 
         rec["presets"] = {}
         variants = {}
-        for pname in colormod.PRESETS:
+        for pname in (only or colormod.PRESETS):
             rendered, creport = colormod.correct(img, sm.mask, sweep=sweep,
                                                  bg_class=eff_class, preset=pname)
             p_dir = shoot / ".prep" / "presets" / pname
@@ -750,7 +786,11 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
             }
             variants[pname] = rendered
 
-        creport = rec["presets"][colormod.DEFAULT_PRESET]["report"]
+        # DEFAULT_PRESET is not necessarily rendered under `only`; fall back to
+        # whatever was, so the manifest still carries a colour report.
+        _rep_key = (colormod.DEFAULT_PRESET if colormod.DEFAULT_PRESET in rec["presets"]
+                    else next(iter(rec["presets"])))
+        creport = rec["presets"][_rep_key]["report"]
         rec["color"] = creport
         # `listing/` stays empty until a preset is picked — the whole point is
         # that the operator chooses the look, so nothing may default into the
@@ -787,7 +827,32 @@ def run_apply(shoot: Path, quiet: bool = False) -> dict:
     warm = shoot_rb >= colormod.WARM_SUBJECT_MIN_RB
     m["subject_warmth"] = dict(median_r_minus_b=round(shoot_rb, 2),
                                frames=len(warmths), warm=warm)
-    default = colormod.default_preset_for(shoot_class, warm_subject=warm)
+    # A DELIBERATE PICK OUTRANKS THE DEFAULT, ALWAYS.
+    #
+    # This used to auto-pick unconditionally at the end of every render. Run
+    # --apply while an operator's --pick is in flight and the auto-pick lands
+    # last, so the manifest says one look and listing/ holds another. That
+    # happened three times in one session: --pick printed "picked asshot",
+    # reported success, and the shipping files were still studio. It is only
+    # caught by hashing the files, which nobody does.
+    #
+    # An already-chosen look is a decision. Re-render its files, leave the
+    # choice alone.
+    prior = m.get("chosen_preset")
+    if prior and prior in (only or colormod.PRESETS):
+        save_manifest(shoot, m)
+        m = run_pick(shoot, prior, quiet=True, auto=False)
+        if not quiet:
+            print(f"  kept the look already chosen for this shoot: {prior}")
+        return m
+
+    default = colormod.default_preset_for(
+        shoot_class, warm_subject=warm, new_item=not _already_listed(shoot))
+    # Nothing else was rendered, so the backdrop's usual default cannot be shown
+    # or picked. Adopting it anyway would point listing/ at files that do not
+    # exist.
+    if only and default not in only:
+        default = only[0]
     save_manifest(shoot, m)
     m = run_pick(shoot, default, quiet=True, auto=True)
     if not quiet:
@@ -1259,6 +1324,30 @@ def run_approve(shoot: Path) -> dict:
     return m
 
 
+def _invalidate_from(m: dict, stage: str) -> None:
+    """A decision changed, so everything downstream of it is no longer agreed.
+
+    PREP already treats a changed FILE as stale. It did not treat a changed
+    DECISION that way, and the two are equally dangerous: paul-fredrick sat at
+    `approved: true` with every stage signed off while six frames carried a
+    rotation the shipping files had never been rendered with. The manifest said
+    270 degrees; listing/ held the portrait frame it had before. Nothing in the
+    gate noticed, because no file had changed.
+
+    So recording an answer clears the publish stamp and every stage approval
+    from that stage onward. Re-approving is cheap; shipping a frame nobody
+    approved in its current form is not.
+    """
+    from . import stages as stagemod
+
+    st = stagemod.stage_state(m)
+    order = list(stagemod.STAGES)
+    for later in order[order.index(stage):]:
+        st[later] = {"approved": False, "approved_at": None}
+    m["approved"] = False
+    m["approved_at"] = None
+
+
 def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
     """Record looked-at orientation answers (`NAME=90`).
 
@@ -1306,6 +1395,7 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
     # A rotation change invalidates the rendered files and any approval.
     m["approved"] = False
     m["approved_at"] = None
+    _invalidate_from(m, "orientation")
     save_manifest(shoot, m)
     _sync_orientation_json(shoot, m)
     return m
@@ -1442,7 +1532,7 @@ def _presets_sheet(rows, out_path: Path, cell: int = 340) -> None:
     import cv2
     if not rows:
         return
-    names = list(colormod.PRESETS)
+    names = [p for p in colormod.PRESETS if p in (rows[0][2] if rows else {})] or list(colormod.PRESETS)
     header = [_label(cell, "ORIGINAL", (170, 170, 170), 26)]
     for p in names:
         header.append(_label(cell, p.upper(), (160, 235, 170), 26))
@@ -1554,6 +1644,7 @@ def main(argv=None) -> int:
                     help="actually write draft.md for --repoint-draft")
     ap.add_argument("--approve", action="store_true", help="stamp approval (explicit operator yes only)")
     ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
+    ap.add_argument("--only", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
     ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
@@ -1616,7 +1707,7 @@ def main(argv=None) -> int:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
             run_check(shoot, args.aspect, args.pad, args.pop, quiet=True)
-        m = run_apply(shoot, quiet=args.quiet)
+        m = run_apply(shoot, quiet=args.quiet, only=tuple(getattr(args, 'only', None) or ()))
         _print_status(shoot, m)
     return 0
 
