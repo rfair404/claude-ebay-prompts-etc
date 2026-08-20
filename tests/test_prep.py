@@ -529,13 +529,27 @@ def test_a_weaker_preset_moves_the_backdrop_less():
     assert moved["studio"] <= moved["punch"] + 1e-6, moved
 
 
-def test_dark_cloth_defaults_to_punch():
-    """Chosen deliberately: a deepened backdrop gives the item somewhere to
-    separate against, so the extra contrast pays off. A white sweep has nothing
-    to separate from and the same push reads as over-processing."""
-    assert C.default_preset_for("dark") == "punch"
-    assert C.default_preset_for("light") == "studio"
-    assert C.default_preset_for(None) in C.PRESETS
+def test_a_new_item_defaults_to_crisp_whatever_the_backdrop():
+    """`crisp` is the only look that cannot misrepresent the goods.
+
+    It cleans the backdrop at full strength and leaves the item's colour exactly
+    as the camera recorded it. Adopted as the default for new items after an
+    audit of published photos found item colour destroyed on 14 frames — a
+    fairy doll's magenta wings rendered grey among them — every one a mask
+    failure feeding a correction that was behaving correctly on a wrong premise.
+    """
+    for bg in ("dark", "light", "other", None):
+        assert C.default_preset_for(bg, new_item=True) == "crisp", bg
+
+
+def test_an_existing_listing_keeps_its_old_default():
+    """Re-rendering a live listing into a different look changes pictures a
+    buyer may already have seen. Only `--pick` may do that, one at a time."""
+    assert C.default_preset_for("dark", new_item=False) == "punch"
+    assert C.default_preset_for("light", new_item=False) == "studio"
+    assert C.default_preset_for(None, new_item=False) in C.PRESETS
+    # the warm-metal exception still applies to existing shoots
+    assert C.default_preset_for("dark", warm_subject=True, new_item=False) == "crisp"
 
 
 def test_studio_neutralises_the_cloth_but_not_the_item():
@@ -1013,6 +1027,35 @@ def test_set_rotate_is_absolute_and_rotate_is_relative():
             o = P.load_manifest(shoot)["photos"]["IMG_0.jpg"]["orientation"]
             assert o["subject_angle"] == 270, o
             assert o["applied"] == 0, o                             # 90 exif + 270 subject
+
+
+def test_recording_a_rotation_invalidates_the_approvals():
+    """A changed DECISION is as stale as a changed file.
+
+    paul-fredrick sat at approved=true with all four stages signed off while six
+    frames carried a rotation the shipping files had never been rendered with —
+    the manifest said 270 degrees and listing/ still held the portrait frame.
+    Nothing caught it, because no file had changed.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        m = P.load_manifest(shoot)
+        m["photos"] = {"IMG_0.jpg": {"orientation": {"exif_angle": 0, "subject_angle": 0,
+                                                     "applied": 0, "needs_ask": False}}}
+        m["approved"] = True
+        m["approved_at"] = "2026-08-19T00:00:00+00:00"
+        from lib.photo_prep import stages as S
+        for st in S.STAGES:
+            S.stage_state(m)[st] = {"approved": True, "approved_at": "x"}
+        P.save_manifest(shoot, m)
+
+        P.run_rotate(shoot, ["IMG_0.jpg=90"], absolute=True)
+
+        m = P.load_manifest(shoot)
+        assert m["approved"] is False, "the publish stamp survived a rotation change"
+        assert m["approved_at"] is None
+        for st in S.STAGES:
+            assert not m["stages"][st]["approved"], f"{st} stayed approved"
 
 
 if __name__ == "__main__":

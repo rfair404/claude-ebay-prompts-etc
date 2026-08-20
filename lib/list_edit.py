@@ -69,6 +69,7 @@ policy IDs / locations to paste in.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -1258,6 +1259,50 @@ def build_review_card(draft_path: Path,
                 status = r.get("status") or "?"
                 break
 
+    # THE FINAL PHOTOS, LISTED. Every one, in order, hero marked, gaps called out.
+    #
+    # The card used to print a count and a hero filename. A count cannot tell
+    # you that a frame is still the un-prepped original, that a redacted frame
+    # was replaced by its un-redacted twin, or that listing/ holds a look nobody
+    # picked — all three of which happened. These are the exact files that go to
+    # eBay on approval, so they belong on the surface where approval is given.
+    photo_lines = []
+    try:
+        _m = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        _by_out = {(r.get("output") or ""): r for r in (_m.get("photos") or {}).values()}
+        prep_note = f"  look: {_m.get('chosen_preset') or 'none picked'}"
+        if not _m.get("approved"):
+            prep_note += "   [!] PREP NOT APPROVED"
+    except (OSError, ValueError):
+        _by_out, prep_note = {}, "  [!] no PREP manifest for these photos"
+
+    for _i, _rel in enumerate(photos):
+        _rel = str(_rel)
+        _f = shoot / _rel
+        _tag = "hero" if _i == 0 else f"{_i + 1:>4}"
+        if not _f.exists():
+            photo_lines.append(f"  {_tag}  {_rel}   [!] MISSING FROM DISK")
+            continue
+        _rec = _by_out.get(_rel)
+        _bits = []
+        if _rec:
+            _o = _rec.get("orientation") or {}
+            if _o.get("applied"):
+                _bits.append(f"rot {_o['applied']}deg")
+            if (_rec.get("unskew") or {}).get("applied"):
+                _bits.append("squared")
+            if (_rec.get("crop") or {}).get("applied"):
+                _bits.append("cropped")
+            _want = _rec.get("out_sha256")
+            if _want:
+                # PREP records a 16-char prefix; match the same way it does.
+                _got = hashlib.sha256(_f.read_bytes()).hexdigest()[:len(_want)]
+                if _got != _want:
+                    _bits.append("[!] CHANGED SINCE PREP APPROVED IT")
+        else:
+            _bits.append("[!] not in the PREP manifest")
+        photo_lines.append(f"  {_tag}  {_rel}" + (f"   [{', '.join(_bits)}]" if _bits else ""))
+
     card = "\n".join([
         f"━━ REVIEW: {shoot.name}  (sku {sku} · ledger {status}) ━━",
         f'Title:     "{title}"  [{len(title)}/80]',
@@ -1273,6 +1318,8 @@ def build_review_card(draft_path: Path,
         *comps,
         "Condition detail:",
         f"  {cond_desc}",
+        f"Final photos - exactly what publishes ({len(photos)}):{prep_note}",
+        *photo_lines,
         "⚠ Needs review / manual intervention:",
         *flags,
         "",

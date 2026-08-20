@@ -247,13 +247,30 @@ def subject_warmth(bgr: np.ndarray, mask: np.ndarray) -> dict:
 
 
 def default_preset_for(bg_class: Optional[str],
-                       warm_subject: bool = False) -> str:
-    """The preset a shoot on this kind of backdrop gets by default.
+                       warm_subject: bool = False,
+                       new_item: bool = True) -> str:
+    """The preset a shoot gets by default.
 
-    `warm_subject` comes from `subject_warmth` aggregated over the shoot — brass,
-    bronze, gold, gilt, copper. On a dark ground it selects the look that leaves
-    the item's colour exactly as the camera recorded it.
+    `crisp` is the house default for NEW items: it cleans the backdrop at full
+    strength and does not touch the item's colour at all, which is the only
+    setting that cannot misrepresent the goods. It was adopted after an audit of
+    already-published photos found item colour destroyed on 14 frames — a fairy
+    doll's magenta wings rendered grey, a red catalog page drained to 2% of its
+    saturation — every one of them a mask failure feeding a correction that was
+    behaving correctly on a wrong premise.
+
+    `new_item=False` means the shoot is already live on eBay. Those keep the
+    look they were published under: re-rendering an existing listing into a
+    different look silently changes pictures a buyer may already have seen, and
+    a bulk re-default would do it to every listing at once. Change one on
+    purpose with `--pick`.
+
+    `warm_subject` comes from `subject_warmth` aggregated over the shoot —
+    brass, bronze, gold, gilt, copper on a dark ground. It selects `crisp` too,
+    for the same reason: leave the item's colour as the camera recorded it.
     """
+    if new_item:
+        return "crisp"
     if warm_subject and bg_class == "dark":
         return "crisp"
     return DEFAULT_PRESET_BY_BACKDROP.get(bg_class or "", DEFAULT_PRESET)
