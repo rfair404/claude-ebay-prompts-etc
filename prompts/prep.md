@@ -142,6 +142,106 @@ Proportions come from the item's own opposite edges, so a 12x9 painting comes
 out 4:3. Stretching a slightly trapezoidal frame into a "nicer" rectangle is the
 same class of lie as smoothing a scratch out of the paint.
 
+## SHOWING A MODIFIED IMAGE — the locked template
+
+Every time PREP changes a picture, the operator sees it this way. No
+exceptions, no per-stage improvisation, and never a prose description in place
+of the picture.
+
+**The rule: never show a result without what it came from.** A cropped frame
+alone is unreviewable — the question is not "is this a good picture", it is
+"was the right thing removed". The same holds for a rotation, a squaring and a
+colour pass.
+
+    BEFORE            →   AFTER              →   why, in the operator's words
+    (what it was)         (what will ship)       ("would cut 10% off the page")
+
+| Stage | Before | After | Options offered |
+|---|---|---|---|
+| orientation | the frame as the camera gave it | at the chosen turn | all four turns |
+| unskew | the tilted frame | squared, with the tilt in degrees | squared / leave as shot |
+| crop | the full frame | the crop result | cropped / as shot / force a crop |
+| colour | as shot | each rendered look | as shot + every look |
+
+Requirements, all of them load-bearing:
+
+1. **A card per frame**, one picture per card, big enough to judge.
+2. **Every option side by side as a thumbnail**, current choice ruled green.
+3. **Click any picture to open it full size**; arrow keys step frame to frame.
+4. **An override on every card**, including frames the pipeline refused. A card
+   you cannot argue with is not a review. A refused crop still offers *force a
+   crop*, and says it cannot be previewed.
+5. **A free-text box on every card.** The options only cover the overrides we
+   thought of; "the smokestack is clipped" needs somewhere to go.
+6. **The reason, per frame, in words** — "no studio backdrop (luma 192)", "would
+   cut 10% off the subject". A refusal without a reason reads as a failure.
+7. **An Accept button per stage**, stating that it sends the stage as shown.
+8. **The exact command, copyable**, and generated in an IDEMPOTENT form
+   (`--set-rotate`, not `--rotate`) — see the rules below.
+
+Build it with:
+
+    python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
+
+publish that file as an artifact, link it, and republish the SAME path after
+every change so the link never moves. Pair it with a one-click accept in chat
+so the operator never copies a command by hand.
+
+**The page must work with JavaScript switched off.** Selection is native radio
+inputs, the shown picture is a CSS `:has()` rule, tabs are a radio group, the
+preview is `:target`. Script does one job — assembling the command — and the
+page is fully usable when it never runs. Two versions built the DOM in JS and
+routed every click through a handler; both rendered perfectly and neither
+responded to a single click in the viewer the operator actually uses.
+
+Rules learned by breaking them, in order of what they cost:
+
+1. **No inline `onclick`, and no JS-built DOM.** Render the markup from Python.
+2. **A generated command must be idempotent.** `--rotate` is relative to what
+   the sheet shows; a page that emits it as if it were absolute moves the frame
+   again on every paste. Use `--set-rotate`.
+3. **Never assume a key event landed on an element** — it can land on the
+   document, which has no `closest()`, and the handler dies silently.
+4. **Never render a lone option as a button.** One option is not a choice.
+5. **Write each image's bytes once**, as a CSS custom property on the card.
+   Three copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
+6. **Anything that looks clickable must be clickable**; anything that is not
+   gets no affordance.
+
+The JPEG builders (`--stage NAME`) remain as the fallback when no page can be
+published.
+
+---
+
+## What the audit found, and what it changed
+
+An audit of 819 already-published frames (`tools/prep_saturation_audit.py`, then
+`tools/prep_saturation_verify.py` against the subject mask) found item colour
+destroyed on **14 frames across 10 shoots**, 9 of them live. Worth keeping in
+mind because every one had the same shape:
+
+- the correction was behaving **correctly on a wrong premise**. Segmentation
+  handed part of the item to the backdrop, and the backdrop pass neutralised it,
+  which is exactly what it is told to do to cloth;
+- the tell is **mask coverage**: 43–70% on flat printed catalog covers, 5–9% on
+  thin silver on a light ground. Those two subjects are the weakness;
+- the first-pass sweep flagged 39 shoots, but **54 of 76 frames were the
+  correction working** — a backdrop cast being removed. Measure inside the mask
+  before calling anything damage.
+
+Mitigations now in the code: `_protect_objects` tests chroma as well as luma
+(`CHROMA_OBJECT_MIN`, measured — cloth reaches 24, paint starts at 54), `crisp`
+is the default for new items, and `asshot` exists for when a shoot's mask cannot
+be trusted at all.
+
+**Open defect — OSD can be confidently wrong.** On paul-fredrick the detector
+read subject 270 on five frames at confidence up to 12.2 with recognised script,
+all corroborating each other, and all wrong: the pages ship at 270 applied, not
+0. The one frame it could not read is the one the operator kept correcting by
+hand, and they were right every time. "High confidence, corroborated" is exactly
+the state in which a headless run would ship these unreviewed. Do not trust OSD
+alone on flat printed media; the orientation gate is what catches it.
+
 ## The looks
 
 Both render every time; the operator picks. They differ only in how hard they
@@ -159,7 +259,39 @@ white-balance gain, the backdrop curve, the neutralise, the blur, the pop and
 the sharpen together. Reach for it when a look reads washed out: the wash comes
 from the correction, so less correction is less wash.
 
-**Default: `punch` on a dark or navy cloth, `studio` on a light sweep.** A
+### Printed media renders `asshot`. No exceptions from the default path.
+
+**Books, magazines, catalogs, mailers — any shoot whose subject is printed paper
+— default to `asshot` (k=0), not to `studio`.**
+
+The correction cannot be trusted on this class, and the reason is structural
+rather than a tuning miss. A catalog is photographed open on a light sweep, so
+the printed page IS a large light field with ink on it: the segmenter hands that
+page to the backdrop, and the backdrop pass then does exactly what it is told to
+do to a backdrop — neutralise it toward paper white. White balance has nothing
+reliable to lock onto either, because the page's own ink is the dominant colour
+and glossy stock throws the sweep's cast straight back into the lens.
+
+Measured on `more-mags-444/fall-and-winter-1980`, on renders that were already
+live: saturation against source-selected pixels fell 51.8% on the hero, 60.9%
+and 61.3% on two interior spreads, and 94.0% on the mailer. The damage scales
+linearly with `k` — studio -39.4%, half -19.2%, tenth -3.5%, asshot -0.2% —
+which is the signature of the backdrop pass eating the subject, not of a bad
+curve. Re-running under the chroma guard did not change those numbers.
+
+`tenth` is the compromise if a genuine cast has to come off. `asshot` is the
+default because the failure is silent: a drained catalog spread still looks like
+a catalog spread, and nothing in the pipeline flags it.
+
+**Default: `crisp` for any NEW item, whatever the backdrop.** It is the only
+look that cannot misrepresent the goods — full-strength backdrop cleanup, the
+item's colour left exactly as the camera recorded it. An item ALREADY LIVE keeps
+the look it was published under; re-rendering it into a different one silently
+changes pictures a buyer may already have seen. Change one on purpose with
+`--pick`, never in bulk.
+
+The older backdrop-led defaults still apply to existing shoots:
+**`punch` on a dark or navy cloth, `studio` on a light sweep.** A
 deepened backdrop gives the item something to separate against, so the extra
 push pays off; on a white sweep the same push has nothing to separate from and
 reads as over-processed. `--pick` overrides. The default decides what is SHOWN
@@ -206,6 +338,15 @@ The subject half comes from page-orientation detection (objective, but only when
 **corroborated by another frame in the same shoot** — measured false positives
 include a textless macro read as text at higher confidence than a real magazine
 cover), or from a recorded look, or it goes to ASK.
+
+On printed media, prefer the page-orientation (OSD) read over the vision
+estimate when the two disagree. Text is the one thing on a catalog page that has
+an unambiguous upright, and the corroboration rule already guards OSD's known
+false positive. Measured on `fall-and-winter-1980`: the three frames resolved
+`exif+osd` all landed upright, while two of the three resolved `exif+vision`
+shipped rotated 90 degrees with the models on their sides and the body text
+running vertically — and none of them were flagged ASK, so the pipeline was
+confidently wrong rather than uncertain.
 
 Nothing infers "probably upright" from an aspect ratio. A round item with no
 defined upright is resolved the same way as everything else: someone looks once

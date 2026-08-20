@@ -160,7 +160,7 @@ Load each prompt when you reach its phase.
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
-| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → crop → colour, each approved) |
+| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → unskew → crop → colour, each approved) |
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
@@ -251,7 +251,7 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
    Accept button per stage. Then walk the three staged reviews in
    order, STOPPING for the user at each one (HARD gate). Never batch them into
    one question:
-   `--stage orientation` (fix with `--rotate NAME=DEG`) → `--approve-stage
+   `--stage orientation` (fix with `--set-rotate NAME=DEG`, the idempotent form) → `--approve-stage
    orientation` → `--stage crop` (`--crop NAME=off|on|padF`) → `--approve-stage
    crop` → `--apply` → `--stage color` (`--pick studio|punch`) →
    `--approve-stage color` → `--approve`. Photos land in `listing/`;
