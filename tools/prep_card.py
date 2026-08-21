@@ -64,8 +64,10 @@ def _shipping_bytes(shoot: Path, name: str, rec: dict, settled: bool):
     describing decisions taken since. A stale picture under a fresh label is
     worse than no picture, because it reviews as agreement.
 
-    While a stage is still open, the truth is the SOURCE at the rotation
-    currently recorded. That is the decision under review.
+    While a stage is still open, the truth is the SOURCE at the rotation and
+    inside the crop box currently recorded. That is the decision under review —
+    and after the auto first pass BOTH of those are decided, so a card that
+    showed the rotation but not the crop would be reviewing half the proposal.
     """
     if settled:
         live = shoot / "listing" / name
@@ -76,7 +78,18 @@ def _shipping_bytes(shoot: Path, name: str, rec: dict, settled: bool):
     ang = int(rec.get("orientation", {}).get("subject_angle") or 0)
     if ang:
         im = im.rotate(-ang, expand=True)
-    return im, "source @ recorded rotation"
+    where = "source @ recorded rotation"
+
+    crop = rec.get("crop") or {}
+    box = crop.get("box")
+    # The box was planned on the upright frame at full resolution, which is
+    # exactly what `im` is here. Guard the bounds anyway: a manifest edited by
+    # hand, or a source replaced since the plan, must degrade to the uncropped
+    # frame rather than to a PIL exception in the middle of a contact sheet.
+    if crop.get("applied") and box and box[2] <= im.width and box[3] <= im.height:
+        im = im.crop(tuple(box))
+        where = "rotated + cropped"
+    return im, where
 
 
 def _state_line(rec: dict, settled: set) -> tuple[str, tuple[int, int, int]]:

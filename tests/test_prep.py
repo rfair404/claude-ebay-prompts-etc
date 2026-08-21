@@ -1324,3 +1324,64 @@ if __name__ == "__main__":
     print(f"{len(fns) - bad}/{len(fns)} passed")
     sys.exit(1 if bad else 0)
 
+
+
+# ---------------------------------------------------------------------------
+# the auto first pass — decide once, ask once
+# ---------------------------------------------------------------------------
+
+def test_auto_resolves_every_frame_and_approves_nothing():
+    """The pass exists to spend the operator's attention once instead of twice.
+    It may decide anything; it may approve nothing."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+
+        for name, rec in m["photos"].items():
+            assert not rec["orientation"]["needs_ask"], f"{name} still asking"
+            assert "applied" in (rec.get("crop") or {}), f"{name} has no crop decision"
+            assert not rec.get("pending_orientation"), name
+        st = m.get("stages") or {}
+        assert not any(v.get("approved") for v in st.values()), st
+        assert not m.get("approved")
+
+
+def test_auto_flags_the_frames_it_guessed():
+    """A guess presented as a resolution is the one way this pass can hurt, so
+    every frame it could not read is marked and named."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        guessed = m["auto"]["guessed"]
+        for name in guessed:
+            o = m["photos"][name]["orientation"]
+            assert o.get("guessed") is True, name
+            assert any("auto first pass" in n for n in o.get("notes") or []), name
+        for name, rec in m["photos"].items():
+            if name not in guessed:
+                assert not rec["orientation"].get("guessed"), name
+
+
+def test_a_crop_always_leaves_background_around_the_item():
+    """Trim the edges, never reframe: a small item in a big frame must not come
+    back as a keyhole just because the pad is a fraction of the item."""
+    fp = {"w": 4000, "h": 3000, "bbox": (1900, 1400, 200, 200),
+          "offset": 0.0, "subject_frac": 0.003, "capture": 1.0,
+          "box_aspect": 1.0, "border_fg": 0.0}
+    x0, y0, x1, y1 = P._fit_box(fp, 1.0, P.DEFAULT_PAD)
+    kept = ((x1 - x0) * (y1 - y0)) / (4000 * 3000)
+    assert kept >= P.MIN_FRAME_KEPT * 0.999, kept
+    assert (x0, y0) != (x1, y1)
+
+
+def test_approve_auto_stamps_both_stages_like_a_sheet_would():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        m = P.run_approve_auto(shoot)
+        assert m["stages"]["orientation"]["approved"]
+        assert m["stages"]["crop"]["approved"]
+        # The same digest a per-stage approval carries, so a later edit
+        # invalidates it the same way.
+        assert m["stages"]["crop"].get("decisions")
+        assert not m["stages"]["color"]["approved"], "colour is still the operator's"

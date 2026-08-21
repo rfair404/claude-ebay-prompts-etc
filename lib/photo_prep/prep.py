@@ -77,7 +77,20 @@ MANIFEST_VERSION = 1
 MIN_AGREEMENT = 0.75     # detector bbox containment below which we do not crop
 MIN_LONG_SIDE = 1400     # eBay wants >=1600 for zoom; never crop below this
 DEFAULT_ASPECT = "1:1"
-DEFAULT_PAD = 0.12
+# How much backdrop a crop keeps around the item, as a fraction of the item's
+# own box on each side. It was 0.12, which frames the goods handsomely and reads
+# as aggressive on a listing: a magazine cropped to a 12% margin looks trimmed
+# to the bleed, and any error in the mask lands ON the item. A crop should TRIM
+# THE EDGES, not reframe the shot, so the margin is generous by default and
+# `--crop NAME=padF` is there for the frame that wants it tight.
+DEFAULT_PAD = 0.28
+
+# And a floor under the whole box: a crop may not keep less than this much of
+# the frame it came from. The pad is measured off the ITEM, so a small item in a
+# big frame still yields a keyhole from a generous pad — 28% of a matchbook is
+# nothing. This is the rule in the operator's words: trim a little around the
+# edges, always leave some background.
+MIN_FRAME_KEPT = 0.55
 DEFAULT_SUBJECT = "auto"
 DEFAULT_CATEGORY = catmod.DEFAULT_CATEGORY
 
@@ -394,6 +407,14 @@ def _fit_box(fp: dict, aspect: Optional[float], pad: float) -> tuple:
     else:
         ch, cw = ph, ph * aspect
 
+    # A crop trims edges; it does not reframe. Grow the box back out until it
+    # keeps at least MIN_FRAME_KEPT of the frame — the pad alone cannot promise
+    # that, because it is measured off the item, and a small item in a big frame
+    # yields a keyhole whatever the pad says.
+    if cw * ch < MIN_FRAME_KEPT * W * H:
+        g = ((MIN_FRAME_KEPT * W * H) / (cw * ch)) ** 0.5
+        cw, ch = cw * g, ch * g
+
     # Too big for the frame: shrink to fit, keeping the aspect.
     if cw > W or ch > H:
         s = min(W / cw, H / ch)
@@ -586,7 +607,8 @@ def _unify_backdrop(photos: dict, quiet: bool = False) -> Optional[dict]:
     return {"class": shoot_class, "luma": round(shoot_luma, 1), "promoted": promoted}
 
 
-def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
+def plan_geometry(shoot: Path, quiet: bool = False,
+                  provisional: bool = False) -> dict:
     """Plan the crop and the colour reading — on the APPROVED rotations.
 
     This used to run in the same loop as orientation, which meant every one of
@@ -600,6 +622,13 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     anything else measured. It costs a second decode per frame. It buys the
     guarantee that no downstream number was computed against a rotation that
     later changed.
+
+    `provisional` is the ONE exception, and it is not a loosening: the auto
+    first pass (`--auto`) resolves orientation itself and then plans the crop
+    against exactly those rotations, in one breath, with nothing approved at
+    either end. What the gate protects — no crop box measured against a rotation
+    that later changed — is kept here by the sequencing rather than the stamp.
+    Nothing is approved; the operator still decides both.
     """
     from .center_crop import _parse_aspect
     from . import stages as stagemod
@@ -607,7 +636,7 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     m = load_manifest(shoot)
     if not m.get("photos"):
         raise SystemExit("nothing planned — run --check first")
-    if not stagemod.stage_state(m)["orientation"]["approved"]:
+    if not (provisional or stagemod.stage_state(m)["orientation"]["approved"]):
         raise SystemExit(
             "orientation is not approved yet — it is the first stage, and "
             "nothing else may be measured against a rotation that could still "
@@ -1226,6 +1255,97 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
     return m
 
 
+def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
+             subject: Optional[str] = None, category: Optional[str] = None,
+             quiet: bool = False) -> dict:
+    """The FIRST PASS: turn every frame and plan every crop, asking nothing.
+
+    The staged review is what PREP is for, and it is also a lot of the
+    operator's attention spent on frames where the answer was never in doubt.
+    So the run now starts with a best attempt at the two geometric stages,
+    made in one breath and approved by nobody:
+
+        --auto  ->  the operator looks once  ->  approve, or open the stages
+
+    Two rules make this safe to do unasked.
+
+    ORIENTATION IS GUESSED HERE, AND SAYS SO. A frame the resolver cannot read
+    would normally become an ASK and stop the run. In this pass it takes the
+    best signal available — the OSD proposal if there is one, otherwise 0 — and
+    records `guessed: True` against it. That flag is the whole point: it is what
+    the card and the widget mark, and it names exactly the frames worth a human
+    look. A guess presented as a resolution is the failure mode this pass could
+    have, and the flag is what keeps it from happening silently.
+
+    THE CROP IS DELIBERATELY LOOSE. `MIN_FRAME_KEPT` and the wider default pad
+    mean the first pass trims edges and leaves backdrop around the item. A crop
+    that is too generous costs nothing but a second look; one that is too tight
+    has already thrown pixels away, and on an item nobody re-shoots that is not
+    recoverable.
+
+    Nothing is approved and nothing is rendered. `listing/` is still written
+    only after the gate, and the gate still wants a human.
+    """
+    m = run_check(shoot, aspect_s, pad, pop, subject=subject,
+                  category=category, quiet=quiet)
+
+    guessed = []
+    for key, rec in m["photos"].items():
+        o = rec["orientation"]
+        if not o.get("needs_ask"):
+            continue
+        prop = o.get("osd_proposal")
+        if prop is None:
+            prop = o.get("osd_angle") if o.get("osd_angle") else 0
+        prop = int(prop or 0) % 360
+        o["subject_angle"] = prop
+        o["applied"] = (o.get("exif_angle", 0) + prop) % 360
+        o["needs_ask"] = False
+        o["guessed"] = True
+        o["source"] = (o.get("source") or "auto") + "+guess"
+        o["notes"] = list(o.get("notes") or []) + [
+            f"auto first pass: nothing legible to read, took {prop} deg "
+            f"(OSD proposal {o.get('osd_proposal')}, conf {o.get('osd_conf')})"]
+        rec["status"] = "PENDING"
+        guessed.append(key)
+    save_manifest(shoot, m)
+
+    # Straight into the crop, against the rotations just recorded. Nothing else
+    # may run between these two calls: that adjacency is what makes planning
+    # against unapproved rotations safe here.
+    m = plan_geometry(shoot, quiet=quiet, provisional=True)
+    m["auto"] = {"at": _now(), "guessed": guessed, "pad": pad,
+                 "min_frame_kept": MIN_FRAME_KEPT}
+    save_manifest(shoot, m)
+
+    photos = m.get("photos") or {}
+    cropped = [n for n, r in photos.items() if (r.get("crop") or {}).get("applied")]
+    print(f"\n{shoot.name}: auto first pass — {len(photos)} frames, "
+          f"{len(cropped)} cropped, {len(guessed)} orientation guessed")
+    if guessed:
+        print("  guessed (worth a look): " + ", ".join(guessed))
+    print("  nothing is approved. --approve-auto to take it as it stands, "
+          "or --stage orientation to open the review.")
+    return m
+
+
+def run_approve_auto(shoot: Path) -> dict:
+    """Take the auto first pass as it stands — both geometric stages at once.
+
+    This is the operator saying yes to what they were shown, so it is a real
+    approval and stamps like one: the same per-stage digest over the same
+    decisions, so any later edit invalidates it exactly as it would a stage
+    approved on its own sheet. The only thing being compressed is the number of
+    times they have to say yes to a page they have already read.
+    """
+    m = load_manifest(shoot)
+    if not (m.get("auto") or {}).get("at"):
+        raise SystemExit("no auto pass to approve — run --auto first")
+    for stage in ("orientation", "crop"):
+        m = run_approve_stage(shoot, stage)
+    return m
+
+
 def run_approve_stage(shoot: Path, stage: str) -> dict:
     """Sign off one stage. Approving ORIENTATION also plans everything that
     depends on it, so the operator never has to remember a second command."""
@@ -1509,6 +1629,7 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
                     catalog spread from applied 0 to 270 on its second run.
     """
     m = load_manifest(shoot)
+    touched = []
     for pair in pairs:
         if "=" not in pair:
             raise SystemExit(f"--rotate wants NAME=DEG, got {pair!r}")
@@ -1535,6 +1656,7 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
         o["source"] = "exif+vision" if o.get("exif_angle") else "vision"
         o["needs_ask"] = False
         m["photos"][key]["status"] = "SHIP"
+        touched.append(key)
         print(f"  {key}: {'=' if absolute else '+'}{deg}° → subject {subject}°, "
               f"total applied {o['applied']}° (recorded look)")
 
@@ -1542,8 +1664,25 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
     m["approved"] = False
     m["approved_at"] = None
     _invalidate_from(m, "orientation")
+    for key in touched:
+        o = m["photos"][key]["orientation"]
+        # The frame HAS now been looked at, by whoever recorded this answer. A
+        # note saying it needs a look outlives the look otherwise, and every
+        # sheet and card downstream keeps flagging a frame that was answered.
+        o.pop("guessed", None)
+        o["notes"] = [n for n in (o.get("notes") or [])
+                      if "needs a look" not in n and "auto first pass" not in n]
     save_manifest(shoot, m)
     _sync_orientation_json(shoot, m)
+
+    # A shoot still sitting in the auto first pass has crop boxes measured on
+    # the rotations that just changed. Re-plan them now, in the same breath, or
+    # the widget and the card the operator is about to be shown would picture a
+    # crop from a frame that no longer exists — the exact failure the staged
+    # order exists to prevent, arriving through the back door.
+    if (m.get("auto") or {}).get("at") and not stagemod.stage_state(m)["orientation"]["approved"]:
+        m = plan_geometry(shoot, quiet=True, provisional=True)
+        print("  re-planned the crop on the corrected rotations")
     return m
 
 
@@ -1765,6 +1904,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="PREP — orientation, crop and colour for one shoot.")
     ap.add_argument("shoot_dir")
     ap.add_argument("--check", action="store_true", help="analyse + plan; render nothing")
+    ap.add_argument("--auto", action="store_true",
+                    help="first pass: resolve orientation AND plan the crop in one go, "
+                         "asking nothing and approving nothing (guessed frames are flagged)")
+    ap.add_argument("--approve-auto", action="store_true", dest="approve_auto",
+                    help="sign off the auto pass as it stands (orientation + crop together)")
     ap.add_argument("--apply", action="store_true", help="render listing/ + the review sheet")
     ap.add_argument("--pick", metavar="PRESET",
                     help="adopt a preset for the shoot (copies it into listing/)")
@@ -1793,7 +1937,7 @@ def main(argv=None) -> int:
                     help="print the decision record and its digest, and report "
                          "any stage whose decisions have changed since sign-off")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
-    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help="margin around the subject (default 0.12)")
+    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help=f"margin around the subject, as a fraction of its own box (default {DEFAULT_PAD})")
     ap.add_argument("--category", default=None, choices=list(catmod.names()),
                     help="what KIND of goods this shoot is: sets the subject "
                          "detector and which looks are rendered, in one flag. "
@@ -1855,6 +1999,13 @@ def main(argv=None) -> int:
     if getattr(args, "set_rotate", None):
         m = run_rotate(shoot, args.set_rotate, absolute=True)
         _print_status(shoot, m)
+        return 0
+    if args.auto:
+        run_auto(shoot, args.aspect, args.pad, args.pop,
+                 subject=subject, category=category, quiet=args.quiet)
+        return 0
+    if args.approve_auto:
+        run_approve_auto(shoot)
         return 0
     if args.stage:
         run_stage(shoot, args.stage, quiet=args.quiet)

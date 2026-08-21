@@ -15,10 +15,48 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ---
 
+## The run OPENS with a best attempt, made without asking
+
+    python -m lib.photo_prep.prep <shoot> --auto
+
+One pass, no questions: every frame turned the way PREP reads it, every crop
+planned, nothing approved and nothing rendered. Then the operator looks ONCE at
+what it did and either takes it or opens the stages.
+
+Why it is allowed to guess. The staged review below is the point of PREP, and it
+also spends the operator's attention on frames where the answer was never in
+doubt. Deciding first and asking second costs nothing as long as two things hold,
+and they are enforced in code:
+
+- **A guess is labelled a guess.** A frame the resolver cannot read would
+  normally become an ASK and stop the run. Here it takes the best signal it has
+  (the OSD proposal, else 0) and records `guessed: true`. Report those frames by
+  name, every time — they are exactly the ones worth a human look, and a guess
+  presented as a resolution is the one way this pass can hurt.
+- **The crop is deliberately loose.** `DEFAULT_PAD` is 0.28 of the item's own
+  box, and `MIN_FRAME_KEPT` (0.55) is a floor under the whole box: a crop trims
+  the edges and always leaves backdrop around the item. Too generous costs a
+  second look. Too tight has already thrown pixels away, and nobody re-shoots.
+
+Present the result as a widget: every frame, the turn applied, the crop box on
+the frame, and the guessed ones flagged. Apply the pass, then show ONE card
+(`python tools/prep_card.py <shoot>`) of the revised frames, and ask a single
+question with two answers:
+
+- **approve** → `--approve-auto`, which signs off orientation AND crop together
+  and moves to colour;
+- **override** → open the interactive flow below, at `--stage orientation`.
+
+Nothing about the gate changes. `--auto` approves nothing, `listing/` is still
+written only after the stages are signed off, and `--approve-auto` stamps the
+same per-stage digest a sheet approval does — so any later edit invalidates it
+the same way.
+
 ## The review is STAGED, and interactive. Always.
 
-Three corrections, in this order, and **you do not move on until the operator
-says the current one is right**:
+This is where an override lands, and where a shoot goes whenever the auto pass
+is not good enough. Three corrections, in this order, and **you do not move on
+until the operator says the current one is right**:
 
     1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
 
