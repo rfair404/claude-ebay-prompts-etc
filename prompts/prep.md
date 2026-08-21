@@ -371,8 +371,14 @@ confusion: paper against a sweep is the figure/ground split it measures.
 
 **Why it renders one look.** The section above already says printed media ships
 `asshot`, always. Rendering the other five produces images nobody opens, at
-~25s a frame each. Measured on two 12 MP catalog frames: **100s/frame under
-`default`, 17s/frame under `printed` — 5.9× faster**, same decisions, same gates.
+~25s a frame each. Measured on five 12 MP catalog frames, same decisions and
+the same gates: **8m10s under `default` → 45.6s under `printed`, 10.7×**. Per
+frame, once u2net is loaded, that is ~94s → ~5.1s.
+
+Two of those seconds came back from `asshot` itself: at `k=0` every term in the
+colour correction is multiplied by zero and the result discarded, so the loop is
+now skipped outright rather than computed and thrown away (26s → 3.9s a frame).
+The pixels and the full colour report are asserted identical to the old path.
 
 `looks` narrows what is RENDERED, never what is picked. The operator still
 chooses at the colour stage and `--pick` still overrides. A one-look category
