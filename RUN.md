@@ -244,7 +244,9 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-2b. PREP → `--check`, then `python tools/prep_sheet_html.py <shoot>` and publish
+2b. PREP → `--check` (ORIENTATION ONLY — unskew, crop and colour are not
+   measured until orientation is approved, so no crop box describes a rotation
+   that could still change), then `python tools/prep_sheet_html.py <shoot>` and publish
    `.prep/review.html` as an artifact — that page IS the review surface for all
    three stages, not a JPEG and not a prose description. Card per frame, every
    option side by side, an override and a free-text box on every card, and an

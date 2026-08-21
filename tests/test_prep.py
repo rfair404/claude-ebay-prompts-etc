@@ -904,7 +904,8 @@ def test_approving_a_stage_invalidates_the_later_ones():
     with tempfile.TemporaryDirectory() as td:
         shoot = _shoot(Path(td) / "s", n=1)
         m = P.load_manifest(shoot)
-        m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": False},
+        m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": False, "applied": 0},
+                                     "unskew": {"applied": False},
                                      "crop": {"applied": False}}}
         P.save_manifest(shoot, m)
         P.run_approve_stage(shoot, "orientation")
@@ -1222,6 +1223,57 @@ def test_unskew_runs_before_crop_in_the_stage_order():
     assert S.STAGES == ("orientation", "unskew", "crop", "color")
     assert S.STAGES.index("unskew") < S.STAGES.index("crop")
     assert S.stage_blocker({}, "crop"), "crop must not open before unskew is approved"
+
+
+def test_check_measures_nothing_until_orientation_is_settled():
+    """Orientation is first, and that has to mean nothing else is measured yet.
+
+    A crop box and a backdrop reading describe the geometry they were computed
+    on. Measuring them in the same pass as orientation means measuring against a
+    rotation nobody has confirmed — which is how six catalog spreads ended up
+    with crops planned at 0 degrees and a manifest that said 270.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.run_check(shoot, "1:1", 0.12, "gentle", quiet=True)
+
+        for name, rec in m["photos"].items():
+            assert rec.get("pending_orientation") is True, name
+            assert rec["orientation"], "orientation IS measured in this pass"
+            assert not (rec.get("crop") or {}).get("applied"), name
+            assert not (rec.get("unskew") or {}).get("applied"), name
+
+
+def test_geometry_refuses_to_plan_before_orientation_is_approved():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_check(shoot, "1:1", 0.12, "gentle", quiet=True)
+        try:
+            P.plan_geometry(shoot, quiet=True)
+            raise AssertionError("geometry planned against an unapproved rotation")
+        except SystemExit as e:
+            assert "orientation is not approved" in str(e)
+
+
+def test_approving_orientation_plans_the_geometry_itself():
+    """The operator should not have to remember a second command."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_check(shoot, "1:1", 0.12, "gentle", quiet=True)
+        m = P.load_manifest(shoot)
+        for rec in m["photos"].values():
+            rec["orientation"]["needs_ask"] = False
+        P.save_manifest(shoot, m)
+
+        P.run_approve_stage(shoot, "orientation")
+
+        m = P.load_manifest(shoot)
+        for name, rec in m["photos"].items():
+            assert not rec.get("pending_orientation"), name
+            assert "is_sweep" in (rec.get("color_plan") or {}), name
+            assert (rec.get("crop") or {}).get("reason") !=                 "not planned yet — orientation first", name
+        # (the shoot-level backdrop verdict needs more than one frame to unify,
+        #  so it is asserted in the multi-frame test above, not here)
 
 
 if __name__ == "__main__":

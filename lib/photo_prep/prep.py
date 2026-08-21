@@ -546,6 +546,76 @@ def _unify_backdrop(photos: dict, quiet: bool = False) -> Optional[dict]:
     return {"class": shoot_class, "luma": round(shoot_luma, 1), "promoted": promoted}
 
 
+def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
+    """Plan unskew, crop and the colour reading — on the APPROVED rotations.
+
+    This used to run in the same loop as orientation, which meant every one of
+    these measurements described a frame the operator had not confirmed yet. A
+    crop box and a backdrop reading each describe the geometry they were
+    computed on; turn the frame afterwards and they describe nothing. That is
+    how six catalog spreads ended up with crops planned at 0 degrees and
+    shipping files rendered at 0 degrees while the manifest said 270.
+
+    So orientation is settled and signed off first, always, and only then is
+    anything else measured. It costs a second decode per frame. It buys the
+    guarantee that no downstream number was computed against a rotation that
+    later changed.
+    """
+    from .center_crop import _parse_aspect
+    from . import stages as stagemod
+
+    m = load_manifest(shoot)
+    if not m.get("photos"):
+        raise SystemExit("nothing planned — run --check first")
+    if not stagemod.stage_state(m)["orientation"]["approved"]:
+        raise SystemExit(
+            "orientation is not approved yet — it is the first stage, and "
+            "nothing else may be measured against a rotation that could still "
+            "change.\n  open it with --stage orientation")
+
+    aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
+    pad = float(m["settings"].get("pad", DEFAULT_PAD))
+
+    for key, rec in m["photos"].items():
+        src = shoot / key
+        if not src.exists():
+            continue
+        upright = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
+        sm = mask_for(upright)
+
+        prev_sk = skewmod.from_dict(rec.get("unskew"))
+        sk = prev_sk if prev_sk.operator else skewmod.plan(upright, sm)
+        upright, sm = _unskewed(upright, sm, sk)
+
+        stats = colormod.analyze(upright, sm.mask)
+        prior_crop = rec.get("crop") or {}
+        crop = (prior_crop if prior_crop.get("operator")
+                else plan_crop(upright, sm, aspect, pad, stats))
+
+        rec["subject"] = {"source": sm.source, "agreement": round(sm.agreement, 3),
+                          "mask_iou": round(sm.mask_iou, 3),
+                          "coverage": round(sm.coverage, 4), "bbox": list(sm.bbox)}
+        rec["unskew"] = sk.to_dict()
+        rec["crop"] = crop
+        prev_cp = rec.get("color_plan") or {}
+        measured = dict(bg_class=stats.bg_class, bg_luma=round(stats.bg_luma, 1),
+                        bg_iqr=round(stats.bg_iqr, 1), bg_rough=round(stats.bg_rough, 1))
+        rec["color_plan"] = (dict(prev_cp, **measured) if prev_cp.get("operator")
+                             else dict(measured, is_sweep=stats.is_sweep,
+                                       bg_class_effective=stats.bg_class))
+        rec["status"] = "SHIP" if crop["applied"] else "PASSTHROUGH"
+        rec.pop("pending_orientation", None)
+        if not quiet:
+            print(f"  {key:28} {'squared ' if sk.applied else '        '}"
+                  f"{'crop' if crop['applied'] else 'no crop: ' + (crop.get('reason') or '')[:44]}")
+
+    m["backdrop"] = _unify_backdrop(m["photos"], quiet)
+    save_manifest(shoot, m)
+    if not quiet:
+        print(f"\n{shoot.name}: geometry and colour planned on the approved rotations")
+    return m
+
+
 def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = False) -> dict:
     """Analyse every frame; write the manifest, rotation sheet and ask panels."""
     from .center_crop import _parse_aspect
@@ -597,15 +667,22 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         sm = subjectmod.describe(orientmod.rotate_bgr(sm.mask, v.subject_angle),
                                  sm.source, sm.agreement, sm.mask_iou)
 
-        # Square up BEFORE anything else is measured. A crop box and a backdrop
-        # reading each describe the geometry they were computed on, and this is
-        # the step that changes it.
+        # ORIENTATION IS FIRST, AND NOTHING ELSE IS MEASURED UNTIL IT IS SETTLED.
+        #
+        # A crop box and a backdrop reading each describe the geometry they were
+        # computed on. Measure them here, before the operator has confirmed which
+        # way is up, and a later rotation silently invalidates both — which is
+        # how six catalog spreads got crops planned at 0 degrees while the
+        # manifest ended up saying 270.
+        #
+        # `plan_geometry()` does that work, after --approve-stage orientation.
         prev_sk = skewmod.from_dict(prev.get("unskew"))
-        sk = prev_sk if prev_sk.operator else skewmod.plan(upright, sm)
-        upright, sm = _unskewed(upright, sm, sk)
-
-        stats = colormod.analyze(upright, sm.mask)
-        crop = plan_crop(upright, sm, aspect, pad, stats)
+        sk = (prev_sk if prev_sk.operator else
+              skewmod.Skew(False, "not planned yet — orientation first"))
+        stats = None
+        crop = (prev.get("crop") if (prev.get("crop") or {}).get("operator")
+                else {"applied": False, "reason": "not planned yet — orientation first",
+                      "box": None, "offset": 0.0, "agreement": 0.0})
 
         if v.needs_ask:
             orientmod.four_way_panel(bgr, ask_dir / f"{path.stem}_rotation.jpg",
@@ -630,17 +707,9 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
             # An operator's `--detail` call is an answer, not a proposal: it
             # survives a re-run the same way a recorded rotation does. Only the
             # measurements are refreshed; the sweep verdict stays theirs.
-            "color_plan": (dict(prev.get("color_plan") or {},
-                                bg_class=stats.bg_class, bg_luma=round(stats.bg_luma, 1),
-                                bg_iqr=round(stats.bg_iqr, 1),
-                                bg_rough=round(stats.bg_rough, 1))
-                           if (prev.get("color_plan") or {}).get("operator")
-                           else {"bg_class": stats.bg_class, "bg_luma": round(stats.bg_luma, 1),
-                                 "bg_iqr": round(stats.bg_iqr, 1),
-                                 "bg_rough": round(stats.bg_rough, 1),
-                                 "is_sweep": stats.is_sweep,
-                                 "bg_class_effective": stats.bg_class}),
-            "status": "ASK" if v.needs_ask else ("SHIP" if crop["applied"] else "PASSTHROUGH"),
+            "color_plan": prev.get("color_plan") or {},
+            "pending_orientation": True,
+            "status": "ASK" if v.needs_ask else "PENDING",
             "output": prev.get("output"),
             "out_sha256": prev.get("out_sha256"),
         }
@@ -654,13 +723,13 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
 
         if not quiet:
             rot = f"exif {v.exif_angle}+subj {v.subject_angle}={v.applied}"
-            print(f"  {key:28} {rot:<26} {v.source:<12} "
-                  f"{'crop' if crop['applied'] else 'no crop: ' + crop['reason'][:36]:<48} "
-                  f"bg={stats.bg_class}" + ("  [ASK]" if v.needs_ask else ""))
+            print(f"  {key:28} {rot:<26} {v.source:<12}"
+                  + ("  [ASK]" if v.needs_ask else ""))
 
     m["photos"] = photos
     _corroborate_orientation(photos, quiet)
-    m["backdrop"] = _unify_backdrop(photos, quiet)
+    # The backdrop verdict is a MEASUREMENT of the upright frame, so it belongs
+    # with the rest of the geometry — after orientation is signed off, not here.
     # Any earlier approval is void: what the operator approved is not what the
     # manifest now describes.
     m["approved"] = False
@@ -668,6 +737,13 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
     save_manifest(shoot, m)
 
     _rotation_sheet(thumbs, photos, shoot / ".prep" / "rotation_sheet.jpg")
+    if not quiet:
+        asks = sum(1 for r in photos.values() if r["orientation"]["needs_ask"])
+        print(f"\n{shoot.name}: {len(photos)} photos · "
+              f"{asks} awaiting an orientation answer")
+        print("  orientation is the first stage and nothing else is measured "
+              "until it is approved.")
+        print(f"  next: --stage orientation")
     return m
 
 
@@ -1092,6 +1168,8 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
 
 
 def run_approve_stage(shoot: Path, stage: str) -> dict:
+    """Sign off one stage. Approving ORIENTATION also plans everything that
+    depends on it, so the operator never has to remember a second command."""
     """Record the operator's sign-off on ONE stage."""
     m = load_manifest(shoot)
     blocked = stagemod.stage_blocker(m, stage)
@@ -1110,6 +1188,13 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
     m["approved"] = False
     m["approved_at"] = None
     save_manifest(shoot, m)
+    if stage == "orientation":
+        # Everything downstream is a measurement of the upright frame. Plan it
+        # now, against the rotations that were just approved, so no crop box or
+        # backdrop reading can describe a frame that has since been turned.
+        plan_geometry(shoot, quiet=True)
+        m = load_manifest(shoot)
+        print("  planned unskew, crop and the colour reading on those rotations")
     nxt = stagemod.STAGES[stagemod.STAGES.index(stage) + 1:] or None
     print(f"APPROVED stage '{stage}' at {st[stage]['approved_at']}")
     print(f"  next: --stage {nxt[0]}" if nxt else "  all stages approved — --apply writes listing/")

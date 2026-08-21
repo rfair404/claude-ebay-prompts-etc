@@ -29,6 +29,20 @@ about to change. A colour judgement is only meaningful on the final framing.
 Shown together, a bad crop and a bad rotation look the same on the page and
 neither can be answered.
 
+**Orientation is first, and that means nothing else is measured yet.**
+`--check` reads EXIF, segments, runs the text detector and resolves which way is
+up — and stops there. It does NOT plan the unskew, the crop or the colour
+reading, because each of those describes the geometry it was computed on:
+measure them against a rotation nobody has confirmed, and a later turn silently
+invalidates all three. Six catalog spreads shipped exactly that way, with crops
+planned at 0° while the manifest ended up saying 270°.
+
+`--approve-stage orientation` then runs `plan_geometry()` itself, against the
+rotations just approved, so the operator never has to remember a second command.
+Planning refuses outright while orientation is unapproved. It costs one extra
+decode per frame; it buys the guarantee that no downstream number was ever
+computed against a rotation that later changed.
+
 Each stage shows **a card per photo with a thumbnail for every option at that
 stage, side by side**, current choice ruled green. The operator is picking from
 pictures, never reading a description of a picture.
