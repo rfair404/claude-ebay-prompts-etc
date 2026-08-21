@@ -48,8 +48,14 @@ ask the operator to rule on frames you can read.
 - a human figure, which in a fashion or catalog frame is the strongest cue there
   is: head up, garment hanging down;
 - an object with an unambiguous upright (a locomotive on its wheels);
-- **and** agreement with the rest of the shoot where the frames are alike. Six
-  spreads photographed in one session cannot correctly differ by 90°.
+- **and** agreement with the rest of the shoot where the frames are alike — as a
+  *prompt to look again*, never as the answer. This used to read "six spreads
+  photographed in one session cannot correctly differ by 90°", and that is
+  false: on `paul-fredrick` the cover was shot portrait-wise and the spreads
+  were laid on the bedspread turned 90°, so the subject half genuinely differed
+  within one session. The camera half is shared across a session; the way the
+  item was laid down is not. Treating disagreement as proof of error is what
+  made a correct OSD reading look wrong (see `docs/osd-audit-2026-08-21.md`).
 
 **What does NOT clear it**, and goes to the operator with the sheet:
 
@@ -57,9 +63,18 @@ ask the operator to rule on frames you can read.
 - a frame whose two halves disagree — a masthead upright on one page and a model
   upright on the other. Say which cue you followed and why;
 - a round or flat item with no defined upright;
-- anything resting on OSD alone. **OSD is reference, not evidence.** On one
-  catalog shoot it read the same wrong angle on five frames at confidence up to
-  12.2, with recognised script, all corroborating each other.
+- anything resting on OSD alone. **OSD is reference, not evidence.** Measured
+  across 73 frames where a human look was recorded beside the reading, OSD
+  agreed with the operator **49%** of the time at the old confidence floor —
+  a coin toss. The floor is now 4.0, where it agrees 84% of the time and
+  answers 42% of frames; below that it reports no answer and the frame becomes
+  an ASK. Regenerate the numbers with `python tools/osd_audit.py --bands`.
+
+  Note what this does NOT license: a reading that clears 4.0 is still
+  reference. 84% is not 100%, and the one frame that shipped sideways on
+  `paul-fredrick` read confidence 12.29 — well clear of any bar — on a script
+  confidence of 0.6. High orientation confidence with weak script confidence
+  means tesseract is confident about marks it does not recognise as language.
 
 State the confidence per frame when you report, and name the cue. A number
 without a cue is not a judgement.
