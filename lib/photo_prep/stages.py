@@ -28,6 +28,7 @@ from typing import Optional
 import numpy as np
 
 from . import color as colormod
+from . import decisions as decmod
 from . import orientation as orientmod
 from . import unskew as skewmod
 
@@ -67,6 +68,17 @@ def stage_blocker(m: dict, stage: str) -> Optional[str]:
             return (f"stage '{earlier}' is not approved yet — a {stage} decision "
                     f"made on an un-approved {earlier} is a decision about a frame "
                     f"that is going to change")
+
+    # An approval that no longer describes the decisions it was given is not an
+    # approval. The same sentence as above, one step further: a crop decided on
+    # an orientation that has since been edited is a decision about a frame that
+    # ALREADY changed. See photo_prep.decisions (#21).
+    stale = decmod.stale_stages(m, STAGES[:STAGES.index(stage)])
+    if stale:
+        earlier, why = stale[0]
+        return (f"stage '{earlier}' was approved, but its decisions have changed "
+                f"since — {why[0]}. Re-open and re-approve '{earlier}' before "
+                f"deciding {stage} on top of it")
     return None
 
 

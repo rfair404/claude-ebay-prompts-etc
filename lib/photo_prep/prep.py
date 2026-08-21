@@ -63,6 +63,7 @@ from typing import Optional
 import numpy as np
 
 from . import color as colormod
+from . import decisions as decmod
 from . import orientation as orientmod
 from . import stages as stagemod
 from . import categories as catmod
@@ -304,6 +305,20 @@ def assert_approved(shoot: Path) -> dict:
         raise PrepGateError(
             f"{shoot.name}: photo prep is not approved (HARD gate). Review "
             f"{shoot / '.prep' / 'prep_review.jpg'}, then --approve.")
+
+    # A CHANGED DECISION IS STALENESS, NOT JUST A CHANGED FILE.
+    #
+    # This function used to hash only sources and outputs, so a rotation edited
+    # after sign-off left `approved: true` standing over frames the shipping
+    # files had never been rendered with -- six of them, on paul-fredrick.
+    # Comparing the decision record catches that class structurally (#21).
+    dstale = decmod.stale_stages(m, stagemod.STAGES)
+    if dstale:
+        why = "; ".join(f"{stage}: {reasons[0]}" for stage, reasons in dstale[:3])
+        raise PrepGateError(
+            f"{shoot.name}: decisions changed since sign-off -- {why}"
+            f"{' ...' if len(dstale) > 3 else ''}. Re-open the affected stage, "
+            f"re-approve, and re-run --apply.")
 
     stale = []
     for name, rec in m["photos"].items():
@@ -1013,6 +1028,10 @@ def run_pick(shoot: Path, preset: str, quiet: bool = False,
             rows.append((name, _load_bgr(shoot / name), _load_bgr(dst), rec))
 
     m["chosen_preset"] = preset
+    # WHO chose it, not just what. An auto-adopted default and a deliberate
+    # --pick are different decisions even when they name the same preset:
+    # only one of them survives the next --apply. See decisions.record_for.
+    m["preset_picked_by_operator"] = not auto
     m["preset_source"] = "default" if auto else "picked"
     # A different look is a different set of photos; whatever was approved
     # before was approved for images that are no longer the ones on disk.
@@ -1220,7 +1239,13 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
             f"cannot approve '{stage}' - {len(pending)} outstanding: "
             + "; ".join(pending[:12]))
     st = stagemod.stage_state(m)
-    st[stage] = {"approved": True, "approved_at": _now()}
+    # The sign-off attaches to the DECISIONS it was given, not merely to a
+    # timestamp. Any later change to any decision moves the digest, so the
+    # approval stops matching without anyone remembering to invalidate it --
+    # which is what let six frames sit at approved:true at a rotation the
+    # shipping files had never been rendered with (issue #21).
+    st[stage] = dict(approved=True, approved_at=_now(),
+                     **decmod.stamp(m, stage))
     # A later stage's approval cannot survive an earlier one being revisited.
     for later in stagemod.STAGES[stagemod.STAGES.index(stage) + 1:]:
         st[later] = {"approved": False, "approved_at": None}
@@ -1803,6 +1828,9 @@ def main(argv=None) -> int:
     ap.add_argument("--only", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
     ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
+    ap.add_argument("--decisions", action="store_true",
+                    help="print the decision record and its digest, and report "
+                         "any stage whose decisions have changed since sign-off")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
     ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help="margin around the subject (default 0.12)")
     ap.add_argument("--category", default=None, choices=list(catmod.names()),
@@ -1896,6 +1924,22 @@ def main(argv=None) -> int:
         m = run_approve(shoot)
         print(f"APPROVED {shoot.name} at {m['approved_at']} — "
               f"{len(m['photos'])} photos cleared for DRAFT.")
+        return 0
+    if args.decisions:
+        m = load_manifest(shoot)
+        rec = decmod.record_for(m)
+        print(json.dumps(rec, indent=2, sort_keys=True))
+        print(f"digest: {decmod.digest(rec)}")
+        stale = decmod.stale_stages(m, stagemod.STAGES)
+        if stale:
+            print()
+            print("DECISIONS CHANGED SINCE SIGN-OFF:")
+            for stage, why in stale:
+                print(f"  {stage}:")
+                for w in why:
+                    print(f"    {w}")
+        else:
+            print("every approved stage still matches its decisions")
         return 0
     if args.status:
         _print_status(shoot, load_manifest(shoot))
