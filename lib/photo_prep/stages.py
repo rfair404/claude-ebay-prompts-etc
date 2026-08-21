@@ -9,7 +9,7 @@ ship. Shown together, a bad crop and a bad rotation look the same on the page.
 
 So the review runs in order and stops at each step:
 
-    orientation  ->  unskew  ->  crop  ->  colour
+    orientation  ->  crop  ->  colour
 
 Each stage renders ONE sheet with a row per frame and a thumbnail for every
 option at that stage, so the choice is a pick rather than a description. Each
@@ -30,14 +30,12 @@ import numpy as np
 from . import color as colormod
 from . import decisions as decmod
 from . import orientation as orientmod
-from . import unskew as skewmod
 
-STAGES = ("orientation", "unskew", "crop", "color")
+STAGES = ("orientation", "crop", "color")
 STAGE_LABEL = {
     "orientation": "1 · ORIENTATION — which way is up",
-    "unskew": "2 · UNSKEW — square up a rectangular item",
-    "crop": "3 · CROP — framing on the squared frame",
-    "color": "4 · COLOUR — backdrop and item, on the final framing",
+    "crop": "2 · CROP — framing on the upright frame",
+    "color": "3 · COLOUR — backdrop and item, on the final framing",
 }
 
 CELL = 250
@@ -198,57 +196,7 @@ def orientation_sheet(shoot: Path, m: dict, out: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# stage 2 — unskew
-# ---------------------------------------------------------------------------
-
-def unskew_sheet(shoot: Path, m: dict, out: Path) -> Path:
-    """Row per frame: the upright frame with the item's own quad drawn on it,
-    and the squared result beside it.
-
-    The quad is what makes this answerable. A deskew of two degrees is invisible
-    as a before/after pair at thumbnail size, but a green outline that does not
-    sit on the item's edges is obvious — the operator is checking the MEASUREMENT,
-    not eyeballing the correction.
-    """
-    import cv2
-    from .prep import _load_bgr, _thumb
-
-    rows = [_banner(CELL * 3 + 20, STAGE_LABEL["unskew"],
-                    "left = the edges PREP measured, right = squared.  "
-                    "Override with --unskew NAME=off|on")]
-    for name, rec in (m.get("photos") or {}).items():
-        src = shoot / name
-        if not src.exists():
-            continue
-        up = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
-        sk = skewmod.from_dict(rec.get("unskew"))
-
-        drawn = up.copy()
-        if sk.quad:
-            q = np.array(sk.quad, np.int32).reshape(-1, 1, 2)
-            cv2.polylines(drawn, [q], True, PICK if sk.applied else WARN,
-                          max(3, int(0.004 * max(up.shape[:2]))), cv2.LINE_AA)
-        tiles = [_tile(_thumb(drawn, CELL * 2), "edges measured", False)]
-
-        if sk.applied:
-            tiles.append(_tile(_thumb(skewmod.apply(up, sk), CELL * 2), "squared", True))
-        else:
-            blank = np.full((CELL, CELL, 3), 22, np.uint8)
-            cv2.putText(blank, "AS SHOT", (18, CELL // 2), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7, WARN, 2, cv2.LINE_AA)
-            tiles.append(_tile(blank, "left alone", True))
-
-        bits = f"tilt {sk.tilt_deg:.2f}deg  keystone {sk.keystone:.3f}  fill {sk.fill:.2f}"
-        rows.append(_row_label(CELL * 3 + 20,
-                               f"{name}   {'SQUARED' if sk.applied else 'as shot'}   "
-                               f"{bits}   — {sk.reason}",
-                               OK if sk.applied else WARN))
-        rows.append(np.hstack(tiles))
-    return _write(_stack(rows), out)
-
-
-# ---------------------------------------------------------------------------
-# stage 3 — crop
+# stage 2 — crop
 # ---------------------------------------------------------------------------
 
 def crop_sheet(shoot: Path, m: dict, out: Path) -> Path:
@@ -294,7 +242,7 @@ def crop_sheet(shoot: Path, m: dict, out: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# stage 4 — colour
+# stage 3 — colour
 # ---------------------------------------------------------------------------
 
 def color_sheet(shoot: Path, m: dict, out: Path) -> Path:
@@ -339,5 +287,5 @@ def color_sheet(shoot: Path, m: dict, out: Path) -> Path:
     return _write(_stack(rows), out)
 
 
-SHEET_BUILDERS = {"orientation": orientation_sheet, "unskew": unskew_sheet,
-                  "crop": crop_sheet, "color": color_sheet}
+SHEET_BUILDERS = {"orientation": orientation_sheet, "crop": crop_sheet,
+                  "color": color_sheet}

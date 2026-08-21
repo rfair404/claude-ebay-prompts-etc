@@ -587,7 +587,7 @@ def _unify_backdrop(photos: dict, quiet: bool = False) -> Optional[dict]:
 
 
 def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
-    """Plan unskew, crop and the colour reading — on the APPROVED rotations.
+    """Plan the crop and the colour reading — on the APPROVED rotations.
 
     This used to run in the same loop as orientation, which meant every one of
     these measurements described a frame the operator had not confirmed yet. A
@@ -624,8 +624,10 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
         upright = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
         sm = mask_for(upright, smode)
 
-        prev_sk = skewmod.from_dict(rec.get("unskew"))
-        sk = prev_sk if prev_sk.operator else skewmod.plan(upright, sm)
+        # A LEGACY warp, if this shoot was squared before the unskew stage was
+        # removed. Nothing plans a new one; the crop box below was measured on
+        # the squared pixels, so the replay has to happen before it.
+        sk = skewmod.from_dict(rec.get("unskew"))
         upright, sm = _unskewed(upright, sm, sk)
 
         stats = colormod.analyze(upright, sm.mask)
@@ -636,7 +638,6 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
         rec["subject"] = {"source": sm.source, "agreement": round(sm.agreement, 3),
                           "mask_iou": round(sm.mask_iou, 3),
                           "coverage": round(sm.coverage, 4), "bbox": list(sm.bbox)}
-        rec["unskew"] = sk.to_dict()
         rec["crop"] = crop
         prev_cp = rec.get("color_plan") or {}
         measured = dict(bg_class=stats.bg_class, bg_luma=round(stats.bg_luma, 1),
@@ -647,7 +648,7 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
         rec["status"] = "SHIP" if crop["applied"] else "PASSTHROUGH"
         rec.pop("pending_orientation", None)
         if not quiet:
-            print(f"  {key:28} {'squared ' if sk.applied else '        '}"
+            print(f"  {key:28} "
                   f"{'crop' if crop['applied'] else 'no crop: ' + (crop.get('reason') or '')[:44]}")
 
     m["backdrop"] = _unify_backdrop(m["photos"], quiet)
@@ -725,9 +726,6 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         # manifest ended up saying 270.
         #
         # `plan_geometry()` does that work, after --approve-stage orientation.
-        prev_sk = skewmod.from_dict(prev.get("unskew"))
-        sk = (prev_sk if prev_sk.operator else
-              skewmod.Skew(False, "not planned yet — orientation first"))
         stats = None
         crop = (prev.get("crop") if (prev.get("crop") or {}).get("operator")
                 else {"applied": False, "reason": "not planned yet — orientation first",
@@ -751,7 +749,10 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
             "subject": {"source": sm.source, "agreement": round(sm.agreement, 3),
                         "mask_iou": round(sm.mask_iou, 3),
                         "coverage": round(sm.coverage, 4), "bbox": list(sm.bbox)},
-            "unskew": sk.to_dict(),
+            # Carried, never re-decided: the stage is gone, and only a shoot
+            # squared under it still has anything here to replay.
+            "unskew": prev.get("unskew") or {"applied": False,
+                                             "reason": "unskew stage removed"},
             "crop": crop,
             # An operator's `--detail` call is an answer, not a proposal: it
             # survives a re-run the same way a recorded rotation does. Only the
@@ -864,9 +865,9 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         before = _load_bgr(src)
         img = orientmod.rotate_bgr(before, rec["orientation"]["applied"])
 
-        # The unskew recorded at stage 2 is a decision, not a proposal — apply
-        # it, do not re-derive it. Everything below is measured on the squared
-        # frame, which is what the crop box was planned on.
+        # A legacy warp from before the unskew stage was removed is a decision
+        # already published, not a proposal — replay it, never re-derive it.
+        # Everything below is measured on the frame the crop was planned on.
         sk = skewmod.from_dict(rec.get("unskew"))
 
         # Re-segment on the upright pixels: the crop box in the manifest was
@@ -1258,7 +1259,7 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
         # backdrop reading can describe a frame that has since been turned.
         plan_geometry(shoot, quiet=True)
         m = load_manifest(shoot)
-        print("  planned unskew, crop and the colour reading on those rotations")
+        print("  planned the crop and the colour reading on those rotations")
     nxt = stagemod.STAGES[stagemod.STAGES.index(stage) + 1:] or None
     print(f"APPROVED stage '{stage}' at {st[stage]['approved_at']}")
     print(f"  next: --stage {nxt[0]}" if nxt else "  all stages approved — --apply writes listing/")
@@ -1266,9 +1267,12 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
 
 
 def _unskewed(img: np.ndarray, sm, sk) -> tuple:
-    """Carry a frame and its mask through a planned unskew, or return them as
-    they are. One place, so every consumer — the check pass, the apply pass, the
-    stage sheets — is looking at identical pixels."""
+    """Replay a LEGACY unskew onto a frame and its mask, or return them as they
+    are. One place, so every consumer — the check pass, the apply pass, the stage
+    sheets — is looking at identical pixels.
+
+    The unskew stage is gone. This exists so the frames that were published with
+    a warp recorded re-render to the pixels a buyer is already looking at."""
     if not getattr(sk, "applied", False):
         return img, sm
     return (skewmod.apply(img, sk),
@@ -1302,7 +1306,8 @@ def _cropped(img: np.ndarray, sm, box) -> tuple:
 
 
 def prepared(shoot: Path, name: str, rec: dict) -> np.ndarray:
-    """A frame as the crop and colour stages see it: upright, then squared."""
+    """A frame as the crop and colour stages see it: upright, plus any legacy
+    unskew this shoot was published with."""
     img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
     sk = skewmod.from_dict(rec.get("unskew"))
     return skewmod.apply(img, sk) if sk.applied else img
@@ -1332,46 +1337,6 @@ def _replan_crop(shoot: Path, m: dict, name: str, rec: dict, pad: float) -> dict
     crop["reason"] = (f"operator: recrop at pad {pad}" if crop["applied"]
                       else f"operator recrop refused — {crop['reason']}")
     return crop
-
-
-def run_set_unskew(shoot: Path, pairs: list) -> dict:
-    """Override the unskew decision for named frames: off | on.
-
-    `on` is the operator saying "this IS a rectangle" — it waives the shape test
-    only. The magnitude guards stay armed, because "square it up" is not consent
-    to flatten a shot that was taken at an angle deliberately.
-    """
-    m = load_manifest(shoot)
-    for pair in pairs:
-        if "=" not in pair:
-            raise SystemExit(f"--unskew wants NAME=off|on, got {pair!r}")
-        name, val = pair.rsplit("=", 1)
-        key = _match_photo(m, name)
-        rec = m["photos"][key]
-        val = val.strip().lower()
-        if val == "off":
-            sk = skewmod.Skew(applied=False, reason="operator: leave it as shot",
-                              operator=True)
-        elif val == "on":
-            img = orientmod.rotate_bgr(_load_bgr(shoot / key),
-                                       rec["orientation"]["applied"])
-            sk = skewmod.plan(img, mask_for(img, subject_mode(m)), rectangular=True)
-            sk.operator = True
-            sk.reason = ("operator: " + sk.reason if sk.applied
-                         else "operator asked to square it up, but " + sk.reason)
-        else:
-            raise SystemExit(f"{name}: expected off|on, got {val!r}")
-        rec["unskew"] = sk.to_dict()
-        # The crop box was measured on the old geometry. Anything pinned there
-        # describes pixels that no longer exist.
-        rec.pop("crop", None)
-        print(f"  {key}: unskew -> {val}  ({sk.reason})")
-    st = stagemod.stage_state(m)
-    for later in ("unskew", "crop", "color"):
-        st[later] = {"approved": False, "approved_at": None}
-    m["approved"] = False
-    save_manifest(shoot, m)
-    return m
 
 
 def _match_photo(m: dict, name: str) -> str:
@@ -1777,8 +1742,7 @@ def _print_status(shoot: Path, m: dict) -> None:
     photos = m.get("photos", {})
     asks = [n for n, r in photos.items() if r["orientation"]["needs_ask"]]
     cropped = sum(1 for r in photos.values() if (r.get("crop") or {}).get("applied"))
-    squared = sum(1 for r in photos.values() if (r.get("unskew") or {}).get("applied"))
-    print(f"\n{shoot.name}: {len(photos)} photos · {squared} squared · {cropped} cropped · "
+    print(f"\n{shoot.name}: {len(photos)} photos · {cropped} cropped · "
           f"{len(asks)} awaiting an orientation answer")
     chosen = m.get("chosen_preset")
     src = m.get("preset_source")
@@ -1798,23 +1762,20 @@ def main(argv=None) -> int:
     except Exception:
         pass
 
-    ap = argparse.ArgumentParser(description="PREP — orientation, unskew, crop and colour for one shoot.")
+    ap = argparse.ArgumentParser(description="PREP — orientation, crop and colour for one shoot.")
     ap.add_argument("shoot_dir")
     ap.add_argument("--check", action="store_true", help="analyse + plan; render nothing")
     ap.add_argument("--apply", action="store_true", help="render listing/ + the review sheet")
     ap.add_argument("--pick", metavar="PRESET",
                     help="adopt a preset for the shoot (copies it into listing/)")
     ap.add_argument("--stage", metavar="NAME",
-                    help="open a review stage: orientation | unskew | crop | color")
+                    help="open a review stage: orientation | crop | color")
     ap.add_argument("--approve-stage", metavar="NAME",
-                    help="sign off ONE stage (orientation | unskew | crop | color)")
+                    help="sign off ONE stage (orientation | crop | color)")
     ap.add_argument("--detail", nargs="+", metavar="NAME=on|off",
                     help="mark named frames as detail macros (on) so the colour pass leaves "
                          "the non-subject pixels alone — use when the 'backdrop' is the item's "
                          "own card, box or mount; off hands them back to backdrop treatment")
-    ap.add_argument("--unskew", nargs="+", metavar="NAME=off|on",
-                    help="override the unskew decision for named frames: on = this is a "
-                         "rectangle, square it up; off = leave the geometry alone")
     ap.add_argument("--crop", nargs="+", metavar="NAME=off|on|padF",
                     help="override the crop decision for named frames")
     ap.add_argument("--sheet", action="store_true",
@@ -1878,7 +1839,7 @@ def main(argv=None) -> int:
         m = load_manifest(shoot)
         m.setdefault("settings", {})["category"] = category
         m["settings"]["subject"] = subject
-        for st in ("unskew", "crop", "color"):
+        for st in ("crop", "color"):
             if m.get("stages", {}).get(st):
                 m["stages"][st] = {"approved": False, "approved_at": None}
         m["approved"] = False
@@ -1886,7 +1847,7 @@ def main(argv=None) -> int:
         save_manifest(shoot, m)
         print(f"category: {stored_cat} -> {category}  "
               f"(subject {stored_subject} -> {subject}; "
-              f"unskew/crop/colour sign-off dropped; re-run --check)")
+              f"crop/colour sign-off dropped; re-run --check)")
         print(f"  {catmod.describe(category)}")
 
     if args.rotate:
@@ -1900,9 +1861,6 @@ def main(argv=None) -> int:
         return 0
     if args.approve_stage:
         run_approve_stage(shoot, args.approve_stage)
-        return 0
-    if args.unskew:
-        run_set_unskew(shoot, args.unskew)
         return 0
     if args.crop:
         run_set_crop(shoot, args.crop)

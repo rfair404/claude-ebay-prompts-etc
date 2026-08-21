@@ -970,8 +970,6 @@ def test_stages_run_in_order_and_cannot_be_skipped():
     assert "orientation" in S.stage_blocker(m, "crop")
     assert S.stage_blocker(m, "color")
     S.stage_state(m)["orientation"]["approved"] = True
-    assert "unskew" in S.stage_blocker(m, "crop")
-    S.stage_state(m)["unskew"]["approved"] = True
     assert S.stage_blocker(m, "crop") is None
     assert "crop" in S.stage_blocker(m, "color")
 
@@ -982,11 +980,9 @@ def test_approving_a_stage_invalidates_the_later_ones():
         shoot = _shoot(Path(td) / "s", n=1)
         m = P.load_manifest(shoot)
         m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": False, "applied": 0},
-                                     "unskew": {"applied": False},
                                      "crop": {"applied": False}}}
         P.save_manifest(shoot, m)
         P.run_approve_stage(shoot, "orientation")
-        P.run_approve_stage(shoot, "unskew")
         P.run_approve_stage(shoot, "crop")
         m = P.load_manifest(shoot)
         assert m["stages"]["crop"]["approved"]
@@ -1175,131 +1171,38 @@ def test_crisp_keeps_the_cameras_colour_on_the_item():
 
 
 # ---------------------------------------------------------------------------
-# unskew — square up a rectangle, refuse everything that is not one
+# the unskew stage is gone — it may not come back by accident
 # ---------------------------------------------------------------------------
 
-from lib.photo_prep import unskew as U                     # noqa: E402
-
-
-class _M:
-    """The two fields unskew.plan reads off a SubjectMask."""
-    def __init__(self, mask):
-        self.mask = mask
-
-
-def _quad_scene(quad, bg=30, subject=200):
-    """A filled quadrilateral on a flat backdrop, plus its mask."""
-    img = np.full((H, W, 3), bg, np.uint8)
-    mask = np.zeros((H, W), np.uint8)
-    q = np.array(quad, np.int32).reshape(-1, 1, 2)
-    cv2.fillPoly(img, [q], (subject, subject, subject))
-    cv2.fillPoly(mask, [q], 255)
-    return img, mask
-
-
-def _tilted_rect(cx, cy, w, h, deg):
-    a = np.radians(deg)
-    R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
-    pts = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
-    return (pts @ R.T + (cx, cy)).tolist()
-
-
-def test_unskew_squares_a_tilted_frame():
-    """A rectangle rotated 4 degrees is the whole point of the stage."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 4.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    assert 3.0 <= sk.tilt_deg <= 5.0, sk.tilt_deg
-    assert sk.fill > U.MIN_FILL, sk.fill
-
-    out = U.apply(img, sk)
-    after = U.plan(out, _M(U.apply_mask(mask, sk)))
-    assert not after.applied and "already square" in after.reason, after.reason
-
-
-def test_unskew_leaves_a_frame_that_is_already_square():
-    img, mask = _quad_scene([[300, 250], [900, 250], [900, 700], [300, 700]])
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied and "already square" in sk.reason, sk.reason
-    assert np.array_equal(U.apply(img, sk), img), "a no-op must not resample"
-
-
-def test_unskew_refuses_a_round_item():
-    """A marble has no square to restore; a quad fitted to it is noise.
-
-    This is the guard that keeps the stage out of the way of every non-flat
-    item in the inventory.
+def test_the_unskew_stage_is_not_in_the_pipeline():
+    """Removed on the operator's call: too slow, and it squared the wrong
+    rectangle often enough to cost more photos than it saved. The module stays
+    for REPLAY only, so shoots published with a warp still re-render to the
+    pixels that are live — but nothing plans one, and no stage asks about one.
     """
-    img = np.full((H, W, 3), 30, np.uint8)
-    mask = np.zeros((H, W), np.uint8)
-    cv2.ellipse(img, (600, 450), (260, 210), 12, 0, 360, (200, 200, 200), -1)
-    cv2.ellipse(mask, (600, 450), (260, 210), 12, 0, 360, 255, -1)
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied, sk.reason
-    assert "not a rectangle" in sk.reason, sk.reason
-    assert sk.fill < U.MIN_FILL, sk.fill
-
-
-def test_unskew_refuses_a_deliberately_angled_shot():
-    """Steep keystone is a three-quarter view, not a mistake. Squaring it would
-    throw away the shot the photographer meant to take."""
-    img, mask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied, sk.reason
-    assert "on purpose" in sk.reason or "not a rectangle" in sk.reason, sk.reason
-
-
-def test_unskew_keeps_the_items_own_proportions():
-    """The destination rectangle is measured from the item's opposite edges, so
-    a 4:3 painting comes out 4:3 — the correction restores a rectangle, it does
-    not invent a nicer one."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 640, 480, 3.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    (x0, y0), (x1, _), (_, y2), _ = sk.dst
-    assert abs(((x1 - x0) / (y2 - y0)) - 4 / 3) < 0.03, sk.dst
-
-
-def test_unskew_never_crops():
-    """The canvas grows to hold every source pixel. A stage that silently ate
-    the corners of a frame would be indistinguishable from a bad crop."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    out = U.apply(img, sk)
-    assert out.shape[0] >= H and out.shape[1] >= W, out.shape
-    assert (out.shape[0] * out.shape[1]) / (H * W) <= U.MAX_CANVAS_GROWTH
-
-
-def test_unskew_operator_on_waives_only_the_shape_test():
-    """`--unskew NAME=on` says "this is a rectangle" — a mount, a mat or a
-    shadow can easily cost a real frame its shape score. It must not become a
-    licence to flatten a shot that was angled on purpose."""
-    # A tilted rectangle with a bite out of one side: unambiguously tilted,
-    # but too ragged to pass the shape test on its own.
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
-    notch = np.array([[600, 200], [960, 250], [900, 700]], np.int32)
-    cv2.fillPoly(img, [notch], (30, 30, 30))
-    cv2.fillPoly(mask, [notch], 0)
-
-    free = U.plan(img, _M(mask))
-    assert not free.applied and "not a rectangle" in free.reason, free.reason
-    forced = U.plan(img, _M(mask), rectangular=True)
-    assert forced.applied, forced.reason
-    assert 4.0 <= forced.tilt_deg <= 6.0, forced.tilt_deg
-
-    steep, smask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
-    over = U.plan(steep, _M(smask), rectangular=True)
-    assert not over.applied, "a forced unskew must still obey the magnitude guards"
-
-
-def test_unskew_runs_before_crop_in_the_stage_order():
-    """Order is a dependency, not a preference: a crop box measured on skewed
-    pixels describes a frame that is about to change shape."""
     from lib.photo_prep import stages as S
-    assert S.STAGES == ("orientation", "unskew", "crop", "color")
-    assert S.STAGES.index("unskew") < S.STAGES.index("crop")
-    assert S.stage_blocker({}, "crop"), "crop must not open before unskew is approved"
+    from lib.photo_prep import unskew as U
+
+    assert S.STAGES == ("orientation", "crop", "color")
+    assert "unskew" not in S.SHEET_BUILDERS
+    assert not hasattr(U, "plan"), "planning an unskew is what was removed"
+    assert hasattr(U, "apply") and hasattr(U, "from_dict"), "replay must survive"
+
+
+def test_a_recorded_unskew_is_still_replayed():
+    """46 shoots were published with a warp recorded. Re-running PREP on one of
+    them must return the pixels a buyer is already looking at, not new ones."""
+    from lib.photo_prep import unskew as U
+
+    sk = U.from_dict({"applied": True, "reason": "legacy",
+                      "quad": [[10, 12], [300, 4], [308, 210], [18, 218]],
+                      "dst": [[0, 0], [300, 0], [300, 210], [0, 210]],
+                      "out_size": [300, 210]})
+    img = np.full((240, 320, 3), 40, np.uint8)
+    img[60:120, 80:160] = 200
+    out = U.apply(img, sk)
+    assert out.shape[:2] == (210, 300), out.shape
+    assert not np.array_equal(out[:210, :300], img[:210, :300]), "the warp did nothing"
 
 
 def test_check_measures_nothing_until_orientation_is_settled():
@@ -1318,7 +1221,6 @@ def test_check_measures_nothing_until_orientation_is_settled():
             assert rec.get("pending_orientation") is True, name
             assert rec["orientation"], "orientation IS measured in this pass"
             assert not (rec.get("crop") or {}).get("applied"), name
-            assert not (rec.get("unskew") or {}).get("applied"), name
 
 
 def test_geometry_refuses_to_plan_before_orientation_is_approved():

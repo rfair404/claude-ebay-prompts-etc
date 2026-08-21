@@ -16,7 +16,6 @@ explicit operator instruction:
     be wrong in a way nothing here detects: on fall-and-winter-1980 two frames
     shipped rotated 90 degrees while flagged as resolved, not ASK. The guess is
     the best signal available, not a correct answer.
-  * DESKEW IS ACCEPTED. Whatever the unskew stage decides stands.
 
 The one thing it will NOT do is write to a sold listing. It never passes
 --allow-not-sellable, so list_edit's guard — which asks eBay, not the ledger,
@@ -54,7 +53,7 @@ MEDIA = re.compile(
     r"|paul-fredrick|folio|mark-shale|fall-and-winter|zachry|decatur",
     re.I)
 
-STAGES = ("orientation", "unskew", "crop", "color")
+STAGES = ("orientation", "crop", "color")
 
 
 def run(args: list[str], timeout: int = 1800) -> tuple[int, str]:

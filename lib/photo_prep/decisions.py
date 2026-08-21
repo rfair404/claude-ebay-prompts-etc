@@ -75,7 +75,7 @@ RENDER_SETTINGS = ("subject", "pop")
 
 # A STAGE'S APPROVAL ATTACHES TO THE DECISIONS UP TO THAT STAGE, NOT ALL OF THEM.
 #
-# The four stages depend on each other in one direction only, and approving one
+# The three stages depend on each other in one direction only, and approving one
 # is what LICENSES the next to be planned -- `--approve-stage orientation` runs
 # plan_geometry() itself, against the rotations just signed off. So hashing the
 # whole record into the orientation approval would invalidate that approval the
@@ -86,18 +86,16 @@ RENDER_SETTINGS = ("subject", "pop")
 # stage is still free to be planned and re-planned above it.
 STAGE_SCOPE = {
     "orientation": ("orientation",),
-    "unskew": ("orientation", "unskew"),
     "crop": ("orientation", "unskew", "crop"),
     "color": ("orientation", "unskew", "crop"),
 }
 
 # `subject` chooses which detector's mask everything geometric is measured
-# against, so it belongs from the unskew stage on. `pop` only reaches the colour
+# against, so it belongs from the crop stage on. `pop` only reaches the colour
 # pass. Scoping these the same way keeps the same promise: changing the detector
 # invalidates the boxes measured with it, and changing the subject pass does not.
 STAGE_SETTINGS = {
     "orientation": (),
-    "unskew": ("subject",),
     "crop": ("subject",),
     "color": ("subject", "pop"),
 }
@@ -121,6 +119,12 @@ def _orientation(rec: dict) -> dict:
 
 
 def _unskew(rec: dict) -> dict:
+    """A LEGACY warp recorded before the unskew stage was removed.
+
+    Nothing plans one any more, so this reads False on every new shoot. It stays
+    in the record because a shoot that WAS squared still replays that warp, and a
+    decision that moves pixels has to sit under the approval that covers them.
+    """
     sk = rec.get("unskew") or {}
     if not sk.get("applied"):
         return {"applied": False, "by": "operator" if sk.get("operator") else "auto"}

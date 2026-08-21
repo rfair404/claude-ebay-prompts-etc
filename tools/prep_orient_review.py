@@ -35,6 +35,7 @@ import cv2                                                   # noqa: E402
 import numpy as np                                           # noqa: E402
 
 from lib.photo_prep import orientation as orientmod          # noqa: E402
+from lib.photo_prep.prep import _load_bgr                     # noqa: E402
 
 TURNS = (0, 90, 180, 270)
 INK = (240, 240, 240)
@@ -70,7 +71,12 @@ def build(shoot: Path, per_sheet: int, cell: int) -> list[Path]:
         o = rec["orientation"]
         # The camera half is objective; the four options are the SUBJECT turns
         # on top of it, which is the only thing anyone is being asked to judge.
-        cam = orientmod.rotate_bgr(cv2.imread(str(src)), o.get("exif_angle", 0))
+        # Decode through PREP's own loader. cv2.imread applies the EXIF
+        # orientation tag itself, so reading with it and then rotating by
+        # exif_angle turned every frame TWICE — the sheet drew the right
+        # picture under the wrong label, and every angle copied off it landed
+        # 90 degrees out. _load_bgr is what prep.py measures and renders on.
+        cam = orientmod.rotate_bgr(_load_bgr(src), o.get("exif_angle", 0))
         cells = []
         for t in TURNS:
             applied = ((o.get("exif_angle", 0) or 0) + t) % 360

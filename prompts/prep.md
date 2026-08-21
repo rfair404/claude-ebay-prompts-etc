@@ -17,17 +17,24 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ## The review is STAGED, and interactive. Always.
 
-Four corrections, in this order, and **you do not move on until the operator
+Three corrections, in this order, and **you do not move on until the operator
 says the current one is right**:
 
-    1. ORIENTATION  ->  2. UNSKEW  ->  3. CROP  ->  4. COLOUR / touch-up
+    1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
 
-This ordering is not a preference, it is a dependency. Squaring up is only
-meaningful once the frame is the right way up. A crop is only meaningful on the
-shape that will ship — a box measured on skewed pixels describes a frame that is
-about to change. A colour judgement is only meaningful on the final framing.
-Shown together, a bad crop and a bad rotation look the same on the page and
-neither can be answered.
+This ordering is not a preference, it is a dependency. A crop is only meaningful
+once the frame is the right way up. A colour judgement is only meaningful on the
+final framing. Shown together, a bad crop and a bad rotation look the same on
+the page and neither can be answered.
+
+**There used to be an UNSKEW stage between orientation and crop**, warping a
+rectangular item so its edges met the picture's. It was removed in 2026-08 on
+the operator's call: it cost a quad fit and a full-frame resample on every
+frame, it damaged more photos than it saved — a quad landing on a mat, a mount
+or a soft shadow squares up the wrong rectangle — and two degrees of tilt is not
+something a buyer sees in a thumbnail. Nothing plans one now. A shoot that was
+squared before it went still REPLAYS its recorded warp, so re-running PREP on a
+live shoot returns the pixels a buyer is already looking at.
 
 ## Orientation is DECIDED, not asked — above 95% confidence
 
@@ -81,10 +88,9 @@ without a cue is not a judgement.
 
 **Orientation is first, and that means nothing else is measured yet.**
 `--check` reads EXIF, segments, runs the text detector and resolves which way is
-up — and stops there. It does NOT plan the unskew, the crop or the colour
-reading, because each of those describes the geometry it was computed on:
-measure them against a rotation nobody has confirmed, and a later turn silently
-invalidates all three. Six catalog spreads shipped exactly that way, with crops
+up — and stops there. It does NOT plan the crop or the colour reading, because
+each of those describes the geometry it was computed on: measure them against a
+rotation nobody has confirmed, and a later turn silently invalidates both. Six catalog spreads shipped exactly that way, with crops
 planned at 0° while the manifest ended up saying 270°.
 
 `--approve-stage orientation` then runs `plan_geometry()` itself, against the
@@ -97,10 +103,10 @@ Each stage shows **a card per photo with a thumbnail for every option at that
 stage, side by side**, current choice ruled green. The operator is picking from
 pictures, never reading a description of a picture.
 
-**Present it as the Frame Check page, every time — orientation, unskew, crop
-AND colour.** This is the settled format. Do not hand over a JPEG contact sheet,
-do not describe the frames in prose, and do not invent a different layout for
-any stage: all four use the same page, the same card, the same controls.
+**Present it as the Frame Check page, every time — orientation, crop AND
+colour.** This is the settled format. Do not hand over a JPEG contact sheet, do
+not describe the frames in prose, and do not invent a different layout for any
+stage: all three use the same page, the same card, the same controls.
 
     python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
 
@@ -171,41 +177,6 @@ click-through covers the page.
 The JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and
 are the fallback when no page can be published.
 
-## Unskew: what counts as crooked
-
-A framed picture, a magazine, a book, a record sleeve, a certificate, a box —
-the object is a rectangle and the buyer knows it, so a couple of degrees off
-square reads as a cheap listing before they have read a word. The orientation
-stage only turns in multiples of 90°; this is the stage that fixes the rest.
-
-It measures the item's own outline, fits a quad to it, and warps the frame so
-the item's edges meet the picture's. Two refusals, both reported per frame:
-
-- **Not a rectangle.** A marble, a jug, a heap of flatware — there is no square
-  to restore, and a quad fitted to one is noise. Measured as how completely the
-  outline fills the smallest rotated rectangle around it: a book scores ~0.97,
-  an ellipse cannot beat 0.79, and the line is 0.88.
-- **Angled on purpose.** Past ~18° of tilt or a quarter of keystone, the angle
-  IS the shot — a raking-light pass across a surface, a three-quarter view
-  showing depth — and flattening it destroys what the frame was taken for.
-
-`--unskew NAME=on` overrides the FIRST of those only: it says "this is a
-rectangle", which a mat, a mount or a soft shadow can easily cost a real frame.
-It is not consent to flatten a deliberately angled shot — the magnitude guards
-stay armed either way. `--unskew NAME=off` leaves a frame's geometry alone.
-Changing the unskew throws away any crop box pinned to the old geometry, because
-that box describes pixels that no longer exist.
-
-The warp carries the whole frame, backdrop included, so the crop stage still has
-something to work with, and the canvas grows to hold every source pixel —
-squaring up never crops. The wedges of new canvas outside the original frame are
-filled by replicating the edge; that only ever lands on backdrop beyond where
-the photograph reached, never on the item.
-
-Proportions come from the item's own opposite edges, so a 12x9 painting comes
-out 4:3. Stretching a slightly trapezoidal frame into a "nicer" rectangle is the
-same class of lie as smoothing a scratch out of the paint.
-
 ## SHOWING A MODIFIED IMAGE — the locked template
 
 Every time PREP changes a picture, the operator sees it this way. No
@@ -214,8 +185,7 @@ of the picture.
 
 **The rule: never show a result without what it came from.** A cropped frame
 alone is unreviewable — the question is not "is this a good picture", it is
-"was the right thing removed". The same holds for a rotation, a squaring and a
-colour pass.
+"was the right thing removed". The same holds for a rotation and a colour pass.
 
     BEFORE            →   AFTER              →   why, in the operator's words
     (what it was)         (what will ship)       ("would cut 10% off the page")
@@ -223,7 +193,6 @@ colour pass.
 | Stage | Before | After | Options offered |
 |---|---|---|---|
 | orientation | the frame as the camera gave it | at the chosen turn | all four turns |
-| unskew | the tilted frame | squared, with the tilt in degrees | squared / leave as shot |
 | crop | the full frame | the crop result | cropped / as shot / force a crop |
 | colour | as shot | each rendered look | as shot + every look |
 
@@ -402,7 +371,7 @@ approved*.
 
 **The category persists in the manifest**, so a later `--check` or `--apply`
 that does not repeat the flag gets the same answer. Changing it drops the
-unskew/crop/colour sign-offs, because every box downstream of the detector was
+crop/colour sign-offs, because every box downstream of the detector was
 measured against the old one. `--subject auto|paper` remains available as the
 escape hatch for a shoot its category gets wrong, and outranks it.
 
@@ -479,7 +448,6 @@ in either tool is the call in both.
 | `strip_exif` | PREP bakes EXIF internally; `no-exif/` is legacy output |
 | `even_background`, `trim_whitespace` | PREP's backdrop pass (mask-driven, works on dark felt too) |
 | `center_crop` | PREP's crop (its safety guards are reused, not reimplemented) |
-| (nothing did this) | PREP's unskew — no earlier step squared a crooked rectangle |
 | `orient.py --set` | still works; PREP reads AND writes its manifest |
 | DRAFT step 1/1b/2/3 | this prompt |
 

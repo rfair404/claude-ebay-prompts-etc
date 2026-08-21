@@ -30,7 +30,7 @@ import argparse, json, subprocess, sys, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-STAGES = ("orientation", "unskew", "crop", "color")
+STAGES = ("orientation", "crop", "color")
 IMG = (".jpg", ".jpeg", ".png", ".heic", ".JPG", ".JPEG", ".PNG")
 
 

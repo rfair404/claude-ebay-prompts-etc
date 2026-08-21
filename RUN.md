@@ -187,7 +187,7 @@ outright with no tolerance.
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
-| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → unskew → crop → colour, each approved) |
+| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → crop → colour, each approved) |
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
@@ -271,7 +271,7 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-2b. PREP → `--check` (ORIENTATION ONLY — unskew, crop and colour are not
+2b. PREP → `--check` (ORIENTATION ONLY — the crop and the colour reading are not
    measured until orientation is approved, so no crop box describes a rotation
    that could still change), then `python tools/prep_sheet_html.py <shoot>` and publish
    `.prep/review.html` as an artifact — that page IS the review surface for all

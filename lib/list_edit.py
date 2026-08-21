@@ -1290,7 +1290,7 @@ def build_review_card(draft_path: Path,
             if _o.get("applied"):
                 _bits.append(f"rot {_o['applied']}deg")
             if (_rec.get("unskew") or {}).get("applied"):
-                _bits.append("squared")
+                _bits.append("squared (legacy)")
             if (_rec.get("crop") or {}).get("applied"):
                 _bits.append("cropped")
             _want = _rec.get("out_sha256")
