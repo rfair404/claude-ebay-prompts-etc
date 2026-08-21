@@ -9,6 +9,109 @@ pricing. Read the prior phases' files, render the template, validate
 against its constraints, write one self-contained local file. **Local
 file only — no eBay calls, no publishing** (firewall, per _shared).
 
+## Photos come from PREP — DRAFT does not touch them up
+
+Photo preparation is its own phase now: **[PREP](prep.md)**, run after IDENTIFY.
+It handles orientation, crop, backdrop and the subject pass in one pass, writes
+`<shoot-dir>/listing/`, and stops at a HARD approval gate.
+
+**DRAFT's job here is only to point `photos:` at the prepped files:**
+
+    python -m lib.photo_prep.prep <shoot-dir> --repoint-draft --apply-repoint
+
+That maps each existing entry to its prepped counterpart **in the same order** —
+entry one is the eBay gallery image and the list is often not lexicographic.
+
+If PREP has not been run, stop and run it; do not fall back to the old tools.
+`upload_photos_to_eps` enforces this in code, so an unprepped or unapproved
+shoot cannot publish regardless of what this prompt says.
+
+<details>
+<summary>The old hand-chained sequence (superseded — kept for one-off use)</summary>
+
+The steps below ran as a chain: `strip_exif` → `even_background` →
+`trim_whitespace` → `center_crop`, each writing a subdirectory. **Do not run
+them as a chain any more.** Four subdirectories that all look plausible, plus a
+lexicographic photo picker at the end, is where 66 sideways photos hid until
+buyers complained. PREP replaces the whole sequence with one output directory
+and a manifest recording what was done to each frame.
+
+The individual tools still work for a quick one-off, and `orient.py`'s manifest
+is read *and written* by PREP so a rotation recorded in either is the call in
+both. What must not happen is running both on one shoot and then guessing which
+directory the draft points at.
+
+> ⛔ **The orientation test is CONTENT, not metadata.** "Would a buyer see this
+> the right way up?" is the only question that matters, and it cannot be answered
+> from EXIF. A clean metadata pass is necessary and nowhere near sufficient: a
+> phone held at an angle, a book laid on its side, a box shot end-on all produce
+> files that are correct by their EXIF and wrong on the page. Buyers complained
+> about exactly this, and it was declared fixed twice on the strength of the
+> metadata alone. **Never call photos good without looking at them, and never at
+> thumbnail size** — a whole batch was passed off small tiles with every frame
+> still rotated. See step 1b.
+
+Run the sequence (skip a step when it doesn't apply):
+
+1. **EXIF / orientation** — always. Bakes any real Orientation tag into the
+   pixels (`exif_transpose`), then strips metadata, so a viewer needs no tag to
+   get it right.
+       python -m lib.photo_prep.strip_exif <shoot-dir>            # -> <shoot-dir>/no-exif/
+       python -m lib.photo_prep.strip_exif <shoot-dir> --force    # after fixing a bug: stale
+                                                                 # outputs are NEWER than their
+                                                                 # sources and are skipped otherwise
+
+1b. **Orientation review — ALWAYS, and a HUMAN rules on it.** Step 1 only fixes
+   photos whose camera told the truth. For the rest:
+   - Build a numbered contact sheet of the SHIPPED files (`no-exif/`, opened with
+     NO transpose), frame numbers matching this draft's `photos:` order.
+   - Any frame that isn't obviously right: render it at **all four rotations side
+     by side** and pick by eye. Text baseline is the strongest cue (which way
+     would you tilt your head to read it), then how the object naturally sits.
+   - Record the call — never rotate a shipped file in place:
+         python -m lib.photo_prep.orient <shoot-dir> --set "1=180,2=ccw,3=cw"
+     It writes `<shoot-dir>/orientation.json` (degrees CW) and REBUILDS
+     `no-exif/` from the source every time, so a wrong call cannot stack and a
+     later strip_exif cannot silently revert a human's decision.
+   - **Show the user the sheet and get their ruling BEFORE anything publishes.**
+     They are looking at the real listings; you are not.
+   - On a flat lay with objects at odds, no rotation makes everything upright.
+     Pick the hero and SAY which secondary item stays inverted — that is a
+     re-shoot issue, not a rotation one. Don't claim the frame is perfect.
+2. **Backdrop cleanup — only for near-white/seamless backdrops** (NOT dark-felt
+   shots; the corner-sampling logic is tuned for light backgrounds). Evens
+   lighting/shadow, then trims the border to the subject.
+       python -m lib.photo_prep.even_background <dir>            # -> uniform backdrop
+       python -m lib.photo_prep.trim_whitespace <dir>           # -> <dir>/trimmed/
+3. **Center-crop — always.** Centers the item on its focal point at an
+   eBay-friendly aspect (square 1:1 default). Finds the subject by
+   background-contrast (works on dark felt AND light box interiors) and unions
+   ALL foreground pieces so a pair/set stays whole.
+       python -m lib.photo_prep.center_crop <dir> --check        # per-photo verdict + reason
+       python -m lib.photo_prep.center_crop <dir> --apply        # recenter in place (backs up to .orig/)
+   `--apply` overwrites in place so DRAFT's lexicographic photo picker uses the
+   centered files with no other change; default (no `--apply`) writes to
+   `cropped/`. Tunables: `--aspect 4:5`/`orig`, `--pad 0.12`, `--threshold` (flag
+   cutoff, default 6%). Writes a `crop_review.jpg` before|after contact sheet.
+   The tool REFUSES a crop it can't make safely (subject fills the frame, nothing
+   detected, detector locked onto a logo/fragment, or the crop would cut the
+   item): it prints `SKIPPED <reason>`, passes the original through untouched,
+   and labels that row on the review sheet. Expect a lot of skips on macro-heavy
+   shoots — that's the tool working. `--force` crops anyway; don't, unattended.
+
+Chaining: each tool reads a dir and writes a subdir — point the next step at the
+previous output. See [[feedback_center_crop_before_draft]].
+
+</details>
+
+**Check the photos before drafting (per [[feedback_crop_check_first]] ethos):**
+eyeball `<shoot-dir>/.prep/prep_review.jpg`. PREP self-skips the known misfires
+and prints the reason on each row, but that is a backstop, not a substitute — a
+crop can be merely ugly rather than unsafe, and a look can be wrong for the item
+without any rule catching it. Never draft on a bad pass: re-run PREP, `--pick`
+the other look, or record a different rotation. The approval that PREP's gate
+wants is the user's, on that sheet.
+
 ## Inputs
 
 1. `identify.txt` — structured fields (unit_type, qty, category, weight,
@@ -84,6 +187,28 @@ down to it.
   the user reviews and accepts offers manually.
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
+**Net-floor check (MANDATORY — the floor is a price we AGREE to, not a
+formality).** An auto-decline figure is a standing offer to sell at that number,
+so before writing it, compute what we'd actually keep if a buyer hit it exactly:
+
+    net_at_floor = floor − fee(floor) − our_postage
+
+using PRICE's **measured fee band** (16–18% depending on size — see
+[price.md](price.md); it is NOT 13%) and the REAL postage for this item
+(Media Mail only if it's a book with no advertising; magazines and anything with
+ads ship Ground Advantage at 2–3× the cost). If `net_at_floor` is implausibly
+thin for the handling — packing, a trip to the mailbox, and the return risk —
+**raise the floor until it isn't**, and say so in `meta.notes`.
+
+This exists because it was gotten wrong: two magazine lots went live with floors
+set from the Recommended tier under the old 13% fee assumption, and at those
+floors an accepted offer netted **$13.46 and $9.67** on heavy Ground Advantage
+parcels. Both were raised at the REPORT phase (2026-08-15). The failure mode is
+specific — a low floor looks generous and costs nothing until someone takes it.
+
+Postage weighs most on cheap heavy things, so the check bites hardest exactly
+where the old rule was loosest: sub-$50 lots of paper.
+
 **shipping:** weight/dims from IDENTIFY (round up); `free_shipping` true →
 `domestic_shipping_type` FREE_FLAT_RATE; `primary_service` per Service
 map; `handling_time_days` 1; `item_location_zip` blank. **Set
@@ -115,6 +240,40 @@ fulfillment policy. Decide `fulfillment_mode`:
   known. Add a short closing line to the description body: *"Local pickup only
   — <location_hint>. Not local? Message me for a freight quote."* Log the
   decision (+ trigger) in `meta.notes`.
+
+**Carrier-check gate — FedEx vs USPS (SOFT — suggest, never auto-switch).**
+Default carrier is the USPS policy. But at DRAFT, evaluate whether this item
+should go FedEx instead. **Trigger the FedEx check when ANY of these is true:**
+- estimated **packed weight > 5 lb**, OR
+- **any side > 24 in** (long/oversized), OR
+- **very fragile** (glass, thin porcelain, etc.), OR
+- **item value > $200** (price or working price).
+
+When triggered, do this:
+1. **Estimate the FedEx cost** for the packed weight/dims to the buyer (assume an
+   average CONUS zone ~4–5 unless a real destination is known; FedEx Home
+   Delivery / Ground Economy). Note it's an ESTIMATE (no live FedEx rate API
+   here) and show the assumptions (weight, dims, zone). The account's FedEx
+   policy is **`fulfillment_policy_id` 292460878014** ("FedEx SmartPost / Ground
+   Economy") — reference it by id.
+2. **Add the DRIVE COST to FedEx's effective cost.** The seller's nearest FedEx
+   drop-off is **~30 min away (≈1 hr round-trip)**; USPS is picked up free from
+   home, so USPS pays no drive. Factor the round-trip drive (gas + the seller's
+   time) into FedEx's total so a small label saving that the drive eats up does
+   NOT count as cheaper. State the drive adjustment you used.
+3. **Compare FedEx (label + drive) vs the USPS estimate.** Recommend the **FedEx
+   policy** only when FedEx is genuinely cheaper after the drive, OR when USPS
+   can't handle the item (oversize / >70 lb). Otherwise keep USPS.
+4. **Never auto-switch.** Suggest it and let the user choose. If they accept,
+   set the offer's fulfillment policy to the FedEx id at LIST time (a `--review`/
+   publish-time policy override); log the decision + the two estimates in
+   `meta.notes`, and append a NEEDS_REVIEW line so it surfaces at REVIEW.
+
+**Always, on the DRY RUN** (`--list`/`--publish` without `--confirm`, and in the
+REVIEW card): if the FedEx estimate (incl. drive) is **less than USPS** for this
+item, SURFACE the FedEx estimated price and recommend switching — even if the
+item didn't hit a trigger above. The user wants to see any FedEx saving before
+publishing.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.

@@ -1,0 +1,42 @@
+name: tests
+
+# The suite was red for weeks without anyone noticing (a leaked monkeypatch in
+# test_marble_index.py), because nothing ran it on push. This is the guard.
+#
+# It deliberately installs only what the tests import — no eBay credentials, no
+# network. Every test builds its own fixtures; anything that would need a live
+# API or a logged-in browser belongs in a manual smoke check, not here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Verified against a clean venv + clean checkout: this exact set gives
+      # 53 passed, 1 skipped, 0 failed in ~5s. The skip is tests/test_marble_gate.py,
+      # which runs the real CLIP gate and needs sentence-transformers (torch, ~2GB,
+      # plus a model download on first use) — deliberately not a CI dependency.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest numpy pillow pyyaml opencv-python
+
+      - name: Compile every tracked module
+        run: git ls-files '*.py' | xargs python -m py_compile
+
+      - name: Run the suite
+        run: python -m pytest tests/ -q
+
+      - name: Run it again, to catch order-dependent state
+        run: python -m pytest tests/ -q

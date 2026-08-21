@@ -167,6 +167,38 @@ def update_meta(path: str | Path, updates: dict[str, str]) -> None:
     path.write_text("".join(head + new_body + tail), encoding="utf-8")
 
 
+def set_photo_order(path: str | Path, order: list[str]) -> list[str]:
+    """Rewrite a draft's `photos:` list in place, leaving the rest of the file
+    untouched.
+
+    Photo ORDER is a real listing decision, not bookkeeping: entry one is the
+    eBay gallery image — the only frame most buyers ever see in search results.
+    It gets its own writer for the same reason `update_meta` has one: rewriting
+    the whole file through a YAML round-trip would drop the template's comments
+    and reflow every block a human reads.
+
+    Returns the order written.
+    """
+    path = Path(path)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    start = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^photos:[ \t]*(#.*)?$", ln):
+            start = i
+            break
+    if start is None:
+        raise DraftParseError(f"{path}: no top-level `photos:` block to reorder.")
+
+    end = start + 1
+    while end < len(lines) and re.match(r"^[ \t]*(-|#|$)", lines[end]):
+        end += 1
+
+    block = ["photos:\n"] + [f"  - {name}\n" for name in order]
+    path.write_text("".join(lines[:start] + block + lines[end:]), encoding="utf-8")
+    return list(order)
+
+
 def resolve_photo_paths(draft: Draft) -> list[Path]:
     """Resolve the draft's `photos:` list to absolute paths in the shoot dir."""
     shoot_dir = draft.path.parent

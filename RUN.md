@@ -26,7 +26,7 @@ never version-controlled). Only treat `<name>` as a different location if it
 isn't found under `inventory/`, or the user gives an explicit path.
 
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
-    list  <photos-dir>   → INVESTIGATE → DRAFT → REVIEW(gate)→publish (post-buy: listing)
+    list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish
     full  <photos-dir>   → all in order, ending at the REVIEW gate
 
 If no mode is given: a single-item or grouped shoot of items the user
@@ -39,11 +39,18 @@ pipeline. But a **phase keyword runs ONLY that one prompt and stops** (it does
 NOT continue to the next phase):
 
     identify    <name>   → only IDENTIFY     ([prompts/identify.md](prompts/identify.md))    → identify.txt
+    prep        <name>   → only PREP         ([prompts/prep.md](prompts/prep.md))            → listing/ (HARD gate)
     price       <name>   → only PRICE        ([prompts/price.md](prompts/price.md))          → price.txt (+ comps.csv)
     curate      <name>   → only CURATE       ([prompts/curate.md](prompts/curate.md))        → review.md
     investigate <name>   → only INVESTIGATE  ([prompts/investigate.md](prompts/investigate.md)) → investigate.txt
     draft       <name>   → only DRAFT        ([prompts/draft.md](prompts/draft.md))          → draft.md (+ --record)
-    review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md (HARD gate)
+    review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md + review_card.html (HARD gate)
+    report               → only REPORT       ([prompts/report.md](prompts/report.md))        → performance numbers (+ docs/performance-<date>.md)
+
+**REPORT takes no shoot name** — it is account-wide, not per-item. "report",
+"how are we doing", "what did we actually make", "what sold this week" all land
+here. It is the only phase that reads eBay's *outcomes* rather than producing a
+listing, and it never publishes or edits anything.
 
 So "run identify sand-dollars" (or just "identify sand-dollars") runs IDENTIFY
 alone on `inventory/sand-dollars/` and stops — it does not roll on to PRICE. A
@@ -71,7 +78,21 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    "ok"/"looks good"/silence. (This replaced the old absolute no-publish
    firewall — publishing is now gated here, not forbidden.)
 
-2. **The IDENTIFY maker-mark gate (interactive only).** In a gate category —
+2. **The PREP photo gate — three stages, three approvals.** After IDENTIFY,
+   PREP walks the operator through **orientation, then crop, then colour**, in
+   that order, one sheet per stage, each sheet showing every option for that
+   stage side by side as thumbnails. You do not move to the next stage until the
+   user says the current one is right, and the code enforces it: a stage will not
+   open until its predecessor is approved, approving a stage clears every later
+   sign-off, and `--apply` refuses to write `listing/` until all three are in.
+   Photos go live ONLY after the user approves. Unlike the maker-mark gate this does NOT degrade in a headless
+   run — it halts, because a bad photo is the one error buyers see first and 66
+   sideways ones shipped while the rules said otherwise. It is enforced in code
+   too: `upload_photos_to_eps` refuses photos that are not prepped and approved,
+   and an approval goes stale the moment a source or output file changes.
+   Flip it to soft only when the user says so.
+
+3. **The IDENTIFY maker-mark gate (interactive only).** In a gate category —
    jewelry, precious metals, glass, pottery/ceramics (editable list in
    [prompts/identify.md](prompts/identify.md)) — when a maker's mark is plausibly
    present but undecisive from the photos, IDENTIFY STOPS and asks the user to
@@ -82,8 +103,10 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    it degrades to the SOFT path — `needs_followup_photo` + a `NEEDS_REVIEW.md`
    line — and the run proceeds.
 
-REVIEW is the only thing that stops a **headless** run (the maker-mark gate
-above is interactive-only). PRICE's Apify call (Stage B) used to
+**PREP and REVIEW both stop a headless run** — PREP because photos are the first
+thing a buyer judges and the rules alone did not hold, REVIEW because it is what
+authorises publishing. The maker-mark gate above is interactive-only and
+degrades. PRICE's Apify call (Stage B) used to
 be a second HARD gate; it no longer is — Apify runs automatically as part
 of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
 confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
@@ -134,14 +157,54 @@ queue — the user reads it when convenient instead of being interrupted.
 
 Load each prompt when you reach its phase.
 
+## Locking a format
+
+Every artefact passed between phases carries a version stamp — `template_version`
+on the draft, `MANIFEST_VERSION` on `.prep/prep.json`, a fixed column order on
+`listings_ledger.csv`, a fixed section list on the REVIEW card. A stamp on its
+own does nothing; `tests/test_formats.py` is what makes it mean something. It
+holds the exact field set of each format and fails the moment one changes.
+
+**To change a format:**
+
+1. make the change;
+2. run `python tests/test_formats.py` — it will fail, and that is the point;
+3. decide which kind of change it is:
+   - **additive and safe** → add the field to the lock in the same commit, so
+     the next reader can see when it appeared;
+   - **breaking for readers** → bump the version stamp, teach the readers both
+     shapes, then update the lock.
+
+Never relax an assertion so it stops noticing. That converts a format change
+from a decision into an accident.
+
+The lock also carries two debts, as counts that may only go DOWN: 31 drafts
+stamp `v1` with no `_field_constraints` block at all, and 21 carry a partial
+one. Those are under-enforced — the validator checks fewer fields than it should
+— but none of them disagrees with the template, and a rule that DISAGREES fails
+outright with no tolerance.
+
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
+| PREP | [prompts/prep.md](prompts/prep.md) | photos (+`identify.txt`) | `listing/` + `.prep/prep.json` (HARD gate: orientation → unskew → crop → colour, each approved) |
 | PRICE | [prompts/price.md](prompts/price.md) | `identify.txt` | `price.txt` |
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
 | DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` + `--record` → SKU stamped + ledger row (DRAFTED) |
-| REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `--review` → `review_card.md` (records+preflights) → (on approval) LIVE listing |
+| REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `--review` → `review_card.md` (records+preflights) + `review_card.html` (the page the decision is made on) → (on approval) LIVE listing |
+| REPORT | [prompts/report.md](prompts/report.md) | `sales_ledger.csv`+`listings_ledger.csv`+drafts | printed numbers (+ `docs/performance-<date>.md`) |
+
+**REPORT closes the loop.** PRICE decides what to ask; REPORT measures what we
+actually got, and feeds the gap back. Its two commands:
+
+    python lib/sync_actuals.py --apply     # refresh actuals from the Fulfillment API
+    python lib/report.py --performance     # fees, ask-vs-actual, speed, categories
+
+`sync_actuals` exists because two local records are structurally incomplete:
+the listings ledger only knows the ASK (an accepted Best Offer never writes
+back), and the Inventory API is blind to anything listed by hand on eBay.com.
+Orders are the only source that sees every sale and the price actually paid.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 
@@ -208,6 +271,20 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
+2b. PREP → `--check` (ORIENTATION ONLY — unskew, crop and colour are not
+   measured until orientation is approved, so no crop box describes a rotation
+   that could still change), then `python tools/prep_sheet_html.py <shoot>` and publish
+   `.prep/review.html` as an artifact — that page IS the review surface for all
+   three stages, not a JPEG and not a prose description. Card per frame, every
+   option side by side, an override and a free-text box on every card, and an
+   Accept button per stage. Then walk the three staged reviews in
+   order, STOPPING for the user at each one (HARD gate). Never batch them into
+   one question:
+   `--stage orientation` (fix with `--set-rotate NAME=DEG`, the idempotent form) → `--approve-stage
+   orientation` → `--stage crop` (`--crop NAME=off|on|padF`) → `--approve-stage
+   crop` → `--apply` → `--stage color` (`--pick studio|punch`) →
+   `--approve-stage color` → `--approve`. Photos land in `listing/`;
+   INVESTIGATE still reads the originals.
 3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
    → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
    adopt Recommended tier as provisional working price; write `price.txt`.
@@ -215,13 +292,18 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
 4. CURATE (plan mode) → write `review.md`.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.
-6. DRAFT (list mode) → render template, run the pre-write validation
-   pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
+6. DRAFT (list mode) → point `photos:` at the prepped files
+   (`prep --repoint-draft --apply-repoint`), render template, run the
+   pre-write validation pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
    to stamp the item's SKU into the draft and create its lifecycle ledger
    record (status DRAFTED). Do this for EVERY draft, and again after any edit.
 7. REVIEW (list mode) → `python lib/list_edit.py --review <shoot-dir>` — one
-   command that records (if needed) + preflights + builds `review_card.md`.
-   Present that card and STOP (HARD gate). Surface title + price + the ⚠ count.
+   command that records (if needed) + preflights + builds `review_card.md` —
+   then `python tools/review_card_html.py <shoot-dir>` and deliver
+   `review_card.html`. That page IS the review surface: the listing as a buyer
+   meets it, the hero picker, and every ⚠ line — not the text card alone and
+   never a prose summary. Present it with the card and STOP (HARD gate).
+   Surface title + price + the ⚠ count.
 8. On explicit approval at the card → `python lib/list_edit.py --list
    <shoot-dir> --confirm` (sync + publish LIVE); report the listing URL.
    On a change request → re-run the owning phase, re-render `draft.md`,

@@ -664,6 +664,36 @@ def get_item_condition_policies(category_id: str,
     )
 
 
+def get_condition_names(category_id: str,
+                        marketplace: str = DEFAULT_MARKETPLACE,
+                        creds: Optional[EbayCredentials] = None) -> dict[int, str]:
+    """{conditionId: eBay's own label} for a category.
+
+    The label is per-CATEGORY, not global, and the difference is not cosmetic.
+    Jewelry categories use eBay's newer three-tier used ladder, where
+    conditionId 3000 is "Pre-owned - Good"; elsewhere the same id is the only
+    generic "Used". A fixed id->name table therefore reports a grade that the
+    buyer is not seeing — measured on category 262011, where our table called
+    3000 "USED_EXCELLENT" while eBay displayed "Pre-owned - Good", two rungs
+    apart. Always render a condition to a human from THIS, never from a
+    hard-coded map.
+    """
+    data = get_item_condition_policies(category_id, marketplace, creds)
+    pols = data.get("itemConditionPolicies") or []
+    out: dict[int, str] = {}
+    if not pols:
+        return out
+    for c in pols[0].get("itemConditions", []):
+        cid, name = c.get("conditionId"), c.get("conditionDescription")
+        if cid is None:
+            continue
+        try:
+            out[int(cid)] = name or ""
+        except (ValueError, TypeError):
+            pass
+    return out
+
+
 def get_allowed_condition_ids(category_id: str,
                               marketplace: str = DEFAULT_MARKETPLACE,
                               creds: Optional[EbayCredentials] = None) -> tuple[set[int], bool]:

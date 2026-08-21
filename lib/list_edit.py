@@ -69,6 +69,7 @@ policy IDs / locations to paste in.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -81,7 +82,8 @@ from pathlib import Path
 from typing import Optional
 
 from config import ConfigError, config_path, load_config
-from draft_io import Draft, parse_draft, resolve_photo_paths, update_meta
+from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
+                       update_meta)
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -92,6 +94,7 @@ from ebay_client import (
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
+    get_condition_names,
     get_category_suggestions,
     get_fulfillment_policies,
     get_inventory_locations,
@@ -303,6 +306,8 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
+        elif shown:
+            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:                       # PUBLISHED / ENDED / DELETED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
@@ -317,6 +322,38 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         return str(path)
     except (OSError, csv.Error):
         return None
+
+
+def set_hero_photo(draft_path: Path, name: str) -> list[str]:
+    """Move one photo to the front of the draft's `photos:` list.
+
+    Entry one is eBay's gallery image — the frame a buyer judges the listing by
+    before reading a word — so which photo leads is a decision worth making
+    deliberately and cheaply, the same way PREP makes orientation and crop
+    deliberate. Everything else keeps its relative order, so promoting a frame
+    never silently reshuffles the rest.
+
+    `name` matches on the full entry, the file name, or the stem, case-blind.
+    Returns the new order.
+    """
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    photos = [str(p) for p in (draft.frontmatter.get("photos") or [])]
+    if not photos:
+        raise SystemExit(f"{draft_path}: the draft has no photos to reorder.")
+
+    want = name.strip().lower()
+    hit = next((p for p in photos
+                if want in (p.lower(), Path(p).name.lower(), Path(p).stem.lower())), None)
+    if hit is None:
+        raise SystemExit(f"no photo matching {name!r} in the draft. Have: "
+                         + ", ".join(Path(p).name for p in photos))
+
+    order = [hit] + [p for p in photos if p != hit]
+    if order == photos:
+        return photos
+    set_photo_order(draft_path, order)
+    return order
 
 
 def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
@@ -435,9 +472,40 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 # Photo upload
 # ---------------------------------------------------------------------------
 
+def _assert_photos_cleared(photo_paths: list[Path]) -> None:
+    """The PREP gate, enforced in code at the point of no return.
+
+    Every path that puts a photo on eBay funnels through `upload_photos_to_eps`,
+    so this is the one place worth guarding. A prompt instruction is not a
+    control: the sideways-photo incident happened with the rules already written
+    down. This refuses to upload photos that were not prepped AND explicitly
+    approved — the same shape as the `--confirm` guard on publishing.
+
+    Shoots with no PREP manifest at all are legacy (photos came from the old
+    `no-exif/` chain). Those are refused too, with the command to fix them,
+    because "every image goes through the filter" is the whole point.
+    """
+    if not photo_paths:
+        return
+    from photo_prep.prep import PrepGateError, assert_approved
+
+    # `listing/` is PREP's output; the rest are the old chain's intermediates.
+    # All of them sit one level under the shoot, so the shoot is their parent —
+    # otherwise the error tells you to go and prep `no-exif/` itself.
+    _SUBDIRS = {"listing", "no-exif", "evened", "trimmed", "cropped", ".orig"}
+    shoots = {p.parent.parent if p.parent.name in _SUBDIRS else p.parent
+              for p in photo_paths}
+    for shoot in sorted(shoots):
+        try:
+            assert_approved(shoot)
+        except PrepGateError as e:
+            raise SystemExit(f"[PREP GATE] {e}") from None
+
+
 def upload_photos_to_eps(photo_paths: list[Path],
                          creds: Optional[EbayCredentials] = None) -> list[str]:
     """Upload each photo to EPS (in order); return EPS URLs in the same order."""
+    _assert_photos_cleared(photo_paths)
     creds = creds or load_credentials()
     urls: list[str] = []
     for ph in photo_paths:
@@ -477,6 +545,10 @@ def _md_inline(text: str) -> str:
     """Escape HTML, then render the inline markdown the templates use."""
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    # [label](http(s)://url) -> anchor. Runs after HTML-escape so the generated
+    # tag survives; only http(s) targets allowed (eBay permits links to other
+    # eBay listings/pages within a description).
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
     return text
 
 
@@ -488,19 +560,37 @@ def _body_to_html(md: str) -> str:
     markdown body collapses into one run-on paragraph (newlines and `#`/`-`
     markers are ignored). This restores the intended structure. Stdlib-only —
     no markdown dependency, matching the rest of lib/.
+
+    A wrapped line CONTINUES what it is wrapping. Draft bodies are written at a
+    sane column width, so a long bullet spills onto the next line — and that
+    continuation line does not start with `-`. Treating it as a new block was
+    the bug a buyer saw: the list closed after the first line, the remainder of
+    the sentence became its own paragraph, and the next bullet opened a fresh
+    list. On a live listing it read as line breaks landing mid-sentence.
+
+    So a non-blank line that starts no new construct is appended to whatever is
+    currently open — the bullet, or the paragraph — which is also what standard
+    markdown does with lazy continuation.
     """
     lines = (md or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
     in_ul = False
     para: list[str] = []
+    li: list[str] = []
 
     def flush_para() -> None:
         if para:
             out.append("<p>" + " ".join(_md_inline(p) for p in para) + "</p>")
             para.clear()
 
+    def flush_li() -> None:
+        if li:
+            out.append("<li>" + " ".join(_md_inline(x) for x in li) + "</li>")
+            li.clear()
+
     def close_ul() -> None:
         nonlocal in_ul
+        flush_li()
         if in_ul:
             out.append("</ul>")
             in_ul = False
@@ -520,10 +610,13 @@ def _body_to_html(md: str) -> str:
             out.append(f"<h{level}>{_md_inline(m_h.group(2))}</h{level}>")
         elif m_li:
             flush_para()
+            flush_li()
             if not in_ul:
                 out.append("<ul>")
                 in_ul = True
-            out.append(f"<li>{_md_inline(m_li.group(1))}</li>")
+            li.append(m_li.group(1))
+        elif li:
+            li.append(stripped)          # the bullet wraps — keep it in the bullet
         else:
             close_ul()
             para.append(stripped)
@@ -561,8 +654,38 @@ def _build_inventory_item(draft: Draft, image_urls: list[str]) -> dict:
         pkg["dimensions"] = {"length": float(length), "width": float(width),
                              "height": float(depth), "unit": "INCH"}
     if pkg:
+        # packageType is REQUIRED for CALCULATED shipping (which includes every
+        # international/eIS quote). Domestic free-flat-rate never needed it, so
+        # it was omitted for months; moving a flat-rate media offer onto a
+        # calculated policy surfaced it as error 25002 / err:216314
+        # "Please provide a valid Shipping Package type".
+        pkg["packageType"] = _package_type(draft)
         item["packageWeightAndSize"] = pkg
     return item
+
+
+def _package_type(draft: Draft) -> str:
+    """eBay packageType for this item, inferred from the packed dimensions.
+
+    Only a rate-calculation hint — eBay uses weight+dims for the actual quote —
+    but it must be present and VALID or calculated/international shipping is
+    rejected.
+
+    MAILING_BOX is deliberately NOT used. eBay rejected it on every attempt
+    with `errorId 25101 — Invalid <ShippingPackage> (err:216305|MailingBoxes)`,
+    including on an obvious box (a 10x8x2 hardcover). PACKAGE_THICK_ENVELOPE
+    was accepted for the same item. Only these two values are known-good on
+    this account, so those are the only two emitted.
+    """
+    try:
+        dims = sorted(float(draft.get(f"shipping.package_in.{k}") or 0)
+                      for k in ("length", "width", "depth"))
+    except (TypeError, ValueError):
+        return "PACKAGE_THICK_ENVELOPE"
+    # flat AND large: catalogs, magazines, LPs — the one case for LARGE_ENVELOPE
+    if dims and dims[-1] >= 12 and dims[0] <= 1:
+        return "LARGE_ENVELOPE"
+    return "PACKAGE_THICK_ENVELOPE"
 
 
 def _build_offer(draft: Draft, sku: str, category_id: str,
@@ -632,6 +755,11 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
     # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
     policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup")
+    # Optional: an international (eBay International Shipping) policy — Worldwide
+    # shipToLocations, no region exclusions. Only items with
+    # `shipping.international: true` use it, and only if they clear the
+    # dangerous-goods gate in _international_blockers().
+    policies["fulfillment_international"] = _ebay_extra("fulfillment_policy_id_international")
     # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
     # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
     # listings need it; falls back to the default payment policy otherwise.
@@ -703,6 +831,25 @@ _COND_ID_TO_ENUM = {
     3000: "USED_EXCELLENT", 4000: "USED_VERY_GOOD", 5000: "USED_GOOD",
     6000: "USED_ACCEPTABLE", 7000: "FOR_PARTS_OR_NOT_WORKING",
 }
+# The new-ladder rungs resolve to a name only via the per-category lookup
+# (ebay_client.get_condition_names); 2990/3010 are deliberately NOT added to the
+# global table above, because their meaning is category-dependent.
+# eBay's NEWER three-rung used ladder, used by jewelry and a growing set of
+# categories. Our enum ids (3000/4000/5000/6000) predate it and do not line up:
+# on this ladder id 3000 is "Pre-owned - Good", so an item we grade
+# USED_EXCELLENT is ADVERTISED as "Pre-owned - Good" — a rung below what it is —
+# and 2990 ("Pre-owned - Excellent") cannot be reached at all, because the Sell
+# API takes an enum NAME (see the payload build) and we have no name for 2990.
+# Measured live on categories 262008 and 262011.
+#
+# NOT fixed here on purpose. Reaching 2990 needs the Sell API's own enum for it
+# (likely PRE_OWNED_EXCELLENT) verified against eBay's current enum list, not
+# guessed — a wrong enum fails the publish outright, and these run against LIVE
+# listings. Until then the reporting is at least honest: the preflight prints
+# the label the BUYER sees, from the per-category lookup, so nobody reads
+# "USED_EXCELLENT" and assumes that is what is on the page.
+_NEW_USED_LADDER = {2990, 3000, 3010}
+
 _COND_FAMILIES = (
     [1000, 1500, 1750, 2750],          # new-ish
     [2000, 2010, 2020, 2030, 2500],    # refurbished
@@ -752,6 +899,103 @@ def _is_media_service(code: str) -> bool:
     return "media" in c  # USPSMedia / USPSMediaMail
 
 
+# Items eBay International Shipping REFUSES at the US hub. Offering
+# international on one of these yields a cancelled order plus a seller defect,
+# so these hard-block.
+#
+# Matched against the TITLE and item_specifics (type/material) ONLY — never the
+# body or condition text. That distinction is the whole design: condition prose
+# is full of words that look like hazmat but describe appearance. Scanning the
+# body flagged 46 of 209 drafts, essentially all false: "no PAINT loss" ->
+# flammable liquid, "LIGHTER shade" -> butane, a ceramic hen's "FEATHER"
+# detail -> CITES. Titles name what a thing IS; descriptions say what it looks
+# like.
+_DANGEROUS_GOODS_PATTERNS = (
+    # "lighter" is an adjective at least as often as a noun in this inventory
+    # ("Lighter Blue Glaze", "lighter weight wool"), and an optional qualifier
+    # group made the bare word match — hard-blocking eIS on innocuous titles.
+    # Require either a qualifier, or the word used as a noun (not immediately
+    # followed by a colour/comparative).
+    (r"\bbutane\b|\blighter fluid\b|\bzippo\b"
+     r"|\b(cigarette|pocket|torch|butane|gas)\s+lighter\b"
+     r"|\blighters?\b(?!\s+(blue|green|red|brown|gray|grey|tan|shade|color|colour|"
+     r"weight|wood|finish|tone|version|than))",
+     "lighter / butane (flammable — eIS prohibited)"),
+    (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
+    (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",
+     "aerosol / compressed gas"),
+    (r"\bperfume\b|\bcologne\b|\beau de (toilette|parfum)\b",
+     "alcohol-based fragrance (flammable)"),
+    (r"\bgunpowder\b|\bammunition\b|\bammo\b|\bprimers\b|\bblack powder\b|\bflare\b",
+     "explosives / ammunition components"),
+)
+
+# Ambiguous in an antiques catalog: these words usually name a FORM, a COLOR or
+# a period style rather than the actual regulated substance — an empty antique
+# "whiskey jug" is stoneware, and "Ivory Cream" is a paint colour on faux grips.
+# Blocking on them was wrong 3 times out of 4 against real inventory, so they
+# WARN and ask for a human call instead.
+_DG_REVIEW_PATTERNS = (
+    (r"\bivory\b|\btortoise ?shell\b|\btaxidermy\b|\bwhalebone\b|\bscrimshaw\b|\bhorn\b",
+     "possible CITES / wildlife material — confirm it's faux or synthetic"),
+    (r"\bwine\b|\bwhiskey\b|\bwhisky\b|\bbourbon\b|\bliqueur\b|\bbeer\b",
+     "alcohol wording — confirm the vessel is EMPTY (an empty antique jug is fine)"),
+    (r"\bknife\b|\bknives\b|\bdagger\b|\bsword\b|\brazor\b",
+     "bladed item — legal in most destinations but some refuse; check before shipping"),
+)
+
+# If any of these appear, the material words above are describing an imitation,
+# so don't even raise the CITES review flag.
+_FAUX_RE = re.compile(r"\bfaux\b|\bimitation\b|\bsimulated\b|\brepro(duction)?\b"
+                      r"|\bresin\b|\bcelluloid\b|\bbakelite\b|\bplastic\b|\bstyle\b",
+                      re.I)
+
+_INTL_WEIGHT_WARN_OZ = 5 * 16   # ~5 lb
+
+
+def _international_blockers(draft: Draft) -> list[str]:
+    """Hard reasons this item cannot ship internationally. Empty = clear.
+
+    Scans title + item_specifics only (see _DANGEROUS_GOODS_PATTERNS).
+    """
+    parts = [str(draft.get("title") or "")]
+    for k in ("item_specifics.type", "item_specifics.material",
+              "item_specifics.subject"):
+        parts.append(str(draft.get(k) or ""))
+    haystack = " ".join(parts)
+    return [label for pattern, label in _DANGEROUS_GOODS_PATTERNS
+            if re.search(pattern, haystack, re.I)]
+
+
+def _international_warnings(draft: Draft) -> list[str]:
+    """Soft flags — surfaced at REVIEW, do NOT block. Judgement calls where the
+    right answer depends on the item, not a rule."""
+    out = []
+    parts = [str(draft.get("title") or "")]
+    for k in ("item_specifics.type", "item_specifics.material",
+              "item_specifics.subject"):
+        parts.append(str(draft.get(k) or ""))
+    haystack = " ".join(parts)
+    faux = bool(_FAUX_RE.search(haystack))
+    for pattern, label in _DG_REVIEW_PATTERNS:
+        if re.search(pattern, haystack, re.I):
+            if faux and "CITES" in label:
+                continue          # "Faux Stag ... Ivory Cream" is not ivory
+            out.append(label)
+    try:
+        lb = int(draft.get("shipping.weight.major_lb") or 0)
+        oz = int(draft.get("shipping.weight.minor_oz") or 0)
+        if lb * 16 + oz > _INTL_WEIGHT_WARN_OZ:
+            out.append(f"heavy ({lb} lb {oz} oz) — international postage may exceed "
+                       f"item value; worth checking before it sells")
+    except (TypeError, ValueError):
+        pass
+    if str(draft.get("shipping.fulfillment_mode") or "").upper() == "LOCAL_PICKUP":
+        out.append("item is flagged ship-risky (local pickup) — fragile/oversized "
+                   "pieces travel badly through the eIS hub")
+    return out
+
+
 def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
@@ -760,18 +1004,47 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     1. If the draft is `fulfillment_mode: LOCAL_PICKUP` (DRAFT sets this for
        ship-risky items the user confirmed as local-pickup), use the
        local-pickup policy.
-    2. Else if `primary_service` is Media Mail (DRAFT sets this for
+    2. Else if `shipping.international: true` AND the item clears the
+       dangerous-goods / weight gate, use the international (eIS) policy.
+    3. Else if `primary_service` is Media Mail (DRAFT sets this for
        books/magazines/comics/music/movies) AND a media policy is configured,
        use it.
-    3. Else use the default (USPS Ground) policy.
+    4. Else use the default (USPS Ground) policy.
     Returns (chosen_fulfillment_id, messages).
+
+    International is OPT-IN per item, never global. eBay International Shipping
+    is an account-level enrollment, so the moment a listing uses a policy whose
+    shipToLocations include Worldwide, eIS offers it abroad — including for
+    items eIS will refuse at the hub. The gate below is what stops that.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
     pickup_fid = str(policies.get("fulfillment_local_pickup") or "")
+    intl_fid = str(policies.get("fulfillment_international") or "")
     mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
+    wants_intl = str(draft.get("shipping.international") or "").strip().lower() in (
+        "true", "yes", "1", "on")
     msgs: list[str] = []
+
+    if wants_intl and mode == "LOCAL_PICKUP":
+        wants_intl = False
+        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
+                    "ignored (a pickup-only item has nothing to ship).")
+    if wants_intl:
+        blockers = _international_blockers(draft)
+        if blockers:
+            wants_intl = False
+            msgs.append("shipping: INTERNATIONAL REFUSED — " + "; ".join(blockers) +
+                        ". eBay International Shipping rejects these at the US hub, "
+                        "which cancels the order and books a seller defect. Listing "
+                        "domestic-only. Override by clearing the matched wording or "
+                        "setting the policy id by hand if you know it's safe.")
+        elif not intl_fid:
+            wants_intl = False
+            msgs.append("shipping: international requested but "
+                        "ebay.fulfillment_policy_id_international is unset — "
+                        "listing domestic-only.")
 
     if mode == "LOCAL_PICKUP":
         if pickup_fid:
@@ -781,6 +1054,18 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             msgs.append("shipping: item is LOCAL_PICKUP but ebay.fulfillment_policy_id_local_pickup "
                         "is unset — falling back to the default ground policy. Add a local-pickup "
                         "policy (see SETUP_EBAY_API.md) so ship-risky items list as pickup-only.")
+    elif wants_intl:
+        chosen, label = intl_fid, "international (eIS-enabled policy)"
+        for w in _international_warnings(draft):
+            msgs.append(f"shipping: INTERNATIONAL REVIEW — {w}")
+        if _is_media_service(want):
+            # USPS Media Mail is a domestic-only service, so an international
+            # policy can't carry it. Going international costs the media rate.
+            msgs.append("shipping: item wanted Media Mail but international was "
+                        "requested — Media Mail is DOMESTIC-ONLY, so this uses "
+                        "Ground Advantage domestically. If the media rate matters "
+                        "more than international reach, set shipping.international "
+                        "false, or create a media+worldwide policy.")
     elif _is_media_service(want):
         if media_fid:
             chosen, label = media_fid, "Media Mail (media policy)"
@@ -847,14 +1132,20 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     if not allowed:
         msgs.append(f"condition: {cur} (category condition metadata unavailable — left as-is)")
     else:
+        names = get_condition_names(category_id, creds=creds)
         new_enum, reason = _remap_condition_for_category(cur, allowed)
+        shown = names.get(_COND_ENUM_TO_ID.get(new_enum, -1))
         if reason:
-            msgs.append(reason)
+            # Say what the BUYER will see, not what our enum is called: the two
+            # disagree on every category using eBay's three-tier used ladder.
+            msgs.append(reason + (f' -> buyer sees "{shown}"' if shown else ""))
             if apply:
                 _set_draft_condition(draft_path, new_enum)
                 draft.frontmatter["condition"] = new_enum
                 notes = str(draft.get("meta.notes") or "")
                 update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
+        elif shown:
+            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:
             msgs.append(f"condition: {cur} OK for category")
 
@@ -924,6 +1215,33 @@ def build_review_card(draft_path: Path,
     if not comps:
         comps = ["  • (no comp URLs found — see price.txt)"]
 
+    # International (eIS) eligibility — ALWAYS shown, whether or not the item
+    # opted in. The point is that a reviewer sees "this can never go abroad"
+    # BEFORE approving, so a gun-shaped butane lighter is caught at the gate
+    # rather than after an international buyer's order is cancelled at the hub.
+    intl_on = str(draft.get("shipping.international") or "").strip().lower() in (
+        "true", "yes", "1", "on")
+    intl_blockers = _international_blockers(draft)
+    intl_warnings = _international_warnings(draft)
+    if intl_blockers:
+        intl_lines = [f"  ✖ CANNOT SHIP INTERNATIONALLY — {'; '.join(intl_blockers)}"]
+        if intl_on:
+            intl_lines.append("  ✖ draft asks for international but it will be "
+                              "REFUSED and listed domestic-only — fix the draft.")
+        else:
+            intl_lines.append("  • correctly domestic-only. Do NOT set "
+                              "shipping.international true on this item.")
+    elif intl_warnings:
+        intl_lines = [f"  ⚠ {'ENABLED' if intl_on else 'eligible'} — needs a human call:"]
+        intl_lines += [f"      – {w}" for w in intl_warnings]
+    elif intl_on:
+        intl_lines = ["  ✓ ENABLED — ships worldwide via eBay International Shipping.",
+                      "  • delivered-price basis no longer holds: an overseas buyer "
+                      "pays eIS freight + duties on top of this price."]
+    else:
+        intl_lines = ["  • eligible, not enabled (shipping.international: false). "
+                      "Set true to offer it worldwide."]
+
     # Flags worth a human eye.
     flags: list[str] = []
     nr = shoot / "NEEDS_REVIEW.md"
@@ -941,6 +1259,50 @@ def build_review_card(draft_path: Path,
                 status = r.get("status") or "?"
                 break
 
+    # THE FINAL PHOTOS, LISTED. Every one, in order, hero marked, gaps called out.
+    #
+    # The card used to print a count and a hero filename. A count cannot tell
+    # you that a frame is still the un-prepped original, that a redacted frame
+    # was replaced by its un-redacted twin, or that listing/ holds a look nobody
+    # picked — all three of which happened. These are the exact files that go to
+    # eBay on approval, so they belong on the surface where approval is given.
+    photo_lines = []
+    try:
+        _m = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        _by_out = {(r.get("output") or ""): r for r in (_m.get("photos") or {}).values()}
+        prep_note = f"  look: {_m.get('chosen_preset') or 'none picked'}"
+        if not _m.get("approved"):
+            prep_note += "   [!] PREP NOT APPROVED"
+    except (OSError, ValueError):
+        _by_out, prep_note = {}, "  [!] no PREP manifest for these photos"
+
+    for _i, _rel in enumerate(photos):
+        _rel = str(_rel)
+        _f = shoot / _rel
+        _tag = "hero" if _i == 0 else f"{_i + 1:>4}"
+        if not _f.exists():
+            photo_lines.append(f"  {_tag}  {_rel}   [!] MISSING FROM DISK")
+            continue
+        _rec = _by_out.get(_rel)
+        _bits = []
+        if _rec:
+            _o = _rec.get("orientation") or {}
+            if _o.get("applied"):
+                _bits.append(f"rot {_o['applied']}deg")
+            if (_rec.get("unskew") or {}).get("applied"):
+                _bits.append("squared")
+            if (_rec.get("crop") or {}).get("applied"):
+                _bits.append("cropped")
+            _want = _rec.get("out_sha256")
+            if _want:
+                # PREP records a 16-char prefix; match the same way it does.
+                _got = hashlib.sha256(_f.read_bytes()).hexdigest()[:len(_want)]
+                if _got != _want:
+                    _bits.append("[!] CHANGED SINCE PREP APPROVED IT")
+        else:
+            _bits.append("[!] not in the PREP manifest")
+        photo_lines.append(f"  {_tag}  {_rel}" + (f"   [{', '.join(_bits)}]" if _bits else ""))
+
     card = "\n".join([
         f"━━ REVIEW: {shoot.name}  (sku {sku} · ledger {status}) ━━",
         f'Title:     "{title}"  [{len(title)}/80]',
@@ -950,10 +1312,14 @@ def build_review_card(draft_path: Path,
         f"Fulfillment: {fulfill}",
         "Preflight (condition / shipping / insurance):",
         *[f"  • {m}" for m in pf],
+        "International (eBay International Shipping):",
+        *intl_lines,
         "Comps (open to verify):",
         *comps,
         "Condition detail:",
         f"  {cond_desc}",
+        f"Final photos - exactly what publishes ({len(photos)}):{prep_note}",
+        *photo_lines,
         "⚠ Needs review / manual intervention:",
         *flags,
         "",
@@ -1077,9 +1443,15 @@ _SYNC_FIELD_ALIASES = {
     "shipping": "shipping", "weight": "shipping", "dims": "shipping",
     "quantity": "quantity", "qty": "quantity",
     "bestoffer": "bestoffer", "best_offer": "bestoffer", "offer": "bestoffer",
+    # Re-resolve which fulfillment policy the offer points at. Needed on its own
+    # because the `shipping` group only touches packageWeightAndSize on the
+    # ITEM — the policy lives in listingPolicies on the OFFER, so flipping
+    # shipping.international has no effect without this.
+    "policies": "policies", "policy": "policies", "fulfillment": "policies",
+    "international": "policies", "intl": "policies",
 }
 _ITEM_SIDE = {"title", "description", "condition", "aspects", "photos", "shipping", "quantity"}
-_OFFER_SIDE = {"description", "price", "quantity", "bestoffer"}
+_OFFER_SIDE = {"description", "price", "quantity", "bestoffer", "policies"}
 # Keys accepted by PUT inventory_item / updateOffer — used to strip read-only
 # echo fields (offerId, listing, status, …) out of the GET response before PUT.
 _WRITABLE_ITEM_KEYS = ("availability", "condition", "conditionDescription",
@@ -1112,12 +1484,65 @@ def _canonical_sync_fields(fields) -> set[str]:
     return out
 
 
+class ListingNotSellable(RuntimeError):
+    """The SKU's offer is not live — updating it could resurrect a sold item."""
+
+
+def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
+    """Ask eBay — not the local ledger — whether this SKU is still on sale.
+
+    The ledger cannot answer this. An accepted Best Offer never writes back to
+    it, and `sync_actuals` exists precisely because orders are the only record
+    that sees every sale. So a sold item can sit in the ledger as PUBLISHED for
+    hours, and a batch update will happily write to it.
+
+    Returns {sellable, status, quantity, offer_id, listing_id, reason}.
+    """
+    try:
+        d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}",
+                     creds=creds)
+    except EbayAPIError as e:
+        if e.status == 404:
+            return dict(sellable=False, status="NO_OFFER", quantity=0, offer_id=None,
+                        listing_id=None, reason="no offer exists for this SKU")
+        raise
+    offers = d.get("offers") or []
+    if not offers:
+        return dict(sellable=False, status="NO_OFFER", quantity=0, offer_id=None,
+                    listing_id=None, reason="no offer exists for this SKU")
+    o = offers[0]
+    status = str(o.get("status") or "").upper()
+    qty = o.get("availableQuantity")
+    qty = int(qty) if qty is not None else None
+    listing = (o.get("listing") or {})
+    lstatus = str(listing.get("listingStatus") or "").upper()
+
+    reason = ""
+    if status != "PUBLISHED":
+        reason = f"offer status is {status or 'unknown'}, not PUBLISHED"
+    elif lstatus and lstatus not in ("ACTIVE",):
+        reason = f"listing status is {lstatus}, not ACTIVE"
+    elif qty == 0:
+        reason = "availableQuantity is 0 — the item has sold out"
+    return dict(sellable=not reason, status=status or lstatus or "unknown",
+                quantity=qty, offer_id=o.get("offerId"),
+                listing_id=listing.get("listingId"), reason=reason)
+
+
 def update_listing_fields(draft_path: Path, fields,
-                          creds: Optional[EbayCredentials] = None) -> list[str]:
+                          creds: Optional[EbayCredentials] = None,
+                          allow_not_sellable: bool = False) -> list[str]:
     """Update ONLY the named field groups on an existing eBay item/offer.
 
     GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
     current eBay value. Never publishes. Returns the list of fields changed.
+
+    REFUSES a SKU whose offer is not currently live, unless explicitly
+    overridden. Writing to a sold-out inventory item is not harmless: this
+    function used to round-trip `availability` on every update, so a PUT could
+    hand eBay a positive quantity for an item that had already sold and get the
+    listing resurrected as a new one. That happened on a real SKU. Checking the
+    ledger is not sufficient — an accepted Best Offer never writes back to it.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -1130,12 +1555,33 @@ def update_listing_fields(draft_path: Path, fields,
     offer_fields = canon & _OFFER_SIDE
     changed: list[str] = []
 
+    state = offer_sellable_state(sku, creds)
+    if not state["sellable"] and not allow_not_sellable:
+        raise ListingNotSellable(
+            f"SKU {sku} is not on sale — {state['reason']}. Refusing to update it; "
+            f"writing to a sold item can relist it as a new listing. "
+            f"(offer {state['offer_id']}, listing {state['listing_id']}) "
+            f"Pass --allow-not-sellable only if you know the offer is live.")
+
     if item_fields:
         try:
             cur = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
         except EbayAPIError as e:
             raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
         item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
+        # `availability` MUST stay in the payload. This PUT is a full replace of
+        # the inventory item, not a merge: omitting the key does not "leave
+        # eBay's value alone", it sets the quantity to zero and drops the
+        # listing to OUT_OF_STOCK. Removing it took five live listings out of
+        # search before that was understood.
+        #
+        # The sold-item relist is prevented by the guard above instead, which is
+        # the right place for it: refuse to write to an offer that is not live,
+        # rather than write a deliberately incomplete item.
+        if "availability" not in item and "quantity" not in item_fields:
+            raise ValueError(
+                f"SKU {sku}: eBay returned no availability block; refusing to "
+                f"PUT an inventory item that would zero the quantity")
         product = item.setdefault("product", {})
         if "title" in item_fields:
             product["title"] = str(draft.get("title")); changed.append("title")
@@ -1203,6 +1649,20 @@ def update_listing_fields(draft_path: Path, fields,
             else:
                 lp.pop("bestOfferTerms", None)
             changed.append("bestoffer")
+        if "policies" in offer_fields:
+            # Re-runs the same routing --sync uses (local pickup / international
+            # / media / default) and applies any change to the LIVE offer. The
+            # dangerous-goods gate runs here too, so an item that must not go
+            # abroad silently stays on the domestic policy.
+            pol_ids, _loc = _resolve_policies_and_location(creds)
+            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds)
+            lp = offer.setdefault("listingPolicies", {})
+            prev = lp.get("fulfillmentPolicyId")
+            lp["fulfillmentPolicyId"] = fid
+            changed.append(f"policies(fulfillment {prev}->{fid})"
+                           if prev != fid else "policies(unchanged)")
+            for m in pol_msgs:
+                print(f"  {m}")
         api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer, creds=creds)
 
     update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
@@ -1523,12 +1983,16 @@ def _cli() -> None:
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
     ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
+    ap.add_argument("--set-hero", nargs=2, metavar=("TARGET", "PHOTO"),
+                    help="move PHOTO to the front of the draft's photos list (eBay gallery image)")
     ap.add_argument("--review", metavar="TARGET", help="One step: record + preflight + build the REVIEW decision card. Stops for approval; does NOT publish.")
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
     ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
-    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer.")
+    ap.add_argument("--allow-not-sellable", action="store_true",
+                    help="update even if the SKU's offer is not live (DANGEROUS: writing to a sold item can relist it)")
+    ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
@@ -1581,6 +2045,13 @@ def _cli() -> None:
             print(f"Preflight {args.preflight}:")
             for m in preflight_listing(Path(args.preflight)):
                 print(f"  {m}")
+            return
+        if args.set_hero:
+            target, photo = args.set_hero
+            order = set_hero_photo(Path(target), photo)
+            print(f"[OK] hero -> {order[0]}")
+            for i, p in enumerate(order[1:], 2):
+                print(f"  {i}. {p}")
             return
         if args.review:
             card, path = build_review_card(Path(args.review))
@@ -1641,7 +2112,12 @@ def _cli() -> None:
                       "No implicit 'all' — that's what --sync/--list are for.")
                 sys.exit(1)
             field_list = [f for f in args.fields.split(",") if f.strip()]
-            changed = update_listing_fields(Path(args.update), field_list)
+            try:
+                changed = update_listing_fields(Path(args.update), field_list,
+                                                allow_not_sellable=args.allow_not_sellable)
+            except ListingNotSellable as e:
+                print(f"[SKIP] {e}")
+                sys.exit(2)
             if changed:
                 print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
             else:

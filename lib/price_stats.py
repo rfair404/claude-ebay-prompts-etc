@@ -164,6 +164,12 @@ def _condition_cohort(condition: Optional[str]) -> str:
     return "unknown"
 
 
+# Titles of comps that asked for the delivered basis but had no shipping figure,
+# so fell back to item-only. Module-level because _load_comps is called once per
+# run-sort and the warning belongs to the whole run.
+_DELIVERED_FALLBACKS: list[str] = []
+
+
 def _load_comps(json_path: Union[str, Path], source: str,
                 price_field: str) -> list["Comp"]:
     """Read a saved Apify run JSON into Comp objects.
@@ -178,6 +184,15 @@ def _load_comps(json_path: Union[str, Path], source: str,
         if sold is None:
             continue
         total = c.get("total_price")
+        # A delivered-basis run that quietly substitutes the item-only price is
+        # the worst kind of wrong: the header still says DELIVERED, but every
+        # comp missing shipping drags the median down by its postage, and our
+        # free-shipping list price is set against that median. The substitution
+        # still happens (dropping the comp entirely would be worse on a thin
+        # cohort) but it is COUNTED, and the caller shouts about it.
+        fell_back = price_field == "total" and total is None
+        if fell_back:
+            _DELIVERED_FALLBACKS.append(str(c.get("title", ""))[:60])
         price = total if (price_field == "total" and total is not None) else sold
         comps.append(Comp(
             title=str(c.get("title", "")),
@@ -656,9 +671,22 @@ def _cli() -> None:
         sys.exit(1)
 
     if args.json:
+        report["delivered_fallbacks"] = list(_DELIVERED_FALLBACKS)
         print(json.dumps(report, indent=2, default=str))
     else:
         print(render(report))
+        if _DELIVERED_FALLBACKS:
+            n = len(_DELIVERED_FALLBACKS)
+            print(f"\n⚠ DELIVERED BASIS INCOMPLETE — {n} comp(s) had no shipping figure "
+                  f"and were counted at their ITEM-ONLY price:", file=sys.stderr)
+            for t in _DELIVERED_FALLBACKS[:5]:
+                print(f"    • {t}", file=sys.stderr)
+            if n > 5:
+                print(f"    … and {n - 5} more", file=sys.stderr)
+            print("  The tiers above are therefore a MIXED basis and read LOW by roughly "
+                  "the missing postage.\n  Usual cause: eBay changed the delivery wording "
+                  "the extractor matches — check lib/ebay_sold_browse.py --js.",
+                  file=sys.stderr)
 
 
 if __name__ == "__main__":

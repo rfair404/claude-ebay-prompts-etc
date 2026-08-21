@@ -9,8 +9,9 @@ publishes the listing LIVE. This is the gate that replaced the old
 "never publish" firewall: publishing is no longer refused, it is
 *gated here*.
 
-**Produces:** `<shoot-dir>/review_card.md` + the same card to chat. Does
-NOT publish.
+**Produces:** `<shoot-dir>/review_card.md`, the **review page**
+(`review_card.html`) that the decision is actually made on, and the same card
+to chat. Does NOT publish.
 
 ## One command builds the card
 
@@ -38,6 +39,40 @@ Present that card to the user **verbatim** and STOP. It contains:
     Condition detail (every flagged defect, verbatim — never softened)
     ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines)
     → Approve publishes LIVE at $<price>, with the exact --list … --confirm command
+
+## The card is a page — every time, no exceptions
+
+The text card is what the ledger records. It is **not** what the decision is
+made on: it asks for a publish decision without showing the thing being
+published, and a buyer meets this listing as a picture first and a title
+second. So REVIEW always also builds the page:
+
+    python tools/review_card_html.py <shoot-dir>    # -> <shoot-dir>/review_card.html
+
+Deliver it (send the file, or publish it as an artifact and link it) and
+present the text card in chat beside it. Republish the SAME path so the link
+never moves. This is the official review surface — not a 4,000px JPEG, not a
+prose summary, not the text card alone.
+
+What the page must carry (the generator does this; don't strip it):
+- the listing as a buyer meets it — the lead photo big enough to judge, every
+  frame as a thumbnail, click to open full size;
+- the **hero picker**: entry one is eBay's gallery image, the only frame most
+  buyers ever see in search, and picking it from thumbnails is a different
+  question than picking it from a filename. Selecting a frame rewrites the
+  command shown at the bottom, in an idempotent form (`--set-hero`);
+- price with its tiers, the fact table, item specifics, the description as it
+  will render, comps, condition detail verbatim, and every ⚠ line — a card you
+  cannot argue with is not a review.
+
+**The page must work with JavaScript off.** Native radios, `:has()` for which
+picture shows, `:target` for full size. Two JS-driven versions of the Frame
+Check page rendered perfectly and responded to nothing in the viewer the
+operator actually uses; the same constraint binds here. The page cannot reach
+the CLI, so it shows a copyable command rather than a button that pretends
+otherwise. Held by `tests/test_review_card_html.py`.
+
+The same rule governs PREP's stage reviews — see [`prep.md`](prep.md).
 
 Don't hand-edit or re-derive the card — the command is the single source, so
 cards stay consistent. **Fallback** (no shell/creds, e.g. a Cowork tab):
@@ -96,6 +131,6 @@ user, and only pass `--confirm` on an explicit yes.
 ## Closing
 
 Per _shared: lead with the result.
-- Awaiting decision: `review_card.md` path + the headline (title + price)
-  + the count of ⚠ lines. Then stop.
+- Awaiting decision: the review page (delivered/linked), `review_card.md`
+  path + the headline (title + price) + the count of ⚠ lines. Then stop.
 - After publish: the live listing URL + price. Nothing further runs.

@@ -1,0 +1,38 @@
+# CLIP visual-index + classifier dependencies
+# (lib/vindex.py, marble_index.py, ebay_visual.py, mcsa_index.py,
+#  marble_classify.py, marble_crop.py, reembed.py).
+#
+# CPU-only torch is fine — no GPU required.
+# NOTE: torch on Windows needs the MS Visual C++ Redistributable installed
+#   (https://aka.ms/vs/17/release/vc_redist.x64.exe), or its DLLs won't load.
+# sentence-transformers pulls torch + transformers + scikit-learn transitively;
+# they're listed explicitly for clarity/pinning.
+#
+# The rest of the repo (apify_ebay, ebay_client, price_stats, etc.) remains
+# stdlib-only — these deps are only needed for the visual indexes.
+
+sentence-transformers>=5.6.0   # CLIP ViT-B/32 embeddings (vindex core)
+torch>=2.12.1                  # CPU build is sufficient
+Pillow>=12.2.0                 # image decode
+pillow-heif>=0.16.0            # optional: HEIC/HEIF decode (prep degrades without it)
+numpy>=2.4.6                   # embedding math / storage
+lxml>=6.1.1                    # HTML parsing (crawlers)
+opencv-python-headless>=4.13.0 # marble_crop.py auto-crop (Hough + contour blobs)
+scikit-learn>=1.9.0           # marble_classify.py prototype/kNN heads
+
+# --- PREP photo stage (lib/photo_prep/prep.py) ---
+# Subject segmentation + the objective half of orientation. Both are optional at
+# import time — PREP degrades to the LAB heuristic and to ASK-everything without
+# them — but the stage is only as good as its evidence, so install both.
+rembg>=2.0.78                  # u2net subject mask (MIT; u2net weights Apache-2.0)
+onnxruntime>=1.28.0            # rembg's runtime (CPU build is sufficient)
+pytesseract>=0.3.13            # page-orientation detection wrapper
+# pytesseract ALSO needs the Tesseract binary, which pip cannot install:
+#   Windows:  winget install --id UB-Mannheim.TesseractOCR -e
+#   macOS:    brew install tesseract
+#   Debian:   apt install tesseract-ocr
+# The installer does not add it to PATH; lib/photo_prep/orientation.py checks the
+# usual install locations before reporting it missing.
+#
+# NOT briaai/RMBG-1.4, despite torch already being here: it is CC BY-NC, and this
+# is a commercial seller.
