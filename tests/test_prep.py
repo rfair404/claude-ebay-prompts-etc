@@ -125,16 +125,53 @@ def test_low_confidence_osd_is_not_an_answer():
     assert v.needs_ask, "a shaky OSD reading must not rotate anything"
 
 
+def test_the_worst_osd_band_is_refused():
+    """OSD in the 2.0-3.0 confidence band agreed with the human look 12% of the
+    time across 73 labelled frames -- the worst bucket in the corpus, and worse
+    than chance. The old floor of 1.5 admitted all of it.
+
+    Measured by tools/osd_audit.py, which scores every OSD reading in
+    inventory/ against the look recorded beside it. Agreement runs 21% below
+    2.0 and 12% from 2-3, then 80% above 4.0. Regenerate with:
+
+        python tools/osd_audit.py --bands
+
+    This is the guard against quietly lowering the bar again to resolve more
+    frames without checking what the extra answers are worth. An unresolved
+    frame becomes an ASK, which is cheap; a wrong one ships sideways."""
+    assert O.OSD_MIN_CONF >= 3.5, (
+        "OSD below ~3.5 agreed with the operator less than half the time; "
+        "lowering this bar buys answers that are worse than no answer")
+    for conf in (1.6, 2.0, 2.9):
+        v = O.resolve("f.jpg", exif_tag=None, osd=(90, conf, "in the bad band"))
+        assert v.needs_ask, f"OSD at confidence {conf} was believed"
+        assert v.subject_angle == 0, "an unbelieved reading still rotated the frame"
+
+
+def test_a_confident_osd_reading_is_still_used():
+    """The floor removes bad answers; it must not remove the signal."""
+    v = O.resolve("f.jpg", exif_tag=None, osd=(270, 8.0, "well clear of the bar"))
+    assert not v.needs_ask
+    assert v.subject_angle == 270 and v.source == "osd"
+
+
 def test_osd_needs_a_recognised_script_not_just_confidence():
     """A textless cast-iron key came back '180 deg, conf 1.51, script conf 0.1'
     and was silently flipped backwards relative to every other frame in its
     shoot. Orientation confidence says 'these marks point that way'; script
-    confidence is what says 'these are marks of a language I know'."""
+    confidence is what says 'these are marks of a language I know'.
+
+    The two bars are independent, which is the whole point: clearing the
+    confidence bar must not excuse a missing script. So the fixture's
+    confidence is derived from the bar rather than written as a literal --
+    it was 1.51 when the bar was 1.5, and pinning it there turned a later
+    raise of OSD_MIN_CONF into a failure of the SCRIPT test."""
     assert O.OSD_MIN_SCRIPT > 0, "the script bar must exist"
+    clears_confidence = O.OSD_MIN_CONF + 1.0
     # The filter lives in the reader, so assert on its contract: a reading
     # without a recognised script is reported as NO answer.
-    assert O.OSD_MIN_CONF <= 1.51, "fixture assumes 1.51 clears the confidence bar"
-    v = O.resolve("f.jpg", exif_tag=None, osd=(None, 1.51, "did not recognise a script"))
+    v = O.resolve("f.jpg", exif_tag=None,
+                  osd=(None, clears_confidence, "did not recognise a script"))
     assert v.needs_ask and v.subject_angle == 0
 
 
