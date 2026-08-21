@@ -44,7 +44,7 @@ NOT continue to the next phase):
     curate      <name>   → only CURATE       ([prompts/curate.md](prompts/curate.md))        → review.md
     investigate <name>   → only INVESTIGATE  ([prompts/investigate.md](prompts/investigate.md)) → investigate.txt
     draft       <name>   → only DRAFT        ([prompts/draft.md](prompts/draft.md))          → draft.md (+ --record)
-    review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md (HARD gate)
+    review      <name>   → only REVIEW       ([prompts/review.md](prompts/review.md))        → review_card.md + review_card.html (HARD gate)
     report               → only REPORT       ([prompts/report.md](prompts/report.md))        → performance numbers (+ docs/performance-<date>.md)
 
 **REPORT takes no shoot name** — it is account-wide, not per-item. "report",
@@ -165,7 +165,7 @@ Load each prompt when you reach its phase.
 | CURATE | [prompts/curate.md](prompts/curate.md) | `identify.txt`+`price.txt`+profile | `review.md` |
 | INVESTIGATE | [prompts/investigate.md](prompts/investigate.md) | photos (+`identify.txt`) | `investigate.txt` |
 | DRAFT | [prompts/draft.md](prompts/draft.md) | `identify.txt`+`investigate.txt`+`price.txt`+template | `draft.md` + `--record` → SKU stamped + ledger row (DRAFTED) |
-| REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `--review` → `review_card.md` (records+preflights) → (on approval) LIVE listing |
+| REVIEW | [prompts/review.md](prompts/review.md) | `draft.md`+`price.txt`+`NEEDS_REVIEW.md` | `--review` → `review_card.md` (records+preflights) + `review_card.html` (the page the decision is made on) → (on approval) LIVE listing |
 | REPORT | [prompts/report.md](prompts/report.md) | `sales_ledger.csv`+`listings_ledger.csv`+drafts | printed numbers (+ `docs/performance-<date>.md`) |
 
 **REPORT closes the loop.** PRICE decides what to ask; REPORT measures what we
@@ -271,8 +271,12 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
    to stamp the item's SKU into the draft and create its lifecycle ledger
    record (status DRAFTED). Do this for EVERY draft, and again after any edit.
 7. REVIEW (list mode) → `python lib/list_edit.py --review <shoot-dir>` — one
-   command that records (if needed) + preflights + builds `review_card.md`.
-   Present that card and STOP (HARD gate). Surface title + price + the ⚠ count.
+   command that records (if needed) + preflights + builds `review_card.md` —
+   then `python tools/review_card_html.py <shoot-dir>` and deliver
+   `review_card.html`. That page IS the review surface: the listing as a buyer
+   meets it, the hero picker, and every ⚠ line — not the text card alone and
+   never a prose summary. Present it with the card and STOP (HARD gate).
+   Surface title + price + the ⚠ count.
 8. On explicit approval at the card → `python lib/list_edit.py --list
    <shoot-dir> --confirm` (sync + publish LIVE); report the listing URL.
    On a change request → re-run the owning phase, re-render `draft.md`,
