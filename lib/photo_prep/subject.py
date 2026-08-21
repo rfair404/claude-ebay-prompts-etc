@@ -20,8 +20,19 @@ detectors landing on the same pixels is evidence; one detector landing
 somewhere confidently is a guess. PREP crops on agreement and flags
 disagreement for a human instead of cropping anyway.
 
+Flat printed goods are the one class where that arbitration is wrong by
+construction. On a magazine, catalog or record sleeve the salient object in the
+frame is the PICTURE PRINTED ON THE ITEM — u2net cuts out the cover model and
+hands back a mask that is a strict sub-region of the paper. `_containment`
+cannot catch it, because a box wholly inside the paper's box scores 1.0. The
+LAB detector has no such confusion: paper against a sweep is exactly the
+figure/ground split it measures. So a shoot may declare `subject_mode="paper"`,
+which takes the LAB mask as the subject and demotes u2net to a recorded second
+opinion. It is a per-shoot statement about what is being photographed, not a
+quality dial.
+
 In-process:
-    mask_for(bgr) -> SubjectMask(mask, bbox, source, agreement, coverage, …)
+    mask_for(bgr, mode="auto") -> SubjectMask(mask, bbox, source, agreement, …)
 """
 from __future__ import annotations
 
@@ -157,8 +168,14 @@ def describe(mask: np.ndarray, source: str, agreement: float,
              mask_iou: float, alt_bbox: Optional[tuple] = None) -> SubjectMask:
     """Re-derive the geometry of an existing mask.
 
-    Used after a 90° rotation: segmentation is rotation-invariant, so the mask
-    can be turned with the image instead of paying for a second u2net pass.
+    Used wherever a frame is transformed by a known geometry -- a 90° rotation,
+    an unskew, a crop. The mask is carried through the same transform and its
+    numbers recomputed here, rather than paying for a second u2net pass.
+
+    That is not only the cheap option, it is the accurate one. Re-segmenting
+    transformed pixels asks a different question: both detectors read context
+    the transform changed, so the new mask can disagree with the box that was
+    planned against the old one. Carrying the mask keeps the premise fixed.
     """
     H, W = mask.shape[:2]
     bbox = _bbox_of(mask)
@@ -175,14 +192,31 @@ def describe(mask: np.ndarray, source: str, agreement: float,
     )
 
 
-def mask_for(bgr: np.ndarray) -> SubjectMask:
-    """Segment the subject with both detectors; report agreement."""
+MODES = ("auto", "paper")
+
+
+def mask_for(bgr: np.ndarray, mode: str = "auto") -> SubjectMask:
+    """Segment the subject with both detectors; report agreement.
+
+    `mode="paper"` flips which detector is believed — see the module docstring.
+    Both still run, so `mask_iou` keeps reporting how far apart they were.
+    """
+    if mode not in MODES:
+        raise ValueError(f"subject mode must be one of {MODES}, got {mode!r}")
     H, W = bgr.shape[:2]
 
     primary = _rembg_mask(bgr)
     secondary = _lab_mask(bgr)
 
-    if primary is None:
+    if mode == "paper":
+        # The item is the sheet, not what is printed on it. LAB decides; u2net
+        # is recorded so a wildly split pair is still visible in the manifest.
+        mask, source = secondary, "lab(paper)"
+        bbox = _bbox_of(mask)
+        alt_bbox = _bbox_of(primary) if primary is not None else None
+        agreement = _containment(bbox, alt_bbox) if alt_bbox else 1.0
+        mask_iou = _iou(primary, secondary) if primary is not None else 1.0
+    elif primary is None:
         mask, source = secondary, "lab"
         bbox, alt_bbox = _bbox_of(mask), None
         agreement, mask_iou = 1.0, 1.0

@@ -348,6 +348,50 @@ at the gate, never what publishes.
 
 ---
 
+## Categories — say what the goods ARE, once
+
+Most of PREP's flags are not preferences. They are statements about what is in
+front of the camera, and they have the same answer every time for a given kind
+of goods. `--category` carries the whole set:
+
+```bash
+python -m lib.photo_prep.prep <shoot> --category printed --check
+```
+
+| category | detector | looks rendered |
+|---|---|---|
+| `default` | `auto` — both detectors, arbitrated on agreement | all six, for comparison |
+| `printed` | `paper` — LAB decides; u2net kept as a second opinion | `asshot` only |
+
+**Why `printed` needs its own detector.** On a catalog the salient object is the
+picture PRINTED ON the item, so u2net cuts out the cover model and returns a
+mask that is a strict sub-region of the paper. The containment test cannot catch
+that — a box wholly inside the paper's box scores 1.0. LAB has no such
+confusion: paper against a sweep is the figure/ground split it measures.
+
+**Why it renders one look.** The section above already says printed media ships
+`asshot`, always. Rendering the other five produces images nobody opens, at
+~25s a frame each. Measured on two 12 MP catalog frames: **100s/frame under
+`default`, 17s/frame under `printed` — 5.9× faster**, same decisions, same gates.
+
+`looks` narrows what is RENDERED, never what is picked. The operator still
+chooses at the colour stage and `--pick` still overrides. A one-look category
+says *the comparison is not live for this kind of item* — not *this look is
+approved*.
+
+**The category persists in the manifest**, so a later `--check` or `--apply`
+that does not repeat the flag gets the same answer. Changing it drops the
+unskew/crop/colour sign-offs, because every box downstream of the detector was
+measured against the old one. `--subject auto|paper` remains available as the
+escape hatch for a shoot its category gets wrong, and outranks it.
+
+Categories live in `lib/photo_prep/categories.py`. Adding one is data, not code
+— but keep it grounded: every field should trace to something observed on a real
+shoot. A category invented from taste is a policy change wearing a config file,
+and it reaches hundreds of frames before anyone notices it was a guess.
+
+---
+
 ## What it will not do
 
 The line is between **the studio** and **the goods**. Re-toning, neutralising

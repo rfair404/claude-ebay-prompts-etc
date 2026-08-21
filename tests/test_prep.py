@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 import numpy as np                                        # noqa: E402
 import cv2                                                # noqa: E402
 
+from lib.photo_prep import categories as CAT             # noqa: E402
 from lib.photo_prep import color as C                     # noqa: E402
 from lib.photo_prep import orientation as O               # noqa: E402
 from lib.photo_prep import prep as P                      # noqa: E402
@@ -515,6 +516,45 @@ def test_asshot_changes_nothing():
     # with red and blue swapped. A grey test fixture cannot see that.
     b, g, r = out[:, :, 0].mean(), out[:, :, 1].mean(), out[:, :, 2].mean()
     assert r > b, f"red and blue look swapped: B={b:.0f} G={g:.0f} R={r:.0f}"
+
+
+def test_asshot_skips_the_correction_loop_without_changing_its_report():
+    """The k=0 fast path must be a skip, not a different answer.
+
+    `correct()` used to run white balance, the luma LUT, neutralise, diffuse,
+    pop and sharpen at full resolution with every term multiplied by zero, then
+    throw the result away and return the original pixels -- 26 seconds a frame
+    on a 12 MP catalog shoot, and `asshot` is the standing look for printed
+    media. The loop is now skipped outright.
+
+    That is only safe while the report it would have produced is the report we
+    construct instead, so these are the fields the skip has to keep true. They
+    hold by construction: with strength 0 the first pass leaves the working
+    array equal to the input, and `_damage` quantizes before comparing, so the
+    one attempt it would have recorded is zeros and it breaks immediately.
+    """
+    img, mask = _scene(bg=40, subject=(30, 60, 210))
+    _out, rep = C.correct(img, mask, preset="asshot")
+
+    # Exactly one attempt, at zero, undamaged -- and so no backing off.
+    assert rep["attempts"] == [dict(strength=0.0, new_clipped=0, new_crushed=0)], \
+        rep["attempts"]
+    assert rep["backoffs"] == 0, rep["backoffs"]
+    assert rep["subject_newly_clipped"] == 0
+    assert rep["subject_newly_crushed"] == 0
+    assert rep["strength"] == 0.0
+
+    # A skipped loop must still describe the frame it declined to correct:
+    # the review sheet prints these, and a passthrough that reported nothing
+    # would look like a failure rather than a deliberate look.
+    assert rep["preset"] == "asshot"
+    for key in ("backdrop", "wb_gains", "wb_note", "curve", "bg_luma_before",
+                "bg_luma_after", "subject_at_rails_before"):
+        assert key in rep, f"the k=0 path dropped {key!r} from the report"
+
+    # Every knob reports as untouched, whatever the preset table says.
+    assert rep["bg_neutralize"] == 0.0
+    assert rep["bg_diffuse"] == 0.0
 
 
 def test_a_weaker_preset_moves_the_backdrop_less():
@@ -1276,6 +1316,61 @@ def test_approving_orientation_plans_the_geometry_itself():
         #  so it is asserted in the multi-frame test above, not here)
 
 
+# ---------------------------------------------------------------------------
+# category profiles
+# ---------------------------------------------------------------------------
+
+def test_every_category_names_real_looks_and_a_real_detector():
+    """The guard for the next category somebody adds.
+
+    A profile is plain data, so a typo in it is not a syntax error -- it is a
+    shoot that renders nothing, or one that raises deep inside `mask_for` after
+    25 seconds of segmentation. Both were cheap to prevent here.
+    """
+    from lib.photo_prep import subject as S
+    for name in CAT.names():
+        prof = CAT.profile(name)
+        assert prof.get("subject", "auto") in S.MODES, \
+            f"category {name!r} names a detector that does not exist"
+        for look in (prof.get("looks") or ()):
+            assert look in C.PRESETS, \
+                f"category {name!r} renders {look!r}, which is not a preset"
+
+
+def test_printed_is_paper_and_asshot():
+    """The two facts the printed category exists to carry.
+
+    `paper` because u2net returns the cover model rather than the sheet, and
+    the containment test scores that 1.0 so nothing downstream can catch it.
+    `asshot` because printed colour is what the buyer is judging, and it is
+    also where the batch time went -- five of six looks on a catalog frame are
+    rendered for a comparison nobody opens.
+    """
+    assert CAT.subject_for("printed") == "paper"
+    assert CAT.looks_for("printed") == ("asshot",)
+
+
+def test_default_category_still_renders_everything():
+    """A filter that narrowed the generic case would be a silent policy change.
+
+    `looks_for` returns empty, not None, because that is what `run_apply`'s
+    `only` already treats as 'render them all'.
+    """
+    assert CAT.looks_for(None) == ()
+    assert CAT.looks_for("default") == ()
+    assert CAT.subject_for(None) == "auto"
+
+
+def test_an_unknown_category_is_refused_not_ignored():
+    """Falling back to the generic profile would render five extra looks and
+    segment a catalog as if it were an object -- quietly, on a whole batch."""
+    try:
+        CAT.profile("catalogs")      # plausible, and not the name
+    except ValueError as e:
+        assert "printed" in str(e), "the error should list the real names"
+    else:
+        raise AssertionError("an unknown category was accepted")
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
@@ -1289,3 +1384,4 @@ if __name__ == "__main__":
             print(f"FAIL  {fn.__name__}: {e}")
     print(f"{len(fns) - bad}/{len(fns)} passed")
     sys.exit(1 if bad else 0)
+

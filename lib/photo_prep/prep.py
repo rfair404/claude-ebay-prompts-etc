@@ -65,6 +65,7 @@ import numpy as np
 from . import color as colormod
 from . import orientation as orientmod
 from . import stages as stagemod
+from . import categories as catmod
 from . import subject as subjectmod
 from . import unskew as skewmod
 from .subject import mask_for
@@ -76,6 +77,8 @@ MIN_AGREEMENT = 0.75     # detector bbox containment below which we do not crop
 MIN_LONG_SIDE = 1400     # eBay wants >=1600 for zoom; never crop below this
 DEFAULT_ASPECT = "1:1"
 DEFAULT_PAD = 0.12
+DEFAULT_SUBJECT = "auto"
+DEFAULT_CATEGORY = catmod.DEFAULT_CATEGORY
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +248,28 @@ def load_manifest(shoot: Path) -> dict:
         "settings": {},
         "photos": {},
     }
+
+
+def subject_mode(m: dict) -> str:
+    """Which detector this shoot believes — see subject.mask_for.
+
+    Read from the manifest at every call site rather than threaded as an
+    argument: it is a property of what is in front of the camera, and a frame
+    re-segmented later (at --apply, or for one operator recrop) has to be
+    segmented the same way the approved sheet was.
+    """
+    return m.get("settings", {}).get("subject", DEFAULT_SUBJECT)
+
+
+def category_of(m: dict) -> str:
+    """Which category this shoot declared — see photo_prep.categories.
+
+    Read back from the manifest for the same reason `subject_mode` is: it is a
+    statement about the goods, so a later pass that did not repeat the flag
+    must not quietly fall back to the generic profile and render five looks
+    nobody asked for.
+    """
+    return m.get("settings", {}).get("category", DEFAULT_CATEGORY)
 
 
 def save_manifest(shoot: Path, m: dict) -> None:
@@ -575,13 +600,14 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
+    smode = subject_mode(m)
 
     for key, rec in m["photos"].items():
         src = shoot / key
         if not src.exists():
             continue
         upright = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
-        sm = mask_for(upright)
+        sm = mask_for(upright, smode)
 
         prev_sk = skewmod.from_dict(rec.get("unskew"))
         sk = prev_sk if prev_sk.operator else skewmod.plan(upright, sm)
@@ -616,7 +642,10 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     return m
 
 
-def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = False) -> dict:
+def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
+              subject: Optional[str] = None,
+              category: Optional[str] = None,
+              quiet: bool = False) -> dict:
     """Analyse every frame; write the manifest, rotation sheet and ask panels."""
     from .center_crop import _parse_aspect
 
@@ -626,7 +655,12 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
 
     aspect = _parse_aspect(aspect_s)
     m = load_manifest(shoot)
-    m["settings"] = dict(aspect=aspect_s, pad=pad, pop=pop)
+    # None means "whatever this shoot already declared" — a batch re-check
+    # (tools/prep_run.py) must not silently demote a paper shoot back to auto.
+    subject = subject or subject_mode(m)
+    category = category or category_of(m)
+    m["settings"] = dict(aspect=aspect_s, pad=pad, pop=pop, subject=subject,
+                         category=category)
     prior = m.get("photos", {})
     photos: dict = {}
 
@@ -648,7 +682,7 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         # Order matters: OSD on the whole frame throws the item's type away
         # before reading it (see orient.osd_angle).
         cam = orientmod.rotate_bgr(bgr, orientmod.EXIF_ROT.get(exif_tag or 1, 0))
-        sm = mask_for(cam)
+        sm = mask_for(cam, subject)
         osd = (orientmod.osd_angle(_subject_region(cam, sm.bbox))
                if osd_on else (None, 0.0, "tesseract not installed"))
 
@@ -794,6 +828,13 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
     pop = m["settings"].get("pop", "gentle")
+    smode = subject_mode(m)
+
+    # An explicit `only` still wins; otherwise the shoot's category decides
+    # which looks are worth rendering. This is where the batch time actually
+    # goes -- six looks at ~25s a frame on 12 MP, five of which a printed
+    # shoot will never open. See photo_prep.categories.
+    only = tuple(only) or catmod.looks_for(category_of(m))
 
     out_dir = shoot / "listing"
     out_dir.mkdir(exist_ok=True)
@@ -815,7 +856,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
 
         # Re-segment on the upright pixels: the crop box in the manifest was
         # planned there, and the colour pass needs the same mask.
-        sm = mask_for(img)
+        sm = mask_for(img, smode)
         img, sm = _unskewed(img, sm, sk)
         # Judged before the crop — a tight crop keeps too little backdrop to
         # tell a sweep from a textured surface (see color._backdrop_lut).
@@ -833,9 +874,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
                 else plan_crop(img, sm, aspect, pad, pre_stats, sweep))
         rec["crop"] = crop
         if crop["applied"]:
-            x0, y0, x1, y1 = crop["box"]
-            img = img[y0:y1, x0:x1]
-            sm = mask_for(img)
+            img, sm = _cropped(img, sm, crop["box"])
 
         # Every preset renders from the SAME mask and crop. Segmentation is the
         # expensive step by a wide margin, so offering three looks costs barely
@@ -1212,6 +1251,31 @@ def _unskewed(img: np.ndarray, sm, sk) -> tuple:
                                 sm.source, sm.agreement, sm.mask_iou))
 
 
+def _cropped(img: np.ndarray, sm, box) -> tuple:
+    """Carry a frame and its mask through the planned crop.
+
+    The mask is CUT, not re-measured -- the same rule `_unskewed` follows, and
+    for the same two reasons.
+
+    It is cheaper, though modestly so: a second segmentation costs ~2.7s a
+    frame once u2net is loaded. (A cold call looks like ~19s; that is the model
+    load, paid once per process, and attributing it per frame overstates this.)
+
+    More importantly it is the only version that is correct. The crop box was
+    planned against THIS mask; re-segmenting the cropped pixels answers a
+    different question, because both detectors read context the crop just threw
+    away -- u2net sees a new composition, and the LAB detector samples a border
+    ring that is now the item's own edge rather than the sweep. So the colour
+    pass could run against a mask that never agreed with the box it was cropped
+    to, which is the shape of the fairy-doll frame that shipped with its magenta
+    wings neutralised to grey. Cutting the mask cannot drift from the decision.
+    """
+    x0, y0, x1, y1 = box
+    return (img[y0:y1, x0:x1],
+            subjectmod.describe(sm.mask[y0:y1, x0:x1],
+                                sm.source, sm.agreement, sm.mask_iou))
+
+
 def prepared(shoot: Path, name: str, rec: dict) -> np.ndarray:
     """A frame as the crop and colour stages see it: upright, then squared."""
     img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
@@ -1234,7 +1298,7 @@ def _replan_crop(shoot: Path, m: dict, name: str, rec: dict, pad: float) -> dict
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
-    sm = mask_for(img)
+    sm = mask_for(img, subject_mode(m))
     img, sm = _unskewed(img, sm, skewmod.from_dict(rec.get("unskew")))
     stats = colormod.analyze(img, sm.mask)
     crop = plan_crop(img, sm, aspect, pad, stats, sweep=True)
@@ -1266,7 +1330,7 @@ def run_set_unskew(shoot: Path, pairs: list) -> dict:
         elif val == "on":
             img = orientmod.rotate_bgr(_load_bgr(shoot / key),
                                        rec["orientation"]["applied"])
-            sk = skewmod.plan(img, mask_for(img), rectangular=True)
+            sk = skewmod.plan(img, mask_for(img, subject_mode(m)), rectangular=True)
             sk.operator = True
             sk.reason = ("operator: " + sk.reason if sk.applied
                          else "operator asked to square it up, but " + sk.reason)
@@ -1741,6 +1805,15 @@ def main(argv=None) -> int:
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
     ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help="margin around the subject (default 0.12)")
+    ap.add_argument("--category", default=None, choices=list(catmod.names()),
+                    help="what KIND of goods this shoot is: sets the subject "
+                         "detector and which looks are rendered, in one flag. "
+                         "Persists in the manifest. See photo_prep/categories.py")
+    ap.add_argument("--subject", default=None, choices=["auto", "paper"],
+                    help="what the item IS: 'paper' for flat printed goods "
+                         "(magazines, catalogs, sleeves) where the salient "
+                         "object is the picture printed on the item, not the "
+                         "item. Persists in the manifest.")
     ap.add_argument("--pop", default="gentle", choices=["off", "gentle", "strong"],
                     help="subject pass: saturation/contrast/unsharp (default gentle)")
     ap.add_argument("--quiet", action="store_true")
@@ -1749,6 +1822,44 @@ def main(argv=None) -> int:
     shoot = Path(args.shoot_dir)
     if not shoot.is_dir():
         ap.error(f"not a directory: {shoot}")
+
+    # WHAT IS BEING PHOTOGRAPHED IS RECORDED ONCE, AND READ BACK BY EVERY PASS.
+    #
+    # The category and the detector it implies are properties of the ITEM, not
+    # of this invocation, so they persist in the manifest. A later `--check` or
+    # `--apply` that does not repeat the flag has to get the same answer --
+    # otherwise a batch re-check silently demotes a paper shoot back to `auto`
+    # and re-measures every box against a mask of the cover model.
+    #
+    # `--subject` stays available on its own as the escape hatch for a shoot its
+    # category gets wrong, and it outranks the category when both are given.
+    _m0 = load_manifest(shoot)
+    stored_cat = category_of(_m0)
+    stored_subject = _m0.get("settings", {}).get("subject", DEFAULT_SUBJECT)
+
+    category = args.category or stored_cat
+    subject = args.subject or (catmod.subject_for(args.category) if args.category
+                               else stored_subject)
+
+    # Changing either one re-measures every box downstream, so the sign-offs
+    # those boxes earned are dropped HERE rather than silently carried over onto
+    # different numbers. This is the invalidation issue #21 wants to make
+    # structural; until the decision record lands it is done explicitly, at the
+    # one place both settings can change.
+    if category != stored_cat or subject != stored_subject:
+        m = load_manifest(shoot)
+        m.setdefault("settings", {})["category"] = category
+        m["settings"]["subject"] = subject
+        for st in ("unskew", "crop", "color"):
+            if m.get("stages", {}).get(st):
+                m["stages"][st] = {"approved": False, "approved_at": None}
+        m["approved"] = False
+        m["approved_at"] = None
+        save_manifest(shoot, m)
+        print(f"category: {stored_cat} -> {category}  "
+              f"(subject {stored_subject} -> {subject}; "
+              f"unskew/crop/colour sign-off dropped; re-run --check)")
+        print(f"  {catmod.describe(category)}")
 
     if args.rotate:
         m = run_rotate(shoot, args.rotate)
@@ -1792,13 +1903,13 @@ def main(argv=None) -> int:
 
     if args.check or not args.apply:
         print(f"PREP check — {shoot}")
-        m = run_check(shoot, args.aspect, args.pad, args.pop, quiet=args.quiet)
+        m = run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=args.quiet)
         _print_status(shoot, m)
         print(f"  rotation sheet: {shoot / '.prep' / 'rotation_sheet.jpg'}")
     if args.apply:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
-            run_check(shoot, args.aspect, args.pad, args.pop, quiet=True)
+            run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=True)
         m = run_apply(shoot, quiet=args.quiet, only=tuple(getattr(args, 'only', None) or ()))
         _print_status(shoot, m)
     return 0
