@@ -29,6 +29,41 @@ about to change. A colour judgement is only meaningful on the final framing.
 Shown together, a bad crop and a bad rotation look the same on the page and
 neither can be answered.
 
+## Orientation is DECIDED, not asked — above 95% confidence
+
+Orientation is the one stage where the answer is usually in the picture, and it
+is not a good use of the operator's attention. So the model decides it:
+
+    python tools/prep_orient_review.py <shoot>   # -> .prep/orient_review_N.jpg
+
+A row per frame, all four turns side by side, big enough to read printed body
+copy, current call ruled green, with the OSD reading printed for reference.
+**Read it, decide, apply with `--set-rotate`, and only surface the frames that
+fall below the bar.** Do not build a clickable picker for this stage and do not
+ask the operator to rule on frames you can read.
+
+**What clears 95%** — a positive, legible signal:
+
+- printed text whose baseline you can read (a masthead, body copy, a caption);
+- a human figure, which in a fashion or catalog frame is the strongest cue there
+  is: head up, garment hanging down;
+- an object with an unambiguous upright (a locomotive on its wheels);
+- **and** agreement with the rest of the shoot where the frames are alike. Six
+  spreads photographed in one session cannot correctly differ by 90°.
+
+**What does NOT clear it**, and goes to the operator with the sheet:
+
+- "it looks more natural this way" with nothing legible to point at;
+- a frame whose two halves disagree — a masthead upright on one page and a model
+  upright on the other. Say which cue you followed and why;
+- a round or flat item with no defined upright;
+- anything resting on OSD alone. **OSD is reference, not evidence.** On one
+  catalog shoot it read the same wrong angle on five frames at confidence up to
+  12.2, with recognised script, all corroborating each other.
+
+State the confidence per frame when you report, and name the cue. A number
+without a cue is not a judgement.
+
 **Orientation is first, and that means nothing else is measured yet.**
 `--check` reads EXIF, segments, runs the text detector and resolves which way is
 up — and stops there. It does NOT plan the unskew, the crop or the colour

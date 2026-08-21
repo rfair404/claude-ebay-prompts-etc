@@ -1314,7 +1314,14 @@ def run_set_crop(shoot: Path, pairs: list) -> dict:
             rec["crop"] = _replan_crop(shoot, m, key, rec, pad)
         else:
             raise SystemExit(f"{name}: expected off|on|pad<float>, got {val!r}")
-        print(f"  {key}: crop -> {val}")
+        # Report the OUTCOME, not the request. "crop -> on" was printed even
+        # when the safety guard refused the recrop, so two frames read as
+        # cropped in the log and shipped uncropped.
+        c = rec["crop"]
+        if c.get("applied"):
+            print(f"  {key}: crop -> {val}  [box {c.get('box')}]")
+        else:
+            print(f"  {key}: crop -> REFUSED — {c.get('reason') or 'no reason recorded'}")
     stagemod.stage_state(m)["crop"] = {"approved": False, "approved_at": None}
     m["approved"] = False
     save_manifest(shoot, m)
