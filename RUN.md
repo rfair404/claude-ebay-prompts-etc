@@ -157,6 +157,33 @@ queue — the user reads it when convenient instead of being interrupted.
 
 Load each prompt when you reach its phase.
 
+## Locking a format
+
+Every artefact passed between phases carries a version stamp — `template_version`
+on the draft, `MANIFEST_VERSION` on `.prep/prep.json`, a fixed column order on
+`listings_ledger.csv`, a fixed section list on the REVIEW card. A stamp on its
+own does nothing; `tests/test_formats.py` is what makes it mean something. It
+holds the exact field set of each format and fails the moment one changes.
+
+**To change a format:**
+
+1. make the change;
+2. run `python tests/test_formats.py` — it will fail, and that is the point;
+3. decide which kind of change it is:
+   - **additive and safe** → add the field to the lock in the same commit, so
+     the next reader can see when it appeared;
+   - **breaking for readers** → bump the version stamp, teach the readers both
+     shapes, then update the lock.
+
+Never relax an assertion so it stops noticing. That converts a format change
+from a decision into an accident.
+
+The lock also carries two debts, as counts that may only go DOWN: 31 drafts
+stamp `v1` with no `_field_constraints` block at all, and 21 carry a partial
+one. Those are under-enforced — the validator checks fewer fields than it should
+— but none of them disagrees with the template, and a rule that DISAGREES fails
+outright with no tolerance.
+
 | Phase | Prompt | Reads | Writes |
 |---|---|---|---|
 | IDENTIFY | [prompts/identify.md](prompts/identify.md) | photos | `identify.txt` |
