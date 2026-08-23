@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -245,11 +246,37 @@ def manifest_path(shoot: Path) -> Path:
     return shoot / ".prep" / "prep.json"
 
 
+# What the manifest looked like when we read it. Stamped into the loaded dict
+# and popped before writing, so it never reaches disk and never widens the
+# format. Its only job is to let save_manifest tell "nobody touched this" from
+# "someone did".
+READ_FINGERPRINT = "_read_fingerprint"
+
+
+class ManifestConflict(RuntimeError):
+    """The manifest changed on disk between our read and our write.
+
+    Raised rather than resolved. Whoever holds the stale copy cannot know which
+    of the two sets of decisions the operator meant, and merging them silently
+    is how a look got adopted that nobody picked.
+    """
+
+
+def _manifest_fingerprint(p: Path) -> Optional[str]:
+    """A hash of the bytes on disk, or None when there are none."""
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
 def load_manifest(shoot: Path) -> dict:
     p = manifest_path(shoot)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            m = json.loads(p.read_text(encoding="utf-8"))
+            m[READ_FINGERPRINT] = _manifest_fingerprint(p)
+            return m
         except Exception:
             pass
     return {
@@ -261,6 +288,7 @@ def load_manifest(shoot: Path) -> dict:
         "approved_at": None,
         "settings": {},
         "photos": {},
+        READ_FINGERPRINT: None,          # we read an absence; it must stay absent
     }
 
 
@@ -286,11 +314,64 @@ def category_of(m: dict) -> str:
     return m.get("settings", {}).get("category", DEFAULT_CATEGORY)
 
 
-def save_manifest(shoot: Path, m: dict) -> None:
-    m["updated"] = _now()
+def save_manifest(shoot: Path, m: dict, force: bool = False) -> None:
+    """Write the manifest, refusing to clobber another writer.
+
+    PREP is not run by one process at a time. Batches run in a pool, an
+    operator runs a command against a shoot a background --apply is halfway
+    through, and more than one agent works the same tree. This used to be a
+    bare write_text: last writer won, silently.
+
+    It cost three incidents in two days. Twice a background --apply's auto-pick
+    landed after an operator's --pick, so the manifest named one look while
+    listing/ held another and --pick reported success either way. Once a
+    concurrent session overwrote a full set of eight orientation calls, which
+    only surfaced because a contact sheet was rendered afterwards and looked
+    wrong.
+
+    So: compare-and-swap. A writer that read fingerprint X refuses to overwrite
+    a manifest now at Y, and raises instead of merging — whoever holds the stale
+    copy cannot know which of the two sets of decisions was meant. Callers
+    re-read and retry; that is the whole protocol.
+
+    The write itself is tmp-and-rename. It was not atomic either, so a crash
+    mid-write left a truncated manifest rather than the previous one.
+
+    `force` exists for the deliberate overwrite. It is never the default.
+    """
     p = manifest_path(shoot)
+    if not force and READ_FINGERPRINT in m:
+        expected, actual = m[READ_FINGERPRINT], _manifest_fingerprint(p)
+        if expected != actual:
+            what = ("created by another writer" if expected is None else
+                    "gone" if actual is None else "changed under us")
+            raise ManifestConflict(
+                f"{p} was {what} since it was read "
+                f"(read {expected}, now {actual}). Re-read the manifest and "
+                f"re-apply the change; nothing has been written.")
+
+    m["updated"] = _now()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(m, indent=2), encoding="utf-8")
+    body = {k: v for k, v in m.items() if k != READ_FINGERPRINT}
+    # Serialise BEFORE touching the disk, so an unserialisable value fails
+    # without having created anything, and clean up the temp file if the write
+    # itself dies — a stray .tmp never replaces the manifest, but it does make
+    # the next person wonder whether it should have.
+    text = json.dumps(body, indent=2)
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    # Re-stamp, so a caller that saves the same dict twice is not told its own
+    # write was somebody else's.
+    if READ_FINGERPRINT in m:
+        m[READ_FINGERPRINT] = _manifest_fingerprint(p)
 
 
 # ---------------------------------------------------------------------------
