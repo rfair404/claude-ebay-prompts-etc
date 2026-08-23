@@ -42,6 +42,13 @@ sales_ledger.csv
 # is what makes the reports themselves disposable.
 /docs/performance-*.md
 
+# Dashboard output — reports/sales_dashboard.html carries gross, fees, net and
+# item-level sale prices; reports/ebay_ads.json carries the account's campaigns;
+# reports/price_vs_actual.csv carries every ask and what it realised. All class 2.
+# Regenerate the whole directory with:
+#   python tools/sales_report.py
+/reports/
+
 # Inventory working files — private business data + images (photos, per-item
 # phase output, comps, SKUs). The default content store; never tracked.
 /inventory/

@@ -306,8 +306,6 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
-        elif shown:
-            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:                       # PUBLISHED / ENDED / DELETED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
