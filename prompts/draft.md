@@ -348,12 +348,27 @@ tokens that genuinely carry weight (a maker, a model). Whole-title caps
 is shouting, not emphasis. **Separators:** prefer `/` for alternatives,
 `-` sparingly; no pipes, no bullets, no decorative characters.
 
-Every slot is still governed by the claim bar. Era, maker, and material
-enter the title only where INVESTIGATE supports them — an empty slot is
-correct when the evidence is not there. **We never buy a slot with a
-claim we cannot defend**, and condition/scarcity words (`MINT`, `RARE`)
-do not get the lead slot on our listings even though the studied seller
-gives them one.
+**The lead slot goes to a condition or scarcity word when one is
+earned**, ahead of the era word — `MINT`, `NOS`, `RARE`, `SCARCE`,
+`FINE`. The studied seller leads this way constantly (their mean
+condition slot is 0.2) and it is the strongest thing in the field: it is
+the first word a scrolling buyer reads. Earn it like this:
+
+- `MINT` / `NOS` / `EXCELLENT` — from the condition grade INVESTIGATE
+  already assigned via [condition-rubric.md](condition-rubric.md).
+  The rubric decides the word; the title just carries it. Grade to the
+  top of the supported band, per house practice — a clean piece is Mint.
+- `RARE` / `SCARCE` / `HTF` — only where INVESTIGATE found actual
+  scarcity evidence (a low production figure, a short production window,
+  a thin comp field after a real hunt). "I haven't seen another" is not
+  evidence, and neither is a high asking price.
+- `FINE` — quality of make, when the piece supports it.
+
+No word is earned → **the era word leads instead**, and that is a normal
+outcome, not a failure. The rest of the slots work the same way: era,
+maker, and material enter the title only where INVESTIGATE supports
+them, and an empty slot is correct when the evidence is not there. We
+lead as hard as the evidence allows and not one word harder.
 
 ## Markdown body (description)
 
@@ -362,7 +377,22 @@ order**. The skeleton is house style as of 2026-08-24 — it is the spine
 the studied seller uses on 100% of their bodies, and a body missing a
 section reads as a thinner listing:
 
-- **Hook** (1–2 sentences) from INVESTIGATE Summary, buyer-facing.
+- **Opener** — ONE sentence, ~20 words, that names the item in full:
+  era, maker, material, object. It is the title expanded into a
+  sentence, and it is the same claim set as the title, so it needs no
+  new evidence. Written in first person (see Voice below).
+- **The look-at-this line** — one sentence on why it is worth a look:
+  the feature that makes it, how it displays, what it does. The studied
+  seller does this on half their listings and it is what stops a scroll.
+  Enthusiasm is allowed here; **claims are not smuggled in with it**.
+  "This displays beautifully" is a matter of taste and always fine;
+  "this is a rare piece" is a scarcity claim and needs the same evidence
+  the title's `RARE` needs.
+- **The cross-sell line** — "This is one of several … I'm listing this
+  week, so please take a look at my other listings." Include it **only
+  when it is true**: there are sibling items from the same estate or lot
+  actually going up. One-off item → drop the line rather than invent a
+  batch.
 - **What's Included** — bullets from observable components; unit-type
   vocabulary.
 - **Size** — the measured dimensions, plus weight where it matters to
@@ -372,6 +402,11 @@ section reads as a thinner listing:
   INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`.
   At most one short context line for expected vintage wear; no warm
   framing sentence, no marketing. Defects always survive any trim.
+  Close the section with the photos line — "Please see the photos and
+  read the description for full details" — which the studied seller
+  carries on 100% of listings. It sets the expectation that the photos
+  are part of the disclosure; it never substitutes for naming a defect
+  in words.
 - **Markings** — maker's mark, signature, hallmark, stamp, or label:
   what it says and where it is, keyed to the photo that shows it.
   **Required.** When there is none, `No maker's mark found.` is the
@@ -379,14 +414,34 @@ section reads as a thinner listing:
   the honest alternative to implying attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
+- **The close** — the standing block, same on every listing, from
+  `store.closing_block` in [`../config.yaml`](../config.yaml): the
+  questions line, the terms line, the sign-off. It is boilerplate on
+  purpose — a buyer reads it once and it answers the questions that
+  otherwise arrive as messages. Render it verbatim from config; **do not
+  compose it per listing** and do not add claims to it. If a line in
+  that block ever stops being true, the fix is config, not a listing.
+  When `store.display_name` is set, the sign-off names the store; when
+  it is empty, the unnamed thank-you ships — never invent a brand name.
 
-**Length:** aim ~120–160 words (their median body is 133 across 245 listings). Short
+**Length:** aim ~130–180 words (their median body is 133 across 245
+listings; ours carries the same spine plus the opener and close). Short
 paragraphs, ~20 words per sentence. A body under ~100 words is usually a
 section left empty — check which one before shipping it.
 
-**Voice stays ours:** sentence case (never all-caps bodies), neutral
-catalog voice, no shop boilerplate, no cross-sell line, no payment-terms
-block. We took their structure, not their delivery.
+**Voice: first person, ours.** Write as the seller — "I picked this up
+from a local estate", "I haven't tested it". It reads as a person, and
+that is the point: the studied seller is in first person on 100% of
+bodies. Two things do not follow it into our copy:
+
+- **Sentence case, never an all-caps body.** Caps is shouting, it is
+  harder to read on a phone, and it flattens the emphasis we do want.
+- **First person is not a licence to speculate.** "I think this might be
+  Georgian" is exactly the guess the claim bar exists to stop — first
+  person makes a claim sound softer without making it any more
+  supported. What I say in my own voice still has to be something
+  INVESTIGATE established. Where I genuinely don't know, say that
+  plainly and say what I did to check.
 
 Hard rules: never include a claim absent from INVESTIGATE's listing-safe
 / observable lists; never anything INVESTIGATE marked NOT defensible;

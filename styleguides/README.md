@@ -63,8 +63,10 @@ ever loaded because a run asked for it._
 **Adopted** is the end state a guide can earn: the technique stops being an
 overlay and becomes a house rule in `prompts/`. That is a deliberate, one-time
 promotion, not a default — it happened for patinaelements on 2026-08-24 after
-the pattern held across every category sampled. The guide file stays as the
-traceable source of the numbers, and what was left behind is recorded in it.
+the pattern held across every category sampled, and extended the same day to
+the tone (first-person voice, the standing close, the earned lead slot). The
+guide file stays as the traceable source of the numbers, and records both what
+was left behind and what was adopted only with a binding on it.
 
 ---
 

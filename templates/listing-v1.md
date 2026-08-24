@@ -222,9 +222,21 @@ eBay does not enforce a hard maxLen on description at the HTML level;
 the server-side limit is well above what a typical listing uses. Keep
 paragraphs short for mobile readability.
 
-The section order below is house style and is not optional — Hook,
-What's Included, Size, Condition, Markings, About this item. Aim
-~120–160 words total, sentence case, neutral voice.
+The section order below is house style and is not optional — Opener,
+look-at-this line, cross-sell line, What's Included, Size, Condition,
+Markings, About this item, the close. Aim ~130–180 words total,
+first person, sentence case (never all-caps).
+
+(Opener — one sentence, ~20 words, naming the item in full: era, maker,
+material, object. The title expanded into a sentence.)
+
+(One sentence on why it is worth a look — the feature that makes it, how
+it displays, what it does. Enthusiasm is fine; claims are not smuggled
+in with it.)
+
+(Cross-sell line — "This is one of several … I'm listing this week, so
+please take a look at my other listings." ONLY when sibling items are
+actually going up. Drop the line for a one-off.)
 
 ## What's Included
 
@@ -243,7 +255,9 @@ What's Included, Size, Condition, Markings, About this item. Aim
 (Factual, minimal. Every defect surfaced in INVESTIGATE's
 defensible-claims section goes here, not minimized. No warm framing
 sentence, no marketing; at most one short context line for expected
-vintage wear. Then bullet specifics as `<location>: <defect>`.)
+vintage wear. Then bullet specifics as `<location>: <defect>`, and close
+the section with "Please see the photos and read the description for
+full details.")
 
 - (exterior wear / finish / hardware)
 - (interior / functional condition)
@@ -260,3 +274,7 @@ where it is, keyed to the photo that shows it. When there is none,
 
 (1–2 sentence closing collector hook — era, distinguishing feature,
 why a collector or end-user would want this specific piece.)
+
+(Then the standing close, rendered VERBATIM from `store.closing_block`
+in config.yaml. Same on every listing; never composed per item, never
+carries a claim about the item.)

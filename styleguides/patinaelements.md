@@ -22,16 +22,33 @@ are willing to claim*.
 
 ## Adopted as house style — 2026-08-24
 
-This guide is no longer an overlay to switch on. Everything below except the
-claim words was folded into the house rules: the title pattern in
-[`../prompts/draft.md`](../prompts/draft.md#the-house-title-pattern), the body
-skeleton (Hook / What's Included / **Size** / Condition / **Markings** / About)
-in draft.md and [`../templates/listing-v1.md`](../templates/listing-v1.md), and
-the frame-count target in [`../prompts/prep.md`](../prompts/prep.md).
+This guide is no longer an overlay to switch on. It was adopted in two passes:
+the structural technique on 2026-08-24, then the tone — first-person voice, the
+boilerplate, and condition/scarcity words in the lead title slot — on the
+operator's call the same day. What landed where:
 
-**Not adopted, deliberately:** their all-caps bodies, first-person shop voice,
-boilerplate (cross-sell line, payment terms), and condition/scarcity words in
-the lead title slot. Those are identity or claim-bar matters, not technique.
+- **Title pattern**, including the earned lead slot —
+  [`../prompts/draft.md`](../prompts/draft.md#the-house-title-pattern)
+- **Body**: Opener → look-at-this line → cross-sell line → What's Included →
+  **Size** → Condition → **Markings** → About → the close — draft.md and
+  [`../templates/listing-v1.md`](../templates/listing-v1.md)
+- **The standing close** — `store.closing_block` in
+  [`../config.yaml`](../config.yaml), rendered verbatim on every listing
+- **Frame count** — [`../prompts/prep.md`](../prompts/prep.md)
+
+**Not adopted:**
+
+- **All-caps bodies** (100% of theirs). Operator's call: harder to read on a
+  phone, and it flattens the emphasis we do want.
+- **The "clean, smoke-free environment" line** (100% of theirs). It is a claim
+  about our premises, not about an item, and it was not confirmed. It lives in
+  config the day it is.
+
+**Adopted with a binding, not as-is:** `MINT` / `RARE` in the lead slot. The
+slot is ours to use and it is the strongest word in the field, but the word is
+licensed by evidence — `MINT` by the condition rubric's grade, `RARE` by actual
+scarcity evidence from INVESTIGATE. Nothing earned → the era word leads. Same
+for the first-person voice: it changes who is speaking, not what may be said.
 
 The file stays as the traceable source of the numbers behind those rules, and
 as the pattern for the next seller we study.

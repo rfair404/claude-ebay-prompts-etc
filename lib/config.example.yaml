@@ -144,3 +144,33 @@ profiles:
   high-floor:
     profit_floor: 200
     margin_target: 0.60
+
+# ---------------------------------------------------------------------------
+# Store identity + the standing close on every listing body.
+#
+# DRAFT renders `closing_block` VERBATIM as the last section of every
+# description (see prompts/draft.md, "Markdown body"). It is boilerplate on
+# purpose: a buyer reads it once, and it answers the questions that otherwise
+# arrive as messages.
+#
+# Two rules. Nothing here may be a claim about the ITEM — this block is
+# identical on every listing, so anything item-specific is false somewhere.
+# And every line must be true of every listing you ship: if one stops being
+# true, fix it HERE, never by editing it out of one listing.
+#
+# Note what is NOT in the default block: the "clean, smoke-free environment"
+# line that most estate sellers carry. It is a factual claim about your
+# premises. Add it only if it holds for everything you store and ship.
+store:
+  # The storefront name buyers see, used in the sign-off. Leave EMPTY and
+  # DRAFT signs off with the unnamed thank-you rather than inventing a brand.
+  display_name: ""
+
+  closing_block: |
+    Please message me with any questions before buying — I'd rather answer
+    one than have you guess.
+
+    Payment or contact is appreciated within three days so I can keep
+    listings moving.
+
+    Thank you for looking, and please take a look at my other listings.
