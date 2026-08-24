@@ -26,10 +26,34 @@ that guide's **PREP — photography** section.
 It is **advisory**, and it lands on the review card, not in the stage contract:
 the four approved stages (orientation → unskew → crop → colour), the look
 defaults, `--category` handling, and the "printed media takes no crop" rule are
-unchanged. A guide can say "shoot to ~12 frames, keep the backdrop light and
-neutral, crop tight"; it cannot add a stage, override a look, or justify a
-drained frame. Note the loaded guide on the review card (`style_guide: <slug>`)
-so the reviewer knows which conventions were in play.
+unchanged. A guide can say "keep the backdrop light and neutral, crop tight"; it
+cannot add a stage, override a look, or justify a drained frame. Note the loaded
+guide on the review card (`style_guide: <slug>`) so the reviewer knows which
+conventions were in play.
+
+**The patinaelements guide is no longer an overlay** — its conventions were
+adopted as house style on 2026-08-24 and are written into the frame-count rule
+below. The overlay mechanism stays for the *next* seller we study.
+
+---
+
+## Frame count — the house target
+
+**Ten frames per listing**, and count them before PREP runs, not after.
+Measured across 245 active listings of a seller worth matching: median 10
+photos, 38% at 12 or more, effectively none at the 24 cap
+([study](../styleguides/_studies/patinaelements.md)). Eight good frames beat
+twelve padded ones, but a three-frame listing is a thin listing, and the fix
+is a reshoot, not processing.
+
+PREP does not invent frames. When a shoot comes in under target, **say so on
+the review card** — `frames: 6 (house target 10)` — and name the shots that
+are missing: the marked/signed detail, the underside, each disclosed defect,
+a scale reference. That list is the reshoot request; it is not a reason to
+hold the listing.
+
+The photo-protocol conventions for marbles stay as they are — that spec is a
+per-item agreement, not a count target.
 
 ---
 

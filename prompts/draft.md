@@ -154,6 +154,11 @@ seller's title strings or sentences; the guide carries technique, not text.
 If a guide is loaded, say so in `meta.notes` (`style_guide: <slug>`) so the
 review card shows which listings were drafted under an overlay.
 
+**The patinaelements guide is no longer an overlay** — its title pattern and
+body skeleton were adopted as house style on 2026-08-24 and are written into
+the two sections below, claim bar intact. The overlay mechanism stays for the
+*next* seller we study.
+
 ## Source-of-truth mapping
 
 Never invent. Never copy IDENTIFY `[BEST-CASE]` markers into copy — only
@@ -164,7 +169,8 @@ repeat a claim INVESTIGATE confirmed.
   · `meta.shoot_dir` path · `meta.drafted_at` UTC ISO-8601 ·
   `meta.ebay_*`/`last_synced` unchanged null · `meta.notes` = DRAFT NOTES.
 - `title` — best fitting INVESTIGATE title claim; apply unit-type
-  phrasing; ≤80.
+  phrasing; ≤80. **Build it to the house title pattern below** — a short
+  title is a wasted title.
 - `category_id` blank (eBay suggests at LIST) · `category_path` from
   INVESTIGATE/IDENTIFY category (human-readable only).
 - `condition` — map INVESTIGATE's grade (already from condition-rubric)
@@ -314,18 +320,73 @@ Books/catalogs/magazines/media → `USPSMediaMail`. ≤15 lb non-media →
 blank + flag (needs a quote) — also a strong local-pickup candidate (gate
 above).
 
+## The house title pattern
+
+Measured, not guessed: 245 active listings from a seller worth matching,
+and the pattern held in every category sampled — jewelry, collectibles,
+glass, antiques, clothing (see
+[`../styleguides/_studies/patinaelements.md`](../styleguides/_studies/patinaelements.md)).
+Adopted as house style 2026-08-24.
+
+**Slot order** — era → object/maker → material → distinguishing detail →
+measurement → unit phrase. Era leads (their mean era slot is 0.4, and
+97% of titles carry an era word); material sits mid-title around slot 6.
+
+**Fill the field.** Target 75–80 characters. Their median is 78 and 89%
+run ≥75. Stop only when the next true keyword will not fit — never
+because the title "reads finished" at 55.
+
+**Budget ~2 descriptors** (their mean is 1.8, max 4). Past that it reads
+as keyword soup, and every adjective spent is a searchable noun lost.
+
+**Measurement earns a slot** where size is a buying decision — 56% of
+their antiques titles carry one, 37% of glass, 0% of clothing. Include
+it when we have a measured number, not an estimate.
+
+**Casing:** sentence/title case, with ALL-CAPS reserved for one or two
+tokens that genuinely carry weight (a maker, a model). Whole-title caps
+is shouting, not emphasis. **Separators:** prefer `/` for alternatives,
+`-` sparingly; no pipes, no bullets, no decorative characters.
+
+Every slot is still governed by the claim bar. Era, maker, and material
+enter the title only where INVESTIGATE supports them — an empty slot is
+correct when the evidence is not there. **We never buy a slot with a
+claim we cannot defend**, and condition/scarcity words (`MINT`, `RARE`)
+do not get the lead slot on our listings even though the studied seller
+gives them one.
+
 ## Markdown body (description)
 
-Compose from INVESTIGATE's claim set only:
+Compose from INVESTIGATE's claim set only, in this **fixed section
+order**. The skeleton is house style as of 2026-08-24 — it is the spine
+the studied seller uses on 100% of their bodies, and a body missing a
+section reads as a thinner listing:
+
 - **Hook** (1–2 sentences) from INVESTIGATE Summary, buyer-facing.
 - **What's Included** — bullets from observable components; unit-type
   vocabulary.
+- **Size** — the measured dimensions, plus weight where it matters to
+  the buyer. **Required whenever we have a measurement.** If nothing was
+  measured, say so plainly rather than dropping the section.
 - **Condition** — factual, minimal. Bullets enumerating EVERY defect
   INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`.
   At most one short context line for expected vintage wear; no warm
   framing sentence, no marketing. Defects always survive any trim.
+- **Markings** — maker's mark, signature, hallmark, stamp, or label:
+  what it says and where it is, keyed to the photo that shows it.
+  **Required.** When there is none, `No maker's mark found.` is the
+  correct content — absence is information a buyer wants, and it is also
+  the honest alternative to implying attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
+
+**Length:** aim ~120–160 words (their median body is 133 across 245 listings). Short
+paragraphs, ~20 words per sentence. A body under ~100 words is usually a
+section left empty — check which one before shipping it.
+
+**Voice stays ours:** sentence case (never all-caps bodies), neutral
+catalog voice, no shop boilerplate, no cross-sell line, no payment-terms
+block. We took their structure, not their delivery.
 
 Hard rules: never include a claim absent from INVESTIGATE's listing-safe
 / observable lists; never anything INVESTIGATE marked NOT defensible;

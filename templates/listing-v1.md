@@ -222,24 +222,39 @@ eBay does not enforce a hard maxLen on description at the HTML level;
 the server-side limit is well above what a typical listing uses. Keep
 paragraphs short for mobile readability.
 
+The section order below is house style and is not optional — Hook,
+What's Included, Size, Condition, Markings, About this item. Aim
+~120–160 words total, sentence case, neutral voice.
+
 ## What's Included
 
 - (bullet each included component, with counts where relevant)
 - (distinguish original vs replacement parts)
 - (list any paperwork / extras by name + date when visible)
 
+## Size
+
+- (measured dimensions — the ones a buyer decides on)
+- (weight, where it matters to the buyer)
+- (if nothing was measured, say so plainly — do not drop the section)
+
 ## Condition
 
-(Prose describing visible condition. Every defect surfaced in
-INVESTIGATE's defensible-claims section goes here, framed honestly
-without minimizing. Lead with a single warm sentence — e.g. "This is a
-vintage piece with vintage character. No item is perfect — but this one
-is still beautiful and fully functional." — then bullet specifics.)
+(Factual, minimal. Every defect surfaced in INVESTIGATE's
+defensible-claims section goes here, not minimized. No warm framing
+sentence, no marketing; at most one short context line for expected
+vintage wear. Then bullet specifics as `<location>: <defect>`.)
 
 - (exterior wear / finish / hardware)
 - (interior / functional condition)
 - (specific defects, described not minimized)
 - (paperwork or extras condition, if any)
+
+## Markings
+
+(Maker's mark, signature, hallmark, stamp, or label: what it says and
+where it is, keyed to the photo that shows it. When there is none,
+"No maker's mark found." is the correct content.)
 
 ## About this item
 

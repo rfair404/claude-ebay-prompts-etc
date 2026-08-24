@@ -55,10 +55,16 @@ guide is named, none is loaded and house defaults apply.
 
 | Guide | Seller | Sample | What it is good for | Status |
 |---|---|---|---|---|
-| [patinaelements.md](patinaelements.md) | patinaelements | 245 active listings (60 with full detail, 40 images measured) | General estate/antiques + jewelry: cap-length titles, a rigid SIZE → CONDITION → MAKER'S MARK body skeleton, ~12 photos | active |
+| [patinaelements.md](patinaelements.md) | patinaelements | 245 active listings (all with full detail, 60 images measured) | General estate/antiques + jewelry: cap-length titles, a rigid SIZE → CONDITION → MAKER'S MARK body skeleton, ~10 photos | **adopted as house style 2026-08-24** |
 
 _Add a row per guide. `default: off` is not negotiable — a style guide is only
 ever loaded because a run asked for it._
+
+**Adopted** is the end state a guide can earn: the technique stops being an
+overlay and becomes a house rule in `prompts/`. That is a deliberate, one-time
+promotion, not a default — it happened for patinaelements on 2026-08-24 after
+the pattern held across every category sampled. The guide file stays as the
+traceable source of the numbers, and what was left behind is recorded in it.
 
 ---
 
