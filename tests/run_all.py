@@ -57,20 +57,33 @@ def _run_module(mod):
             traceback.print_exc()
     tail = f", {skipped} skipped" if skipped else ""
     print(f"{len(fns) - failed - skipped}/{len(fns) - skipped} passed{tail}")
-    return failed
+    return failed, skipped
 
 
 def main():
     mods = sorted(p.stem for p in HERE.glob("test_*.py"))
-    total_fail = 0
+    total_fail = total_skip = 0
     for name in mods:
         if FAST and name in SLOW:
             print(f"\n==== {name} (SKIPPED --fast) ====")
             continue
         print(f"\n==== {name} ====")
-        total_fail += _run_module(importlib.import_module(name))
-    print(f"\n{'=' * 40}\n"
-          f"{'ALL SUITES PASSED' if not total_fail else f'{total_fail} FAILURE(S)'}")
+        failed, skipped = _run_module(importlib.import_module(name))
+        total_fail += failed
+        total_skip += skipped
+    print(f"\n{'=' * 40}")
+    if total_fail:
+        print(f"{total_fail} FAILURE(S)")
+    elif total_skip:
+        # Never plain "ALL SUITES PASSED" while something went unrun. This
+        # runner cannot supply pytest fixtures, and two fixture tests were
+        # FAILING on the branch while it reported everything green — which is
+        # how the failure reached CI instead of being caught here.
+        print(f"passed, but {total_skip} test(s) NOT RUN — this runner cannot "
+              f"supply pytest fixtures.\n"
+              f"  run `python -m pytest tests/` before trusting a green result.")
+    else:
+        print("ALL SUITES PASSED")
     return total_fail
 
 
