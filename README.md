@@ -16,6 +16,7 @@ then load each phase prompt on demand. `RUN.md` is the single entry point
     full <photos-dir>   all in order, ending at the REVIEW gate
 
     report              account-wide: what we actually made       (no shoot dir)
+    promote             account-wide: what to pay to place        (no shoot dir)
 
 A single phase can be run alone by name (`identify <name>`, `price <name>`, …);
 see [`RUN.md`](RUN.md). **REPORT** ([`prompts/report.md`](prompts/report.md)) is
@@ -24,6 +25,14 @@ than producing a listing, and never publishes or edits anything:
 
     python lib/sync_actuals.py --apply     # actuals from the Fulfillment API
     python lib/report.py --performance     # fees, ask-vs-actual, speed, categories
+    python tools/sales_report.py           # the same, as a dashboard, synced first
+
+**PROMOTE** ([`prompts/promote.md`](prompts/promote.md)) is the other one, and
+runs after REPORT: it plans paid placement — which campaign, what budget, which
+listings — and **proposes only**. Every eBay write stays the operator's
+keystroke, because an ad added by mistake spends before anyone notices.
+
+    python tools/promote.py --budget 20    # the plan + the exact calls to enact it
 
 ## What changed from v2
 
