@@ -157,11 +157,17 @@ Only **3** are inert. The other 30 are inventory, not litter.
 `SOLD.md` and matches `sales_ledger.csv` by title only. **Action:** backfill the
 `sku`/`shoot_dir` columns in `sales_ledger.csv` so the next audit joins cleanly.
 
-**Drafted, never published — 8 roots, 691 MB, ~$599 of parseable ask.**
-`hunter-33-carrabelle` (275 MB, a bare `draft.md` and nothing else),
-`tins` ($72), `coke-tray` ($22), `bb-cats-pair`, `hone` ($130),
-`baby-boy`, `esquire-gentleman`, `fenton-lamps` ($375). **Action:** same as 4a —
-these want PREP and PUBLISH, not a broom.
+**Drafted, never published — 7 roots, 416 MB.**
+`tins`, `coke-tray`, `bb-cats-pair`, `hone`, `baby-boy`, `esquire-gentleman`,
+`fenton-lamps`. **Action:** same as 4a — these want PREP and PUBLISH, not a broom.
+
+**Hand-listed channel — 1 root, 275 MB. Not backlog, not cleanup.**
+`hunter-33-carrabelle` is a 1982 Hunter 33 Cherubini sloop, $7,500 OBO, 98
+photos. eBay Motors vehicle listings do not go through the Sell Inventory/Offer
+API, so this is **listed by hand** and tracked outside the pipeline — the same
+way case items go to the mall rather than to eBay. Its `draft.md` is copy to
+paste into the Motors flow, not a `--list` target. Do not count it in any
+pipeline backlog and do not chase it as a stalled draft. **Keep the shoot.**
 
 **Priced or identified, no draft — 15 roots, 1,079 MB, ~$670 of parseable ask.**
 `marbles-collection-1` and `-2` (647 MB together) are the known 3-bucket sorting

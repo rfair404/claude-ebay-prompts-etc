@@ -205,6 +205,24 @@ def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
                             f"/bulk_create_ads_by_listing_id", body)
 
 
+def set_bidding(campaign_id: str, strategy: str, confirm: bool) -> None:
+    """FIXED -> DYNAMIC: eBay manages the bids and updates them daily.
+
+    The one bid automation the API actually has. Note what it costs you: under
+    DYNAMIC you can still add keywords but can no longer set their bid values,
+    so the ad group's default bid stops being the ceiling you chose.
+    """
+    from ebay_client import api_send
+
+    body = {"biddingStrategy": strategy}
+    if not confirm:
+        print(f"DRY — would POST .../{campaign_id}/update_bidding_strategy {body}")
+        return
+    api_send("POST", f"/sell/marketing/v1/ad_campaign/{campaign_id}"
+                     f"/update_bidding_strategy", body)
+    print(f"  bidding strategy -> {strategy}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--budget", type=float, default=20.0, help="daily budget USD (default 20)")
@@ -217,9 +235,14 @@ def main() -> int:
     ap.add_argument("--campaign", help="operate on this existing campaign id")
     ap.add_argument("--bid", type=float, default=0.25,
                     help="default cost-per-click bid for the ad group (default 0.25)")
+    ap.add_argument("--bidding", choices=("FIXED", "DYNAMIC"),
+                    help="set the campaign's bidding strategy (needs --confirm)")
     ap.add_argument("--confirm", action="store_true",
                     help="actually write to eBay. Without it every write is a dry run.")
     a = ap.parse_args()
+
+    if a.bidding and a.campaign:
+        set_bidding(a.campaign, a.bidding, a.confirm)
 
     if a.create:
         cid = create_campaign(a.create, a.budget, a.confirm)
