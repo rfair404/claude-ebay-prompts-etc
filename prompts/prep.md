@@ -330,6 +330,32 @@ white-balance gain, the backdrop curve, the neutralise, the blur, the pop and
 the sharpen together. Reach for it when a look reads washed out: the wash comes
 from the correction, so less correction is less wash.
 
+### Printed media takes NO crop, either.
+
+**On books, magazines, catalogs and mailers, force `--crop <every frame>=off`.**
+
+Same cause as the colour rule, a different stage. The crop stage looks for the
+highest-contrast object in the frame; on an open catalog that object is the
+photograph PRINTED IN THE LAYOUT, not the catalog. So it crops the merchandise
+away and keeps the picture of it.
+
+Measured on live listings before the fix: `j-crew/3` shipped cropped to a
+printed boot with the J.CREW masthead — the thing that identifies the listing —
+outside the frame; `mark-shale-business-casual` to a printed chair, keeping 24%
+of the original; `brother-tree` into the body text at 18.9%; and the
+`fall-and-winter-1980` mailer to a bare black bar, because the crop locked onto
+the redaction rectangle over the address. Of 56 cropped media frames the median
+kept 75% and the tail ran to 19%.
+
+There is no crop worth making here. The object of the listing is the whole page,
+edges included: a buyer judging a catalog is judging its cover wear, its corners
+and its squareness, all of which live exactly where a tight crop cuts. Set crop
+off for the class rather than trying to teach the detector what a catalog is.
+
+Order matters when re-rendering: set the crop off BEFORE `--apply`. A crop
+change invalidates the renders, so doing it afterwards renders every frame
+twice.
+
 ### Printed media renders `asshot`. No exceptions from the default path.
 
 **Books, magazines, catalogs, mailers — any shoot whose subject is printed paper

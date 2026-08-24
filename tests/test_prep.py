@@ -1385,3 +1385,81 @@ def test_approve_auto_stamps_both_stages_like_a_sheet_would():
         # invalidates it the same way.
         assert m["stages"]["crop"].get("decisions")
         assert not m["stages"]["color"]["approved"], "colour is still the operator's"
+
+
+# --------------------------------------------------------------- gc / cleanup
+#
+# PREP was purely additive: it wrote presets on every pass and removed nothing,
+# so `inventory/` carried 3.5 GB of renders no manifest even named — stranded by
+# re-runs that narrowed `--only` or the shoot's category. These pin the two
+# halves of the fix apart: the leak goes automatically, the operator's unchosen
+# looks never do.
+
+def _fake_presets(shoot: Path, looks, frames):
+    root = shoot / ".prep" / "presets"
+    for look in looks:
+        (root / look).mkdir(parents=True, exist_ok=True)
+        for f in frames:
+            (root / look / f).write_bytes(b"x" * 4096)
+    return root
+
+
+def test_sweep_takes_only_what_the_manifest_cannot_name():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        root = _fake_presets(shoot, ("asshot", "punch", "stranded"),
+                             ("a.jpg", "b.jpg", "gone.jpg"))
+        m = {"photos": {n: {"presets": {
+                 look: {"path": f".prep/presets/{look}/{n.lower()}"}
+                 for look in ("asshot", "punch")}}
+             for n in ("A.jpg", "B.jpg")}}
+
+        freed = P._sweep_unreferenced_presets(shoot, m, quiet=True)
+
+        assert not (root / "stranded").exists(), "a look nothing names survived"
+        # The frame that left the shoot takes its renders with it, even under a
+        # look that is still in use.
+        assert not (root / "asshot" / "gone.jpg").exists()
+        # Everything the manifest points at is untouched.
+        for look in ("asshot", "punch"):
+            for f in ("a.jpg", "b.jpg"):
+                assert (root / look / f).exists(), f"{look}/{f} was swept"
+        assert freed == 4096 * 5, freed
+
+
+def test_gc_refuses_an_unapproved_shoot():
+    """Before approval the unchosen looks ARE the gate — nothing may take them."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_apply(shoot, quiet=True)
+        root = shoot / ".prep" / "presets"
+        before = sorted(p.name for p in root.iterdir() if p.is_dir())
+        assert P.run_gc(shoot, force=True) == 0
+        assert sorted(p.name for p in root.iterdir() if p.is_dir()) == before
+
+
+def test_gc_keeps_the_chosen_look_and_is_dry_by_default():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+        m = P.load_manifest(shoot)
+        chosen = m["chosen_preset"]
+        for st in m.get("stages", {}):
+            m["stages"][st] = {"approved": True, "approved_at": "x"}
+        m["approved"] = True
+        P.save_manifest(shoot, m)
+        root = shoot / ".prep" / "presets"
+        looks = sorted(p.name for p in root.iterdir() if p.is_dir())
+
+        # inventory/ is gitignored — the default must never remove anything.
+        assert P.run_gc(shoot, force=False) > 0 or len(looks) == 1
+        assert sorted(p.name for p in root.iterdir() if p.is_dir()) == looks
+
+        P.run_gc(shoot, force=True)
+        left = sorted(p.name for p in root.iterdir() if p.is_dir())
+        assert left == [chosen], left
+        # The shipped files are the point of the whole exercise.
+        assert list((shoot / "listing").glob("*.jpg"))

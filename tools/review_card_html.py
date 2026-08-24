@@ -194,14 +194,7 @@ def build(shoot: Path, out: Path | None = None) -> Path:
         for f in frames)
 
     shoot_posix = shoot.as_posix()
-    cmds = "".join(
-        f'<pre class="cmd" data-i="{f["i"]}">'
-        + (f'# frame {f["i"] + 1} already leads — nothing to run.\n'
-           if f["i"] == 0 else
-           f'python lib/list_edit.py --set-hero {html.escape(shoot_posix)} '
-           f'{html.escape(f["name"])}\n')
-        + "</pre>"
-        for f in frames)
+    cmds = ""   # the picker reports its choice in the chat, not as a command
 
     bo_line = ("on · auto-decline $" + str(bo.get("auto_decline_amount"))
                if bo.get("enabled") else "off")
@@ -283,13 +276,31 @@ h2{{font:600 11px/1 "IBM Plex Sans",sans-serif;letter-spacing:.13em;
   border:1px solid var(--rule);border-radius:3px;cursor:zoom-in}}
 .shotcap{{display:block;margin-top:8px;font-size:11.5px;color:var(--muted);
   font-family:"IBM Plex Mono",ui-monospace,monospace}}
-.strip{{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}}
+/* The cover sits at half width with the rest of the shoot beside it, so the
+   gallery image AND every other frame are visible without scrolling. A hero
+   that filled the column pushed the strip below the fold, which is where the
+   frame you actually want to promote was hiding. */
+.shotwrap{{display:flex;gap:14px;align-items:flex-start}}
+/* 42%, not 50%: at 140px a thumbnail needs ~290px of strip to sit two abreast,
+   and a half-width hero left only ~250px — which stacked them in a single
+   column down the side. Giving the hero four percent back buys the second
+   column, and the hero is still less than half the width it started at. */
+.shotcol{{flex:0 0 42%;max-width:42%;min-width:0}}
+.strip{{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));/* 132 not 140: the track only has to be wide ENOUGH to admit a second
+     column — 1fr then stretches both back to ~140px. Asking for 140
+     left 0.8px of slack, and any padding change would silently drop
+     the strip to a single column. */
+  gap:10px;margin-top:0;flex:1;align-content:flex-start;
+  max-height:420px;overflow-y:auto}}
+@media(max-width:640px){{.shotwrap{{flex-wrap:wrap}}
+  .shotcol{{flex:0 0 100%;max-width:100%}}
+  .strip{{margin-top:12px}}}}
 .pick{{position:absolute;width:1px;height:1px;opacity:0;margin:0}}
-.strip label{{position:relative;width:70px;height:70px;border:1px solid var(--rule);
+.strip label{{position:relative;width:100%;height:140px;border:1px solid var(--rule);
   border-radius:3px;overflow:hidden;cursor:pointer;background:var(--sunk);display:block}}
 .chipimg{{position:absolute;inset:0;background-size:contain;
   background-repeat:no-repeat;background-position:center}}
-.chipn{{position:absolute;left:0;bottom:0;padding:1px 5px;font-size:10px;
+.chipn{{position:absolute;left:0;bottom:0;padding:2px 7px;font-size:11.5px;
   font-family:"IBM Plex Mono",ui-monospace,monospace;background:var(--surface);
   color:var(--muted);border-top-right-radius:3px}}
 .pick:focus-visible+label{{outline:2px solid var(--accent);outline-offset:2px}}
@@ -361,8 +372,10 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
   <div class="grid">
     <div class="col">
       <h2>Cover shot — what buyers see in search</h2>
-      {shots}
-      <div class="strip">{chips}</div>
+      <div class="shotwrap">
+        <div class="shotcol">{shots}</div>
+        <div class="strip">{chips}</div>
+      </div>
       <p class="hint">Frame 1 is eBay's gallery image. Pick another and the command
         below changes to match — the page can't reach the CLI, so run it yourself.</p>
     </div>
@@ -403,12 +416,10 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
   </div>
 
   <div class="wide">
-    <h2>To change the cover shot</h2>
-    {cmds}
-    <h2>To publish — only after you approve</h2>
-    <p class="cmdlab">This puts the listing live at ${html.escape(price)}. There is no undo
-      that gets the listing's original start time back.</p>
-    <pre class="pub">python lib/list_edit.py --list {html.escape(shoot_posix)} --confirm</pre>
+    <h2>Decide in the chat</h2>
+    <p class="cmdlab">This page is for looking, not for doing. When you have seen
+      enough, the assistant asks how to proceed &mdash; approve and publish, push
+      photos only, hold, or say what needs changing &mdash; and runs it for you.</p>
   </div>
 </div>
 {bigs}

@@ -970,6 +970,10 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     m["approved"] = False
     m["approved_at"] = None
     save_manifest(shoot, m)
+    # Renders from an earlier pass that this one no longer names. Nothing can
+    # read them again, so they go now rather than accruing until an audit finds
+    # 3.5 GB of them. See _sweep_unreferenced_presets.
+    _sweep_unreferenced_presets(shoot, m, quiet=quiet)
     _presets_sheet(rows, shoot / ".prep" / "prep_presets.jpg")
 
     # Adopt the backdrop's default look so `listing/` is populated without a
@@ -1021,6 +1025,139 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         print(f"  default look for a {shoot_class or 'mixed'} backdrop{warm_note}: "
               f"{default} (--pick {'|'.join(colormod.PRESETS)} to change)")
     return m
+
+
+
+# ---------------------------------------------------------------- cleanup
+#
+# PREP WAS PURELY ADDITIVE, AND IT SHOWED.
+#
+# Every pass wrote and nothing ever removed, so `inventory/` reached 27.3 GB
+# with 9.2 GB of it in `.prep/presets/`. Two distinct leaks, and they want
+# different treatment:
+#
+#   1. UNREFERENCED renders. `--apply` narrows the preset set (`--only`, or the
+#      shoot's category via categories.looks_for). Re-run a shoot that was once
+#      rendered at six looks with a two-look category and the other four sit
+#      there forever -- the manifest does not mention them, `--pick` cannot
+#      reach them, nothing can ever read them again. Measured: 171 dirs and
+#      1366 files, 3.5 GB. This is not a decision anyone made, it is a leak, so
+#      run_apply now sweeps it automatically at the end of every render.
+#
+#   2. SUPERSEDED renders. The looks that WERE rendered this run but lost the
+#      pick, plus the `.prep/ask/` panels for frames whose orientation has since
+#      been answered. Those are real artifacts of a real decision and the
+#      comparison sheet is the whole point of the gate, so they are never swept
+#      automatically -- only by an explicit `--gc`, and only once the shoot is
+#      approved. Both are regenerable with `--apply`.
+#
+# `--gc` prints and removes nothing; `--gc --gc-force` removes. There is no
+# `git checkout` behind `inventory/` -- it is gitignored -- so the dry run is
+# the default in the one place where that asymmetry actually bites.
+
+
+def _dir_bytes(d: Path) -> int:
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+
+
+def _mb(b: int) -> str:
+    """Render sizes so a sweep of a few stray frames does not read as '0 MB'."""
+    return f"{b / 1048576:.1f} MB" if b >= 1048576 else f"{b / 1024:.0f} KB"
+
+
+def _sweep_unreferenced_presets(shoot: Path, m: dict, quiet: bool = False) -> int:
+    """Delete preset renders no manifest entry points at. Returns bytes freed.
+
+    Safe by construction: a file the manifest does not name cannot be picked,
+    cannot be copied to `listing/`, and cannot be shown on the comparison sheet.
+    """
+    import shutil
+
+    p_root = shoot / ".prep" / "presets"
+    if not p_root.is_dir():
+        return 0
+
+    named, referenced = set(), set()
+    for rec in (m.get("photos") or {}).values():
+        for pname, entry in (rec.get("presets") or {}).items():
+            named.add(pname)
+            referenced.add((shoot / entry["path"]).resolve())
+
+    freed = 0
+    for pdir in sorted(p_root.iterdir()):
+        if not pdir.is_dir():
+            continue
+        if pdir.name not in named:
+            freed += _dir_bytes(pdir)
+            shutil.rmtree(pdir)
+            continue
+        # The look survived but individual frames may not have: a photo removed
+        # from the shoot leaves its render behind under a preset still in use.
+        for f in pdir.rglob("*"):
+            if f.is_file() and f.resolve() not in referenced:
+                freed += f.stat().st_size
+                f.unlink()
+
+    if freed and not quiet:
+        print(f"  swept {_mb(freed)} of unreferenced preset renders")
+    return freed
+
+
+def run_gc(shoot: Path, force: bool = False) -> int:
+    """Drop regenerable byproducts of an APPROVED shoot. Returns bytes freed.
+
+    Refuses on an unapproved shoot: before approval the unchosen looks are the
+    comparison the operator has not made yet, and the ask panels are questions
+    nobody has answered.
+    """
+    import shutil
+
+    m = load_manifest(shoot)
+    if not m.get("photos"):
+        print(f"{shoot}: nothing prepped")
+        return 0
+    if not m.get("approved"):
+        print(f"{shoot}: not approved — keeping every look and every ask panel. "
+              f"--gc is for shoots that are done.")
+        return 0
+
+    chosen = m.get("chosen_preset")
+    targets: list[tuple[Path, str]] = []
+
+    p_root = shoot / ".prep" / "presets"
+    if p_root.is_dir():
+        for pdir in sorted(p_root.iterdir()):
+            if pdir.is_dir() and pdir.name != chosen:
+                targets.append((pdir, f"unchosen look (chosen: {chosen})"))
+
+    ask = shoot / ".prep" / "ask"
+    if ask.is_dir():
+        unresolved = [n for n, r in m["photos"].items()
+                      if (r.get("orientation") or {}).get("needs_ask")]
+        if unresolved:
+            print(f"  keeping .prep/ask/ — still unanswered: {', '.join(unresolved[:5])}")
+        else:
+            targets.append((ask, "orientation panels, all answered"))
+
+    if not targets:
+        print(f"{shoot}: already clean")
+        return 0
+
+    total = 0
+    for d, why in targets:
+        b = _dir_bytes(d)
+        total += b
+        print(f"  {'rm' if force else 'would rm'} {str(d.relative_to(shoot)):24} "
+              f"{_mb(b):>10}   {why}")
+        if force:
+            shutil.rmtree(d)
+
+    verb = "freed" if force else "would free"
+    print(f"{shoot}: {verb} {_mb(total)}  "
+          f"(regenerate with `--apply`)")
+    if not force:
+        print("  dry run — add --gc-force to actually remove")
+    return total
 
 
 def run_pick(shoot: Path, preset: str, quiet: bool = False,
@@ -1932,6 +2069,11 @@ def main(argv=None) -> int:
     ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
     ap.add_argument("--only", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
     ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
+    ap.add_argument("--gc", action="store_true",
+                    help="list the regenerable byproducts an APPROVED shoot is still holding "
+                         "(unchosen preset renders, answered ask panels); removes nothing")
+    ap.add_argument("--gc-force", action="store_true", dest="gc_force",
+                    help="with --gc: actually delete them (inventory/ is gitignored — there is no undo)")
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
     ap.add_argument("--decisions", action="store_true",
                     help="print the decision record and its digest, and report "
@@ -2028,6 +2170,9 @@ def main(argv=None) -> int:
     if args.pick:
         m = run_pick(shoot, args.pick, quiet=args.quiet)
         _print_status(shoot, m)
+        return 0
+    if args.gc:
+        run_gc(shoot, force=args.gc_force)
         return 0
     if args.approve:
         m = run_approve(shoot)
