@@ -44,7 +44,8 @@ BG = (255, 255, 255)
 HAIRLINE = (214, 214, 214)    # the faint edge their inset panels carry
 MARGIN = 0.025                # canvas fraction: outer breathing room
 GUTTER = 0.018                # canvas fraction: between split panels
-INSET_W = 0.34                # canvas fraction: inset panel width
+INSET_W = 0.34                # canvas fraction: single inset panel width
+THUMB_W = 0.26                # canvas fraction: each thumbnail in the two-up column
 INSET_BORDER = 7              # px of white around an inset, then the hairline
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
@@ -109,9 +110,24 @@ def looks_whole(frac: float, touched: int) -> bool:
 
 
 def _signature(im: Image.Image) -> list[float]:
-    """A tiny greyscale fingerprint, for telling near-duplicate frames apart."""
-    g = im.convert("L").resize((16, 16))
+    """A tiny COLOUR fingerprint, for telling near-duplicate frames apart.
+
+    This was greyscale at 16x16 and it could not separate two photographs of
+    the same yellow presentation box — so both thumbnails of a three-view hero
+    came back showing the box. Colour is most of what distinguishes the views
+    we actually shoot: dark felt, yellow box interior, white lid, metal.
+    """
+    g = im.convert("RGB").resize((12, 12))
     return [float(v) for v in g.tobytes()]
+
+
+# A second thumbnail has to be at least this fraction as far from the first
+# thumbnail as that one is from the main view. A fixed threshold cannot do this
+# job: two shots of the same presentation box sat 28 apart while the main view
+# was 50 away — plainly the same story, but above any floor low enough to be
+# safe elsewhere. Judging the gap RELATIVE to the spread this shoot actually
+# has is scale-free, and it is what rejects the duplicate box.
+DISTINCT_ENOUGH = 0.6
 
 
 def _distance(a: list[float], b: list[float]) -> float:
@@ -130,31 +146,59 @@ def list_frames(shoot: Path) -> list[Path]:
 
 
 def choose_frames(frames: list[Path], want: int = 2) -> tuple[list[Path], str]:
-    """Pick the hero and the view(s) that add something to it.
+    """Pick the main view and the companion view(s) that add something.
 
-    The hero is frame one — PREP and DRAFT both treat listing order as the
-    operator's decision, and this tool does not get to overrule it. The
-    companions are the frames that are (a) tightest on the subject, so they
-    read at thumbnail size, and (b) least like the hero, so the montage says
-    something the hero does not.
+    The main view is frame one — PREP and DRAFT both treat listing order as
+    the operator's decision, and this tool does not get to overrule it.
+
+    Companions are chosen for DIVERSITY, not just for being unlike the main
+    view. Scoring each candidate against the hero alone picked two photos of
+    the same presentation box for both pairs of earrings: each was a fine
+    answer to "unlike the macro", and together they said one thing twice. So
+    the pick is greedy max-min — every companion has to be unlike the main
+    view AND unlike every companion already chosen.
     """
     if len(frames) < 2:
         return frames[:1], "single"
     hero = frames[0]
     with Image.open(hero) as h:
         h_sig, h_fill = _signature(h), subject_fill(h)
-    scored = []
+
+    cand = []
     for p in frames[1:]:
         with Image.open(p) as im:
-            fill, sig = subject_fill(im), _signature(im)
-        # tight on the subject AND different from the hero
-        scored.append((fill / 100.0 + _distance(h_sig, sig) / 128.0, fill, p))
-    scored.sort(reverse=True)
-    picks = [hero] + [p for _, _, p in scored[: want - 1]]
-    # A companion much tighter than the hero is a DETAIL — inset it, the way
-    # they inset a hallmark. Comparable framing means two views of equal
-    # weight, which reads better as a split.
-    detail = scored[0][1] > h_fill + 12
+            cand.append({"path": p, "fill": subject_fill(im), "sig": _signature(im)})
+
+    picks, chosen = [hero], [{"sig": h_sig}]
+    while len(picks) < want and cand:
+        best, best_score = None, None
+        for c in cand:
+            # distance to the NEAREST already-chosen frame: a candidate that
+            # duplicates any of them scores low, however novel it is otherwise
+            # Distinctness leads; tightness on the subject only breaks ties.
+            # With fill weighted as heavily as spread, two big flat box shots
+            # beat a screwback detail and a stone macro every time.
+            spread = min(_distance(c["sig"], k["sig"]) for k in chosen) / 128.0
+            score = spread * 3.0 + c["fill"] / 400.0
+            if best_score is None or score > best_score:
+                best, best_score = c, score
+        if len(picks) >= 2:
+            # `picks[1]` is the first thumbnail; the second must not simply
+            # restate it.
+            gap = _distance(best["sig"], chosen[1]["sig"])
+            reach = _distance(chosen[1]["sig"], h_sig)
+            if gap < DISTINCT_ENOUGH * reach:
+                print(f"  note: no second view distinct enough to add "
+                      f"(closest candidate is {gap:.0f} from thumb 1, "
+                      f"which is itself {reach:.0f} from the main view) — "
+                      f"offering the two-frame hero only")
+                break
+        picks.append(best["path"])
+        chosen.append(best)
+        cand.remove(best)
+
+    with Image.open(picks[1]) as b:
+        detail = subject_fill(b) > h_fill + 12
     return picks, ("inset" if detail and want == 2 else "split")
 
 
@@ -179,10 +223,23 @@ def compose_split(paths: list[Path], canvas: int = CANVAS) -> Image.Image:
     m, g = int(canvas * MARGIN), int(canvas * GUTTER)
     inner = canvas - 2 * m
     if len(paths) <= 2:
-        pw = (inner - g) // 2
-        for i, p in enumerate(paths[:2]):
+        # Two landscape frames side by side leave half the square empty: each
+        # panel is tall and thin and the pictures shrink to fit its width. Two
+        # landscapes stack; anything else sits side by side.
+        landscape = []
+        for p in paths[:2]:
             with Image.open(p) as im:
-                out.paste(_panel(im, pw, inner), (m + i * (pw + g), m))
+                landscape.append(im.width > im.height * 1.15)
+        if all(landscape):
+            ph = (inner - g) // 2
+            for i, p in enumerate(paths[:2]):
+                with Image.open(p) as im:
+                    out.paste(_panel(im, inner, ph), (m, m + i * (ph + g)))
+        else:
+            pw = (inner - g) // 2
+            for i, p in enumerate(paths[:2]):
+                with Image.open(p) as im:
+                    out.paste(_panel(im, pw, inner), (m + i * (pw + g), m))
     else:
         lw = int((inner - g) * 0.6)
         rw = inner - g - lw
@@ -210,7 +267,7 @@ def quietest_corner(main: Image.Image, box: float = INSET_W) -> str:
     ring = [px[x, y] for y in range(200) for x in range(200)
             if x < band or x >= 200 - band or y < band or y >= 200 - band]
     ref = statistics.median([0.299 * r + 0.587 * gg + 0.114 * b for r, gg, b in ring])
-    side = int(200 * box) + 6
+    side = min(int(200 * box) + 6, 150)
     spans = {
         "tl": (0, 0), "tr": (200 - side, 0),
         "bl": (0, 200 - side), "br": (200 - side, 200 - side),
@@ -225,28 +282,62 @@ def quietest_corner(main: Image.Image, box: float = INSET_W) -> str:
     return min(("br", "bl", "tr", "tl"), key=lambda c: busy[c])
 
 
+def _chip(path: Path, width: int) -> Image.Image:
+    """One bordered thumbnail: white mat, then a hairline, so a pale item does
+    not float off a pale main frame."""
+    with Image.open(path) as im:
+        t = ImageOps.contain(im.convert("RGB"), (width, width), Image.LANCZOS)
+    framed = Image.new("RGB", (t.width + 2 * INSET_BORDER,
+                               t.height + 2 * INSET_BORDER), BG)
+    framed.paste(t, (INSET_BORDER, INSET_BORDER))
+    edge = Image.new("RGB", (framed.width + 2, framed.height + 2), HAIRLINE)
+    edge.paste(framed, (1, 1))
+    return edge
+
+
 def compose_inset(paths: list[Path], canvas: int = CANVAS,
                   corner: str | None = None) -> Image.Image:
-    """Main view full-bleed with a bordered detail panel dropped in a corner."""
+    """Main view full-bleed with ONE bordered detail panel dropped in a corner."""
     m = int(canvas * MARGIN)
     with Image.open(paths[0]) as im:
         out = _panel(im, canvas, canvas)
         if corner is None:
             corner = quietest_corner(im)
 
-    iw = int(canvas * INSET_W)
-    with Image.open(paths[1]) as im:
-        ins = ImageOps.contain(im.convert("RGB"), (iw, iw), Image.LANCZOS)
-    framed = Image.new("RGB", (ins.width + 2 * INSET_BORDER,
-                               ins.height + 2 * INSET_BORDER), BG)
-    framed.paste(ins, (INSET_BORDER, INSET_BORDER))
-    # one-pixel hairline so a white item does not float off a white panel
-    edge = Image.new("RGB", (framed.width + 2, framed.height + 2), HAIRLINE)
-    edge.paste(framed, (1, 1))
-
+    edge = _chip(paths[1], int(canvas * INSET_W))
     x = m if corner in ("bl", "tl") else canvas - m - edge.width
     y = m if corner in ("tl", "tr") else canvas - m - edge.height
     out.paste(edge, (x, y))
+    return out
+
+
+def compose_inset2(paths: list[Path], canvas: int = CANVAS,
+                   corner: str | None = None) -> Image.Image:
+    """Main view full-bleed with TWO thumbnails stacked down one side.
+
+    The three-view hero: what it is, plus two supporting views — the mark and
+    the reverse, the piece and its box, open and closed. Each thumbnail is
+    smaller than the single-inset panel so the main view still reads at
+    thumbnail size; two panels the size of one inset would leave the hero
+    fighting its own supporting cast.
+    """
+    m = int(canvas * MARGIN)
+    with Image.open(paths[0]) as im:
+        out = _panel(im, canvas, canvas)
+        if corner is None:
+            # the column is tall, so judge the corner against a tall box
+            corner = quietest_corner(im, box=THUMB_W * 2.2)
+
+    chips = [_chip(p, int(canvas * THUMB_W)) for p in paths[1:3]]
+    gap = int(canvas * 0.012)
+    col_w = max(c.width for c in chips)
+    col_h = sum(c.height for c in chips) + gap * (len(chips) - 1)
+    x0 = m if corner in ("bl", "tl") else canvas - m - col_w
+    y0 = m if corner in ("tl", "tr") else canvas - m - col_h
+    y = y0
+    for c in chips:
+        out.paste(c, (x0 + (col_w - c.width), y))
+        y += c.height + gap
     return out
 
 
@@ -257,6 +348,10 @@ def compose(paths: list[Path], layout: str = "auto") -> tuple[Image.Image, str]:
         layout = "split"
     if layout == "inset":
         return compose_inset(paths), "inset"
+    if layout == "inset2":
+        if len(paths) < 3:
+            raise SystemExit("the two-thumbnail hero needs three frames")
+        return compose_inset2(paths), "inset2"
     return compose_split(paths), "split"
 
 
@@ -271,30 +366,49 @@ def _resolve(frames: list[Path], spec: str | None, want: int):
         if not 1 <= i <= len(frames):
             raise SystemExit(f"frame {i} out of range (1–{len(frames)})")
     picks = [frames[i - 1] for i in idx]
+    # Explicit frames still get an inset/split judgement — the operator is
+    # choosing WHICH views, not how they should sit together. A companion much
+    # tighter than the main view is a detail, and a detail insets.
+    if len(picks) >= 2:
+        with Image.open(picks[0]) as a, Image.open(picks[1]) as b:
+            detail = subject_fill(b) > subject_fill(a) + 12
+        return picks, ("inset" if detail else "split")
     return picks, "auto"
 
 
-def _proposal_sheet(montage: Image.Image, frames: list[Path], picks: list[Path],
-                    out: Path) -> None:
-    """The montage over a numbered strip of every frame it could have used.
+def _comparison_sheet(options: list[tuple[str, Image.Image]], frames: list[Path],
+                      picks: list[Path], out: Path) -> None:
+    """Both candidate heroes side by side, over a numbered strip of every frame.
 
-    The auto-pick is a guess and it is allowed to be wrong: it reads "tight on
+    The decision is never "is this montage acceptable" on its own — it is
+    "which of these, or none". Showing one at a time invites a yes, so both
+    are rendered together and skipping is always on the table.
+
+    The frame strip stays because the auto-pick is a guess: it reads "tight on
     the subject and unlike the hero", which finds a macro but cannot tell a
-    hallmark from another angle of the same curve. Showing the alternatives
-    numbered turns a bad pick into a one-word correction (`--frames 1,5`)
-    instead of a re-run and a squint.
+    hallmark from another angle of the same curve. A bad pick costs one word,
+    `--frames 1,6,3`, instead of a re-run and a squint.
     """
     from PIL import ImageDraw
 
-    cell, pad = 190, 10
+    big, gap, pad = 620, 28, 10
+    cell = 170
     cols = max(1, min(len(frames), 8))
     rows = (len(frames) + cols - 1) // cols
-    strip_h = rows * (cell + 26) + pad
-    top = 760
-    sheet = Image.new("RGB", (cols * (cell + pad) + pad, top + strip_h), (248, 248, 249))
-    m = ImageOps.contain(montage, (top - 20, top - 20), Image.LANCZOS)
-    sheet.paste(m, ((sheet.width - m.width) // 2, 10))
+    width = max(len(options) * big + (len(options) + 1) * gap,
+                cols * (cell + pad) + pad)
+    top = big + 74
+    sheet = Image.new("RGB", (width, top + rows * (cell + 26) + pad), (248, 248, 249))
     d = ImageDraw.Draw(sheet)
+
+    for i, (label, img) in enumerate(options):
+        x = gap + i * (big + gap)
+        thumb = ImageOps.contain(img, (big, big), Image.LANCZOS)
+        sheet.paste(thumb, (x + (big - thumb.width) // 2, 46))
+        d.rectangle([x - 1, 45, x + big + 1, 46 + big + 1], outline=(205, 205, 210))
+        d.text((x + 2, 22), label, fill=(25, 25, 25))
+
+    d.text((pad, top - 22), "frames (1-based) - override with --frames", fill=(90, 90, 90))
     for i, f in enumerate(frames):
         x = pad + (i % cols) * (cell + pad)
         y = top + (i // cols) * (cell + 26)
@@ -305,16 +419,30 @@ def _proposal_sheet(montage: Image.Image, frames: list[Path], picks: list[Path],
         sheet.paste(box, (x, y))
         used = f in picks
         d.rectangle([x - 2, y - 2, x + cell + 1, y + cell + 1],
-                    outline=(200, 60, 50) if used else (215, 215, 218), width=3 if used else 1)
-        label = f"{i + 1}" + ("  IN HERO" if used else "")
-        d.text((x + 2, y + cell + 5), label, fill=(40, 40, 40))
+                    outline=(200, 60, 50) if used else (215, 215, 218),
+                    width=3 if used else 1)
+        role = ""
+        if used:
+            role = "  MAIN" if f == picks[0] else f"  THUMB {picks.index(f)}"
+        d.text((x + 2, y + cell + 5), f"{i + 1}{role}", fill=(40, 40, 40))
     sheet.save(out, quality=90)
 
 
+def build_options(picks: list[Path], auto_layout: str) -> list[tuple[str, Image.Image]]:
+    """The two candidate heroes: one supporting view, and two."""
+    out = []
+    one = "inset" if auto_layout == "inset" else "split"
+    img1, _ = compose(picks[:2], one)
+    out.append((f"MONTAGE 1  -  main + 1 ({one})", img1))
+    if len(picks) >= 3:
+        out.append(("MONTAGE 2  -  main + 2 thumbnails", compose_inset2(picks[:3])))
+    return out
+
+
 def run(shoot: Path, spec: str | None, layout: str, want: int,
-        apply: bool, repoint: bool) -> Path:
+        apply: bool, repoint: bool, style: str = "m1") -> Path:
     frames = list_frames(shoot)
-    picks, auto_layout = _resolve(frames, spec, want)
+    picks, auto_layout = _resolve(frames, spec, max(want, 3))
     if len(picks) < 2:
         raise SystemExit(f"{shoot.name}: only {len(frames)} prepped frame(s) — "
                          "a montage needs two. Shoot the detail, or ship the single hero.")
@@ -328,26 +456,39 @@ def run(shoot: Path, spec: str | None, layout: str, want: int,
         print("    the gallery thumbnail is where a buyer decides what it is; "
               "reorder in PREP or pass --frames")
 
-    chosen = auto_layout if layout == "auto" and auto_layout in ("inset", "split") else layout
-    img, used = compose(picks, chosen)
-
     prep = shoot / ".prep"
     prep.mkdir(exist_ok=True)
-    proposal = prep / "hero_proposal.jpg"
-    img.save(proposal, quality=94, subsampling=1)
-    _proposal_sheet(img, frames, picks, prep / "hero_review.jpg")
-    names = ", ".join(f"{frames.index(p) + 1}:{p.name}" for p in picks)
-    print(f"  layout {used} from frames {names}")
-    print(f"  proposal: {proposal}")
-    print(f"  review:   {prep / 'hero_review.jpg'}   (numbered — override with --frames)")
+
+    if layout != "auto":
+        img, used = compose(picks, layout)
+        options = [(f"MONTAGE ({used})", img)]
+    else:
+        options = build_options(picks, auto_layout)
+
+    paths = {}
+    for i, (_, img) in enumerate(options, 1):
+        f = prep / f"hero_m{i}.jpg"
+        img.save(f, quality=94, subsampling=1)
+        paths[f"m{i}"] = f
+    _comparison_sheet(options, frames, picks, prep / "hero_review.jpg")
+
+    names = ", ".join(f"{frames.index(p) + 1}:{p.name}" for p in picks[:3])
+    print(f"  frames {names}")
+    for i, (label, _) in enumerate(options, 1):
+        print(f"  {label}  ->  {paths[f'm{i}']}")
+    print(f"  review:   {prep / 'hero_review.jpg'}   (both side by side, frames numbered)")
 
     if not apply:
-        print("  (proposal only — look at it, then re-run with `apply` to put it in listing/)")
-        return proposal
+        print("  (proposal only — decide, then `apply --style m1|m2`, or skip the montage "
+              "entirely and ship the clean frame)")
+        return prep / "hero_review.jpg"
 
+    if style not in paths:
+        raise SystemExit(f"no {style} was rendered for this shoot "
+                         f"(available: {', '.join(paths)})")
     dst = shoot / "listing" / "00_hero.jpg"
-    img.save(dst, quality=94, subsampling=1)
-    print(f"  hero -> {dst}")
+    Image.open(paths[style]).save(dst, quality=94, subsampling=1)
+    print(f"  {style} -> {dst}")
 
     if repoint:
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -372,13 +513,17 @@ def main() -> None:
     ap.add_argument("--frames", default=None,
                     help="1-based frame numbers over listing/ order, e.g. 1,4 "
                          "(default: hero + the tightest, least-redundant view)")
-    ap.add_argument("--layout", default="auto", choices=["auto", "inset", "split"])
-    ap.add_argument("--panels", type=int, default=2, choices=[2, 3])
+    ap.add_argument("--layout", default="auto",
+                    choices=["auto", "inset", "split", "inset2"],
+                    help="auto renders BOTH candidate styles for the review")
+    ap.add_argument("--style", default="m1", choices=["m1", "m2"],
+                    help="which reviewed montage to apply")
+    ap.add_argument("--panels", type=int, default=3, choices=[2, 3])
     ap.add_argument("--repoint", action="store_true",
                     help="also make it the draft's gallery image")
     a = ap.parse_args()
     run(a.shoot, a.frames, a.layout, a.panels,
-        apply=(a.cmd == "apply"), repoint=a.repoint)
+        apply=(a.cmd == "apply"), repoint=a.repoint, style=a.style)
 
 
 if __name__ == "__main__":

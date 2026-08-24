@@ -57,37 +57,44 @@ per-item agreement, not a count target.
 
 ---
 
-## The hero is a MONTAGE — every listing
+## The hero is a MONTAGE — decided per listing
 
-The gallery frame carries two or three views composed into one image: the
+The gallery frame can carry two or three views composed into one image: the
 object whole, plus the detail that sells it — the maker's mark, the piece
 open, the box it came in. A buyer scrolling a search page sees one thumbnail,
 and one thumbnail can say more than one thing.
 
-    python -m lib.photo_prep.hero_montage propose <shoot>          # look at it
-    python -m lib.photo_prep.hero_montage apply   <shoot> --repoint
+    python -m lib.photo_prep.hero_montage propose <shoot>
+    python -m lib.photo_prep.hero_montage apply   <shoot> --style m2 --repoint
 
-Two layouts, both lifted from the studied seller: **inset** (main view with a
-bordered detail panel in a corner) when the second view is a DETAIL of the
-same object, **split** (equal panels) when it is a different state or a
-different object. `propose` picks frames and layout automatically and writes
-`.prep/hero_review.jpg` — the montage over a numbered strip of every frame it
-could have used. **The auto-pick is a guess and is often wrong**: it reads
-"tight on the subject and unlike the hero", which finds a macro but cannot
-tell a hallmark from another angle of the same curve. Look at the strip and
-override with `--frames 3,6`; it is one word, and it is the difference
-between a hero that says something and one that repeats itself.
+**There is no default style, and no default to montage at all.** `propose`
+renders BOTH candidates side by side over a numbered strip of every frame, and
+the operator picks: **montage 1** (main + one supporting view — inset when
+that view is a detail, split panels when it is a different state or object),
+**montage 2** (main + two thumbnails down the quietest corner), or **neither**,
+which ships the clean frame and leaves the details in slots 2 onward. The
+studied seller montages roughly 18% of their listings, not all of them; a
+single clear object often needs no help.
 
-It also checks the hero frame against PREP's subject detector and says so when
+Frame choice is a guess and gets reviewed. The picker takes the main view from
+listing order — never reordering, that is the operator's decision — and
+chooses companions for DISTINCTNESS: each has to be unlike the main view AND
+unlike the companions already chosen. That rule exists because scoring against
+the main view alone put two photographs of the same presentation box in the
+same hero, twice: each was a fine answer to "unlike the macro", and together
+they said one thing twice. If nothing left is distinct enough, it says so and
+offers the two-frame hero only. Override with `--frames 1,6,3` — the numbers
+are the strip.
+
+It also checks the main frame against PREP's subject detector and says so when
 the object runs off the edge of the picture, naming the frames that show it
-whole. It does **not** reorder anything — listing order is the operator's
-decision, and PREP and DRAFT both honour it.
+whole.
 
 **The honesty rule this tool cannot enforce:** a montage must never imply the
 buyer gets more than one item. Panels show one listing's contents, and two
 panels that read as two objects for sale is a misleading gallery image no
-matter how good it looks. When in doubt, inset rather than split — an inset
-reads as a detail, a split reads as an inventory.
+matter how good it looks. When in doubt, thumbnails rather than equal panels —
+a thumbnail reads as a detail, equal panels read as an inventory.
 
 **Known risk, accepted deliberately:** eBay's picture standards discourage
 added borders and composited artwork on the gallery image. The studied seller
