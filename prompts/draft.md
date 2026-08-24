@@ -134,6 +134,26 @@ wants is the user's, on that sheet.
 
 DRAFT never invents to fill gaps — missing inputs become flagged gaps.
 
+## Style guide (optional overlay — OFF unless the run turns it on)
+
+A **style guide** under [`../styleguides/`](../styleguides/README.md) is a study
+of how one good seller lists — title slot order and budgets, body skeleton,
+voice. It is **off by default**. Load one only when the run names it ("use the
+patinaelements style guide") or a batch config sets `style_guide: <slug>`; then
+read `../styleguides/<slug>.md` and apply its **DRAFT — titles** and
+**DRAFT — description voice** sections while composing.
+
+It changes *how we say it*, never *what we may claim*. Every rule above and
+below still binds: INVESTIGATE remains the sole source of claims, no
+`[BEST-CASE]` language reaches copy, defects survive any trim, expected age
+gets one neutral clause, PII stays redacted (and disclosed), and the field
+constraints hold. **On any conflict, the house rule wins** — drop the guide's
+pattern, note it in `meta.notes`, and move on. Never reproduce a studied
+seller's title strings or sentences; the guide carries technique, not text.
+
+If a guide is loaded, say so in `meta.notes` (`style_guide: <slug>`) so the
+review card shows which listings were drafted under an overlay.
+
 ## Source-of-truth mapping
 
 Never invent. Never copy IDENTIFY `[BEST-CASE]` markers into copy — only

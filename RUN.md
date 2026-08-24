@@ -254,6 +254,11 @@ Cross-cutting depth rules:
 - IDENTIFY loads a category **specialization** (expert field guide) when an
   item matches one — registry + modules in
   [specializations/README.md](specializations/README.md) (e.g. marbles).
+- DRAFT and PREP can load an optional **style guide** — a studied seller's
+  presentation technique (title slots, body skeleton, photo conventions) —
+  registry + modules in [styleguides/README.md](styleguides/README.md). **Off
+  by default**; a run turns one on by name. It is a stylistic overlay: house
+  rules (honesty bar, wear phrasing, PII, stage contract) always win.
 - PRICE runs the autonomous exact-match hunt (Stage A WebSearch → Stage B
   Apify eBay-sold → optional Stage C Chrome when confidence is low) before
   any era-peer fallback; see its prompt.

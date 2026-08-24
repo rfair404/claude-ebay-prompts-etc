@@ -15,6 +15,24 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ---
 
+## Style guide (optional overlay — OFF unless the run turns it on)
+
+A **style guide** under [`../styleguides/`](../styleguides/README.md) carries a
+studied seller's photo conventions: photo count target, backdrop lightness and
+neutrality, framing/subject fill, colour cast. **Off by default.** Load one only
+when the run names it or a batch config sets `style_guide: <slug>`, then read
+that guide's **PREP — photography** section.
+
+It is **advisory**, and it lands on the review card, not in the stage contract:
+the four approved stages (orientation → unskew → crop → colour), the look
+defaults, `--category` handling, and the "printed media takes no crop" rule are
+unchanged. A guide can say "shoot to ~12 frames, keep the backdrop light and
+neutral, crop tight"; it cannot add a stage, override a look, or justify a
+drained frame. Note the loaded guide on the review card (`style_guide: <slug>`)
+so the reviewer knows which conventions were in play.
+
+---
+
 ## The run OPENS with a best attempt, made without asking
 
     python -m lib.photo_prep.prep <shoot> --auto
