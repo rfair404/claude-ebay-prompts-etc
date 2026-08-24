@@ -121,24 +121,132 @@ def suggestions(campaign_id: str) -> dict:
     return out
 
 
+def create_campaign(name: str, budget: float, confirm: bool) -> str:
+    """Create a CPC (Priority) campaign. Returns its id.
+
+    Written deliberately WITHOUT `campaignCriterion`: rule-based selection would
+    hand eBay the choice of what to promote, and the whole point of this phase
+    is that the selection is ours and inspectable. Ads are added by listing id,
+    one explicit decision per listing.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from ebay_client import api_send
+
+    body = {
+        "campaignName": name,
+        "marketplaceId": "EBAY_US",
+        "channels": ["ON_SITE"],
+        "fundingStrategy": {"fundingModel": "COST_PER_CLICK"},
+        "budget": {"daily": {"amount": {"value": f"{budget:.2f}", "currency": "USD"}}},
+        "startDate": (datetime.now(timezone.utc) + timedelta(minutes=2))
+                     .strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+    }
+    if not confirm:
+        print("DRY — would POST /sell/marketing/v1/ad_campaign\n"
+              + json.dumps(body, indent=1))
+        return ""
+    r = api_send("POST", "/sell/marketing/v1/ad_campaign", body)
+    cid = str(r.get("campaignId") or "")
+    if not cid:                       # eBay answers 201 with a Location header
+        from ebay_client import api_send as _s
+        found = _s("GET", f"/sell/marketing/v1/ad_campaign/get_campaign_by_name"
+                          f"?campaign_name={name.replace(' ', '%20')}")
+        cid = str(found.get("campaignId") or "")
+    return cid
+
+
+def ensure_ad_group(campaign_id: str, bid: float, confirm: bool) -> str:
+    """A CPC campaign holds its ads in an AD GROUP, and needs one before any ad.
+
+    Found the hard way: bulk_create_ads_by_listing_id answers
+    `36210 No ad group found for ad group id null` when the campaign has none.
+    A cost-per-sale campaign takes ads directly; a cost-per-click one does not.
+
+    The group carries the default bid — what a click may cost — so this is the
+    number that decides spend, not the daily budget, which only caps it.
+    """
+    from ebay_client import api_send
+
+    try:
+        got = api_send("GET", f"/sell/marketing/v1/ad_campaign/{campaign_id}"
+                              f"/ad_group?limit=10").get("adGroups") or []
+        if got:
+            return str(got[0].get("adGroupId"))
+    except Exception:                                                # noqa: BLE001
+        pass
+    body = {"name": "Revenue core", "adGroupStatus": "ACTIVE",
+            "defaultBid": {"value": f"{bid:.2f}", "currency": "USD"}}
+    if not confirm:
+        print(f"DRY — would POST .../{campaign_id}/ad_group {json.dumps(body)}")
+        return ""
+    r = api_send("POST", f"/sell/marketing/v1/ad_campaign/{campaign_id}/ad_group", body)
+    gid = str(r.get("adGroupId") or "")
+    if not gid:
+        got = api_send("GET", f"/sell/marketing/v1/ad_campaign/{campaign_id}"
+                              f"/ad_group?limit=10").get("adGroups") or []
+        gid = str(got[0].get("adGroupId")) if got else ""
+    return gid
+
+
+def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
+            ad_group_id: str = "") -> dict:
+    """Bulk-create ads by listing id. Up to 500 per call; we send far fewer."""
+    from ebay_client import api_send
+
+    body = {"requests": [
+        ({"listingId": str(l), "adGroupId": ad_group_id} if ad_group_id
+         else {"listingId": str(l)}) for l in listing_ids]}
+    if not confirm:
+        print(f"DRY — would POST .../{campaign_id}/bulk_create_ads_by_listing_id "
+              f"with {len(listing_ids)} listing(s)")
+        return {}
+    return api_send("POST", f"/sell/marketing/v1/ad_campaign/{campaign_id}"
+                            f"/bulk_create_ads_by_listing_id", body)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--budget", type=float, default=20.0, help="daily budget USD (default 20)")
     ap.add_argument("--top", type=int, default=40, help="how many listings to propose")
     ap.add_argument("--json", help="also write the plan here")
+    ap.add_argument("--create", metavar="NAME",
+                    help="create a CPC campaign with this name (needs --confirm to write)")
+    ap.add_argument("--add-ads", action="store_true",
+                    help="add the proposed listings to the campaign (needs --confirm)")
+    ap.add_argument("--campaign", help="operate on this existing campaign id")
+    ap.add_argument("--bid", type=float, default=0.25,
+                    help="default cost-per-click bid for the ad group (default 0.25)")
+    ap.add_argument("--confirm", action="store_true",
+                    help="actually write to eBay. Without it every write is a dry run.")
     a = ap.parse_args()
+
+    if a.create:
+        cid = create_campaign(a.create, a.budget, a.confirm)
+        print(f"campaign: {cid or '(dry run)'}")
+        if cid:
+            a.campaign = cid
 
     live = live_listings()
     camps, ads = campaigns_and_ads()
     running = [c for c in camps if c.get("campaignStatus") == "RUNNING"]
     onsite = [c for c in camps if "ON_SITE" in (c.get("channels") or [])]
-    paused_onsite = [c for c in onsite if c.get("campaignStatus") == "PAUSED"]
+    paused_onsite = [c for c in onsite
+                     if c.get("campaignStatus") in ("PAUSED", "SCHEDULED")]
 
     # Which campaign to hang this on. Reusing a paused ON_SITE campaign keeps the
     # ads that are already in it and costs one resume; a new campaign is only
     # proposed when there is nothing to reuse.
     host = None
-    if running:
+    if a.campaign:
+        # An explicit campaign wins. A freshly created campaign is SCHEDULED,
+        # not RUNNING, until its start time passes — the status heuristics below
+        # would skip it and propose creating yet another one.
+        host = next((c for c in camps if c["campaignId"] == a.campaign), None)
+        action = f"explicit --campaign ({host.get('campaignStatus') if host else 'not found'})"
+    if host:
+        pass
+    elif running:
         host = running[0]
         action = "already running — add items to it"
     elif paused_onsite:
@@ -201,6 +309,20 @@ def main() -> int:
         print(f"       body: {{\"daily\": {{\"amount\": {{\"value\": \"{a.budget}\", \"currency\": \"USD\"}}}}}}")
     else:
         print("  POST /sell/marketing/v1/ad_campaign   (create one first)")
+
+    if a.add_ads and host:
+        gid = ensure_ad_group(host["campaignId"], a.bid, a.confirm)
+        print(f"  ad group: {gid or '(dry run)'} · default bid ${a.bid:.2f}/click")
+        res = add_ads(host["campaignId"], [r["listing_id"] for r in pick],
+                      a.confirm, gid)
+        if a.confirm:
+            resp = res.get("responses") or []
+            ok = [x for x in resp if str(x.get("statusCode", "")).startswith("2")]
+            print(f"\n[eBay] {len(ok)}/{len(resp)} ads created")
+            for x in resp:
+                if x not in ok:
+                    print(f"   FAILED {x.get('listingId')}: "
+                          f"{json.dumps(x.get('errors'))[:160]}")
 
     if a.json:
         REPORTS.mkdir(exist_ok=True)
