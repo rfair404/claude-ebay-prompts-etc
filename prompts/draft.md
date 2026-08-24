@@ -289,10 +289,16 @@ the only case eBay quantity > 1.
 ### Service map
 Applies only when `fulfillment_mode: SHIP`. (LOCAL_PICKUP offers no parcel
 service — leave `primary_service` blank.)
-Books/catalogs/magazines/media → `USPSMediaMail`. ≤15 lb non-media →
-`USPSGroundAdvantage`. >15 lb / oversized → `UPSGround`. freight/movers →
-blank + flag (needs a quote) — also a strong local-pickup candidate (gate
-above).
+**Media Mail is narrower than it looks.** Books (bound, 8+ pages), sheet
+music, printed music/test materials, sound/video recordings, and computer
+media → `USPSMediaMail`. **Periodicals — magazines, newspapers, catalogs,
+mailers, any paper carrying advertising — are EXCLUDED from Media Mail**
+(DMM 173.4.2) and route to `USPSGroundAdvantage`, at 2–3× the postage
+(25–35% of a typical paper-lot sale price — feed that into the net-floor
+check above). A "book" that is really an ad-carrying catalog is a
+periodical, not a book. Other ≤15 lb non-media → `USPSGroundAdvantage`.
+>15 lb / oversized → `UPSGround`. freight/movers → blank + flag (needs a
+quote) — also a strong local-pickup candidate (gate above).
 
 ## Markdown body (description)
 

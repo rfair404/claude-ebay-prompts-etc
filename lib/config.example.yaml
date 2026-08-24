@@ -68,7 +68,10 @@ ebay:
     merchant_location_key: null
     fulfillment_policy_id: null          # default (ground) shipping policy
     fulfillment_policy_id_media: null    # optional: Media Mail policy; used for
-                                         # books/magazines/comics/music/movies
+                                         # books/sheet music/recordings/computer
+                                         # media. NOT magazines/catalogs/any paper
+                                         # with ads (DMM 173.4.2 excludes
+                                         # periodicals) — those ship ground.
     fulfillment_policy_id_local_pickup: null  # optional: local-pickup-only policy;
                                          # used for ship-risky items (fragile/over-
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.
@@ -89,7 +92,10 @@ ebay:
     merchant_location_key: null
     fulfillment_policy_id: null          # default (ground) shipping policy
     fulfillment_policy_id_media: null    # optional: Media Mail policy; used for
-                                         # books/magazines/comics/music/movies
+                                         # books/sheet music/recordings/computer
+                                         # media. NOT magazines/catalogs/any paper
+                                         # with ads (DMM 173.4.2 excludes
+                                         # periodicals) — those ship ground.
     fulfillment_policy_id_local_pickup: null  # optional: local-pickup-only policy;
                                          # used for ship-risky items (fragile/over-
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.

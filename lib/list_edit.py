@@ -747,8 +747,10 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
         "payment": _ebay_extra("payment_policy_id"),
         "return": _ebay_extra("return_policy_id"),
     }
-    # Optional: a Media Mail fulfillment policy used for media items (books,
-    # magazines, comics, music, movies). Not required — falls back to default.
+    # Optional: a Media Mail fulfillment policy used for true media items
+    # (books, sheet music, recordings, computer media). NOT magazines /
+    # catalogs / anything carrying advertising — periodicals are excluded from
+    # Media Mail (DMM 173.4.2). Not required — falls back to default.
     policies["fulfillment_media"] = _ebay_extra("fulfillment_policy_id_media")
     # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
     # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
@@ -1004,9 +1006,10 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
        local-pickup policy.
     2. Else if `shipping.international: true` AND the item clears the
        dangerous-goods / weight gate, use the international (eIS) policy.
-    3. Else if `primary_service` is Media Mail (DRAFT sets this for
-       books/magazines/comics/music/movies) AND a media policy is configured,
-       use it.
+    3. Else if `primary_service` is Media Mail (DRAFT sets this for books /
+       sheet music / recordings / computer media — NOT magazines, catalogs, or
+       anything carrying advertising, which are excluded from Media Mail by
+       DMM 173.4.2) AND a media policy is configured, use it.
     4. Else use the default (USPS Ground) policy.
     Returns (chosen_fulfillment_id, messages).
 
