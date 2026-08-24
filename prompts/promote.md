@@ -14,19 +14,72 @@ evidence for the bet lives in REPORT's numbers.
 
 ---
 
-## The gate: it proposes, you enact
+## The gate: it proposes, you confirm
 
-    python tools/promote.py --budget 20 --top 40
+    python tools/promote.py --budget 20 --top 40           # plan only
 
 The tool reads campaigns, ads, live listings and eBay's own suggested items,
 ranks them for the goal, and prints the plan plus the exact API calls that would
-enact it. It does not make those calls. Creating a campaign, adding an ad and
-setting a bid are writes against a live account with real money attached, and
-they stay the operator's keystroke — the same shape as the PREP gate and
-`list_edit`'s `--confirm`.
+enact it. **By default it makes none of them.**
+
+Every write is opt-in per invocation and requires `--confirm`; without it the
+call is printed and not sent:
+
+    --create NAME       create a campaign
+    --auto-add-min USD  ...with eBay's auto-add rule at that price floor
+    --add-ads           add the proposed listings to it
+    --bid / --ad-rate   what a click costs / what a sale costs
+    --bidding DYNAMIC   hand bid management to eBay
+    --delete ID         remove a campaign
 
 This is not timidity about the API. It is that an ad added by mistake is not
 free to undo: it spends before anyone notices.
+
+## What the funding model decides — and what decides the funding model
+
+The two models are not a preference. **Asking for the auto-add rule IS asking
+for cost-per-sale**, because `campaignCriterion` is refused on CPC:
+
+    36151  'campaignCriterion' is not supported for CPC funding model.
+
+There is no daily-capped click campaign that fills itself.
+
+| Model | Charged | Budget | Auto-add | Bid automation |
+|---|---|---|---|---|
+| `COST_PER_SALE` | an ad rate when a promoted listing sells | none — there is no daily budget | **yes** | ad rate strategy |
+| `COST_PER_CLICK` | per click | daily cap | no | `FIXED` / `DYNAMIC` |
+
+Three more refusals worth knowing before writing anything:
+
+- **`36210 No ad group found for ad group id null`** — a CPC campaign cannot
+  hold ads directly. It needs an ad group, and that group's default bid, not the
+  daily budget, is what a click costs. The budget only caps the day.
+- **`35039 categoryScope is required`** on any criterion-based campaign, even
+  when the rule names no category. `MARKETPLACE` is eBay's tree, `STORE` the
+  seller's.
+- **`campaignCriterion` is create-time only.** The campaign resource has no
+  criterion-update method, so a campaign built without the rule can never learn
+  it and must be deleted and rebuilt. Decide the rule before creating.
+
+## Auto-add and a curated list are mutually exclusive
+
+`autoSelectFutureInventory` hands membership to eBay: it re-checks the inventory
+daily and adds anything matching the rule. The revenue ranking then stops
+deciding what is promoted — the price floor does. That is a real trade, not a
+detail: state it plainly when proposing one, and do not present a ranked list as
+the campaign's contents once a rule is in force.
+
+## There is no ROAS automation
+
+Budget changes are an explicit `updateCampaignBudget` call. The only automations
+eBay offers are `autoSelectFutureInventory` (which listings) and
+`updateBiddingStrategy` (`FIXED`/`DYNAMIC`, CPC only). Nothing is triggered by
+performance.
+
+Nor can ROAS be computed locally: `ad_report_metadata` answers **403** on this
+account and orders carry one lump `totalMarketplaceFee` with no ad-fee line. A
+ROAS rule would therefore be acting on a number nobody has. Say so rather than
+approximating one.
 
 ## Goal: MAXIMISE REVENUE — and what that means mechanically
 

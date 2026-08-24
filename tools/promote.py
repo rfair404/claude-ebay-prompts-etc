@@ -25,14 +25,25 @@ Items already carrying an ACTIVE ad in a RUNNING campaign are excluded — they
 are already promoted. Items in a PAUSED campaign are shown, because resuming
 that campaign is usually cheaper than building a new one.
 
-IT WRITES NOTHING. Not to eBay, not to the ledgers. It prints the plan and the
-exact API calls that would enact it, and stops. Creating a campaign, adding an
-ad, or setting a bid are all writes against a live account and stay your
-keystroke — the same shape as the PREP gate and list_edit's --confirm.
+BY DEFAULT IT WRITES NOTHING — it prints the plan and the exact API calls, and
+stops. Every write is opt-in per invocation and needs `--confirm`; without it
+each one prints what it would send. Creating a campaign, adding an ad and
+setting a bid are writes against a live account with money attached, so they
+stay a deliberate keystroke — the same shape as the PREP gate and list_edit's
+--confirm.
 
-    python tools/promote.py                      # the plan
+    python tools/promote.py                       # the plan, no writes
     python tools/promote.py --budget 20 --top 40
-    python tools/promote.py --json reports/promote_plan.json
+    python tools/promote.py --create "NAME" --budget 20 --confirm
+    python tools/promote.py --create "NAME" --auto-add-min 25 --confirm
+    python tools/promote.py --campaign ID --top 20 --add-ads --confirm
+    python tools/promote.py --campaign ID --bidding DYNAMIC --confirm
+
+AUTO-ADD AND A CURATED LIST ARE MUTUALLY EXCLUSIVE
+
+`--auto-add-min` hands membership to eBay: it re-checks the inventory daily and
+adds anything at or above that ask. The revenue ranking below then no longer
+decides what is promoted — the price floor does. Pick one deliberately.
 """
 from __future__ import annotations
 
