@@ -139,7 +139,10 @@ shipping:
   domestic_shipping_type: "FREE_FLAT_RATE"
   # Primary service code (eBay Fulfillment policy). Common defaults:
   #   USPSGroundAdvantage    — default for items <15 lb
-  #   USPSMediaMail          — books, catalogs, magazines, sheet music
+  #   USPSMediaMail          — books, sheet music, recordings, computer media
+  #                            NOT magazines/catalogs/any paper with ads:
+  #                            periodicals are excluded (DMM 173.4.2) and
+  #                            ship USPSGroundAdvantage
   #   UPSGround              — heavy / oversized
   primary_service: "USPSGroundAdvantage"
   handling_time_days: 1        # business days from sale to shipment

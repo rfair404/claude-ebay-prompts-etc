@@ -239,7 +239,9 @@ live.
 - **`fulfillment_policy_id`** — the default (ground) policy, used for most items.
 - **`fulfillment_policy_id_media`** *(optional)* — a USPS **Media Mail** policy.
   When a draft's `primary_service` is Media Mail (DRAFT sets this for books /
-  magazines / comics / music / movies) and this policy is set, the offer uses
+  sheet music / recordings / computer media — **not** magazines, catalogs, or
+  anything carrying advertising, which are excluded by DMM 173.4.2) and this
+  policy is set, the offer uses
   it; otherwise it falls back to the ground policy. To create one, add a
   fulfillment policy with shipping service `USPSMedia` (free flat-rate) and
   paste its ID here.
