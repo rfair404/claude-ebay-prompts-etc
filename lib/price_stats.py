@@ -103,7 +103,33 @@ _COUNT_RE = re.compile(
     re.IGNORECASE,
 )
 
-# unit_type → does this unit WANT multi-item listings?
+# Nouns that name an INHERENTLY PAIRED item: the thing is sold as two halves,
+# so the listing is a `pair` even when the title never says the word "pair".
+_PAIRED_ITEM_WORDS = {
+    "earring", "earrings", "earing", "earings", "studs", "hoops",
+    "cufflink", "cufflinks", "cuflinks",
+    "bookend", "bookends", "candlestick", "candlesticks", "candleholders",
+    "epaulets", "epaulettes", "spurs", "sconces",
+}
+# Multi-word paired items. Matched against a whitespace-collapsed title, and
+# "&"/"and" are folded together first, so "Salt & Pepper" == "salt and pepper".
+_PAIRED_ITEM_PHRASES = ("cuff links", "salt and pepper", "s and p shakers")
+# Other item CLASSES: one of these next to a paired noun means the listing
+# bundles a second kind of thing (necklace + earrings), so it is not a pair.
+_COMPANION_ITEM_WORDS = {
+    "necklace", "necklaces", "bracelet", "bracelets", "ring", "rings",
+    "pendant", "pendants", "brooch", "brooches", "pin", "pins", "choker",
+    "chain", "chains", "watch", "watches", "anklet", "locket", "parure",
+    "tray", "plate", "platter", "bowl", "vase", "mirror", "lamp", "clock",
+}
+# Lot-ish words that defeat a pair even though "set"/"complete" do not
+# ("Earrings Set" is still one pair of earrings).
+_PAIR_LOT_WORDS = {"lot", "lots", "bundle", "bundles", "collection",
+                   "group", "grouping", "joblot"}
+
+# unit_type → does this unit WANT multi-item listings? `pair` is listed for
+# completeness but never reaches this branch: filter_unit handles it off the
+# item noun instead (see looks_pair_unit).
 _MULTI_UNITS = {"lot", "set", "pair"}
 _SINGLE_UNITS = {"single", "duplicate"}
 
@@ -265,12 +291,71 @@ def looks_multi_item(title: str) -> bool:
     return False
 
 
+def names_paired_item(title: str) -> bool:
+    """True if the title names an inherently-paired item (earrings, cufflinks).
+
+    >>> names_paired_item('Vintage 12K Gold Filled Screw Back Earrings')
+    True
+    >>> names_paired_item('Sterling Cuff Links Monogrammed')
+    True
+    >>> names_paired_item('Antique Silverplate Salt & Pepper Shakers')
+    True
+    >>> names_paired_item('Vintage Sterling Silver Brooch')
+    False
+    """
+    t = title.lower()
+    if set(re.findall(r"[a-z]+", t)) & _PAIRED_ITEM_WORDS:
+        return True
+    flat = re.sub(r"\s+", " ", t.replace("&", " and "))
+    return any(p in flat for p in _PAIRED_ITEM_PHRASES)
+
+
+def looks_pair_unit(title: str) -> bool:
+    """True if the title reads as ONE pair of the item being priced.
+
+    A paired noun IS the pair, word "pair" or not; adding another item class
+    (necklace + earrings), a lot word, a count, or multiple years is not.
+
+    >>> looks_pair_unit('Vintage 12K Gold Filled Goldstone Screw Back Earrings')
+    True
+    >>> looks_pair_unit('Vintage AMCO 12K GF Goldstone Necklace Screw Back Earrings Set')
+    False
+    >>> looks_pair_unit('Lot of 4 Vintage Clip Earrings')
+    False
+    >>> looks_pair_unit('Pair Antique Brass Andirons')
+    True
+    >>> looks_pair_unit('Vintage Sterling Brooch')
+    False
+    """
+    t = title.lower()
+    words = set(re.findall(r"[a-z]+", t))
+    paired = names_paired_item(title) or bool(words & {"pair", "pairs"})
+    if not paired:
+        return False
+    if words & _PAIR_LOT_WORDS:
+        return False
+    if words & _COMPANION_ITEM_WORDS:
+        return False
+    if _COUNT_RE.search(title):
+        return False
+    if len(set(_YEAR_RE.findall(title))) > 1:
+        return False
+    return True
+
+
 def filter_unit(comps: list["Comp"], unit_type: str) -> FilterLog:
     """Keep only comps whose selling-unit matches the item being priced."""
     log = FilterLog("unit_match")
     unit = (unit_type or "single").lower()
     for c in comps:
         if c.dropped:
+            continue
+        if unit == "pair":
+            # A pair is decided by the item NOUN, not the literal token
+            # "pair": "...Screw Back Earrings" is a pair, "Necklace +
+            # Earrings Set" is not.
+            if not looks_pair_unit(c.title):
+                log.add(c, f"not a single pair of the item; pricing a {unit}")
             continue
         multi = looks_multi_item(c.title)
         if unit in _SINGLE_UNITS and multi:
