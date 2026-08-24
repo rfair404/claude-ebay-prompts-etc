@@ -1310,6 +1310,126 @@ def test_an_unknown_category_is_refused_not_ignored():
     else:
         raise AssertionError("an unknown category was accepted")
 
+def test_a_second_writer_cannot_clobber_the_first():
+    """PREP is not run by one process at a time.
+
+    Batches run in a pool, an operator runs a command against a shoot while a
+    background --apply is halfway through it, and more than one agent works the
+    same tree. save_manifest was a bare write_text, so the last writer won in
+    silence. Three incidents in two days: twice an auto-pick landed after an
+    operator's --pick so the manifest named one look while listing/ held
+    another, and once a concurrent session overwrote eight orientation calls.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        first = P.load_manifest(shoot)
+        first["photos"] = {"a.jpg": {}}
+        P.save_manifest(shoot, first)
+
+        r1 = P.load_manifest(shoot)
+        r2 = P.load_manifest(shoot)
+        r1["photos"]["from_r1"] = {}
+        P.save_manifest(shoot, r1)
+
+        r2["photos"]["from_r2"] = {}
+        try:
+            P.save_manifest(shoot, r2)
+            raise AssertionError("the stale writer clobbered the fresh one")
+        except P.ManifestConflict as e:
+            assert "nothing has been written" in str(e)
+
+        on_disk = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        assert "from_r1" in on_disk["photos"], "the first writer's work was lost"
+        assert "from_r2" not in on_disk["photos"], "the refused write landed anyway"
+
+
+def test_the_refused_writer_succeeds_after_re_reading():
+    """Refusing is only useful if the retry is obvious: re-read, re-apply, write."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        stale = P.load_manifest(shoot)
+        fresh = P.load_manifest(shoot)
+        fresh["photos"] = {"theirs": {}}
+        P.save_manifest(shoot, fresh)
+
+        try:
+            stale["photos"] = {"mine": {}}
+            P.save_manifest(shoot, stale)
+            raise AssertionError("expected a conflict")
+        except P.ManifestConflict:
+            pass
+
+        again = P.load_manifest(shoot)
+        again["photos"]["mine"] = {}
+        P.save_manifest(shoot, again)
+
+        photos = P.load_manifest(shoot)["photos"]
+        assert {"theirs", "mine"} <= set(photos), photos
+
+
+def test_saving_the_same_dict_twice_is_not_a_conflict():
+    """A writer must not be told its own write was somebody else's."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        m = P.load_manifest(shoot)
+        m["photos"] = {"a": {}}
+        P.save_manifest(shoot, m)
+        m["photos"]["b"] = {}
+        P.save_manifest(shoot, m)          # must not raise
+        assert set(P.load_manifest(shoot)["photos"]) == {"a", "b"}
+
+
+def test_the_fingerprint_never_reaches_disk():
+    """It is bookkeeping, not part of the format — the format lock would
+    rightly fail if it widened the manifest."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        raw = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        assert P.READ_FINGERPRINT not in raw, raw.keys()
+
+
+def test_a_crash_mid_write_cannot_truncate_the_manifest():
+    """tmp-and-rename. The old write_text left a half-written manifest when it
+    failed, losing the previous one as well as the update."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        good = P.load_manifest(shoot)
+        good["photos"] = {"keep": {}}
+        P.save_manifest(shoot, good)
+        before = (shoot / ".prep" / "prep.json").read_text(encoding="utf-8")
+
+        m = P.load_manifest(shoot)
+        m["photos"]["boom"] = {1 + 2j: "not serialisable"}
+        try:
+            P.save_manifest(shoot, m)
+        except Exception:                                    # noqa: BLE001
+            pass
+        after = (shoot / ".prep" / "prep.json").read_text(encoding="utf-8")
+        assert after == before, "a failed write damaged the manifest"
+
+
+def test_force_is_available_for_a_deliberate_overwrite():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        stale = P.load_manifest(shoot)
+        fresh = P.load_manifest(shoot)
+        fresh["photos"] = {"theirs": {}}
+        P.save_manifest(shoot, fresh)
+
+        stale["photos"] = {"mine": {}}
+        P.save_manifest(shoot, stale, force=True)
+        assert set(P.load_manifest(shoot)["photos"]) == {"mine"}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

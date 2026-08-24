@@ -24,6 +24,7 @@ import argparse
 import json
 import multiprocessing as mp
 import os
+import random
 import sys
 import time
 import traceback
@@ -53,6 +54,45 @@ def _needs(shoot: Path, mode: str) -> bool:
     return not m.get("chosen_preset")
 
 
+# A manifest write refuses when someone else moved the file since it was read.
+# In a pool that is expected rather than exceptional, so the worker re-reads and
+# redoes the work instead of failing the shoot. Bounded, because a conflict that
+# never clears is a bug and should surface as one.
+MANIFEST_ATTEMPTS = 4
+RETRY_BACKOFF = (0.4, 1.2, 3.0)      # seconds before attempts 2, 3 and 4
+
+
+def _with_retry(fn, note_fn):
+    """Run `fn`, re-running it from a fresh read if the manifest moved under us.
+
+    Retrying is only correct because `run_check` and `run_apply` load the
+    manifest themselves, so calling again IS the re-read — there is no stale
+    state carried across an attempt. Anything that merged the two versions
+    instead would be guessing which set of decisions the operator meant.
+
+    The backoff is jittered so two workers that collide do not lock-step into
+    colliding again on the same schedule.
+
+    The attempt count is REPORTED, not swallowed. A retry that nobody sees would
+    hide exactly the contention this was built to make visible — the point was
+    never to make races quiet, only to make them survivable.
+    """
+    from lib.photo_prep import prep as P
+
+    for attempt in range(1, MANIFEST_ATTEMPTS + 1):
+        try:
+            m = fn()
+            note = note_fn(m)
+            if attempt > 1:
+                note += f"  [after {attempt} attempts — manifest contention]"
+            return m, note
+        except P.ManifestConflict:
+            if attempt == MANIFEST_ATTEMPTS:
+                raise
+            pause = RETRY_BACKOFF[attempt - 1] * (0.5 + random.random())
+            time.sleep(pause)
+
+
 def _worker(job):
     """One shoot. Imports live at module scope in the worker after first call,
     so the model load is amortised across every shoot this worker handles."""
@@ -64,14 +104,18 @@ def _worker(job):
         from lib.photo_prep import prep as P
 
         if mode == "check":
-            m = P.run_check(shoot, aspect, pad, pop, quiet=True)
-            n = len(m.get("photos", {}))
-            ask = sum(1 for r in m["photos"].values() if r["orientation"]["needs_ask"])
-            note = f"{n} frames, {ask} ASK"
+            def _ask(m):
+                n = len(m.get("photos", {}))
+                ask = sum(1 for r in m["photos"].values()
+                          if r["orientation"]["needs_ask"])
+                return f"{n} frames, {ask} ASK"
+            m, note = _with_retry(
+                lambda: P.run_check(shoot, aspect, pad, pop, quiet=True), _ask)
         else:
-            m = P.run_apply(shoot, quiet=True)
-            n = len(m.get("photos", {}))
-            note = f"{n} frames, preset {m.get('chosen_preset')}"
+            m, note = _with_retry(
+                lambda: P.run_apply(shoot, quiet=True),
+                lambda m: f"{len(m.get('photos', {}))} frames, "
+                          f"preset {m.get('chosen_preset')}")
         return dict(shoot=shoot_s, ok=True, note=note, secs=round(time.monotonic() - t0, 1))
     except Exception as e:                                    # noqa: BLE001
         return dict(shoot=shoot_s, ok=False,
