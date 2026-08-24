@@ -178,7 +178,7 @@ ORIENTATION_KEYS = {
     "applied", "exif_angle", "exif_tag", "needs_ask", "notes", "osd_angle",
     "osd_conf", "osd_note", "source", "subject_angle", "vision_angle",
 }
-STAGE_ORDER = ("orientation", "unskew", "crop", "color")
+STAGE_ORDER = ("orientation", "crop", "color")
 
 
 def test_manifest_version_and_stage_order_are_fixed():

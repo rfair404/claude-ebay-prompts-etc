@@ -85,6 +85,23 @@ def push_one(shoot: Path, go: bool, listing_id: str = "") -> dict:
         res.update(ok=True, skipped="already pushed")
         return res
 
+    # THE BATCH MAY NOT SIGN THE GATE IT IS ABOUT TO PASS.
+    #
+    # This step used to run `--approve` itself, between repointing the draft and
+    # updating the listing. That made the PREP gate self-signing: whatever state
+    # a shoot was in, the pusher stamped the operator's approval a moment before
+    # `upload_photos_to_eps` checked for it, so the check could never fail and
+    # the docstring's "the code, not this script's good intentions" was false.
+    # Measured cost: more-mags-444/style-incentives went up at 15:48 with its
+    # colour stage unapproved, twelve minutes before a human approved it.
+    # An unapproved shoot is now a REFUSAL the batch reports and carries on from.
+    try:
+        from lib.photo_prep.prep import PrepGateError, assert_approved
+        assert_approved(shoot)
+    except Exception as e:                                          # noqa: BLE001
+        res["error"] = f"not approved: {str(e)[:180]}"
+        return res
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     bak = shoot / f"draft.md.bak-{stamp}"
     shutil.copyfile(shoot / "draft.md", bak)
@@ -93,7 +110,6 @@ def push_one(shoot: Path, go: bool, listing_id: str = "") -> dict:
     for label, cmd in [
         ("repoint", [py, "-m", "lib.photo_prep.prep", str(shoot),
                      "--repoint-draft", "--apply-repoint"]),
-        ("approve", [py, "-m", "lib.photo_prep.prep", str(shoot), "--approve"]),
         ("update",  [py, "lib/list_edit.py", "--update", str(shoot),
                      "--fields", "photos"]),
     ]:

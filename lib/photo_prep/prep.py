@@ -55,6 +55,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,8 +64,10 @@ from typing import Optional
 import numpy as np
 
 from . import color as colormod
+from . import decisions as decmod
 from . import orientation as orientmod
 from . import stages as stagemod
+from . import categories as catmod
 from . import subject as subjectmod
 from . import unskew as skewmod
 from .subject import mask_for
@@ -75,7 +78,22 @@ MANIFEST_VERSION = 1
 MIN_AGREEMENT = 0.75     # detector bbox containment below which we do not crop
 MIN_LONG_SIDE = 1400     # eBay wants >=1600 for zoom; never crop below this
 DEFAULT_ASPECT = "1:1"
-DEFAULT_PAD = 0.12
+# How much backdrop a crop keeps around the item, as a fraction of the item's
+# own box on each side. It was 0.12, which frames the goods handsomely and reads
+# as aggressive on a listing: a magazine cropped to a 12% margin looks trimmed
+# to the bleed, and any error in the mask lands ON the item. A crop should TRIM
+# THE EDGES, not reframe the shot, so the margin is generous by default and
+# `--crop NAME=padF` is there for the frame that wants it tight.
+DEFAULT_PAD = 0.28
+
+# And a floor under the whole box: a crop may not keep less than this much of
+# the frame it came from. The pad is measured off the ITEM, so a small item in a
+# big frame still yields a keyhole from a generous pad — 28% of a matchbook is
+# nothing. This is the rule in the operator's words: trim a little around the
+# edges, always leave some background.
+MIN_FRAME_KEPT = 0.55
+DEFAULT_SUBJECT = "auto"
+DEFAULT_CATEGORY = catmod.DEFAULT_CATEGORY
 
 
 # ---------------------------------------------------------------------------
@@ -228,11 +246,37 @@ def manifest_path(shoot: Path) -> Path:
     return shoot / ".prep" / "prep.json"
 
 
+# What the manifest looked like when we read it. Stamped into the loaded dict
+# and popped before writing, so it never reaches disk and never widens the
+# format. Its only job is to let save_manifest tell "nobody touched this" from
+# "someone did".
+READ_FINGERPRINT = "_read_fingerprint"
+
+
+class ManifestConflict(RuntimeError):
+    """The manifest changed on disk between our read and our write.
+
+    Raised rather than resolved. Whoever holds the stale copy cannot know which
+    of the two sets of decisions the operator meant, and merging them silently
+    is how a look got adopted that nobody picked.
+    """
+
+
+def _manifest_fingerprint(p: Path) -> Optional[str]:
+    """A hash of the bytes on disk, or None when there are none."""
+    try:
+        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
 def load_manifest(shoot: Path) -> dict:
     p = manifest_path(shoot)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            m = json.loads(p.read_text(encoding="utf-8"))
+            m[READ_FINGERPRINT] = _manifest_fingerprint(p)
+            return m
         except Exception:
             pass
     return {
@@ -244,14 +288,90 @@ def load_manifest(shoot: Path) -> dict:
         "approved_at": None,
         "settings": {},
         "photos": {},
+        READ_FINGERPRINT: None,          # we read an absence; it must stay absent
     }
 
 
-def save_manifest(shoot: Path, m: dict) -> None:
-    m["updated"] = _now()
+def subject_mode(m: dict) -> str:
+    """Which detector this shoot believes — see subject.mask_for.
+
+    Read from the manifest at every call site rather than threaded as an
+    argument: it is a property of what is in front of the camera, and a frame
+    re-segmented later (at --apply, or for one operator recrop) has to be
+    segmented the same way the approved sheet was.
+    """
+    return m.get("settings", {}).get("subject", DEFAULT_SUBJECT)
+
+
+def category_of(m: dict) -> str:
+    """Which category this shoot declared — see photo_prep.categories.
+
+    Read back from the manifest for the same reason `subject_mode` is: it is a
+    statement about the goods, so a later pass that did not repeat the flag
+    must not quietly fall back to the generic profile and render five looks
+    nobody asked for.
+    """
+    return m.get("settings", {}).get("category", DEFAULT_CATEGORY)
+
+
+def save_manifest(shoot: Path, m: dict, force: bool = False) -> None:
+    """Write the manifest, refusing to clobber another writer.
+
+    PREP is not run by one process at a time. Batches run in a pool, an
+    operator runs a command against a shoot a background --apply is halfway
+    through, and more than one agent works the same tree. This used to be a
+    bare write_text: last writer won, silently.
+
+    It cost three incidents in two days. Twice a background --apply's auto-pick
+    landed after an operator's --pick, so the manifest named one look while
+    listing/ held another and --pick reported success either way. Once a
+    concurrent session overwrote a full set of eight orientation calls, which
+    only surfaced because a contact sheet was rendered afterwards and looked
+    wrong.
+
+    So: compare-and-swap. A writer that read fingerprint X refuses to overwrite
+    a manifest now at Y, and raises instead of merging — whoever holds the stale
+    copy cannot know which of the two sets of decisions was meant. Callers
+    re-read and retry; that is the whole protocol.
+
+    The write itself is tmp-and-rename. It was not atomic either, so a crash
+    mid-write left a truncated manifest rather than the previous one.
+
+    `force` exists for the deliberate overwrite. It is never the default.
+    """
     p = manifest_path(shoot)
+    if not force and READ_FINGERPRINT in m:
+        expected, actual = m[READ_FINGERPRINT], _manifest_fingerprint(p)
+        if expected != actual:
+            what = ("created by another writer" if expected is None else
+                    "gone" if actual is None else "changed under us")
+            raise ManifestConflict(
+                f"{p} was {what} since it was read "
+                f"(read {expected}, now {actual}). Re-read the manifest and "
+                f"re-apply the change; nothing has been written.")
+
+    m["updated"] = _now()
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(m, indent=2), encoding="utf-8")
+    body = {k: v for k, v in m.items() if k != READ_FINGERPRINT}
+    # Serialise BEFORE touching the disk, so an unserialisable value fails
+    # without having created anything, and clean up the temp file if the write
+    # itself dies — a stray .tmp never replaces the manifest, but it does make
+    # the next person wonder whether it should have.
+    text = json.dumps(body, indent=2)
+    tmp = p.with_name(p.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    # Re-stamp, so a caller that saves the same dict twice is not told its own
+    # write was somebody else's.
+    if READ_FINGERPRINT in m:
+        m[READ_FINGERPRINT] = _manifest_fingerprint(p)
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +399,20 @@ def assert_approved(shoot: Path) -> dict:
         raise PrepGateError(
             f"{shoot.name}: photo prep is not approved (HARD gate). Review "
             f"{shoot / '.prep' / 'prep_review.jpg'}, then --approve.")
+
+    # A CHANGED DECISION IS STALENESS, NOT JUST A CHANGED FILE.
+    #
+    # This function used to hash only sources and outputs, so a rotation edited
+    # after sign-off left `approved: true` standing over frames the shipping
+    # files had never been rendered with -- six of them, on paul-fredrick.
+    # Comparing the decision record catches that class structurally (#21).
+    dstale = decmod.stale_stages(m, stagemod.STAGES)
+    if dstale:
+        why = "; ".join(f"{stage}: {reasons[0]}" for stage, reasons in dstale[:3])
+        raise PrepGateError(
+            f"{shoot.name}: decisions changed since sign-off -- {why}"
+            f"{' ...' if len(dstale) > 3 else ''}. Re-open the affected stage, "
+            f"re-approve, and re-run --apply.")
 
     stale = []
     for name, rec in m["photos"].items():
@@ -353,6 +487,14 @@ def _fit_box(fp: dict, aspect: Optional[float], pad: float) -> tuple:
         cw, ch = pw, pw / aspect
     else:
         ch, cw = ph, ph * aspect
+
+    # A crop trims edges; it does not reframe. Grow the box back out until it
+    # keeps at least MIN_FRAME_KEPT of the frame — the pad alone cannot promise
+    # that, because it is measured off the item, and a small item in a big frame
+    # yields a keyhole whatever the pad says.
+    if cw * ch < MIN_FRAME_KEPT * W * H:
+        g = ((MIN_FRAME_KEPT * W * H) / (cw * ch)) ** 0.5
+        cw, ch = cw * g, ch * g
 
     # Too big for the frame: shrink to fit, keeping the aspect.
     if cw > W or ch > H:
@@ -546,8 +688,9 @@ def _unify_backdrop(photos: dict, quiet: bool = False) -> Optional[dict]:
     return {"class": shoot_class, "luma": round(shoot_luma, 1), "promoted": promoted}
 
 
-def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
-    """Plan unskew, crop and the colour reading — on the APPROVED rotations.
+def plan_geometry(shoot: Path, quiet: bool = False,
+                  provisional: bool = False) -> dict:
+    """Plan the crop and the colour reading — on the APPROVED rotations.
 
     This used to run in the same loop as orientation, which meant every one of
     these measurements described a frame the operator had not confirmed yet. A
@@ -560,6 +703,13 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     anything else measured. It costs a second decode per frame. It buys the
     guarantee that no downstream number was computed against a rotation that
     later changed.
+
+    `provisional` is the ONE exception, and it is not a loosening: the auto
+    first pass (`--auto`) resolves orientation itself and then plans the crop
+    against exactly those rotations, in one breath, with nothing approved at
+    either end. What the gate protects — no crop box measured against a rotation
+    that later changed — is kept here by the sequencing rather than the stamp.
+    Nothing is approved; the operator still decides both.
     """
     from .center_crop import _parse_aspect
     from . import stages as stagemod
@@ -567,7 +717,7 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     m = load_manifest(shoot)
     if not m.get("photos"):
         raise SystemExit("nothing planned — run --check first")
-    if not stagemod.stage_state(m)["orientation"]["approved"]:
+    if not (provisional or stagemod.stage_state(m)["orientation"]["approved"]):
         raise SystemExit(
             "orientation is not approved yet — it is the first stage, and "
             "nothing else may be measured against a rotation that could still "
@@ -575,16 +725,19 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
+    smode = subject_mode(m)
 
     for key, rec in m["photos"].items():
         src = shoot / key
         if not src.exists():
             continue
         upright = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
-        sm = mask_for(upright)
+        sm = mask_for(upright, smode)
 
-        prev_sk = skewmod.from_dict(rec.get("unskew"))
-        sk = prev_sk if prev_sk.operator else skewmod.plan(upright, sm)
+        # A LEGACY warp, if this shoot was squared before the unskew stage was
+        # removed. Nothing plans a new one; the crop box below was measured on
+        # the squared pixels, so the replay has to happen before it.
+        sk = skewmod.from_dict(rec.get("unskew"))
         upright, sm = _unskewed(upright, sm, sk)
 
         stats = colormod.analyze(upright, sm.mask)
@@ -595,7 +748,6 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
         rec["subject"] = {"source": sm.source, "agreement": round(sm.agreement, 3),
                           "mask_iou": round(sm.mask_iou, 3),
                           "coverage": round(sm.coverage, 4), "bbox": list(sm.bbox)}
-        rec["unskew"] = sk.to_dict()
         rec["crop"] = crop
         prev_cp = rec.get("color_plan") or {}
         measured = dict(bg_class=stats.bg_class, bg_luma=round(stats.bg_luma, 1),
@@ -606,7 +758,7 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
         rec["status"] = "SHIP" if crop["applied"] else "PASSTHROUGH"
         rec.pop("pending_orientation", None)
         if not quiet:
-            print(f"  {key:28} {'squared ' if sk.applied else '        '}"
+            print(f"  {key:28} "
                   f"{'crop' if crop['applied'] else 'no crop: ' + (crop.get('reason') or '')[:44]}")
 
     m["backdrop"] = _unify_backdrop(m["photos"], quiet)
@@ -616,7 +768,10 @@ def plan_geometry(shoot: Path, quiet: bool = False) -> dict:
     return m
 
 
-def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = False) -> dict:
+def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
+              subject: Optional[str] = None,
+              category: Optional[str] = None,
+              quiet: bool = False) -> dict:
     """Analyse every frame; write the manifest, rotation sheet and ask panels."""
     from .center_crop import _parse_aspect
 
@@ -626,7 +781,12 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
 
     aspect = _parse_aspect(aspect_s)
     m = load_manifest(shoot)
-    m["settings"] = dict(aspect=aspect_s, pad=pad, pop=pop)
+    # None means "whatever this shoot already declared" — a batch re-check
+    # (tools/prep_run.py) must not silently demote a paper shoot back to auto.
+    subject = subject or subject_mode(m)
+    category = category or category_of(m)
+    m["settings"] = dict(aspect=aspect_s, pad=pad, pop=pop, subject=subject,
+                         category=category)
     prior = m.get("photos", {})
     photos: dict = {}
 
@@ -648,7 +808,7 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         # Order matters: OSD on the whole frame throws the item's type away
         # before reading it (see orient.osd_angle).
         cam = orientmod.rotate_bgr(bgr, orientmod.EXIF_ROT.get(exif_tag or 1, 0))
-        sm = mask_for(cam)
+        sm = mask_for(cam, subject)
         osd = (orientmod.osd_angle(_subject_region(cam, sm.bbox))
                if osd_on else (None, 0.0, "tesseract not installed"))
 
@@ -676,9 +836,6 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
         # manifest ended up saying 270.
         #
         # `plan_geometry()` does that work, after --approve-stage orientation.
-        prev_sk = skewmod.from_dict(prev.get("unskew"))
-        sk = (prev_sk if prev_sk.operator else
-              skewmod.Skew(False, "not planned yet — orientation first"))
         stats = None
         crop = (prev.get("crop") if (prev.get("crop") or {}).get("operator")
                 else {"applied": False, "reason": "not planned yet — orientation first",
@@ -702,7 +859,10 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str, quiet: bool = Fa
             "subject": {"source": sm.source, "agreement": round(sm.agreement, 3),
                         "mask_iou": round(sm.mask_iou, 3),
                         "coverage": round(sm.coverage, 4), "bbox": list(sm.bbox)},
-            "unskew": sk.to_dict(),
+            # Carried, never re-decided: the stage is gone, and only a shoot
+            # squared under it still has anything here to replay.
+            "unskew": prev.get("unskew") or {"applied": False,
+                                             "reason": "unskew stage removed"},
             "crop": crop,
             # An operator's `--detail` call is an answer, not a proposal: it
             # survives a re-run the same way a recorded rotation does. Only the
@@ -794,6 +954,13 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
     pop = m["settings"].get("pop", "gentle")
+    smode = subject_mode(m)
+
+    # An explicit `only` still wins; otherwise the shoot's category decides
+    # which looks are worth rendering. This is where the batch time actually
+    # goes -- six looks at ~25s a frame on 12 MP, five of which a printed
+    # shoot will never open. See photo_prep.categories.
+    only = tuple(only) or catmod.looks_for(category_of(m))
 
     out_dir = shoot / "listing"
     out_dir.mkdir(exist_ok=True)
@@ -808,14 +975,14 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         before = _load_bgr(src)
         img = orientmod.rotate_bgr(before, rec["orientation"]["applied"])
 
-        # The unskew recorded at stage 2 is a decision, not a proposal — apply
-        # it, do not re-derive it. Everything below is measured on the squared
-        # frame, which is what the crop box was planned on.
+        # A legacy warp from before the unskew stage was removed is a decision
+        # already published, not a proposal — replay it, never re-derive it.
+        # Everything below is measured on the frame the crop was planned on.
         sk = skewmod.from_dict(rec.get("unskew"))
 
         # Re-segment on the upright pixels: the crop box in the manifest was
         # planned there, and the colour pass needs the same mask.
-        sm = mask_for(img)
+        sm = mask_for(img, smode)
         img, sm = _unskewed(img, sm, sk)
         # Judged before the crop — a tight crop keeps too little backdrop to
         # tell a sweep from a textured surface (see color._backdrop_lut).
@@ -833,9 +1000,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
                 else plan_crop(img, sm, aspect, pad, pre_stats, sweep))
         rec["crop"] = crop
         if crop["applied"]:
-            x0, y0, x1, y1 = crop["box"]
-            img = img[y0:y1, x0:x1]
-            sm = mask_for(img)
+            img, sm = _cropped(img, sm, crop["box"])
 
         # Every preset renders from the SAME mask and crop. Segmentation is the
         # expensive step by a wide margin, so offering three looks costs barely
@@ -886,6 +1051,10 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     m["approved"] = False
     m["approved_at"] = None
     save_manifest(shoot, m)
+    # Renders from an earlier pass that this one no longer names. Nothing can
+    # read them again, so they go now rather than accruing until an audit finds
+    # 3.5 GB of them. See _sweep_unreferenced_presets.
+    _sweep_unreferenced_presets(shoot, m, quiet=quiet)
     _presets_sheet(rows, shoot / ".prep" / "prep_presets.jpg")
 
     # Adopt the backdrop's default look so `listing/` is populated without a
@@ -939,6 +1108,139 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     return m
 
 
+
+# ---------------------------------------------------------------- cleanup
+#
+# PREP WAS PURELY ADDITIVE, AND IT SHOWED.
+#
+# Every pass wrote and nothing ever removed, so `inventory/` reached 27.3 GB
+# with 9.2 GB of it in `.prep/presets/`. Two distinct leaks, and they want
+# different treatment:
+#
+#   1. UNREFERENCED renders. `--apply` narrows the preset set (`--only`, or the
+#      shoot's category via categories.looks_for). Re-run a shoot that was once
+#      rendered at six looks with a two-look category and the other four sit
+#      there forever -- the manifest does not mention them, `--pick` cannot
+#      reach them, nothing can ever read them again. Measured: 171 dirs and
+#      1366 files, 3.5 GB. This is not a decision anyone made, it is a leak, so
+#      run_apply now sweeps it automatically at the end of every render.
+#
+#   2. SUPERSEDED renders. The looks that WERE rendered this run but lost the
+#      pick, plus the `.prep/ask/` panels for frames whose orientation has since
+#      been answered. Those are real artifacts of a real decision and the
+#      comparison sheet is the whole point of the gate, so they are never swept
+#      automatically -- only by an explicit `--gc`, and only once the shoot is
+#      approved. Both are regenerable with `--apply`.
+#
+# `--gc` prints and removes nothing; `--gc --gc-force` removes. There is no
+# `git checkout` behind `inventory/` -- it is gitignored -- so the dry run is
+# the default in the one place where that asymmetry actually bites.
+
+
+def _dir_bytes(d: Path) -> int:
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+
+
+def _mb(b: int) -> str:
+    """Render sizes so a sweep of a few stray frames does not read as '0 MB'."""
+    return f"{b / 1048576:.1f} MB" if b >= 1048576 else f"{b / 1024:.0f} KB"
+
+
+def _sweep_unreferenced_presets(shoot: Path, m: dict, quiet: bool = False) -> int:
+    """Delete preset renders no manifest entry points at. Returns bytes freed.
+
+    Safe by construction: a file the manifest does not name cannot be picked,
+    cannot be copied to `listing/`, and cannot be shown on the comparison sheet.
+    """
+    import shutil
+
+    p_root = shoot / ".prep" / "presets"
+    if not p_root.is_dir():
+        return 0
+
+    named, referenced = set(), set()
+    for rec in (m.get("photos") or {}).values():
+        for pname, entry in (rec.get("presets") or {}).items():
+            named.add(pname)
+            referenced.add((shoot / entry["path"]).resolve())
+
+    freed = 0
+    for pdir in sorted(p_root.iterdir()):
+        if not pdir.is_dir():
+            continue
+        if pdir.name not in named:
+            freed += _dir_bytes(pdir)
+            shutil.rmtree(pdir)
+            continue
+        # The look survived but individual frames may not have: a photo removed
+        # from the shoot leaves its render behind under a preset still in use.
+        for f in pdir.rglob("*"):
+            if f.is_file() and f.resolve() not in referenced:
+                freed += f.stat().st_size
+                f.unlink()
+
+    if freed and not quiet:
+        print(f"  swept {_mb(freed)} of unreferenced preset renders")
+    return freed
+
+
+def run_gc(shoot: Path, force: bool = False) -> int:
+    """Drop regenerable byproducts of an APPROVED shoot. Returns bytes freed.
+
+    Refuses on an unapproved shoot: before approval the unchosen looks are the
+    comparison the operator has not made yet, and the ask panels are questions
+    nobody has answered.
+    """
+    import shutil
+
+    m = load_manifest(shoot)
+    if not m.get("photos"):
+        print(f"{shoot}: nothing prepped")
+        return 0
+    if not m.get("approved"):
+        print(f"{shoot}: not approved — keeping every look and every ask panel. "
+              f"--gc is for shoots that are done.")
+        return 0
+
+    chosen = m.get("chosen_preset")
+    targets: list[tuple[Path, str]] = []
+
+    p_root = shoot / ".prep" / "presets"
+    if p_root.is_dir():
+        for pdir in sorted(p_root.iterdir()):
+            if pdir.is_dir() and pdir.name != chosen:
+                targets.append((pdir, f"unchosen look (chosen: {chosen})"))
+
+    ask = shoot / ".prep" / "ask"
+    if ask.is_dir():
+        unresolved = [n for n, r in m["photos"].items()
+                      if (r.get("orientation") or {}).get("needs_ask")]
+        if unresolved:
+            print(f"  keeping .prep/ask/ — still unanswered: {', '.join(unresolved[:5])}")
+        else:
+            targets.append((ask, "orientation panels, all answered"))
+
+    if not targets:
+        print(f"{shoot}: already clean")
+        return 0
+
+    total = 0
+    for d, why in targets:
+        b = _dir_bytes(d)
+        total += b
+        print(f"  {'rm' if force else 'would rm'} {str(d.relative_to(shoot)):24} "
+              f"{_mb(b):>10}   {why}")
+        if force:
+            shutil.rmtree(d)
+
+    verb = "freed" if force else "would free"
+    print(f"{shoot}: {verb} {_mb(total)}  "
+          f"(regenerate with `--apply`)")
+    if not force:
+        print("  dry run — add --gc-force to actually remove")
+    return total
+
+
 def run_pick(shoot: Path, preset: str, quiet: bool = False,
              auto: bool = False) -> dict:
     """Adopt one preset for the whole shoot: copy it into `listing/`.
@@ -974,6 +1276,10 @@ def run_pick(shoot: Path, preset: str, quiet: bool = False,
             rows.append((name, _load_bgr(shoot / name), _load_bgr(dst), rec))
 
     m["chosen_preset"] = preset
+    # WHO chose it, not just what. An auto-adopted default and a deliberate
+    # --pick are different decisions even when they name the same preset:
+    # only one of them survives the next --apply. See decisions.record_for.
+    m["preset_picked_by_operator"] = not auto
     m["preset_source"] = "default" if auto else "picked"
     # A different look is a different set of photos; whatever was approved
     # before was approved for images that are no longer the ones on disk.
@@ -1167,6 +1473,97 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
     return m
 
 
+def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
+             subject: Optional[str] = None, category: Optional[str] = None,
+             quiet: bool = False) -> dict:
+    """The FIRST PASS: turn every frame and plan every crop, asking nothing.
+
+    The staged review is what PREP is for, and it is also a lot of the
+    operator's attention spent on frames where the answer was never in doubt.
+    So the run now starts with a best attempt at the two geometric stages,
+    made in one breath and approved by nobody:
+
+        --auto  ->  the operator looks once  ->  approve, or open the stages
+
+    Two rules make this safe to do unasked.
+
+    ORIENTATION IS GUESSED HERE, AND SAYS SO. A frame the resolver cannot read
+    would normally become an ASK and stop the run. In this pass it takes the
+    best signal available — the OSD proposal if there is one, otherwise 0 — and
+    records `guessed: True` against it. That flag is the whole point: it is what
+    the card and the widget mark, and it names exactly the frames worth a human
+    look. A guess presented as a resolution is the failure mode this pass could
+    have, and the flag is what keeps it from happening silently.
+
+    THE CROP IS DELIBERATELY LOOSE. `MIN_FRAME_KEPT` and the wider default pad
+    mean the first pass trims edges and leaves backdrop around the item. A crop
+    that is too generous costs nothing but a second look; one that is too tight
+    has already thrown pixels away, and on an item nobody re-shoots that is not
+    recoverable.
+
+    Nothing is approved and nothing is rendered. `listing/` is still written
+    only after the gate, and the gate still wants a human.
+    """
+    m = run_check(shoot, aspect_s, pad, pop, subject=subject,
+                  category=category, quiet=quiet)
+
+    guessed = []
+    for key, rec in m["photos"].items():
+        o = rec["orientation"]
+        if not o.get("needs_ask"):
+            continue
+        prop = o.get("osd_proposal")
+        if prop is None:
+            prop = o.get("osd_angle") if o.get("osd_angle") else 0
+        prop = int(prop or 0) % 360
+        o["subject_angle"] = prop
+        o["applied"] = (o.get("exif_angle", 0) + prop) % 360
+        o["needs_ask"] = False
+        o["guessed"] = True
+        o["source"] = (o.get("source") or "auto") + "+guess"
+        o["notes"] = list(o.get("notes") or []) + [
+            f"auto first pass: nothing legible to read, took {prop} deg "
+            f"(OSD proposal {o.get('osd_proposal')}, conf {o.get('osd_conf')})"]
+        rec["status"] = "PENDING"
+        guessed.append(key)
+    save_manifest(shoot, m)
+
+    # Straight into the crop, against the rotations just recorded. Nothing else
+    # may run between these two calls: that adjacency is what makes planning
+    # against unapproved rotations safe here.
+    m = plan_geometry(shoot, quiet=quiet, provisional=True)
+    m["auto"] = {"at": _now(), "guessed": guessed, "pad": pad,
+                 "min_frame_kept": MIN_FRAME_KEPT}
+    save_manifest(shoot, m)
+
+    photos = m.get("photos") or {}
+    cropped = [n for n, r in photos.items() if (r.get("crop") or {}).get("applied")]
+    print(f"\n{shoot.name}: auto first pass — {len(photos)} frames, "
+          f"{len(cropped)} cropped, {len(guessed)} orientation guessed")
+    if guessed:
+        print("  guessed (worth a look): " + ", ".join(guessed))
+    print("  nothing is approved. --approve-auto to take it as it stands, "
+          "or --stage orientation to open the review.")
+    return m
+
+
+def run_approve_auto(shoot: Path) -> dict:
+    """Take the auto first pass as it stands — both geometric stages at once.
+
+    This is the operator saying yes to what they were shown, so it is a real
+    approval and stamps like one: the same per-stage digest over the same
+    decisions, so any later edit invalidates it exactly as it would a stage
+    approved on its own sheet. The only thing being compressed is the number of
+    times they have to say yes to a page they have already read.
+    """
+    m = load_manifest(shoot)
+    if not (m.get("auto") or {}).get("at"):
+        raise SystemExit("no auto pass to approve — run --auto first")
+    for stage in ("orientation", "crop"):
+        m = run_approve_stage(shoot, stage)
+    return m
+
+
 def run_approve_stage(shoot: Path, stage: str) -> dict:
     """Sign off one stage. Approving ORIENTATION also plans everything that
     depends on it, so the operator never has to remember a second command."""
@@ -1181,7 +1578,13 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
             f"cannot approve '{stage}' - {len(pending)} outstanding: "
             + "; ".join(pending[:12]))
     st = stagemod.stage_state(m)
-    st[stage] = {"approved": True, "approved_at": _now()}
+    # The sign-off attaches to the DECISIONS it was given, not merely to a
+    # timestamp. Any later change to any decision moves the digest, so the
+    # approval stops matching without anyone remembering to invalidate it --
+    # which is what let six frames sit at approved:true at a rotation the
+    # shipping files had never been rendered with (issue #21).
+    st[stage] = dict(approved=True, approved_at=_now(),
+                     **decmod.stamp(m, stage))
     # A later stage's approval cannot survive an earlier one being revisited.
     for later in stagemod.STAGES[stagemod.STAGES.index(stage) + 1:]:
         st[later] = {"approved": False, "approved_at": None}
@@ -1194,7 +1597,7 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
         # backdrop reading can describe a frame that has since been turned.
         plan_geometry(shoot, quiet=True)
         m = load_manifest(shoot)
-        print("  planned unskew, crop and the colour reading on those rotations")
+        print("  planned the crop and the colour reading on those rotations")
     nxt = stagemod.STAGES[stagemod.STAGES.index(stage) + 1:] or None
     print(f"APPROVED stage '{stage}' at {st[stage]['approved_at']}")
     print(f"  next: --stage {nxt[0]}" if nxt else "  all stages approved — --apply writes listing/")
@@ -1202,9 +1605,12 @@ def run_approve_stage(shoot: Path, stage: str) -> dict:
 
 
 def _unskewed(img: np.ndarray, sm, sk) -> tuple:
-    """Carry a frame and its mask through a planned unskew, or return them as
-    they are. One place, so every consumer — the check pass, the apply pass, the
-    stage sheets — is looking at identical pixels."""
+    """Replay a LEGACY unskew onto a frame and its mask, or return them as they
+    are. One place, so every consumer — the check pass, the apply pass, the stage
+    sheets — is looking at identical pixels.
+
+    The unskew stage is gone. This exists so the frames that were published with
+    a warp recorded re-render to the pixels a buyer is already looking at."""
     if not getattr(sk, "applied", False):
         return img, sm
     return (skewmod.apply(img, sk),
@@ -1212,8 +1618,34 @@ def _unskewed(img: np.ndarray, sm, sk) -> tuple:
                                 sm.source, sm.agreement, sm.mask_iou))
 
 
+def _cropped(img: np.ndarray, sm, box) -> tuple:
+    """Carry a frame and its mask through the planned crop.
+
+    The mask is CUT, not re-measured -- the same rule `_unskewed` follows, and
+    for the same two reasons.
+
+    It is cheaper, though modestly so: a second segmentation costs ~2.7s a
+    frame once u2net is loaded. (A cold call looks like ~19s; that is the model
+    load, paid once per process, and attributing it per frame overstates this.)
+
+    More importantly it is the only version that is correct. The crop box was
+    planned against THIS mask; re-segmenting the cropped pixels answers a
+    different question, because both detectors read context the crop just threw
+    away -- u2net sees a new composition, and the LAB detector samples a border
+    ring that is now the item's own edge rather than the sweep. So the colour
+    pass could run against a mask that never agreed with the box it was cropped
+    to, which is the shape of the fairy-doll frame that shipped with its magenta
+    wings neutralised to grey. Cutting the mask cannot drift from the decision.
+    """
+    x0, y0, x1, y1 = box
+    return (img[y0:y1, x0:x1],
+            subjectmod.describe(sm.mask[y0:y1, x0:x1],
+                                sm.source, sm.agreement, sm.mask_iou))
+
+
 def prepared(shoot: Path, name: str, rec: dict) -> np.ndarray:
-    """A frame as the crop and colour stages see it: upright, then squared."""
+    """A frame as the crop and colour stages see it: upright, plus any legacy
+    unskew this shoot was published with."""
     img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
     sk = skewmod.from_dict(rec.get("unskew"))
     return skewmod.apply(img, sk) if sk.applied else img
@@ -1234,7 +1666,7 @@ def _replan_crop(shoot: Path, m: dict, name: str, rec: dict, pad: float) -> dict
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     img = orientmod.rotate_bgr(_load_bgr(shoot / name), rec["orientation"]["applied"])
-    sm = mask_for(img)
+    sm = mask_for(img, subject_mode(m))
     img, sm = _unskewed(img, sm, skewmod.from_dict(rec.get("unskew")))
     stats = colormod.analyze(img, sm.mask)
     crop = plan_crop(img, sm, aspect, pad, stats, sweep=True)
@@ -1243,46 +1675,6 @@ def _replan_crop(shoot: Path, m: dict, name: str, rec: dict, pad: float) -> dict
     crop["reason"] = (f"operator: recrop at pad {pad}" if crop["applied"]
                       else f"operator recrop refused — {crop['reason']}")
     return crop
-
-
-def run_set_unskew(shoot: Path, pairs: list) -> dict:
-    """Override the unskew decision for named frames: off | on.
-
-    `on` is the operator saying "this IS a rectangle" — it waives the shape test
-    only. The magnitude guards stay armed, because "square it up" is not consent
-    to flatten a shot that was taken at an angle deliberately.
-    """
-    m = load_manifest(shoot)
-    for pair in pairs:
-        if "=" not in pair:
-            raise SystemExit(f"--unskew wants NAME=off|on, got {pair!r}")
-        name, val = pair.rsplit("=", 1)
-        key = _match_photo(m, name)
-        rec = m["photos"][key]
-        val = val.strip().lower()
-        if val == "off":
-            sk = skewmod.Skew(applied=False, reason="operator: leave it as shot",
-                              operator=True)
-        elif val == "on":
-            img = orientmod.rotate_bgr(_load_bgr(shoot / key),
-                                       rec["orientation"]["applied"])
-            sk = skewmod.plan(img, mask_for(img), rectangular=True)
-            sk.operator = True
-            sk.reason = ("operator: " + sk.reason if sk.applied
-                         else "operator asked to square it up, but " + sk.reason)
-        else:
-            raise SystemExit(f"{name}: expected off|on, got {val!r}")
-        rec["unskew"] = sk.to_dict()
-        # The crop box was measured on the old geometry. Anything pinned there
-        # describes pixels that no longer exist.
-        rec.pop("crop", None)
-        print(f"  {key}: unskew -> {val}  ({sk.reason})")
-    st = stagemod.stage_state(m)
-    for later in ("unskew", "crop", "color"):
-        st[later] = {"approved": False, "approved_at": None}
-    m["approved"] = False
-    save_manifest(shoot, m)
-    return m
 
 
 def _match_photo(m: dict, name: str) -> str:
@@ -1455,6 +1847,7 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
                     catalog spread from applied 0 to 270 on its second run.
     """
     m = load_manifest(shoot)
+    touched = []
     for pair in pairs:
         if "=" not in pair:
             raise SystemExit(f"--rotate wants NAME=DEG, got {pair!r}")
@@ -1481,6 +1874,7 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
         o["source"] = "exif+vision" if o.get("exif_angle") else "vision"
         o["needs_ask"] = False
         m["photos"][key]["status"] = "SHIP"
+        touched.append(key)
         print(f"  {key}: {'=' if absolute else '+'}{deg}° → subject {subject}°, "
               f"total applied {o['applied']}° (recorded look)")
 
@@ -1488,8 +1882,25 @@ def run_rotate(shoot: Path, pairs: list[str], absolute: bool = False) -> dict:
     m["approved"] = False
     m["approved_at"] = None
     _invalidate_from(m, "orientation")
+    for key in touched:
+        o = m["photos"][key]["orientation"]
+        # The frame HAS now been looked at, by whoever recorded this answer. A
+        # note saying it needs a look outlives the look otherwise, and every
+        # sheet and card downstream keeps flagging a frame that was answered.
+        o.pop("guessed", None)
+        o["notes"] = [n for n in (o.get("notes") or [])
+                      if "needs a look" not in n and "auto first pass" not in n]
     save_manifest(shoot, m)
     _sync_orientation_json(shoot, m)
+
+    # A shoot still sitting in the auto first pass has crop boxes measured on
+    # the rotations that just changed. Re-plan them now, in the same breath, or
+    # the widget and the card the operator is about to be shown would picture a
+    # crop from a frame that no longer exists — the exact failure the staged
+    # order exists to prevent, arriving through the back door.
+    if (m.get("auto") or {}).get("at") and not stagemod.stage_state(m)["orientation"]["approved"]:
+        m = plan_geometry(shoot, quiet=True, provisional=True)
+        print("  re-planned the crop on the corrected rotations")
     return m
 
 
@@ -1688,8 +2099,7 @@ def _print_status(shoot: Path, m: dict) -> None:
     photos = m.get("photos", {})
     asks = [n for n, r in photos.items() if r["orientation"]["needs_ask"]]
     cropped = sum(1 for r in photos.values() if (r.get("crop") or {}).get("applied"))
-    squared = sum(1 for r in photos.values() if (r.get("unskew") or {}).get("applied"))
-    print(f"\n{shoot.name}: {len(photos)} photos · {squared} squared · {cropped} cropped · "
+    print(f"\n{shoot.name}: {len(photos)} photos · {cropped} cropped · "
           f"{len(asks)} awaiting an orientation answer")
     chosen = m.get("chosen_preset")
     src = m.get("preset_source")
@@ -1709,23 +2119,25 @@ def main(argv=None) -> int:
     except Exception:
         pass
 
-    ap = argparse.ArgumentParser(description="PREP — orientation, unskew, crop and colour for one shoot.")
+    ap = argparse.ArgumentParser(description="PREP — orientation, crop and colour for one shoot.")
     ap.add_argument("shoot_dir")
     ap.add_argument("--check", action="store_true", help="analyse + plan; render nothing")
+    ap.add_argument("--auto", action="store_true",
+                    help="first pass: resolve orientation AND plan the crop in one go, "
+                         "asking nothing and approving nothing (guessed frames are flagged)")
+    ap.add_argument("--approve-auto", action="store_true", dest="approve_auto",
+                    help="sign off the auto pass as it stands (orientation + crop together)")
     ap.add_argument("--apply", action="store_true", help="render listing/ + the review sheet")
     ap.add_argument("--pick", metavar="PRESET",
                     help="adopt a preset for the shoot (copies it into listing/)")
     ap.add_argument("--stage", metavar="NAME",
-                    help="open a review stage: orientation | unskew | crop | color")
+                    help="open a review stage: orientation | crop | color")
     ap.add_argument("--approve-stage", metavar="NAME",
-                    help="sign off ONE stage (orientation | unskew | crop | color)")
+                    help="sign off ONE stage (orientation | crop | color)")
     ap.add_argument("--detail", nargs="+", metavar="NAME=on|off",
                     help="mark named frames as detail macros (on) so the colour pass leaves "
                          "the non-subject pixels alone — use when the 'backdrop' is the item's "
                          "own card, box or mount; off hands them back to backdrop treatment")
-    ap.add_argument("--unskew", nargs="+", metavar="NAME=off|on",
-                    help="override the unskew decision for named frames: on = this is a "
-                         "rectangle, square it up; off = leave the geometry alone")
     ap.add_argument("--crop", nargs="+", metavar="NAME=off|on|padF",
                     help="override the crop decision for named frames")
     ap.add_argument("--sheet", action="store_true",
@@ -1738,9 +2150,26 @@ def main(argv=None) -> int:
     ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
     ap.add_argument("--only", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
     ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
+    ap.add_argument("--gc", action="store_true",
+                    help="list the regenerable byproducts an APPROVED shoot is still holding "
+                         "(unchosen preset renders, answered ask panels); removes nothing")
+    ap.add_argument("--gc-force", action="store_true", dest="gc_force",
+                    help="with --gc: actually delete them (inventory/ is gitignored — there is no undo)")
     ap.add_argument("--status", action="store_true", help="print the manifest summary")
+    ap.add_argument("--decisions", action="store_true",
+                    help="print the decision record and its digest, and report "
+                         "any stage whose decisions have changed since sign-off")
     ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
-    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help="margin around the subject (default 0.12)")
+    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help=f"margin around the subject, as a fraction of its own box (default {DEFAULT_PAD})")
+    ap.add_argument("--category", default=None, choices=list(catmod.names()),
+                    help="what KIND of goods this shoot is: sets the subject "
+                         "detector and which looks are rendered, in one flag. "
+                         "Persists in the manifest. See photo_prep/categories.py")
+    ap.add_argument("--subject", default=None, choices=["auto", "paper"],
+                    help="what the item IS: 'paper' for flat printed goods "
+                         "(magazines, catalogs, sleeves) where the salient "
+                         "object is the picture printed on the item, not the "
+                         "item. Persists in the manifest.")
     ap.add_argument("--pop", default="gentle", choices=["off", "gentle", "strong"],
                     help="subject pass: saturation/contrast/unsharp (default gentle)")
     ap.add_argument("--quiet", action="store_true")
@@ -1750,20 +2179,62 @@ def main(argv=None) -> int:
     if not shoot.is_dir():
         ap.error(f"not a directory: {shoot}")
 
+    # WHAT IS BEING PHOTOGRAPHED IS RECORDED ONCE, AND READ BACK BY EVERY PASS.
+    #
+    # The category and the detector it implies are properties of the ITEM, not
+    # of this invocation, so they persist in the manifest. A later `--check` or
+    # `--apply` that does not repeat the flag has to get the same answer --
+    # otherwise a batch re-check silently demotes a paper shoot back to `auto`
+    # and re-measures every box against a mask of the cover model.
+    #
+    # `--subject` stays available on its own as the escape hatch for a shoot its
+    # category gets wrong, and it outranks the category when both are given.
+    _m0 = load_manifest(shoot)
+    stored_cat = category_of(_m0)
+    stored_subject = _m0.get("settings", {}).get("subject", DEFAULT_SUBJECT)
+
+    category = args.category or stored_cat
+    subject = args.subject or (catmod.subject_for(args.category) if args.category
+                               else stored_subject)
+
+    # Changing either one re-measures every box downstream, so the sign-offs
+    # those boxes earned are dropped HERE rather than silently carried over onto
+    # different numbers. This is the invalidation issue #21 wants to make
+    # structural; until the decision record lands it is done explicitly, at the
+    # one place both settings can change.
+    if category != stored_cat or subject != stored_subject:
+        m = load_manifest(shoot)
+        m.setdefault("settings", {})["category"] = category
+        m["settings"]["subject"] = subject
+        for st in ("crop", "color"):
+            if m.get("stages", {}).get(st):
+                m["stages"][st] = {"approved": False, "approved_at": None}
+        m["approved"] = False
+        m["approved_at"] = None
+        save_manifest(shoot, m)
+        print(f"category: {stored_cat} -> {category}  "
+              f"(subject {stored_subject} -> {subject}; "
+              f"crop/colour sign-off dropped; re-run --check)")
+        print(f"  {catmod.describe(category)}")
+
     if args.rotate:
         m = run_rotate(shoot, args.rotate)
     if getattr(args, "set_rotate", None):
         m = run_rotate(shoot, args.set_rotate, absolute=True)
         _print_status(shoot, m)
         return 0
+    if args.auto:
+        run_auto(shoot, args.aspect, args.pad, args.pop,
+                 subject=subject, category=category, quiet=args.quiet)
+        return 0
+    if args.approve_auto:
+        run_approve_auto(shoot)
+        return 0
     if args.stage:
         run_stage(shoot, args.stage, quiet=args.quiet)
         return 0
     if args.approve_stage:
         run_approve_stage(shoot, args.approve_stage)
-        return 0
-    if args.unskew:
-        run_set_unskew(shoot, args.unskew)
         return 0
     if args.crop:
         run_set_crop(shoot, args.crop)
@@ -1781,10 +2252,29 @@ def main(argv=None) -> int:
         m = run_pick(shoot, args.pick, quiet=args.quiet)
         _print_status(shoot, m)
         return 0
+    if args.gc:
+        run_gc(shoot, force=args.gc_force)
+        return 0
     if args.approve:
         m = run_approve(shoot)
         print(f"APPROVED {shoot.name} at {m['approved_at']} — "
               f"{len(m['photos'])} photos cleared for DRAFT.")
+        return 0
+    if args.decisions:
+        m = load_manifest(shoot)
+        rec = decmod.record_for(m)
+        print(json.dumps(rec, indent=2, sort_keys=True))
+        print(f"digest: {decmod.digest(rec)}")
+        stale = decmod.stale_stages(m, stagemod.STAGES)
+        if stale:
+            print()
+            print("DECISIONS CHANGED SINCE SIGN-OFF:")
+            for stage, why in stale:
+                print(f"  {stage}:")
+                for w in why:
+                    print(f"    {w}")
+        else:
+            print("every approved stage still matches its decisions")
         return 0
     if args.status:
         _print_status(shoot, load_manifest(shoot))
@@ -1792,13 +2282,13 @@ def main(argv=None) -> int:
 
     if args.check or not args.apply:
         print(f"PREP check — {shoot}")
-        m = run_check(shoot, args.aspect, args.pad, args.pop, quiet=args.quiet)
+        m = run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=args.quiet)
         _print_status(shoot, m)
         print(f"  rotation sheet: {shoot / '.prep' / 'rotation_sheet.jpg'}")
     if args.apply:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
-            run_check(shoot, args.aspect, args.pad, args.pop, quiet=True)
+            run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=True)
         m = run_apply(shoot, quiet=args.quiet, only=tuple(getattr(args, 'only', None) or ()))
         _print_status(shoot, m)
     return 0

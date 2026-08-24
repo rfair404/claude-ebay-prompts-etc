@@ -104,15 +104,23 @@ def test_the_photos_are_in_the_page(tmp_path):
     assert 'href="#big0"' in html and 'id="big0"' in html   # click to enlarge
 
 
-def test_the_hero_command_is_idempotent_and_per_frame(tmp_path):
-    """`--set-hero <frame>` names the absolute choice. A relative form would
-    move the frame again on every paste — the bug that made the Frame Check
-    page use `--set-rotate` rather than `--rotate`."""
-    html, shoot = _page(tmp_path)
-    assert f"--set-hero {shoot.as_posix()} b.jpg" in html
-    assert "already leads — nothing to run." in html       # frame 1 is a no-op
-    # one command block per frame, each tied to its radio by index
-    assert html.count('<pre class="cmd" data-i=') == 2
+def test_the_cover_picker_is_per_frame_and_carries_no_command(tmp_path):
+    """The page offers a cover choice, not a command to paste.
+
+    It used to print `--set-hero <shoot> <frame>` per frame, and this test used
+    to assert that. The page stopped doing that on purpose: the review is a
+    conversation now, the picker reports its choice in the chat, and the page
+    says so in as many words — "for looking, not for doing".
+
+    What survives from the old test is the part that mattered: the choice is
+    made per frame and is unambiguous. One radio per frame, in one group, so
+    exactly one cover can be chosen and the first is pre-selected.
+    """
+    html, _shoot = _page(tmp_path)
+    assert html.count('type="radio"') == 2                 # one per frame
+    assert html.count('name="hero"') == 2                  # one group
+    assert 'id="h0" checked' in html                       # frame 1 leads
+    assert "--set-hero" not in html                        # no command to paste
 
 
 def test_the_decision_material_survives(tmp_path):
@@ -125,11 +133,21 @@ def test_the_decision_material_survives(tmp_path):
 
 
 def test_nothing_publishes_from_the_page(tmp_path):
-    """It shows the publish command; it cannot run one. The command keeps its
-    --confirm guard so a paste is still a deliberate act."""
-    html, shoot = _page(tmp_path)
-    assert f"--list {shoot.as_posix()} --confirm" in html
-    assert "<form" not in html.lower() and "<button" not in html.lower()
+    """The page cannot publish, and no longer even hands over the command.
+
+    The guarantee got STRONGER, not weaker. It used to show
+    `--list <shoot> --confirm` for the operator to paste, and this test held
+    that the --confirm guard survived. There is now no publish command on the
+    page at all: it states its own role — "for looking, not for doing" — and the
+    decision is taken in the chat.
+
+    So the assertion is the absence of every affordance, runnable or copyable.
+    """
+    html, _shoot = _page(tmp_path)
+    low = html.lower()
+    assert "<form" not in low and "<button" not in low     # nothing runnable
+    assert "--list" not in html and "--confirm" not in html  # nothing to paste
+    assert "not for doing" in html                         # and it says so
 
 
 def test_a_wrapped_bullet_stays_with_its_bullet(tmp_path):

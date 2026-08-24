@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 import numpy as np                                        # noqa: E402
 import cv2                                                # noqa: E402
 
+from lib.photo_prep import categories as CAT             # noqa: E402
 from lib.photo_prep import color as C                     # noqa: E402
 from lib.photo_prep import orientation as O               # noqa: E402
 from lib.photo_prep import prep as P                      # noqa: E402
@@ -124,16 +125,53 @@ def test_low_confidence_osd_is_not_an_answer():
     assert v.needs_ask, "a shaky OSD reading must not rotate anything"
 
 
+def test_the_worst_osd_band_is_refused():
+    """OSD in the 2.0-3.0 confidence band agreed with the human look 12% of the
+    time across 73 labelled frames -- the worst bucket in the corpus, and worse
+    than chance. The old floor of 1.5 admitted all of it.
+
+    Measured by tools/osd_audit.py, which scores every OSD reading in
+    inventory/ against the look recorded beside it. Agreement runs 21% below
+    2.0 and 12% from 2-3, then 80% above 4.0. Regenerate with:
+
+        python tools/osd_audit.py --bands
+
+    This is the guard against quietly lowering the bar again to resolve more
+    frames without checking what the extra answers are worth. An unresolved
+    frame becomes an ASK, which is cheap; a wrong one ships sideways."""
+    assert O.OSD_MIN_CONF >= 3.5, (
+        "OSD below ~3.5 agreed with the operator less than half the time; "
+        "lowering this bar buys answers that are worse than no answer")
+    for conf in (1.6, 2.0, 2.9):
+        v = O.resolve("f.jpg", exif_tag=None, osd=(90, conf, "in the bad band"))
+        assert v.needs_ask, f"OSD at confidence {conf} was believed"
+        assert v.subject_angle == 0, "an unbelieved reading still rotated the frame"
+
+
+def test_a_confident_osd_reading_is_still_used():
+    """The floor removes bad answers; it must not remove the signal."""
+    v = O.resolve("f.jpg", exif_tag=None, osd=(270, 8.0, "well clear of the bar"))
+    assert not v.needs_ask
+    assert v.subject_angle == 270 and v.source == "osd"
+
+
 def test_osd_needs_a_recognised_script_not_just_confidence():
     """A textless cast-iron key came back '180 deg, conf 1.51, script conf 0.1'
     and was silently flipped backwards relative to every other frame in its
     shoot. Orientation confidence says 'these marks point that way'; script
-    confidence is what says 'these are marks of a language I know'."""
+    confidence is what says 'these are marks of a language I know'.
+
+    The two bars are independent, which is the whole point: clearing the
+    confidence bar must not excuse a missing script. So the fixture's
+    confidence is derived from the bar rather than written as a literal --
+    it was 1.51 when the bar was 1.5, and pinning it there turned a later
+    raise of OSD_MIN_CONF into a failure of the SCRIPT test."""
     assert O.OSD_MIN_SCRIPT > 0, "the script bar must exist"
+    clears_confidence = O.OSD_MIN_CONF + 1.0
     # The filter lives in the reader, so assert on its contract: a reading
     # without a recognised script is reported as NO answer.
-    assert O.OSD_MIN_CONF <= 1.51, "fixture assumes 1.51 clears the confidence bar"
-    v = O.resolve("f.jpg", exif_tag=None, osd=(None, 1.51, "did not recognise a script"))
+    v = O.resolve("f.jpg", exif_tag=None,
+                  osd=(None, clears_confidence, "did not recognise a script"))
     assert v.needs_ask and v.subject_angle == 0
 
 
@@ -517,6 +555,45 @@ def test_asshot_changes_nothing():
     assert r > b, f"red and blue look swapped: B={b:.0f} G={g:.0f} R={r:.0f}"
 
 
+def test_asshot_skips_the_correction_loop_without_changing_its_report():
+    """The k=0 fast path must be a skip, not a different answer.
+
+    `correct()` used to run white balance, the luma LUT, neutralise, diffuse,
+    pop and sharpen at full resolution with every term multiplied by zero, then
+    throw the result away and return the original pixels -- 26 seconds a frame
+    on a 12 MP catalog shoot, and `asshot` is the standing look for printed
+    media. The loop is now skipped outright.
+
+    That is only safe while the report it would have produced is the report we
+    construct instead, so these are the fields the skip has to keep true. They
+    hold by construction: with strength 0 the first pass leaves the working
+    array equal to the input, and `_damage` quantizes before comparing, so the
+    one attempt it would have recorded is zeros and it breaks immediately.
+    """
+    img, mask = _scene(bg=40, subject=(30, 60, 210))
+    _out, rep = C.correct(img, mask, preset="asshot")
+
+    # Exactly one attempt, at zero, undamaged -- and so no backing off.
+    assert rep["attempts"] == [dict(strength=0.0, new_clipped=0, new_crushed=0)], \
+        rep["attempts"]
+    assert rep["backoffs"] == 0, rep["backoffs"]
+    assert rep["subject_newly_clipped"] == 0
+    assert rep["subject_newly_crushed"] == 0
+    assert rep["strength"] == 0.0
+
+    # A skipped loop must still describe the frame it declined to correct:
+    # the review sheet prints these, and a passthrough that reported nothing
+    # would look like a failure rather than a deliberate look.
+    assert rep["preset"] == "asshot"
+    for key in ("backdrop", "wb_gains", "wb_note", "curve", "bg_luma_before",
+                "bg_luma_after", "subject_at_rails_before"):
+        assert key in rep, f"the k=0 path dropped {key!r} from the report"
+
+    # Every knob reports as untouched, whatever the preset table says.
+    assert rep["bg_neutralize"] == 0.0
+    assert rep["bg_diffuse"] == 0.0
+
+
 def test_a_weaker_preset_moves_the_backdrop_less():
     """Ordering is the whole point: half < studio <= punch on backdrop travel."""
     img, mask = _fuzzy_scene()
@@ -893,8 +970,6 @@ def test_stages_run_in_order_and_cannot_be_skipped():
     assert "orientation" in S.stage_blocker(m, "crop")
     assert S.stage_blocker(m, "color")
     S.stage_state(m)["orientation"]["approved"] = True
-    assert "unskew" in S.stage_blocker(m, "crop")
-    S.stage_state(m)["unskew"]["approved"] = True
     assert S.stage_blocker(m, "crop") is None
     assert "crop" in S.stage_blocker(m, "color")
 
@@ -905,11 +980,9 @@ def test_approving_a_stage_invalidates_the_later_ones():
         shoot = _shoot(Path(td) / "s", n=1)
         m = P.load_manifest(shoot)
         m["photos"] = {"IMG_0.jpg": {"orientation": {"needs_ask": False, "applied": 0},
-                                     "unskew": {"applied": False},
                                      "crop": {"applied": False}}}
         P.save_manifest(shoot, m)
         P.run_approve_stage(shoot, "orientation")
-        P.run_approve_stage(shoot, "unskew")
         P.run_approve_stage(shoot, "crop")
         m = P.load_manifest(shoot)
         assert m["stages"]["crop"]["approved"]
@@ -1098,131 +1171,38 @@ def test_crisp_keeps_the_cameras_colour_on_the_item():
 
 
 # ---------------------------------------------------------------------------
-# unskew — square up a rectangle, refuse everything that is not one
+# the unskew stage is gone — it may not come back by accident
 # ---------------------------------------------------------------------------
 
-from lib.photo_prep import unskew as U                     # noqa: E402
-
-
-class _M:
-    """The two fields unskew.plan reads off a SubjectMask."""
-    def __init__(self, mask):
-        self.mask = mask
-
-
-def _quad_scene(quad, bg=30, subject=200):
-    """A filled quadrilateral on a flat backdrop, plus its mask."""
-    img = np.full((H, W, 3), bg, np.uint8)
-    mask = np.zeros((H, W), np.uint8)
-    q = np.array(quad, np.int32).reshape(-1, 1, 2)
-    cv2.fillPoly(img, [q], (subject, subject, subject))
-    cv2.fillPoly(mask, [q], 255)
-    return img, mask
-
-
-def _tilted_rect(cx, cy, w, h, deg):
-    a = np.radians(deg)
-    R = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
-    pts = np.array([[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]])
-    return (pts @ R.T + (cx, cy)).tolist()
-
-
-def test_unskew_squares_a_tilted_frame():
-    """A rectangle rotated 4 degrees is the whole point of the stage."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 4.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    assert 3.0 <= sk.tilt_deg <= 5.0, sk.tilt_deg
-    assert sk.fill > U.MIN_FILL, sk.fill
-
-    out = U.apply(img, sk)
-    after = U.plan(out, _M(U.apply_mask(mask, sk)))
-    assert not after.applied and "already square" in after.reason, after.reason
-
-
-def test_unskew_leaves_a_frame_that_is_already_square():
-    img, mask = _quad_scene([[300, 250], [900, 250], [900, 700], [300, 700]])
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied and "already square" in sk.reason, sk.reason
-    assert np.array_equal(U.apply(img, sk), img), "a no-op must not resample"
-
-
-def test_unskew_refuses_a_round_item():
-    """A marble has no square to restore; a quad fitted to it is noise.
-
-    This is the guard that keeps the stage out of the way of every non-flat
-    item in the inventory.
+def test_the_unskew_stage_is_not_in_the_pipeline():
+    """Removed on the operator's call: too slow, and it squared the wrong
+    rectangle often enough to cost more photos than it saved. The module stays
+    for REPLAY only, so shoots published with a warp still re-render to the
+    pixels that are live — but nothing plans one, and no stage asks about one.
     """
-    img = np.full((H, W, 3), 30, np.uint8)
-    mask = np.zeros((H, W), np.uint8)
-    cv2.ellipse(img, (600, 450), (260, 210), 12, 0, 360, (200, 200, 200), -1)
-    cv2.ellipse(mask, (600, 450), (260, 210), 12, 0, 360, 255, -1)
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied, sk.reason
-    assert "not a rectangle" in sk.reason, sk.reason
-    assert sk.fill < U.MIN_FILL, sk.fill
-
-
-def test_unskew_refuses_a_deliberately_angled_shot():
-    """Steep keystone is a three-quarter view, not a mistake. Squaring it would
-    throw away the shot the photographer meant to take."""
-    img, mask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
-    sk = U.plan(img, _M(mask))
-    assert not sk.applied, sk.reason
-    assert "on purpose" in sk.reason or "not a rectangle" in sk.reason, sk.reason
-
-
-def test_unskew_keeps_the_items_own_proportions():
-    """The destination rectangle is measured from the item's opposite edges, so
-    a 4:3 painting comes out 4:3 — the correction restores a rectangle, it does
-    not invent a nicer one."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 640, 480, 3.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    (x0, y0), (x1, _), (_, y2), _ = sk.dst
-    assert abs(((x1 - x0) / (y2 - y0)) - 4 / 3) < 0.03, sk.dst
-
-
-def test_unskew_never_crops():
-    """The canvas grows to hold every source pixel. A stage that silently ate
-    the corners of a frame would be indistinguishable from a bad crop."""
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
-    sk = U.plan(img, _M(mask))
-    assert sk.applied, sk.reason
-    out = U.apply(img, sk)
-    assert out.shape[0] >= H and out.shape[1] >= W, out.shape
-    assert (out.shape[0] * out.shape[1]) / (H * W) <= U.MAX_CANVAS_GROWTH
-
-
-def test_unskew_operator_on_waives_only_the_shape_test():
-    """`--unskew NAME=on` says "this is a rectangle" — a mount, a mat or a
-    shadow can easily cost a real frame its shape score. It must not become a
-    licence to flatten a shot that was angled on purpose."""
-    # A tilted rectangle with a bite out of one side: unambiguously tilted,
-    # but too ragged to pass the shape test on its own.
-    img, mask = _quad_scene(_tilted_rect(600, 450, 620, 460, 5.0))
-    notch = np.array([[600, 200], [960, 250], [900, 700]], np.int32)
-    cv2.fillPoly(img, [notch], (30, 30, 30))
-    cv2.fillPoly(mask, [notch], 0)
-
-    free = U.plan(img, _M(mask))
-    assert not free.applied and "not a rectangle" in free.reason, free.reason
-    forced = U.plan(img, _M(mask), rectangular=True)
-    assert forced.applied, forced.reason
-    assert 4.0 <= forced.tilt_deg <= 6.0, forced.tilt_deg
-
-    steep, smask = _quad_scene([[250, 260], [980, 150], [980, 760], [250, 640]])
-    over = U.plan(steep, _M(smask), rectangular=True)
-    assert not over.applied, "a forced unskew must still obey the magnitude guards"
-
-
-def test_unskew_runs_before_crop_in_the_stage_order():
-    """Order is a dependency, not a preference: a crop box measured on skewed
-    pixels describes a frame that is about to change shape."""
     from lib.photo_prep import stages as S
-    assert S.STAGES == ("orientation", "unskew", "crop", "color")
-    assert S.STAGES.index("unskew") < S.STAGES.index("crop")
-    assert S.stage_blocker({}, "crop"), "crop must not open before unskew is approved"
+    from lib.photo_prep import unskew as U
+
+    assert S.STAGES == ("orientation", "crop", "color")
+    assert "unskew" not in S.SHEET_BUILDERS
+    assert not hasattr(U, "plan"), "planning an unskew is what was removed"
+    assert hasattr(U, "apply") and hasattr(U, "from_dict"), "replay must survive"
+
+
+def test_a_recorded_unskew_is_still_replayed():
+    """46 shoots were published with a warp recorded. Re-running PREP on one of
+    them must return the pixels a buyer is already looking at, not new ones."""
+    from lib.photo_prep import unskew as U
+
+    sk = U.from_dict({"applied": True, "reason": "legacy",
+                      "quad": [[10, 12], [300, 4], [308, 210], [18, 218]],
+                      "dst": [[0, 0], [300, 0], [300, 210], [0, 210]],
+                      "out_size": [300, 210]})
+    img = np.full((240, 320, 3), 40, np.uint8)
+    img[60:120, 80:160] = 200
+    out = U.apply(img, sk)
+    assert out.shape[:2] == (210, 300), out.shape
+    assert not np.array_equal(out[:210, :300], img[:210, :300]), "the warp did nothing"
 
 
 def test_check_measures_nothing_until_orientation_is_settled():
@@ -1241,7 +1221,6 @@ def test_check_measures_nothing_until_orientation_is_settled():
             assert rec.get("pending_orientation") is True, name
             assert rec["orientation"], "orientation IS measured in this pass"
             assert not (rec.get("crop") or {}).get("applied"), name
-            assert not (rec.get("unskew") or {}).get("applied"), name
 
 
 def test_geometry_refuses_to_plan_before_orientation_is_approved():
@@ -1276,6 +1255,181 @@ def test_approving_orientation_plans_the_geometry_itself():
         #  so it is asserted in the multi-frame test above, not here)
 
 
+# ---------------------------------------------------------------------------
+# category profiles
+# ---------------------------------------------------------------------------
+
+def test_every_category_names_real_looks_and_a_real_detector():
+    """The guard for the next category somebody adds.
+
+    A profile is plain data, so a typo in it is not a syntax error -- it is a
+    shoot that renders nothing, or one that raises deep inside `mask_for` after
+    25 seconds of segmentation. Both were cheap to prevent here.
+    """
+    from lib.photo_prep import subject as S
+    for name in CAT.names():
+        prof = CAT.profile(name)
+        assert prof.get("subject", "auto") in S.MODES, \
+            f"category {name!r} names a detector that does not exist"
+        for look in (prof.get("looks") or ()):
+            assert look in C.PRESETS, \
+                f"category {name!r} renders {look!r}, which is not a preset"
+
+
+def test_printed_is_paper_and_asshot():
+    """The two facts the printed category exists to carry.
+
+    `paper` because u2net returns the cover model rather than the sheet, and
+    the containment test scores that 1.0 so nothing downstream can catch it.
+    `asshot` because printed colour is what the buyer is judging, and it is
+    also where the batch time went -- five of six looks on a catalog frame are
+    rendered for a comparison nobody opens.
+    """
+    assert CAT.subject_for("printed") == "paper"
+    assert CAT.looks_for("printed") == ("asshot",)
+
+
+def test_default_category_still_renders_everything():
+    """A filter that narrowed the generic case would be a silent policy change.
+
+    `looks_for` returns empty, not None, because that is what `run_apply`'s
+    `only` already treats as 'render them all'.
+    """
+    assert CAT.looks_for(None) == ()
+    assert CAT.looks_for("default") == ()
+    assert CAT.subject_for(None) == "auto"
+
+
+def test_an_unknown_category_is_refused_not_ignored():
+    """Falling back to the generic profile would render five extra looks and
+    segment a catalog as if it were an object -- quietly, on a whole batch."""
+    try:
+        CAT.profile("catalogs")      # plausible, and not the name
+    except ValueError as e:
+        assert "printed" in str(e), "the error should list the real names"
+    else:
+        raise AssertionError("an unknown category was accepted")
+
+def test_a_second_writer_cannot_clobber_the_first():
+    """PREP is not run by one process at a time.
+
+    Batches run in a pool, an operator runs a command against a shoot while a
+    background --apply is halfway through it, and more than one agent works the
+    same tree. save_manifest was a bare write_text, so the last writer won in
+    silence. Three incidents in two days: twice an auto-pick landed after an
+    operator's --pick so the manifest named one look while listing/ held
+    another, and once a concurrent session overwrote eight orientation calls.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        first = P.load_manifest(shoot)
+        first["photos"] = {"a.jpg": {}}
+        P.save_manifest(shoot, first)
+
+        r1 = P.load_manifest(shoot)
+        r2 = P.load_manifest(shoot)
+        r1["photos"]["from_r1"] = {}
+        P.save_manifest(shoot, r1)
+
+        r2["photos"]["from_r2"] = {}
+        try:
+            P.save_manifest(shoot, r2)
+            raise AssertionError("the stale writer clobbered the fresh one")
+        except P.ManifestConflict as e:
+            assert "nothing has been written" in str(e)
+
+        on_disk = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        assert "from_r1" in on_disk["photos"], "the first writer's work was lost"
+        assert "from_r2" not in on_disk["photos"], "the refused write landed anyway"
+
+
+def test_the_refused_writer_succeeds_after_re_reading():
+    """Refusing is only useful if the retry is obvious: re-read, re-apply, write."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        stale = P.load_manifest(shoot)
+        fresh = P.load_manifest(shoot)
+        fresh["photos"] = {"theirs": {}}
+        P.save_manifest(shoot, fresh)
+
+        try:
+            stale["photos"] = {"mine": {}}
+            P.save_manifest(shoot, stale)
+            raise AssertionError("expected a conflict")
+        except P.ManifestConflict:
+            pass
+
+        again = P.load_manifest(shoot)
+        again["photos"]["mine"] = {}
+        P.save_manifest(shoot, again)
+
+        photos = P.load_manifest(shoot)["photos"]
+        assert {"theirs", "mine"} <= set(photos), photos
+
+
+def test_saving_the_same_dict_twice_is_not_a_conflict():
+    """A writer must not be told its own write was somebody else's."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        m = P.load_manifest(shoot)
+        m["photos"] = {"a": {}}
+        P.save_manifest(shoot, m)
+        m["photos"]["b"] = {}
+        P.save_manifest(shoot, m)          # must not raise
+        assert set(P.load_manifest(shoot)["photos"]) == {"a", "b"}
+
+
+def test_the_fingerprint_never_reaches_disk():
+    """It is bookkeeping, not part of the format — the format lock would
+    rightly fail if it widened the manifest."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        raw = json.loads((shoot / ".prep" / "prep.json").read_text(encoding="utf-8"))
+        assert P.READ_FINGERPRINT not in raw, raw.keys()
+
+
+def test_a_crash_mid_write_cannot_truncate_the_manifest():
+    """tmp-and-rename. The old write_text left a half-written manifest when it
+    failed, losing the previous one as well as the update."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        good = P.load_manifest(shoot)
+        good["photos"] = {"keep": {}}
+        P.save_manifest(shoot, good)
+        before = (shoot / ".prep" / "prep.json").read_text(encoding="utf-8")
+
+        m = P.load_manifest(shoot)
+        m["photos"]["boom"] = {1 + 2j: "not serialisable"}
+        try:
+            P.save_manifest(shoot, m)
+        except Exception:                                    # noqa: BLE001
+            pass
+        after = (shoot / ".prep" / "prep.json").read_text(encoding="utf-8")
+        assert after == before, "a failed write damaged the manifest"
+
+
+def test_force_is_available_for_a_deliberate_overwrite():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        P.save_manifest(shoot, P.load_manifest(shoot))
+        stale = P.load_manifest(shoot)
+        fresh = P.load_manifest(shoot)
+        fresh["photos"] = {"theirs": {}}
+        P.save_manifest(shoot, fresh)
+
+        stale["photos"] = {"mine": {}}
+        P.save_manifest(shoot, stale, force=True)
+        assert set(P.load_manifest(shoot)["photos"]) == {"mine"}
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
@@ -1289,3 +1443,143 @@ if __name__ == "__main__":
             print(f"FAIL  {fn.__name__}: {e}")
     print(f"{len(fns) - bad}/{len(fns)} passed")
     sys.exit(1 if bad else 0)
+
+
+
+# ---------------------------------------------------------------------------
+# the auto first pass — decide once, ask once
+# ---------------------------------------------------------------------------
+
+def test_auto_resolves_every_frame_and_approves_nothing():
+    """The pass exists to spend the operator's attention once instead of twice.
+    It may decide anything; it may approve nothing."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+
+        for name, rec in m["photos"].items():
+            assert not rec["orientation"]["needs_ask"], f"{name} still asking"
+            assert "applied" in (rec.get("crop") or {}), f"{name} has no crop decision"
+            assert not rec.get("pending_orientation"), name
+        st = m.get("stages") or {}
+        assert not any(v.get("approved") for v in st.values()), st
+        assert not m.get("approved")
+
+
+def test_auto_flags_the_frames_it_guessed():
+    """A guess presented as a resolution is the one way this pass can hurt, so
+    every frame it could not read is marked and named."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        guessed = m["auto"]["guessed"]
+        for name in guessed:
+            o = m["photos"][name]["orientation"]
+            assert o.get("guessed") is True, name
+            assert any("auto first pass" in n for n in o.get("notes") or []), name
+        for name, rec in m["photos"].items():
+            if name not in guessed:
+                assert not rec["orientation"].get("guessed"), name
+
+
+def test_a_crop_always_leaves_background_around_the_item():
+    """Trim the edges, never reframe: a small item in a big frame must not come
+    back as a keyhole just because the pad is a fraction of the item."""
+    fp = {"w": 4000, "h": 3000, "bbox": (1900, 1400, 200, 200),
+          "offset": 0.0, "subject_frac": 0.003, "capture": 1.0,
+          "box_aspect": 1.0, "border_fg": 0.0}
+    x0, y0, x1, y1 = P._fit_box(fp, 1.0, P.DEFAULT_PAD)
+    kept = ((x1 - x0) * (y1 - y0)) / (4000 * 3000)
+    assert kept >= P.MIN_FRAME_KEPT * 0.999, kept
+    assert (x0, y0) != (x1, y1)
+
+
+def test_approve_auto_stamps_both_stages_like_a_sheet_would():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        m = P.run_approve_auto(shoot)
+        assert m["stages"]["orientation"]["approved"]
+        assert m["stages"]["crop"]["approved"]
+        # The same digest a per-stage approval carries, so a later edit
+        # invalidates it the same way.
+        assert m["stages"]["crop"].get("decisions")
+        assert not m["stages"]["color"]["approved"], "colour is still the operator's"
+
+
+# --------------------------------------------------------------- gc / cleanup
+#
+# PREP was purely additive: it wrote presets on every pass and removed nothing,
+# so `inventory/` carried 3.5 GB of renders no manifest even named — stranded by
+# re-runs that narrowed `--only` or the shoot's category. These pin the two
+# halves of the fix apart: the leak goes automatically, the operator's unchosen
+# looks never do.
+
+def _fake_presets(shoot: Path, looks, frames):
+    root = shoot / ".prep" / "presets"
+    for look in looks:
+        (root / look).mkdir(parents=True, exist_ok=True)
+        for f in frames:
+            (root / look / f).write_bytes(b"x" * 4096)
+    return root
+
+
+def test_sweep_takes_only_what_the_manifest_cannot_name():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        root = _fake_presets(shoot, ("asshot", "punch", "stranded"),
+                             ("a.jpg", "b.jpg", "gone.jpg"))
+        m = {"photos": {n: {"presets": {
+                 look: {"path": f".prep/presets/{look}/{n.lower()}"}
+                 for look in ("asshot", "punch")}}
+             for n in ("A.jpg", "B.jpg")}}
+
+        freed = P._sweep_unreferenced_presets(shoot, m, quiet=True)
+
+        assert not (root / "stranded").exists(), "a look nothing names survived"
+        # The frame that left the shoot takes its renders with it, even under a
+        # look that is still in use.
+        assert not (root / "asshot" / "gone.jpg").exists()
+        # Everything the manifest points at is untouched.
+        for look in ("asshot", "punch"):
+            for f in ("a.jpg", "b.jpg"):
+                assert (root / look / f).exists(), f"{look}/{f} was swept"
+        assert freed == 4096 * 5, freed
+
+
+def test_gc_refuses_an_unapproved_shoot():
+    """Before approval the unchosen looks ARE the gate — nothing may take them."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_apply(shoot, quiet=True)
+        root = shoot / ".prep" / "presets"
+        before = sorted(p.name for p in root.iterdir() if p.is_dir())
+        assert P.run_gc(shoot, force=True) == 0
+        assert sorted(p.name for p in root.iterdir() if p.is_dir()) == before
+
+
+def test_gc_keeps_the_chosen_look_and_is_dry_by_default():
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+        m = P.load_manifest(shoot)
+        chosen = m["chosen_preset"]
+        for st in m.get("stages", {}):
+            m["stages"][st] = {"approved": True, "approved_at": "x"}
+        m["approved"] = True
+        P.save_manifest(shoot, m)
+        root = shoot / ".prep" / "presets"
+        looks = sorted(p.name for p in root.iterdir() if p.is_dir())
+
+        # inventory/ is gitignored — the default must never remove anything.
+        assert P.run_gc(shoot, force=False) > 0 or len(looks) == 1
+        assert sorted(p.name for p in root.iterdir() if p.is_dir()) == looks
+
+        P.run_gc(shoot, force=True)
+        left = sorted(p.name for p in root.iterdir() if p.is_dir())
+        assert left == [chosen], left
+        # The shipped files are the point of the whole exercise.
+        assert list((shoot / "listing").glob("*.jpg"))

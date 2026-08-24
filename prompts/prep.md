@@ -15,19 +15,64 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ---
 
+## The run OPENS with a best attempt, made without asking
+
+    python -m lib.photo_prep.prep <shoot> --auto
+
+One pass, no questions: every frame turned the way PREP reads it, every crop
+planned, nothing approved and nothing rendered. Then the operator looks ONCE at
+what it did and either takes it or opens the stages.
+
+Why it is allowed to guess. The staged review below is the point of PREP, and it
+also spends the operator's attention on frames where the answer was never in
+doubt. Deciding first and asking second costs nothing as long as two things hold,
+and they are enforced in code:
+
+- **A guess is labelled a guess.** A frame the resolver cannot read would
+  normally become an ASK and stop the run. Here it takes the best signal it has
+  (the OSD proposal, else 0) and records `guessed: true`. Report those frames by
+  name, every time — they are exactly the ones worth a human look, and a guess
+  presented as a resolution is the one way this pass can hurt.
+- **The crop is deliberately loose.** `DEFAULT_PAD` is 0.28 of the item's own
+  box, and `MIN_FRAME_KEPT` (0.55) is a floor under the whole box: a crop trims
+  the edges and always leaves backdrop around the item. Too generous costs a
+  second look. Too tight has already thrown pixels away, and nobody re-shoots.
+
+Present the result as a widget: every frame, the turn applied, the crop box on
+the frame, and the guessed ones flagged. Apply the pass, then show ONE card
+(`python tools/prep_card.py <shoot>`) of the revised frames, and ask a single
+question with two answers:
+
+- **approve** → `--approve-auto`, which signs off orientation AND crop together
+  and moves to colour;
+- **override** → open the interactive flow below, at `--stage orientation`.
+
+Nothing about the gate changes. `--auto` approves nothing, `listing/` is still
+written only after the stages are signed off, and `--approve-auto` stamps the
+same per-stage digest a sheet approval does — so any later edit invalidates it
+the same way.
+
 ## The review is STAGED, and interactive. Always.
 
-Four corrections, in this order, and **you do not move on until the operator
-says the current one is right**:
+This is where an override lands, and where a shoot goes whenever the auto pass
+is not good enough. Three corrections, in this order, and **you do not move on
+until the operator says the current one is right**:
 
-    1. ORIENTATION  ->  2. UNSKEW  ->  3. CROP  ->  4. COLOUR / touch-up
+    1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
 
-This ordering is not a preference, it is a dependency. Squaring up is only
-meaningful once the frame is the right way up. A crop is only meaningful on the
-shape that will ship — a box measured on skewed pixels describes a frame that is
-about to change. A colour judgement is only meaningful on the final framing.
-Shown together, a bad crop and a bad rotation look the same on the page and
-neither can be answered.
+This ordering is not a preference, it is a dependency. A crop is only meaningful
+once the frame is the right way up. A colour judgement is only meaningful on the
+final framing. Shown together, a bad crop and a bad rotation look the same on
+the page and neither can be answered.
+
+**There used to be an UNSKEW stage between orientation and crop**, warping a
+rectangular item so its edges met the picture's. It was removed in 2026-08 on
+the operator's call: it cost a quad fit and a full-frame resample on every
+frame, it damaged more photos than it saved — a quad landing on a mat, a mount
+or a soft shadow squares up the wrong rectangle — and two degrees of tilt is not
+something a buyer sees in a thumbnail. Nothing plans one now. A shoot that was
+squared before it went still REPLAYS its recorded warp, so re-running PREP on a
+live shoot returns the pixels a buyer is already looking at.
 
 ## Orientation is DECIDED, not asked — above 95% confidence
 
@@ -48,8 +93,14 @@ ask the operator to rule on frames you can read.
 - a human figure, which in a fashion or catalog frame is the strongest cue there
   is: head up, garment hanging down;
 - an object with an unambiguous upright (a locomotive on its wheels);
-- **and** agreement with the rest of the shoot where the frames are alike. Six
-  spreads photographed in one session cannot correctly differ by 90°.
+- **and** agreement with the rest of the shoot where the frames are alike — as a
+  *prompt to look again*, never as the answer. This used to read "six spreads
+  photographed in one session cannot correctly differ by 90°", and that is
+  false: on `paul-fredrick` the cover was shot portrait-wise and the spreads
+  were laid on the bedspread turned 90°, so the subject half genuinely differed
+  within one session. The camera half is shared across a session; the way the
+  item was laid down is not. Treating disagreement as proof of error is what
+  made a correct OSD reading look wrong (see `docs/osd-audit-2026-08-21.md`).
 
 **What does NOT clear it**, and goes to the operator with the sheet:
 
@@ -57,19 +108,27 @@ ask the operator to rule on frames you can read.
 - a frame whose two halves disagree — a masthead upright on one page and a model
   upright on the other. Say which cue you followed and why;
 - a round or flat item with no defined upright;
-- anything resting on OSD alone. **OSD is reference, not evidence.** On one
-  catalog shoot it read the same wrong angle on five frames at confidence up to
-  12.2, with recognised script, all corroborating each other.
+- anything resting on OSD alone. **OSD is reference, not evidence.** Measured
+  across 73 frames where a human look was recorded beside the reading, OSD
+  agreed with the operator **49%** of the time at the old confidence floor —
+  a coin toss. The floor is now 4.0, where it agrees 84% of the time and
+  answers 42% of frames; below that it reports no answer and the frame becomes
+  an ASK. Regenerate the numbers with `python tools/osd_audit.py --bands`.
+
+  Note what this does NOT license: a reading that clears 4.0 is still
+  reference. 84% is not 100%, and the one frame that shipped sideways on
+  `paul-fredrick` read confidence 12.29 — well clear of any bar — on a script
+  confidence of 0.6. High orientation confidence with weak script confidence
+  means tesseract is confident about marks it does not recognise as language.
 
 State the confidence per frame when you report, and name the cue. A number
 without a cue is not a judgement.
 
 **Orientation is first, and that means nothing else is measured yet.**
 `--check` reads EXIF, segments, runs the text detector and resolves which way is
-up — and stops there. It does NOT plan the unskew, the crop or the colour
-reading, because each of those describes the geometry it was computed on:
-measure them against a rotation nobody has confirmed, and a later turn silently
-invalidates all three. Six catalog spreads shipped exactly that way, with crops
+up — and stops there. It does NOT plan the crop or the colour reading, because
+each of those describes the geometry it was computed on: measure them against a
+rotation nobody has confirmed, and a later turn silently invalidates both. Six catalog spreads shipped exactly that way, with crops
 planned at 0° while the manifest ended up saying 270°.
 
 `--approve-stage orientation` then runs `plan_geometry()` itself, against the
@@ -82,10 +141,10 @@ Each stage shows **a card per photo with a thumbnail for every option at that
 stage, side by side**, current choice ruled green. The operator is picking from
 pictures, never reading a description of a picture.
 
-**Present it as the Frame Check page, every time — orientation, unskew, crop
-AND colour.** This is the settled format. Do not hand over a JPEG contact sheet,
-do not describe the frames in prose, and do not invent a different layout for
-any stage: all four use the same page, the same card, the same controls.
+**Present it as the Frame Check page, every time — orientation, crop AND
+colour.** This is the settled format. Do not hand over a JPEG contact sheet, do
+not describe the frames in prose, and do not invent a different layout for any
+stage: all three use the same page, the same card, the same controls.
 
     python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
 
@@ -156,41 +215,6 @@ click-through covers the page.
 The JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and
 are the fallback when no page can be published.
 
-## Unskew: what counts as crooked
-
-A framed picture, a magazine, a book, a record sleeve, a certificate, a box —
-the object is a rectangle and the buyer knows it, so a couple of degrees off
-square reads as a cheap listing before they have read a word. The orientation
-stage only turns in multiples of 90°; this is the stage that fixes the rest.
-
-It measures the item's own outline, fits a quad to it, and warps the frame so
-the item's edges meet the picture's. Two refusals, both reported per frame:
-
-- **Not a rectangle.** A marble, a jug, a heap of flatware — there is no square
-  to restore, and a quad fitted to one is noise. Measured as how completely the
-  outline fills the smallest rotated rectangle around it: a book scores ~0.97,
-  an ellipse cannot beat 0.79, and the line is 0.88.
-- **Angled on purpose.** Past ~18° of tilt or a quarter of keystone, the angle
-  IS the shot — a raking-light pass across a surface, a three-quarter view
-  showing depth — and flattening it destroys what the frame was taken for.
-
-`--unskew NAME=on` overrides the FIRST of those only: it says "this is a
-rectangle", which a mat, a mount or a soft shadow can easily cost a real frame.
-It is not consent to flatten a deliberately angled shot — the magnitude guards
-stay armed either way. `--unskew NAME=off` leaves a frame's geometry alone.
-Changing the unskew throws away any crop box pinned to the old geometry, because
-that box describes pixels that no longer exist.
-
-The warp carries the whole frame, backdrop included, so the crop stage still has
-something to work with, and the canvas grows to hold every source pixel —
-squaring up never crops. The wedges of new canvas outside the original frame are
-filled by replicating the edge; that only ever lands on backdrop beyond where
-the photograph reached, never on the item.
-
-Proportions come from the item's own opposite edges, so a 12x9 painting comes
-out 4:3. Stretching a slightly trapezoidal frame into a "nicer" rectangle is the
-same class of lie as smoothing a scratch out of the paint.
-
 ## SHOWING A MODIFIED IMAGE — the locked template
 
 Every time PREP changes a picture, the operator sees it this way. No
@@ -199,8 +223,7 @@ of the picture.
 
 **The rule: never show a result without what it came from.** A cropped frame
 alone is unreviewable — the question is not "is this a good picture", it is
-"was the right thing removed". The same holds for a rotation, a squaring and a
-colour pass.
+"was the right thing removed". The same holds for a rotation and a colour pass.
 
     BEFORE            →   AFTER              →   why, in the operator's words
     (what it was)         (what will ship)       ("would cut 10% off the page")
@@ -208,7 +231,6 @@ colour pass.
 | Stage | Before | After | Options offered |
 |---|---|---|---|
 | orientation | the frame as the camera gave it | at the chosen turn | all four turns |
-| unskew | the tilted frame | squared, with the tilt in degrees | squared / leave as shot |
 | crop | the full frame | the crop result | cropped / as shot / force a crop |
 | colour | as shot | each rendered look | as shot + every look |
 
@@ -308,6 +330,32 @@ white-balance gain, the backdrop curve, the neutralise, the blur, the pop and
 the sharpen together. Reach for it when a look reads washed out: the wash comes
 from the correction, so less correction is less wash.
 
+### Printed media takes NO crop, either.
+
+**On books, magazines, catalogs and mailers, force `--crop <every frame>=off`.**
+
+Same cause as the colour rule, a different stage. The crop stage looks for the
+highest-contrast object in the frame; on an open catalog that object is the
+photograph PRINTED IN THE LAYOUT, not the catalog. So it crops the merchandise
+away and keeps the picture of it.
+
+Measured on live listings before the fix: `j-crew/3` shipped cropped to a
+printed boot with the J.CREW masthead — the thing that identifies the listing —
+outside the frame; `mark-shale-business-casual` to a printed chair, keeping 24%
+of the original; `brother-tree` into the body text at 18.9%; and the
+`fall-and-winter-1980` mailer to a bare black bar, because the crop locked onto
+the redaction rectangle over the address. Of 56 cropped media frames the median
+kept 75% and the tail ran to 19%.
+
+There is no crop worth making here. The object of the listing is the whole page,
+edges included: a buyer judging a catalog is judging its cover wear, its corners
+and its squareness, all of which live exactly where a tight crop cuts. Set crop
+off for the class rather than trying to teach the detector what a catalog is.
+
+Order matters when re-rendering: set the crop off BEFORE `--apply`. A crop
+change invalidates the renders, so doing it afterwards renders every frame
+twice.
+
 ### Printed media renders `asshot`. No exceptions from the default path.
 
 **Books, magazines, catalogs, mailers — any shoot whose subject is printed paper
@@ -345,6 +393,56 @@ deepened backdrop gives the item something to separate against, so the extra
 push pays off; on a white sweep the same push has nothing to separate from and
 reads as over-processed. `--pick` overrides. The default decides what is SHOWN
 at the gate, never what publishes.
+
+---
+
+## Categories — say what the goods ARE, once
+
+Most of PREP's flags are not preferences. They are statements about what is in
+front of the camera, and they have the same answer every time for a given kind
+of goods. `--category` carries the whole set:
+
+```bash
+python -m lib.photo_prep.prep <shoot> --category printed --check
+```
+
+| category | detector | looks rendered |
+|---|---|---|
+| `default` | `auto` — both detectors, arbitrated on agreement | all six, for comparison |
+| `printed` | `paper` — LAB decides; u2net kept as a second opinion | `asshot` only |
+
+**Why `printed` needs its own detector.** On a catalog the salient object is the
+picture PRINTED ON the item, so u2net cuts out the cover model and returns a
+mask that is a strict sub-region of the paper. The containment test cannot catch
+that — a box wholly inside the paper's box scores 1.0. LAB has no such
+confusion: paper against a sweep is the figure/ground split it measures.
+
+**Why it renders one look.** The section above already says printed media ships
+`asshot`, always. Rendering the other five produces images nobody opens, at
+~25s a frame each. Measured on five 12 MP catalog frames, same decisions and
+the same gates: **8m10s under `default` → 45.6s under `printed`, 10.7×**. Per
+frame, once u2net is loaded, that is ~94s → ~5.1s.
+
+Two of those seconds came back from `asshot` itself: at `k=0` every term in the
+colour correction is multiplied by zero and the result discarded, so the loop is
+now skipped outright rather than computed and thrown away (26s → 3.9s a frame).
+The pixels and the full colour report are asserted identical to the old path.
+
+`looks` narrows what is RENDERED, never what is picked. The operator still
+chooses at the colour stage and `--pick` still overrides. A one-look category
+says *the comparison is not live for this kind of item* — not *this look is
+approved*.
+
+**The category persists in the manifest**, so a later `--check` or `--apply`
+that does not repeat the flag gets the same answer. Changing it drops the
+crop/colour sign-offs, because every box downstream of the detector was
+measured against the old one. `--subject auto|paper` remains available as the
+escape hatch for a shoot its category gets wrong, and outranks it.
+
+Categories live in `lib/photo_prep/categories.py`. Adding one is data, not code
+— but keep it grounded: every field should trace to something observed on a real
+shoot. A category invented from taste is a policy change wearing a config file,
+and it reaches hundreds of frames before anyone notices it was a guess.
 
 ---
 
@@ -414,7 +512,6 @@ in either tool is the call in both.
 | `strip_exif` | PREP bakes EXIF internally; `no-exif/` is legacy output |
 | `even_background`, `trim_whitespace` | PREP's backdrop pass (mask-driven, works on dark felt too) |
 | `center_crop` | PREP's crop (its safety guards are reused, not reimplemented) |
-| (nothing did this) | PREP's unskew — no earlier step squared a crooked rectangle |
 | `orient.py --set` | still works; PREP reads AND writes its manifest |
 | DRAFT step 1/1b/2/3 | this prompt |
 

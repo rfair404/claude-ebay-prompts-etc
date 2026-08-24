@@ -816,7 +816,6 @@ def correct(bgr: np.ndarray,
     # tone curve. Diffusing a detail macro would blur the item's own surface —
     # the one retouch this module is not allowed to do.
     is_sweep = st.is_sweep if sweep is None else bool(sweep)
-    alpha = _bg_alpha(mask)
 
     # If segmentation found essentially nothing, "backdrop" means "the entire
     # frame" and every backdrop operation would run over the item itself. Seen
@@ -828,10 +827,6 @@ def correct(bgr: np.ndarray,
         is_sweep = False
         lut = None
 
-    # Rulers, hang tags and boxes are not backdrop even when they fall outside
-    # the mask. Only the tonal curve is allowed over them; neutralising and
-    # blurring are not.
-    obj_alpha = _protect_objects(rgb0, alpha) if is_sweep else alpha
 
     clip0, crush0 = _at_rails(rgb0, subj)
     budget = max(4, int(CLIP_TOLERANCE * max(st.subject_pixels, 1)))
@@ -840,7 +835,39 @@ def correct(bgr: np.ndarray,
     # further down from wherever it starts; it never walks it up.
     strength, attempts = float(cfg.get("k", 1.0)), []
     out, new_clip, new_crush = rgb0, 0, 0
-    for _ in range(MAX_BACKOFF + 1):
+
+    # A ZERO-STRENGTH LOOK IS A PASSTHROUGH, SO DO NOT COMPUTE IT.
+    #
+    # Every knob in the loop is multiplied by `strength`, and at k == 0 the
+    # loop's output is discarded outright further down -- the `out_u8` branch
+    # hands back the original pixels, because a float32 round-trip rounds a
+    # million pixels by a grey level. So the loop was running white balance,
+    # the luma LUT, neutralise, diffuse, pop and sharpen at full resolution to
+    # build an array nothing reads. Measured at 26s on one 12 MP catalog frame.
+    # `asshot` is the standing look for printed media, the highest-volume
+    # category we shoot, so this burned on nearly every catalog frame.
+    #
+    # Skipping it is exact, not an approximation. With strength 0 the first
+    # pass leaves `work` equal to `rgb0` and `_damage` quantizes before
+    # comparing, so the attempt it would have recorded is zeros -- appended
+    # here so `backoffs` still counts from a real attempt. An empty iterable
+    # then sends the loop straight to its `else`, which already sets exactly
+    # the values this case wants.
+    if strength == 0.0:
+        attempts.append(dict(strength=0.0, new_clipped=0, new_crushed=0))
+
+    # Both of these feed the loop and nothing else, so they are built after the
+    # guard above rather than before it -- `_bg_alpha` is a pair of full-frame
+    # Gaussian blurs (~1.8s at 12 MP) and `_protect_objects` another ~0.3s, and
+    # at k == 0 the loop that would read them never runs.
+    alpha = _bg_alpha(mask) if strength else None
+
+    # Rulers, hang tags and boxes are not backdrop even when they fall outside
+    # the mask. Only the tonal curve is allowed over them; neutralising and
+    # blurring are not.
+    obj_alpha = (_protect_objects(rgb0, alpha) if is_sweep else alpha) if strength else None
+
+    for _ in (() if strength == 0.0 else range(MAX_BACKOFF + 1)):
         work = rgb0 * (1.0 + strength * (gains - 1.0))[None, None, :]
         if lut is not None:
             ident = np.arange(256, dtype=np.float32)
@@ -890,8 +917,9 @@ def correct(bgr: np.ndarray,
         strength *= BACKOFF_FACTOR
         out, new_clip, new_crush = work, clip1, crush1
     else:
-        # Never converged: ship the original rather than a correction we know
-        # damages the subject.
+        # Never converged -- ship the original rather than a correction we know
+        # damages the subject. Also the k == 0 path above, which skips the loop
+        # entirely and wants these very values.
         out, strength, new_clip, new_crush = rgb0, 0.0, 0, 0
 
     # A zero-strength look must be a true passthrough. Every knob is already

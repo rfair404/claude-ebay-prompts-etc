@@ -42,6 +42,13 @@ sales_ledger.csv
 # is what makes the reports themselves disposable.
 /docs/performance-*.md
 
+# Dashboard output — reports/sales_dashboard.html carries gross, fees, net and
+# item-level sale prices; reports/ebay_ads.json carries the account's campaigns;
+# reports/price_vs_actual.csv carries every ask and what it realised. All class 2.
+# Regenerate the whole directory with:
+#   python tools/sales_report.py
+/reports/
+
 # Inventory working files — private business data + images (photos, per-item
 # phase output, comps, SKUs). The default content store; never tracked.
 /inventory/
@@ -119,3 +126,39 @@ desktop.ini
 /.prep_queue.txt
 /.prep_check.log
 /.prep_apply.log
+
+# ------------------------------------------ 2./3. LOCAL WORKING FILES AT ROOT
+# Everything below is written at the repo root by a tool in tools/ and is
+# either regenerable or business data. None of it was ignored before, so a
+# `git add -A` would have staged inventory_sheet.csv — one row per live listing,
+# with our ask — into a PUBLIC repo. That is the reason these rules exist.
+
+# Per-run stdout, audit dumps and hand-built queues. One batch's working set;
+# re-run the tool to get them back.
+/.*.log
+/.*.json
+/.*.txt
+
+# Contact sheets, comps boards and review pages rendered to the repo root by
+# tools/prep_sheet_html.py, compare_live.py and friends. Rebuild from the
+# generator; never edit one by hand.
+/*.html
+
+# Inventory views built from the eBay APIs — SKUs, titles and our asking price
+# for every live listing. BUSINESS DATA, and regenerable:
+#   python tools/ebay_sheet.py       python tools/inventory_sync.py
+/inventory_sheet.csv
+/inventory_sheet.json
+/.inventory_live.json
+/.live_listings_consolidated.json
+
+# Resume state + the report for the retroactive photo re-touch. Names live
+# listing ids and what was pushed to each.
+/_retouch_tracker.json
+/updated_listings.md
+
+# Scratch downloads for the tone/saturation audits: listing images pulled back
+# from eBay's CDN plus one-off analysis scripts. 380 MB, all re-downloadable —
+# what mattered is written into prompts/prep.md, not kept here.
+/.tonecheck/
+/.comps/

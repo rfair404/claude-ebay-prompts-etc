@@ -23,7 +23,7 @@ thing tying them together is that the code usually runs in the right order.
 ## The shape I would refactor toward
 
 **One: a decision record that is pure data.**
-Per frame: `{orientation, unskew, crop, look}` plus who decided it and when
+Per frame: `{orientation, crop, look}` plus who decided it and when
 (`auto` / `operator`) — and *nothing about files*. It is small, diffable,
 reviewable, and can be replayed. Approvals attach to a hash of THIS, so any
 change to any decision invalidates every approval downstream, automatically,

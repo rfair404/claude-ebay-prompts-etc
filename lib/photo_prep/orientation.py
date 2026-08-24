@@ -42,7 +42,34 @@ from typing import Optional
 
 import numpy as np
 
-OSD_MIN_CONF = 1.5      # tesseract's own orientation confidence; below this it is noise
+# Tesseract's own orientation confidence. MEASURED, not chosen: see
+# tools/osd_audit.py, which scores every OSD reading in inventory/ against the
+# human look recorded beside it (73 labelled frames).
+#
+# At the old floor of 1.5, OSD agreed with the recorded look 49% of the time --
+# a coin toss, on the one signal this module calls objective. The failure is not
+# spread evenly, which is what makes it fixable: agreement runs 21% below 2.0 and
+# 12% in the 2.0-3.0 band, then 80% above 4.0 and 86% above 6.0. The old floor
+# admitted the 2-3 band, which is the single worst bucket in the corpus and
+# performs worse than chance.
+#
+#   floor   answers kept   agreement   wrong answers taken
+#    1.5         100%          49%            37
+#    3.0          58%          74%            11
+#    4.0          42%          84%             5
+#    6.0          29%          86%             3
+#
+# 4.0 is the knee. It gives up 58% of the readings to remove 32 of 37 wrong
+# ones, and giving them up is cheap: a frame with no OSD answer is not guessed
+# at, it becomes an ASK and goes to the operator on the rotation sheet, which
+# the stage is built around anyway. A wrong answer is the expensive outcome --
+# it is applied silently and ships a sideways photo in a headless run.
+#
+# This is the question issue #21 said to answer before refactoring. The answer
+# is not a broken angle convention: that was tested at all four rotations and is
+# correct, and EXIF is not double-applied either. OSD was simply being believed
+# far below the confidence at which it is worth believing.
+OSD_MIN_CONF = 4.0
 # …and it must also have recognised a writing system. A textless macro of a cast
 # iron key came back "180 degrees, confidence 1.51, script confidence 0.1" and
 # was silently flipped backwards relative to every other frame in its shoot.

@@ -306,8 +306,6 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
-        elif shown:
-            msgs.append(f'condition: {cur} OK for category -> buyer sees "{shown}"')
         else:                       # PUBLISHED / ENDED / DELETED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
@@ -1290,7 +1288,7 @@ def build_review_card(draft_path: Path,
             if _o.get("applied"):
                 _bits.append(f"rot {_o['applied']}deg")
             if (_rec.get("unskew") or {}).get("applied"):
-                _bits.append("squared")
+                _bits.append("squared (legacy)")
             if (_rec.get("crop") or {}).get("applied"):
                 _bits.append("cropped")
             _want = _rec.get("out_sha256")
