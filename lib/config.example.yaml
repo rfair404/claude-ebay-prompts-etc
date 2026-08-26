@@ -78,7 +78,10 @@ ebay:
                                          # payment OFF; required for AUCTION offers
                                          # (eBay forbids immediate-pay on auctions).
                                          # Falls back to payment_policy_id if unset.
-    return_policy_id: null
+    return_policy_id: null               # for Top Rated Plus this must be a
+                                         # 30-day-or-longer policy with
+                                         # returnShippingCostPayer: SELLER.
+                                         # See docs/top-rated-plus.md.
 
   production:
     app_id: "PRD-app-id"
@@ -99,7 +102,10 @@ ebay:
                                          # payment OFF; required for AUCTION offers
                                          # (eBay forbids immediate-pay on auctions).
                                          # Falls back to payment_policy_id if unset.
-    return_policy_id: null
+    return_policy_id: null               # for Top Rated Plus this must be a
+                                         # 30-day-or-longer policy with
+                                         # returnShippingCostPayer: SELLER.
+                                         # See docs/top-rated-plus.md.
 
 # ---------------------------------------------------------------------------
 # CURATE strategy profiles

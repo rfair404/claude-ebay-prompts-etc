@@ -581,6 +581,72 @@ def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
     return data.get("returnPolicies") or []
 
 
+def create_free_return_policy(name: str = "30-Day Free Returns - Seller Pays",
+                              days: int = 30,
+                              marketplace: str = DEFAULT_MARKETPLACE,
+                              creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) the return policy that qualifies listings for Top Rated Plus.
+
+    eBay's Top Rated Plus criteria (seller standards policy) are same- or
+    1-business-day handling AND "30-day or longer free returns" — free meaning
+    `returnShippingCostPayer: SELLER`. A 30-day BUYER-pays policy satisfies the
+    window but NOT the free-returns half, so it earns neither the seal nor the
+    10% final-value-fee discount.
+
+    Free returns must be based on item location: our items are US-located and
+    listed on EBAY_US, so 30-day free DOMESTIC returns is what qualifies. The
+    international override is left buyer-pays deliberately — it has no bearing
+    on TRS+ here and free international return shipping is not worth eating.
+
+    Idempotent by name: an existing policy with `name` is returned as-is.
+    """
+    existing = next((p for p in get_return_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": (f"{days}-day returns, seller pays return shipping. "
+                        "Qualifies listings for Top Rated Plus."),
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "returnsAccepted": True,
+        "returnPeriod": {"value": int(days), "unit": "DAY"},
+        "refundMethod": "MONEY_BACK",
+        "returnMethod": "MONEY_BACK",
+        "returnShippingCostPayer": "SELLER",
+        "internationalOverride": {
+            "returnsAccepted": True,
+            "returnMethod": "MONEY_BACK",
+            "returnPeriod": {"value": int(days), "unit": "DAY"},
+            "returnShippingCostPayer": "BUYER",
+        },
+    }
+    return api_send("POST", "/sell/account/v1/return_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
+def set_fulfillment_handling_time(policy_id: str, days: int = 1,
+                                  marketplace: str = DEFAULT_MARKETPLACE,
+                                  creds: Optional[EbayCredentials] = None) -> dict:
+    """Set a fulfillment policy's handling time, preserving everything else.
+
+    The Account API has no PATCH — updates are a full-body PUT, so the current
+    policy is read back and re-sent with only handlingTime changed. Anything at
+    or under 1 day meets the Top Rated Plus handling requirement.
+    """
+    pol = next((p for p in get_fulfillment_policies(marketplace, creds=creds)
+                if str(p.get("fulfillmentPolicyId")) == str(policy_id)), None)
+    if pol is None:
+        raise ValueError(f"no fulfillment policy {policy_id} on {marketplace}")
+    body = {k: v for k, v in pol.items() if k != "fulfillmentPolicyId"}
+    body["handlingTime"] = {"value": int(days), "unit": "DAY"}
+    return api_send("PUT", f"/sell/account/v1/fulfillment_policy/{policy_id}",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
 def get_inventory_locations(creds: Optional[EbayCredentials] = None) -> list[dict]:
     data = api_send("GET", "/sell/inventory/v1/location", creds=creds, marketplace=None)
     return data.get("locations") or []
