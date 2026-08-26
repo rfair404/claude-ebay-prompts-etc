@@ -221,8 +221,10 @@ so before writing it, compute what we'd actually keep if a buyer hit it exactly:
 
 using PRICE's **measured fee band** (16–18% depending on size — see
 [price.md](price.md); it is NOT 13%) and the REAL postage for this item
-(Media Mail only if it's a book with no advertising; magazines and anything with
-ads ship Ground Advantage at 2–3× the cost). If `net_at_floor` is implausibly
+(everything now ships Ground Advantage on the single fulfillment policy — the
+account's Media Mail policy was deleted 2026-08-25, so do NOT price a book at the
+media rate; magazines and anything with ads were never Media Mail eligible
+anyway, per DMM 173.4.2). If `net_at_floor` is implausibly
 thin for the handling — packing, a trip to the mailbox, and the return risk —
 **raise the floor until it isn't**, and say so in `meta.notes`.
 
@@ -242,9 +244,12 @@ map; `handling_time_days` 1; `item_location_zip` blank. **Set
 
 **Local-pickup gate (SOFT — suggest, never assume).** Some items are
 awkward or unsafe to parcel-ship (heavy, oversized, or fragile like stained
-glass). For these we list as **local pickup** (no parcel shipping; freight
-offered by quote in the description), routed to the account's local-pickup
-fulfillment policy. Decide `fulfillment_mode`:
+glass). For these we flag local pickup in the **description**, and the offer
+still lists on the single fulfillment policy — the account's local-pickup-only
+policy was deleted 2026-08-25, so `list_edit.py` falls back to the default ground
+policy and prints a warning. That means a `LOCAL_PICKUP` draft is a
+*disclosure*, not a shipping configuration: the listing still shows parcel
+shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
 
 - **Default `SHIP`.** Most items ship normally — leave `fulfillment_mode:
   SHIP` and fill the shipping fields as usual.
@@ -267,39 +272,22 @@ fulfillment policy. Decide `fulfillment_mode`:
   — <location_hint>. Not local? Message me for a freight quote."* Log the
   decision (+ trigger) in `meta.notes`.
 
-**Carrier-check gate — FedEx vs USPS (SOFT — suggest, never auto-switch).**
-Default carrier is the USPS policy. But at DRAFT, evaluate whether this item
-should go FedEx instead. **Trigger the FedEx check when ANY of these is true:**
-- estimated **packed weight > 5 lb**, OR
-- **any side > 24 in** (long/oversized), OR
-- **very fragile** (glass, thin porcelain, etc.), OR
-- **item value > $200** (price or working price).
+**Carrier: there is no carrier choice.** Every item ships on the one
+fulfillment policy, `296458692014` ("Free USPS Ground + eBay International
+Shipping", free calculated USPS Ground Advantage, 1 day handling). Do not
+propose a carrier switch, do not estimate a rival carrier's cost, and do not
+override the policy at LIST time.
 
-When triggered, do this:
-1. **Estimate the FedEx cost** for the packed weight/dims to the buyer (assume an
-   average CONUS zone ~4–5 unless a real destination is known; FedEx Home
-   Delivery / Ground Economy). Note it's an ESTIMATE (no live FedEx rate API
-   here) and show the assumptions (weight, dims, zone). The account's FedEx
-   policy is **`fulfillment_policy_id` 292460878014** ("FedEx SmartPost / Ground
-   Economy") — reference it by id.
-2. **Add the DRIVE COST to FedEx's effective cost.** The seller's nearest FedEx
-   drop-off is **~30 min away (≈1 hr round-trip)**; USPS is picked up free from
-   home, so USPS pays no drive. Factor the round-trip drive (gas + the seller's
-   time) into FedEx's total so a small label saving that the drive eats up does
-   NOT count as cheaper. State the drive adjustment you used.
-3. **Compare FedEx (label + drive) vs the USPS estimate.** Recommend the **FedEx
-   policy** only when FedEx is genuinely cheaper after the drive, OR when USPS
-   can't handle the item (oversize / >70 lb). Otherwise keep USPS.
-4. **Never auto-switch.** Suggest it and let the user choose. If they accept,
-   set the offer's fulfillment policy to the FedEx id at LIST time (a `--review`/
-   publish-time policy override); log the decision + the two estimates in
-   `meta.notes`, and append a NEEDS_REVIEW line so it surfaces at REVIEW.
+The FedEx vs USPS carrier-check gate that used to live here was removed on
+2026-08-25: the FedEx policy it named (`292460878014`, "FedEx SmartPost / Ground
+Economy") had been deleted from the eBay account and returned 404, so following
+the gate produced an offer that could not be published. See
+docs/top-rated-plus.md.
 
-**Always, on the DRY RUN** (`--list`/`--publish` without `--confirm`, and in the
-REVIEW card): if the FedEx estimate (incl. drive) is **less than USPS** for this
-item, SURFACE the FedEx estimated price and recommend switching — even if the
-item didn't hit a trigger above. The user wants to see any FedEx saving before
-publishing.
+Weight and dimensions are still worth recording — they drive the calculated rate
+the buyer sees, and a freight quote if an item is too big for parcel. If an item
+genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and append a
+NEEDS_REVIEW line rather than selecting a different policy.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.

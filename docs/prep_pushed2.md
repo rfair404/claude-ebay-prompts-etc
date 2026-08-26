@@ -37,18 +37,18 @@ Generated 2026-08-17 15:25. 88 listings now show punch-processed photos.
 | [Vintage Simmons Stubby Sterling Silver Money Clip Belt Buckl](https://www.ebay.com/itm/206496594033) | `inventory/ej-08-15/belt-stubby-sterling` | 7 |
 | [Vintage GEMEX Gem-Lok Watch Band NOS in Original Box with Ca](https://www.ebay.com/itm/206494512312) | `inventory/ej-08-15/id-watchband` | 11 |
 | [Vintage Lustern Baby ID Bracelet on Original Card 12K Gold F](https://www.ebay.com/itm/206494511322) | `inventory/ej-08-15/lustern-id-bracelet` | 7 |
-| [From Enoch to the Dead Sea Scrolls Szekely 1981 Teachings of](https://www.ebay.com/itm/206494074345) | `inventory/f-books/FETTDSS` | 3 |
-| [The Essene Jesus A Revaluation from the Dead Sea Scrolls Sze](https://www.ebay.com/itm/206494074260) | `inventory/f-books/TEJ` | 3 |
-| [The Essene Way Biogenic Living Szekely 1989 Hardcover w Dust](https://www.ebay.com/itm/206494074096) | `inventory/f-books/TEWBL` | 2 |
-| [The Fiery Chariots A Play in Five Acts by Edmond Bordeaux Sz](https://www.ebay.com/itm/206494074182) | `inventory/f-books/TFC` | 3 |
-| [Archaeology Magazine 2002 2003 Lot of 7 Consecutive Issues P](https://www.ebay.com/itm/206493958599) | `inventory/f-books/archaeology-magazines` | 11 |
-| [Bible Review Magazine Lot of 13 Issues 2002-2005 Biblical Ar](https://www.ebay.com/itm/206494014477) | `inventory/f-books/bible-review-mags` | 21 |
-| [The UFO Experience Hynek Collectors Library of the Unknown H](https://www.ebay.com/itm/206488641056) | `inventory/f-books/the-ufo-experience` | 5 |
-| [Kinsmart VW New Beetle Diecast Lot of 4 Red Opening Doors Pu](https://www.ebay.com/itm/206467697023) | `inventory/frankie-roys-things/bug-set` | 6 |
-| [Year 2000 Millennium Stevens Linen Calendar Towel Unused Ori](https://www.ebay.com/itm/206494482217) | `inventory/frankie-roys-things/calendar-towel` | 7 |
-| [Vintage Best Signed Christmas Tree Brooch Pin Gold Silver Tw](https://www.ebay.com/itm/206494093050) | `inventory/frankie-roys-things/christmas-tree-pin` | 5 |
-| [Joan Rivers Camel Plaid Star Print Button Front Shirt Womens](https://www.ebay.com/itm/206494264800) | `inventory/frankie-roys-things/joan-rivers-shirt` | 5 |
-| [Matchbox Kellogg's Cereal Truck Lot of 4 Corn Pops Apple Jac](https://www.ebay.com/itm/206467696348) | `inventory/frankie-roys-things/kellogs-car-set` | 11 |
+| [From Enoch to the Dead Sea Scrolls Szekely 1981 Teachings of](https://www.ebay.com/itm/206494074345) | `inventory/FR/books/FETTDSS` | 3 |
+| [The Essene Jesus A Revaluation from the Dead Sea Scrolls Sze](https://www.ebay.com/itm/206494074260) | `inventory/FR/books/TEJ` | 3 |
+| [The Essene Way Biogenic Living Szekely 1989 Hardcover w Dust](https://www.ebay.com/itm/206494074096) | `inventory/FR/books/TEWBL` | 2 |
+| [The Fiery Chariots A Play in Five Acts by Edmond Bordeaux Sz](https://www.ebay.com/itm/206494074182) | `inventory/FR/books/TFC` | 3 |
+| [Archaeology Magazine 2002 2003 Lot of 7 Consecutive Issues P](https://www.ebay.com/itm/206493958599) | `inventory/FR/books/archaeology-magazines` | 11 |
+| [Bible Review Magazine Lot of 13 Issues 2002-2005 Biblical Ar](https://www.ebay.com/itm/206494014477) | `inventory/FR/books/bible-review-mags` | 21 |
+| [The UFO Experience Hynek Collectors Library of the Unknown H](https://www.ebay.com/itm/206488641056) | `inventory/FR/books/the-ufo-experience` | 5 |
+| [Kinsmart VW New Beetle Diecast Lot of 4 Red Opening Doors Pu](https://www.ebay.com/itm/206467697023) | `inventory/FR/bug-set` | 6 |
+| [Year 2000 Millennium Stevens Linen Calendar Towel Unused Ori](https://www.ebay.com/itm/206494482217) | `inventory/FR/calendar-towel` | 7 |
+| [Vintage Best Signed Christmas Tree Brooch Pin Gold Silver Tw](https://www.ebay.com/itm/206494093050) | `inventory/FR/christmas-tree-pin` | 5 |
+| [Joan Rivers Camel Plaid Star Print Button Front Shirt Womens](https://www.ebay.com/itm/206494264800) | `inventory/FR/joan-rivers-shirt` | 5 |
+| [Matchbox Kellogg's Cereal Truck Lot of 4 Corn Pops Apple Jac](https://www.ebay.com/itm/206467696348) | `inventory/FR/kellogs-car-set` | 11 |
 | [GEAR New Country Gear Advertising Catalog Mailer Lot Raymond](https://www.ebay.com/itm/206446264160) | `inventory/gear-catalogs-mailers` | 26 |
 | [Vintage Sweet 12K Gold Filled Serpentine Chain Bracelet Seal](https://www.ebay.com/itm/206422055734) | `inventory/jelelry-07-17-2026/bracelet3` | 4 |
 | [Vintage Blackamoor Figural Cufflinks Gold Tone Black Enamel ](https://www.ebay.com/itm/206418132464) | `inventory/jewelry-07-15-2026/blackmoore-cufflinks` | 6 |
@@ -79,11 +79,11 @@ Generated 2026-08-17 15:25. 88 listings now show punch-processed photos.
 | [Zachry Spring 1994 Catalog Vintage 90s Menswear Hart Schaffn](https://www.ebay.com/itm/206454286979) | `inventory/more-mags-444/zachry` | 6 |
 | [Zachry Fall 1993 Catalog Vintage 90s Menswear Hart Schaffner](https://www.ebay.com/itm/206454287227) | `inventory/more-mags-444/zachry-fall-1993` | 5 |
 | [Vintage Norcrest Fine China Hand Painted Bobwhite Quail Plat](https://www.ebay.com/itm/206345431119) | `inventory/quail-plate` | 17 |
-| [Vintage 1986 B.A.S.S. Limited Edition Belt Buckle Largemouth](https://www.ebay.com/itm/206493719085) | `inventory/roy-items/buckles/bass` | 8 |
-| [Vintage Alumaline 4108 BB-317 Belt Buckle Black White Banded](https://www.ebay.com/itm/206493721025) | `inventory/roy-items/buckles/black-stone` | 3 |
-| [Vintage Mallard Duck Belt Buckle Hand Tooled Painted Leather](https://www.ebay.com/itm/206493720928) | `inventory/roy-items/buckles/duck-leather` | 4 |
-| [Vintage 1977 Bergamot Brass Works Z-144 Mallard Ducks Belt B](https://www.ebay.com/itm/206493721151) | `inventory/roy-items/buckles/ducks` | 6 |
-| [Vintage 1982 Indiana Metal Craft Soaring Bald Eagle Belt Buc](https://www.ebay.com/itm/206493721449) | `inventory/roy-items/buckles/eagle-2` | 5 |
+| [Vintage 1986 B.A.S.S. Limited Edition Belt Buckle Largemouth](https://www.ebay.com/itm/206493719085) | `inventory/FR/buckles/bass` | 8 |
+| [Vintage Alumaline 4108 BB-317 Belt Buckle Black White Banded](https://www.ebay.com/itm/206493721025) | `inventory/FR/buckles/black-stone` | 3 |
+| [Vintage Mallard Duck Belt Buckle Hand Tooled Painted Leather](https://www.ebay.com/itm/206493720928) | `inventory/FR/buckles/duck-leather` | 4 |
+| [Vintage 1977 Bergamot Brass Works Z-144 Mallard Ducks Belt B](https://www.ebay.com/itm/206493721151) | `inventory/FR/buckles/ducks` | 6 |
+| [Vintage 1982 Indiana Metal Craft Soaring Bald Eagle Belt Buc](https://www.ebay.com/itm/206493721449) | `inventory/FR/buckles/eagle-2` | 5 |
 | [Vintage Disston Philadelphia 26" Crosscut Hand Saw Wood Hand](https://www.ebay.com/itm/206358663356) | `inventory/saws/1` | 11 |
 | [Vintage Disston Hand Saw 26" Wheat Handle Keystone Medallion](https://www.ebay.com/itm/206358665704) | `inventory/saws/2` | 16 |
 | [Antique Victorian Aesthetic Silverplate Teapot Engraved Bird](https://www.ebay.com/itm/206340759004) | `inventory/silver-teapot` | 12 |

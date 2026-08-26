@@ -28,17 +28,51 @@ buyer-pays deliberately — it has no bearing on TRS+ here.
 - `config.yaml` → `ebay.production.return_policy_id: 296995924014`
   ("30-Day Free Returns - Seller Pays", created via
   `ebay_client.create_free_return_policy()`).
-- Every fulfillment policy on the account is 1-day handling **except** one, below.
+- `config.yaml` → `ebay.production.fulfillment_policy_id: 296458692014`
+  ("Free USPS Ground + eBay International Shipping (1 day)"). As of 2026-08-25
+  this is the **only** fulfillment policy any item uses — there is no per-item
+  shipping choice. `fulfillment_policy_id_international` points at the same id,
+  because that policy is already the international-enabled one and the code path
+  in `list_edit.py` requires the key to be set.
 - Helper for handling-time repair: `ebay_client.set_fulfillment_handling_time()`.
+
+## Deleted policies still cited by live offers (2026-08-25)
+
+Five fulfillment policies and one payment policy were deleted from the eBay
+account at some point without anything in this repo noticing. The Account API
+returns **404** for each, yet `config.yaml` was still writing the first one into
+every new draft:
+
+| Id | Was | Still on live offers |
+|---|---|---|
+| `292380047014` | old ground default | 40 published |
+| `295948332014` | (silverplate group) | 26 published |
+| `292427280014` | Free Media Mail 1-day | 6 published |
+| `292766452014` | local pickup only | — |
+| `292460878014` | FedEx SmartPost / Ground Economy | — |
+| `292380048014` | auction payment (no immediate pay) | — |
+
+An offer keeps the terms it was **published** with, so those listings keep
+serving buyers correctly — but the terms cannot be read back through the
+Inventory API (it only echoes the dead id) or the Account API (404), and the
+Browse API returns 403 on our seller keyset.
+
+They **are** readable via the Trading API's `GetItem`, which returns the
+published snapshot. `tools/live_shipping_survey.py` does exactly that, reusing
+the same Trading transport as the EPS photo upload. Run it before overwriting
+any of these offers — republishing one rewrites its terms from the *current*
+policy, and you want to know what you are replacing.
+
+Two consequences worth remembering:
+
+- `prompts/draft.md` still routes heavy/oversize items to the FedEx policy
+  `292460878014`, which no longer exists. That guidance is dead and will produce
+  an unusable offer.
+- The Media Mail policy is gone, which happens to match the standing rule that
+  magazines and other periodicals with advertising are **not** Media Mail
+  eligible (DMM 173.4.2).
 
 ## Known exception: 292488008014
 
-`Calculated: USPSParcel free, 2 business days (292488008014)` still carries
-2-day handling and **fails TRS+**. It cannot be repaired: cutting it to 1 day
-makes it byte-identical to the configured default `292380047014`, and the
-Account API rejects that with `20400 / "Duplicate Policy"`.
-
-It is redundant, not used by our offer builder, and left in place rather than
-deleted (deletion is destructive and the local ledger is assumed stale). Do not
-select it for a listing. If it ever needs to go, verify no live offer references
-it first.
+`Calculated: USPSParcel free, 2 business days (292488008014)` carried 2-day
+handling and failed TRS+. It is also now 404 — deleted along with the rest.

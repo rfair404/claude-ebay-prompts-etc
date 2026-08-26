@@ -43,25 +43,25 @@
 | [Vintage Floating Opal Pendant Necklace 1/20 12](https://www.ebay.com/itm/206496595328)<br>`inventory/ej-08-15/floating-opal` | 4 | old chain (exif/crop only) | yes | punch | no |
 | [Vintage GEMEX Gem-Lok Watch Band NOS in Origin](https://www.ebay.com/itm/206494512312)<br>`inventory/ej-08-15/id-watchband` | 11 | old chain (exif/crop only) | no | - | no |
 | [Vintage Lustern Baby ID Bracelet on Original C](https://www.ebay.com/itm/206494511322)<br>`inventory/ej-08-15/lustern-id-bracelet` | 7 | old chain (exif/crop only) | no | - | no |
-| [From Enoch to the Dead Sea Scrolls Szekely 198](https://www.ebay.com/itm/206494074345)<br>`inventory/f-books/FETTDSS` | 3 | old chain (exif/crop only) | no | - | no |
-| [The Essene Jesus A Revaluation from the Dead S](https://www.ebay.com/itm/206494074260)<br>`inventory/f-books/TEJ` | 3 | old chain (exif/crop only) | no | - | no |
-| [The Essene Way Biogenic Living Szekely 1989 Ha](https://www.ebay.com/itm/206494074096)<br>`inventory/f-books/TEWBL` | 2 | old chain (exif/crop only) | no | - | no |
-| [The Fiery Chariots A Play in Five Acts by Edmo](https://www.ebay.com/itm/206494074182)<br>`inventory/f-books/TFC` | 3 | old chain (exif/crop only) | no | - | no |
-| [A Brief History of Time Stephen Hawking 1988 B](https://www.ebay.com/itm/206488640961)<br>`inventory/f-books/a-brief-history-of-time` | 5 | old chain (exif/crop only) | yes | punch | no |
-| [Archaeology Magazine 2002 2003 Lot of 7 Consec](https://www.ebay.com/itm/206493958599)<br>`inventory/f-books/archaeology-magazines` | 11 | old chain (exif/crop only) | no | - | no |
-| [Bible Review Magazine Lot of 13 Issues 2002-20](https://www.ebay.com/itm/206494014477)<br>`inventory/f-books/bible-review-mags` | 20 | old chain (exif/crop only) | no | - | no |
-| [Brother Tree Edmond Bordeaux Szekely 1977 Biog](https://www.ebay.com/itm/206488641490)<br>`inventory/f-books/brother-tree-unmarked-set` | 5 | old chain (exif/crop only) | yes | punch | no |
-| [Death of the New World Edmond Bordeaux Szekely](https://www.ebay.com/itm/206488641172)<br>`inventory/f-books/death-of-the-new-world` | 5 | old chain (exif/crop only) | yes | punch | no |
-| [The UFO Experience Hynek Collectors Library of](https://www.ebay.com/itm/206488641056)<br>`inventory/f-books/the-ufo-experience` | 5 | old chain (exif/crop only) | no | - | no |
-| [Vintage Solid Brass Hound Dog Figurine Beagle ](https://www.ebay.com/itm/206494264255)<br>`inventory/frankie-roys-things/bronze-dog` | 14 | old chain (exif/crop only) | yes | punch | no |
-| [Kinsmart VW New Beetle Diecast Lot of 4 Red Op](https://www.ebay.com/itm/206467697023)<br>`inventory/frankie-roys-things/bug-set` | 5 | old chain (exif/crop only) | no | - | no |
-| [Year 2000 Millennium Stevens Linen Calendar To](https://www.ebay.com/itm/206494482217)<br>`inventory/frankie-roys-things/calendar-towel` | 7 | old chain (exif/crop only) | no | - | no |
-| [Vintage Gold Tone Elk Stag Figurine Christmas ](https://www.ebay.com/itm/206494264413)<br>`inventory/frankie-roys-things/christmas-elk` | 11 | old chain (exif/crop only) | yes | punch | no |
-| [Vintage Best Signed Christmas Tree Brooch Pin ](https://www.ebay.com/itm/206494093050)<br>`inventory/frankie-roys-things/christmas-tree-pin` | 5 | old chain (exif/crop only) | no | - | no |
-| [Vintage Holly Leaves Berries Brooch Pin Gold S](https://www.ebay.com/itm/206494093318)<br>`inventory/frankie-roys-things/holly-pin` | 4 | old chain (exif/crop only) | yes | punch | no |
-| [Joan Rivers Camel Plaid Star Print Button Fron](https://www.ebay.com/itm/206494264800)<br>`inventory/frankie-roys-things/joan-rivers-shirt` | 5 | old chain (exif/crop only) | no | - | no |
-| [Matchbox Kellogg's Cereal Truck Lot of 4 Corn ](https://www.ebay.com/itm/206467696348)<br>`inventory/frankie-roys-things/kellogs-car-set` | 10 | old chain (exif/crop only) | no | - | no |
-| [REATHLETE AIR-C + Heat Leg Massager Air Compre](https://www.ebay.com/itm/206494511836)<br>`inventory/frankie-roys-things/re-athlete` | 3 | old chain (exif/crop only) | yes | punch | no |
+| [From Enoch to the Dead Sea Scrolls Szekely 198](https://www.ebay.com/itm/206494074345)<br>`inventory/FR/books/FETTDSS` | 3 | old chain (exif/crop only) | no | - | no |
+| [The Essene Jesus A Revaluation from the Dead S](https://www.ebay.com/itm/206494074260)<br>`inventory/FR/books/TEJ` | 3 | old chain (exif/crop only) | no | - | no |
+| [The Essene Way Biogenic Living Szekely 1989 Ha](https://www.ebay.com/itm/206494074096)<br>`inventory/FR/books/TEWBL` | 2 | old chain (exif/crop only) | no | - | no |
+| [The Fiery Chariots A Play in Five Acts by Edmo](https://www.ebay.com/itm/206494074182)<br>`inventory/FR/books/TFC` | 3 | old chain (exif/crop only) | no | - | no |
+| [A Brief History of Time Stephen Hawking 1988 B](https://www.ebay.com/itm/206488640961)<br>`inventory/FR/books/a-brief-history-of-time` | 5 | old chain (exif/crop only) | yes | punch | no |
+| [Archaeology Magazine 2002 2003 Lot of 7 Consec](https://www.ebay.com/itm/206493958599)<br>`inventory/FR/books/archaeology-magazines` | 11 | old chain (exif/crop only) | no | - | no |
+| [Bible Review Magazine Lot of 13 Issues 2002-20](https://www.ebay.com/itm/206494014477)<br>`inventory/FR/books/bible-review-mags` | 20 | old chain (exif/crop only) | no | - | no |
+| [Brother Tree Edmond Bordeaux Szekely 1977 Biog](https://www.ebay.com/itm/206488641490)<br>`inventory/FR/books/brother-tree-unmarked-set` | 5 | old chain (exif/crop only) | yes | punch | no |
+| [Death of the New World Edmond Bordeaux Szekely](https://www.ebay.com/itm/206488641172)<br>`inventory/FR/books/death-of-the-new-world` | 5 | old chain (exif/crop only) | yes | punch | no |
+| [The UFO Experience Hynek Collectors Library of](https://www.ebay.com/itm/206488641056)<br>`inventory/FR/books/the-ufo-experience` | 5 | old chain (exif/crop only) | no | - | no |
+| [Vintage Solid Brass Hound Dog Figurine Beagle ](https://www.ebay.com/itm/206494264255)<br>`inventory/FR/bronze-dog` | 14 | old chain (exif/crop only) | yes | punch | no |
+| [Kinsmart VW New Beetle Diecast Lot of 4 Red Op](https://www.ebay.com/itm/206467697023)<br>`inventory/FR/bug-set` | 5 | old chain (exif/crop only) | no | - | no |
+| [Year 2000 Millennium Stevens Linen Calendar To](https://www.ebay.com/itm/206494482217)<br>`inventory/FR/calendar-towel` | 7 | old chain (exif/crop only) | no | - | no |
+| [Vintage Gold Tone Elk Stag Figurine Christmas ](https://www.ebay.com/itm/206494264413)<br>`inventory/FR/christmas-elk` | 11 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage Best Signed Christmas Tree Brooch Pin ](https://www.ebay.com/itm/206494093050)<br>`inventory/FR/christmas-tree-pin` | 5 | old chain (exif/crop only) | no | - | no |
+| [Vintage Holly Leaves Berries Brooch Pin Gold S](https://www.ebay.com/itm/206494093318)<br>`inventory/FR/holly-pin` | 4 | old chain (exif/crop only) | yes | punch | no |
+| [Joan Rivers Camel Plaid Star Print Button Fron](https://www.ebay.com/itm/206494264800)<br>`inventory/FR/joan-rivers-shirt` | 5 | old chain (exif/crop only) | no | - | no |
+| [Matchbox Kellogg's Cereal Truck Lot of 4 Corn ](https://www.ebay.com/itm/206467696348)<br>`inventory/FR/kellogs-car-set` | 10 | old chain (exif/crop only) | no | - | no |
+| [REATHLETE AIR-C + Heat Leg Massager Air Compre](https://www.ebay.com/itm/206494511836)<br>`inventory/FR/re-athlete` | 3 | old chain (exif/crop only) | yes | punch | no |
 | [GEAR New Country Gear Advertising Catalog Mail](https://www.ebay.com/itm/206446264160)<br>`inventory/gear-catalogs-mailers` | 24 | old chain (exif/crop only) | no | - | no |
 | [Vintage Kiddie Kraft 1/20 12K Gold Filled Chil](https://www.ebay.com/itm/206422054942)<br>`inventory/jelelry-07-17-2026/bracelet1` | 5 | old chain (exif/crop only) | yes | punch | no |
 | [Vintage Sweet 12K Gold Filled Serpentine Chain](https://www.ebay.com/itm/206422055734)<br>`inventory/jelelry-07-17-2026/bracelet3` | 4 | old chain (exif/crop only) | no | - | no |
@@ -90,16 +90,16 @@
 | [Tommy Hilfiger Fall 1994 Mailer Foldout Lookbo](https://www.ebay.com/itm/206454286927)<br>`inventory/more-mags-444/th-mailer` | 3 | old chain (exif/crop only) | no | - | no |
 | [Zachry Spring 1994 Catalog Vintage 90s Menswea](https://www.ebay.com/itm/206454286979)<br>`inventory/more-mags-444/zachry` | 5 | old chain (exif/crop only) | no | - | no |
 | [Zachry Fall 1993 Catalog Vintage 90s Menswear ](https://www.ebay.com/itm/206454287227)<br>`inventory/more-mags-444/zachry-fall-1993` | 4 | old chain (exif/crop only) | no | - | no |
-| [Vintage 1986 B.A.S.S. Limited Edition Belt Buc](https://www.ebay.com/itm/206493719085)<br>`inventory/roy-items/buckles/bass` | 8 | old chain (exif/crop only) | no | - | no |
-| [Vintage Alumaline 4108 BB-317 Largemouth Bass ](https://www.ebay.com/itm/206493720061)<br>`inventory/roy-items/buckles/bass-leather` | 4 | old chain (exif/crop only) | yes | punch | no |
-| [Vintage 1978 Raintree Largemouth Bass Belt Buc](https://www.ebay.com/itm/206493716870)<br>`inventory/roy-items/buckles/bass2` | 5 | old chain (exif/crop only) | yes | punch | no |
-| [Vintage Alumaline 4108 BB-317 Belt Buckle Blac](https://www.ebay.com/itm/206493721025)<br>`inventory/roy-items/buckles/black-stone` | 3 | old chain (exif/crop only) | no | - | no |
-| [Vintage Raintree Bluegill Belt Buckle Hand Pai](https://www.ebay.com/itm/206493718295)<br>`inventory/roy-items/buckles/bluegill` | 4 | old chain (exif/crop only) | yes | punch | no |
-| [Vintage Mallard Duck Belt Buckle Hand Tooled P](https://www.ebay.com/itm/206493720928)<br>`inventory/roy-items/buckles/duck-leather` | 4 | old chain (exif/crop only) | no | - | no |
-| [Vintage 1977 Bergamot Brass Works Z-144 Mallar](https://www.ebay.com/itm/206493721151)<br>`inventory/roy-items/buckles/ducks` | 6 | old chain (exif/crop only) | no | - | no |
-| [Vintage Brass Tone Bald Eagle Belt Buckle Rope](https://www.ebay.com/itm/206493721236)<br>`inventory/roy-items/buckles/eagle-1` | 4 | old chain (exif/crop only) | yes | punch | no |
-| [Vintage 1982 Indiana Metal Craft Soaring Bald ](https://www.ebay.com/itm/206493721449)<br>`inventory/roy-items/buckles/eagle-2` | 5 | old chain (exif/crop only) | no | - | no |
-| [1987 Georgia DNR Waterfowl Conservation Belt B](https://www.ebay.com/itm/206493717553)<br>`inventory/roy-items/buckles/ga-waterfowl` | 4 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage 1986 B.A.S.S. Limited Edition Belt Buc](https://www.ebay.com/itm/206493719085)<br>`inventory/FR/buckles/bass` | 8 | old chain (exif/crop only) | no | - | no |
+| [Vintage Alumaline 4108 BB-317 Largemouth Bass ](https://www.ebay.com/itm/206493720061)<br>`inventory/FR/buckles/bass-leather` | 4 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage 1978 Raintree Largemouth Bass Belt Buc](https://www.ebay.com/itm/206493716870)<br>`inventory/FR/buckles/bass2` | 5 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage Alumaline 4108 BB-317 Belt Buckle Blac](https://www.ebay.com/itm/206493721025)<br>`inventory/FR/buckles/black-stone` | 3 | old chain (exif/crop only) | no | - | no |
+| [Vintage Raintree Bluegill Belt Buckle Hand Pai](https://www.ebay.com/itm/206493718295)<br>`inventory/FR/buckles/bluegill` | 4 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage Mallard Duck Belt Buckle Hand Tooled P](https://www.ebay.com/itm/206493720928)<br>`inventory/FR/buckles/duck-leather` | 4 | old chain (exif/crop only) | no | - | no |
+| [Vintage 1977 Bergamot Brass Works Z-144 Mallar](https://www.ebay.com/itm/206493721151)<br>`inventory/FR/buckles/ducks` | 6 | old chain (exif/crop only) | no | - | no |
+| [Vintage Brass Tone Bald Eagle Belt Buckle Rope](https://www.ebay.com/itm/206493721236)<br>`inventory/FR/buckles/eagle-1` | 4 | old chain (exif/crop only) | yes | punch | no |
+| [Vintage 1982 Indiana Metal Craft Soaring Bald ](https://www.ebay.com/itm/206493721449)<br>`inventory/FR/buckles/eagle-2` | 5 | old chain (exif/crop only) | no | - | no |
+| [1987 Georgia DNR Waterfowl Conservation Belt B](https://www.ebay.com/itm/206493717553)<br>`inventory/FR/buckles/ga-waterfowl` | 4 | old chain (exif/crop only) | yes | punch | no |
 | [Rogers & Bro Silverplate Pierced Pie Cake Serv](https://www.ebay.com/itm/206455050736)<br>`inventory/silverplate-SC-lot/misc-NOS/cake-spatchula` | 4 | old chain (exif/crop only) | no | - | no |
 | [Vintage Rogers & Bro Silverplate Gravy Ladle N](https://www.ebay.com/itm/206454296212)<br>`inventory/silverplate-SC-lot/misc-NOS/spoon1` | 7 | old chain (exif/crop only) | no | - | no |
 | [1847 Rogers Bros Daffodil Childs Fork & Spoon ](https://www.ebay.com/itm/206455950753)<br>`inventory/silverplate-SC-lot/rogers-set-boxed` | 6 | old chain (exif/crop only) | no | - | no |
@@ -109,7 +109,7 @@
 | [Radio Shack Science Fair 300-in-One Electronic](https://www.ebay.com/itm/206493160658)<br>`inventory/misc-08-14-a/electronics-board` | 4 | old prepped set | no | - | no |
 | [Vintage Lustern Dainty Maid Heart Bracelet NOS](https://www.ebay.com/itm/206493145393)<br>`inventory/misc-08-14-a/heart-bracelet` | 8 | old prepped set | yes | punch | no |
 | [Vintage Tara Signed Retro Necklace Screw Back ](https://www.ebay.com/itm/206493144177)<br>`inventory/misc-08-14-a/tara-necklace-earrings-set` | 14 | old prepped set | yes | punch | no |
-| [Brother Tree Edmond Bordeaux Szekely 1977 Biog](https://www.ebay.com/itm/206488641394)<br>`inventory/f-books/brother-tree-marked` | 4 | originals (crop backed out) | yes | punch | no |
+| [Brother Tree Edmond Bordeaux Szekely 1977 Biog](https://www.ebay.com/itm/206488641394)<br>`inventory/FR/books/brother-tree-marked` | 4 | originals (crop backed out) | yes | punch | no |
 | [Nikon D5100 DSLR 40mm Macro 55-300 VR 2-Lens K](https://www.ebay.com/itm/206488570275)<br>`inventory/misc-08-13/nikon-d5100` | 8 | originals (crop backed out) | yes | punch | no |
 | [Antique Stoneware Wax Sealer Jar Cobalt Blue T](https://www.ebay.com/itm/206340549954)<br>`inventory/CERAMIC-UNKNOWN` | 14 | raw originals (no prep) | no | - | no |
 | [Antique Stoneware Whiskey Jug Brown Albany Sli](https://www.ebay.com/itm/206340552296)<br>`inventory/JUG-1` | 16 | raw originals (no prep) | no | - | no |

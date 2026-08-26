@@ -47,26 +47,26 @@
 | [Vintage Floating Opal Pendant Necklace 1/20 ](https://www.ebay.com/itm/206496595328) | `inventory/ej-08-15/floating-opal` |
 | [Vintage GEMEX Gem-Lok Watch Band NOS in Orig](https://www.ebay.com/itm/206494512312) | `inventory/ej-08-15/id-watchband` |
 | [Vintage Lustern Baby ID Bracelet on Original](https://www.ebay.com/itm/206494511322) | `inventory/ej-08-15/lustern-id-bracelet` |
-| [From Enoch to the Dead Sea Scrolls Szekely 1](https://www.ebay.com/itm/206494074345) | `inventory/f-books/FETTDSS` |
-| [The Essene Jesus A Revaluation from the Dead](https://www.ebay.com/itm/206494074260) | `inventory/f-books/TEJ` |
-| [The Essene Way Biogenic Living Szekely 1989 ](https://www.ebay.com/itm/206494074096) | `inventory/f-books/TEWBL` |
-| [The Fiery Chariots A Play in Five Acts by Ed](https://www.ebay.com/itm/206494074182) | `inventory/f-books/TFC` |
-| [A Brief History of Time Stephen Hawking 1988](https://www.ebay.com/itm/206488640961) | `inventory/f-books/a-brief-history-of-time` |
-| [Archaeology Magazine 2002 2003 Lot of 7 Cons](https://www.ebay.com/itm/206493958599) | `inventory/f-books/archaeology-magazines` |
-| [Bible Review Magazine Lot of 13 Issues 2002-](https://www.ebay.com/itm/206494014477) | `inventory/f-books/bible-review-mags` |
-| [Brother Tree Edmond Bordeaux Szekely 1977 Bi](https://www.ebay.com/itm/206488641394) | `inventory/f-books/brother-tree-marked` |
-| [Brother Tree Edmond Bordeaux Szekely 1977 Bi](https://www.ebay.com/itm/206488641490) | `inventory/f-books/brother-tree-unmarked-set` |
-| [Death of the New World Edmond Bordeaux Szeke](https://www.ebay.com/itm/206488641172) | `inventory/f-books/death-of-the-new-world` |
-| [The UFO Experience Hynek Collectors Library ](https://www.ebay.com/itm/206488641056) | `inventory/f-books/the-ufo-experience` |
-| [Vintage Solid Brass Hound Dog Figurine Beagl](https://www.ebay.com/itm/206494264255) | `inventory/frankie-roys-things/bronze-dog` |
-| [Kinsmart VW New Beetle Diecast Lot of 4 Red ](https://www.ebay.com/itm/206467697023) | `inventory/frankie-roys-things/bug-set` |
-| [Year 2000 Millennium Stevens Linen Calendar ](https://www.ebay.com/itm/206494482217) | `inventory/frankie-roys-things/calendar-towel` |
-| [Vintage Gold Tone Elk Stag Figurine Christma](https://www.ebay.com/itm/206494264413) | `inventory/frankie-roys-things/christmas-elk` |
-| [Vintage Best Signed Christmas Tree Brooch Pi](https://www.ebay.com/itm/206494093050) | `inventory/frankie-roys-things/christmas-tree-pin` |
-| [Vintage Holly Leaves Berries Brooch Pin Gold](https://www.ebay.com/itm/206494093318) | `inventory/frankie-roys-things/holly-pin` |
-| [Joan Rivers Camel Plaid Star Print Button Fr](https://www.ebay.com/itm/206494264800) | `inventory/frankie-roys-things/joan-rivers-shirt` |
-| [Matchbox Kellogg's Cereal Truck Lot of 4 Cor](https://www.ebay.com/itm/206467696348) | `inventory/frankie-roys-things/kellogs-car-set` |
-| [REATHLETE AIR-C + Heat Leg Massager Air Comp](https://www.ebay.com/itm/206494511836) | `inventory/frankie-roys-things/re-athlete` |
+| [From Enoch to the Dead Sea Scrolls Szekely 1](https://www.ebay.com/itm/206494074345) | `inventory/FR/books/FETTDSS` |
+| [The Essene Jesus A Revaluation from the Dead](https://www.ebay.com/itm/206494074260) | `inventory/FR/books/TEJ` |
+| [The Essene Way Biogenic Living Szekely 1989 ](https://www.ebay.com/itm/206494074096) | `inventory/FR/books/TEWBL` |
+| [The Fiery Chariots A Play in Five Acts by Ed](https://www.ebay.com/itm/206494074182) | `inventory/FR/books/TFC` |
+| [A Brief History of Time Stephen Hawking 1988](https://www.ebay.com/itm/206488640961) | `inventory/FR/books/a-brief-history-of-time` |
+| [Archaeology Magazine 2002 2003 Lot of 7 Cons](https://www.ebay.com/itm/206493958599) | `inventory/FR/books/archaeology-magazines` |
+| [Bible Review Magazine Lot of 13 Issues 2002-](https://www.ebay.com/itm/206494014477) | `inventory/FR/books/bible-review-mags` |
+| [Brother Tree Edmond Bordeaux Szekely 1977 Bi](https://www.ebay.com/itm/206488641394) | `inventory/FR/books/brother-tree-marked` |
+| [Brother Tree Edmond Bordeaux Szekely 1977 Bi](https://www.ebay.com/itm/206488641490) | `inventory/FR/books/brother-tree-unmarked-set` |
+| [Death of the New World Edmond Bordeaux Szeke](https://www.ebay.com/itm/206488641172) | `inventory/FR/books/death-of-the-new-world` |
+| [The UFO Experience Hynek Collectors Library ](https://www.ebay.com/itm/206488641056) | `inventory/FR/books/the-ufo-experience` |
+| [Vintage Solid Brass Hound Dog Figurine Beagl](https://www.ebay.com/itm/206494264255) | `inventory/FR/bronze-dog` |
+| [Kinsmart VW New Beetle Diecast Lot of 4 Red ](https://www.ebay.com/itm/206467697023) | `inventory/FR/bug-set` |
+| [Year 2000 Millennium Stevens Linen Calendar ](https://www.ebay.com/itm/206494482217) | `inventory/FR/calendar-towel` |
+| [Vintage Gold Tone Elk Stag Figurine Christma](https://www.ebay.com/itm/206494264413) | `inventory/FR/christmas-elk` |
+| [Vintage Best Signed Christmas Tree Brooch Pi](https://www.ebay.com/itm/206494093050) | `inventory/FR/christmas-tree-pin` |
+| [Vintage Holly Leaves Berries Brooch Pin Gold](https://www.ebay.com/itm/206494093318) | `inventory/FR/holly-pin` |
+| [Joan Rivers Camel Plaid Star Print Button Fr](https://www.ebay.com/itm/206494264800) | `inventory/FR/joan-rivers-shirt` |
+| [Matchbox Kellogg's Cereal Truck Lot of 4 Cor](https://www.ebay.com/itm/206467696348) | `inventory/FR/kellogs-car-set` |
+| [REATHLETE AIR-C + Heat Leg Massager Air Comp](https://www.ebay.com/itm/206494511836) | `inventory/FR/re-athlete` |
 | [GEAR New Country Gear Advertising Catalog Ma](https://www.ebay.com/itm/206446264160) | `inventory/gear-catalogs-mailers` |
 | [Vintage Kiddie Kraft 1/20 12K Gold Filled Ch](https://www.ebay.com/itm/206422054942) | `inventory/jelelry-07-17-2026/bracelet1` |
 | [Vintage Sweet 12K Gold Filled Serpentine Cha](https://www.ebay.com/itm/206422055734) | `inventory/jelelry-07-17-2026/bracelet3` |
@@ -113,16 +113,16 @@
 | [Vintage Solid Brass Owl Figurine Art Deco MC](https://www.ebay.com/itm/206379504401) | `inventory/owl` |
 | [Vintage Millefiori Art Glass Paperweight Flo](https://www.ebay.com/itm/206418250860) | `inventory/paperweight` |
 | [Vintage Norcrest Fine China Hand Painted Bob](https://www.ebay.com/itm/206345431119) | `inventory/quail-plate` |
-| [Vintage 1986 B.A.S.S. Limited Edition Belt B](https://www.ebay.com/itm/206493719085) | `inventory/roy-items/buckles/bass` |
-| [Vintage Alumaline 4108 BB-317 Largemouth Bas](https://www.ebay.com/itm/206493720061) | `inventory/roy-items/buckles/bass-leather` |
-| [Vintage 1978 Raintree Largemouth Bass Belt B](https://www.ebay.com/itm/206493716870) | `inventory/roy-items/buckles/bass2` |
-| [Vintage Alumaline 4108 BB-317 Belt Buckle Bl](https://www.ebay.com/itm/206493721025) | `inventory/roy-items/buckles/black-stone` |
-| [Vintage Raintree Bluegill Belt Buckle Hand P](https://www.ebay.com/itm/206493718295) | `inventory/roy-items/buckles/bluegill` |
-| [Vintage Mallard Duck Belt Buckle Hand Tooled](https://www.ebay.com/itm/206493720928) | `inventory/roy-items/buckles/duck-leather` |
-| [Vintage 1977 Bergamot Brass Works Z-144 Mall](https://www.ebay.com/itm/206493721151) | `inventory/roy-items/buckles/ducks` |
-| [Vintage Brass Tone Bald Eagle Belt Buckle Ro](https://www.ebay.com/itm/206493721236) | `inventory/roy-items/buckles/eagle-1` |
-| [Vintage 1982 Indiana Metal Craft Soaring Bal](https://www.ebay.com/itm/206493721449) | `inventory/roy-items/buckles/eagle-2` |
-| [1987 Georgia DNR Waterfowl Conservation Belt](https://www.ebay.com/itm/206493717553) | `inventory/roy-items/buckles/ga-waterfowl` |
+| [Vintage 1986 B.A.S.S. Limited Edition Belt B](https://www.ebay.com/itm/206493719085) | `inventory/FR/buckles/bass` |
+| [Vintage Alumaline 4108 BB-317 Largemouth Bas](https://www.ebay.com/itm/206493720061) | `inventory/FR/buckles/bass-leather` |
+| [Vintage 1978 Raintree Largemouth Bass Belt B](https://www.ebay.com/itm/206493716870) | `inventory/FR/buckles/bass2` |
+| [Vintage Alumaline 4108 BB-317 Belt Buckle Bl](https://www.ebay.com/itm/206493721025) | `inventory/FR/buckles/black-stone` |
+| [Vintage Raintree Bluegill Belt Buckle Hand P](https://www.ebay.com/itm/206493718295) | `inventory/FR/buckles/bluegill` |
+| [Vintage Mallard Duck Belt Buckle Hand Tooled](https://www.ebay.com/itm/206493720928) | `inventory/FR/buckles/duck-leather` |
+| [Vintage 1977 Bergamot Brass Works Z-144 Mall](https://www.ebay.com/itm/206493721151) | `inventory/FR/buckles/ducks` |
+| [Vintage Brass Tone Bald Eagle Belt Buckle Ro](https://www.ebay.com/itm/206493721236) | `inventory/FR/buckles/eagle-1` |
+| [Vintage 1982 Indiana Metal Craft Soaring Bal](https://www.ebay.com/itm/206493721449) | `inventory/FR/buckles/eagle-2` |
+| [1987 Georgia DNR Waterfowl Conservation Belt](https://www.ebay.com/itm/206493717553) | `inventory/FR/buckles/ga-waterfowl` |
 | [Vintage Disston Philadelphia 26" Crosscut Ha](https://www.ebay.com/itm/206358663356) | `inventory/saws/1` |
 | [Vintage Disston Hand Saw 26" Wheat Handle Ke](https://www.ebay.com/itm/206358665704) | `inventory/saws/2` |
 | [Antique Victorian Aesthetic Silverplate Teap](https://www.ebay.com/itm/206340759004) | `inventory/silver-teapot` |
