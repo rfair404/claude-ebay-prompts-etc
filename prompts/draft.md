@@ -134,6 +134,31 @@ wants is the user's, on that sheet.
 
 DRAFT never invents to fill gaps — missing inputs become flagged gaps.
 
+## Style guide (optional overlay — OFF unless the run turns it on)
+
+A **style guide** under [`../styleguides/`](../styleguides/README.md) is a study
+of how one good seller lists — title slot order and budgets, body skeleton,
+voice. It is **off by default**. Load one only when the run names it ("use the
+patinaelements style guide") or a batch config sets `style_guide: <slug>`; then
+read `../styleguides/<slug>.md` and apply its **DRAFT — titles** and
+**DRAFT — description voice** sections while composing.
+
+It changes *how we say it*, never *what we may claim*. Every rule above and
+below still binds: INVESTIGATE remains the sole source of claims, no
+`[BEST-CASE]` language reaches copy, defects survive any trim, expected age
+gets one neutral clause, PII stays redacted (and disclosed), and the field
+constraints hold. **On any conflict, the house rule wins** — drop the guide's
+pattern, note it in `meta.notes`, and move on. Never reproduce a studied
+seller's title strings or sentences; the guide carries technique, not text.
+
+If a guide is loaded, say so in `meta.notes` (`style_guide: <slug>`) so the
+review card shows which listings were drafted under an overlay.
+
+**The patinaelements guide is no longer an overlay** — its title pattern and
+body skeleton were adopted as house style on 2026-08-24 and are written into
+the two sections below, claim bar intact. The overlay mechanism stays for the
+*next* seller we study.
+
 ## Source-of-truth mapping
 
 Never invent. Never copy IDENTIFY `[BEST-CASE]` markers into copy — only
@@ -144,7 +169,8 @@ repeat a claim INVESTIGATE confirmed.
   · `meta.shoot_dir` path · `meta.drafted_at` UTC ISO-8601 ·
   `meta.ebay_*`/`last_synced` unchanged null · `meta.notes` = DRAFT NOTES.
 - `title` — best fitting INVESTIGATE title claim; apply unit-type
-  phrasing; ≤80.
+  phrasing; ≤80. **Build it to the house title pattern below** — a short
+  title is a wasted title.
 - `category_id` blank (eBay suggests at LIST) · `category_path` from
   INVESTIGATE/IDENTIFY category (human-readable only).
 - `condition` — map INVESTIGATE's grade (already from condition-rubric)
@@ -195,8 +221,10 @@ so before writing it, compute what we'd actually keep if a buyer hit it exactly:
 
 using PRICE's **measured fee band** (16–18% depending on size — see
 [price.md](price.md); it is NOT 13%) and the REAL postage for this item
-(Media Mail only if it's a book with no advertising; magazines and anything with
-ads ship Ground Advantage at 2–3× the cost). If `net_at_floor` is implausibly
+(everything now ships Ground Advantage on the single fulfillment policy — the
+account's Media Mail policy was deleted 2026-08-25, so do NOT price a book at the
+media rate; magazines and anything with ads were never Media Mail eligible
+anyway, per DMM 173.4.2). If `net_at_floor` is implausibly
 thin for the handling — packing, a trip to the mailbox, and the return risk —
 **raise the floor until it isn't**, and say so in `meta.notes`.
 
@@ -216,9 +244,12 @@ map; `handling_time_days` 1; `item_location_zip` blank. **Set
 
 **Local-pickup gate (SOFT — suggest, never assume).** Some items are
 awkward or unsafe to parcel-ship (heavy, oversized, or fragile like stained
-glass). For these we list as **local pickup** (no parcel shipping; freight
-offered by quote in the description), routed to the account's local-pickup
-fulfillment policy. Decide `fulfillment_mode`:
+glass). For these we flag local pickup in the **description**, and the offer
+still lists on the single fulfillment policy — the account's local-pickup-only
+policy was deleted 2026-08-25, so `list_edit.py` falls back to the default ground
+policy and prints a warning. That means a `LOCAL_PICKUP` draft is a
+*disclosure*, not a shipping configuration: the listing still shows parcel
+shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
 
 - **Default `SHIP`.** Most items ship normally — leave `fulfillment_mode:
   SHIP` and fill the shipping fields as usual.
@@ -241,39 +272,22 @@ fulfillment policy. Decide `fulfillment_mode`:
   — <location_hint>. Not local? Message me for a freight quote."* Log the
   decision (+ trigger) in `meta.notes`.
 
-**Carrier-check gate — FedEx vs USPS (SOFT — suggest, never auto-switch).**
-Default carrier is the USPS policy. But at DRAFT, evaluate whether this item
-should go FedEx instead. **Trigger the FedEx check when ANY of these is true:**
-- estimated **packed weight > 5 lb**, OR
-- **any side > 24 in** (long/oversized), OR
-- **very fragile** (glass, thin porcelain, etc.), OR
-- **item value > $200** (price or working price).
+**Carrier: there is no carrier choice.** Every item ships on the one
+fulfillment policy, `296458692014` ("Free USPS Ground + eBay International
+Shipping", free calculated USPS Ground Advantage, 1 day handling). Do not
+propose a carrier switch, do not estimate a rival carrier's cost, and do not
+override the policy at LIST time.
 
-When triggered, do this:
-1. **Estimate the FedEx cost** for the packed weight/dims to the buyer (assume an
-   average CONUS zone ~4–5 unless a real destination is known; FedEx Home
-   Delivery / Ground Economy). Note it's an ESTIMATE (no live FedEx rate API
-   here) and show the assumptions (weight, dims, zone). The account's FedEx
-   policy is **`fulfillment_policy_id` 292460878014** ("FedEx SmartPost / Ground
-   Economy") — reference it by id.
-2. **Add the DRIVE COST to FedEx's effective cost.** The seller's nearest FedEx
-   drop-off is **~30 min away (≈1 hr round-trip)**; USPS is picked up free from
-   home, so USPS pays no drive. Factor the round-trip drive (gas + the seller's
-   time) into FedEx's total so a small label saving that the drive eats up does
-   NOT count as cheaper. State the drive adjustment you used.
-3. **Compare FedEx (label + drive) vs the USPS estimate.** Recommend the **FedEx
-   policy** only when FedEx is genuinely cheaper after the drive, OR when USPS
-   can't handle the item (oversize / >70 lb). Otherwise keep USPS.
-4. **Never auto-switch.** Suggest it and let the user choose. If they accept,
-   set the offer's fulfillment policy to the FedEx id at LIST time (a `--review`/
-   publish-time policy override); log the decision + the two estimates in
-   `meta.notes`, and append a NEEDS_REVIEW line so it surfaces at REVIEW.
+The FedEx vs USPS carrier-check gate that used to live here was removed on
+2026-08-25: the FedEx policy it named (`292460878014`, "FedEx SmartPost / Ground
+Economy") had been deleted from the eBay account and returned 404, so following
+the gate produced an offer that could not be published. See
+docs/top-rated-plus.md.
 
-**Always, on the DRY RUN** (`--list`/`--publish` without `--confirm`, and in the
-REVIEW card): if the FedEx estimate (incl. drive) is **less than USPS** for this
-item, SURFACE the FedEx estimated price and recommend switching — even if the
-item didn't hit a trigger above. The user wants to see any FedEx saving before
-publishing.
+Weight and dimensions are still worth recording — they drive the calculated rate
+the buyer sees, and a freight quote if an item is too big for parcel. If an item
+genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and append a
+NEEDS_REVIEW line rather than selecting a different policy.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.
@@ -300,18 +314,128 @@ periodical, not a book. Other ≤15 lb non-media → `USPSGroundAdvantage`.
 >15 lb / oversized → `UPSGround`. freight/movers → blank + flag (needs a
 quote) — also a strong local-pickup candidate (gate above).
 
+## The house title pattern
+
+Measured, not guessed: 245 active listings from a seller worth matching,
+and the pattern held in every category sampled — jewelry, collectibles,
+glass, antiques, clothing (see
+[`../styleguides/_studies/patinaelements.md`](../styleguides/_studies/patinaelements.md)).
+Adopted as house style 2026-08-24.
+
+**Slot order** — era → object/maker → material → distinguishing detail →
+measurement → unit phrase. Era leads (their mean era slot is 0.4, and
+97% of titles carry an era word); material sits mid-title around slot 6.
+
+**Fill the field.** Target 75–80 characters. Their median is 78 and 89%
+run ≥75. Stop only when the next true keyword will not fit — never
+because the title "reads finished" at 55.
+
+**Budget ~2 descriptors** (their mean is 1.8, max 4). Past that it reads
+as keyword soup, and every adjective spent is a searchable noun lost.
+
+**Measurement earns a slot** where size is a buying decision — 56% of
+their antiques titles carry one, 37% of glass, 0% of clothing. Include
+it when we have a measured number, not an estimate.
+
+**Casing:** sentence/title case, with ALL-CAPS reserved for one or two
+tokens that genuinely carry weight (a maker, a model). Whole-title caps
+is shouting, not emphasis. **Separators:** prefer `/` for alternatives,
+`-` sparingly; no pipes, no bullets, no decorative characters.
+
+**The lead slot goes to a condition or scarcity word when one is
+earned**, ahead of the era word — `MINT`, `NOS`, `RARE`, `SCARCE`,
+`FINE`. The studied seller leads this way constantly (their mean
+condition slot is 0.2) and it is the strongest thing in the field: it is
+the first word a scrolling buyer reads. Earn it like this:
+
+- `MINT` / `NOS` / `EXCELLENT` — from the condition grade INVESTIGATE
+  already assigned via [condition-rubric.md](condition-rubric.md).
+  The rubric decides the word; the title just carries it. Grade to the
+  top of the supported band, per house practice — a clean piece is Mint.
+- `RARE` / `SCARCE` / `HTF` — only where INVESTIGATE found actual
+  scarcity evidence (a low production figure, a short production window,
+  a thin comp field after a real hunt). "I haven't seen another" is not
+  evidence, and neither is a high asking price.
+- `FINE` — quality of make, when the piece supports it.
+
+No word is earned → **the era word leads instead**, and that is a normal
+outcome, not a failure. The rest of the slots work the same way: era,
+maker, and material enter the title only where INVESTIGATE supports
+them, and an empty slot is correct when the evidence is not there. We
+lead as hard as the evidence allows and not one word harder.
+
 ## Markdown body (description)
 
-Compose from INVESTIGATE's claim set only:
-- **Hook** (1–2 sentences) from INVESTIGATE Summary, buyer-facing.
+Compose from INVESTIGATE's claim set only, in this **fixed section
+order**. The skeleton is house style as of 2026-08-24 — it is the spine
+the studied seller uses on 100% of their bodies, and a body missing a
+section reads as a thinner listing:
+
+- **Opener** — ONE sentence, ~20 words, that names the item in full:
+  era, maker, material, object. It is the title expanded into a
+  sentence, and it is the same claim set as the title, so it needs no
+  new evidence. Written in first person (see Voice below).
+- **The look-at-this line** — one sentence on why it is worth a look:
+  the feature that makes it, how it displays, what it does. The studied
+  seller does this on half their listings and it is what stops a scroll.
+  Enthusiasm is allowed here; **claims are not smuggled in with it**.
+  "This displays beautifully" is a matter of taste and always fine;
+  "this is a rare piece" is a scarcity claim and needs the same evidence
+  the title's `RARE` needs.
+- **The cross-sell line** — "This is one of several … I'm listing this
+  week, so please take a look at my other listings." Include it **only
+  when it is true**: there are sibling items from the same estate or lot
+  actually going up. One-off item → drop the line rather than invent a
+  batch.
 - **What's Included** — bullets from observable components; unit-type
   vocabulary.
+- **Size** — the measured dimensions, plus weight where it matters to
+  the buyer. **Required whenever we have a measurement.** If nothing was
+  measured, say so plainly rather than dropping the section.
 - **Condition** — factual, minimal. Bullets enumerating EVERY defect
   INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`.
   At most one short context line for expected vintage wear; no warm
   framing sentence, no marketing. Defects always survive any trim.
+  Close the section with the photos line — "Please see the photos and
+  read the description for full details" — which the studied seller
+  carries on 100% of listings. It sets the expectation that the photos
+  are part of the disclosure; it never substitutes for naming a defect
+  in words.
+- **Markings** — maker's mark, signature, hallmark, stamp, or label:
+  what it says and where it is, keyed to the photo that shows it.
+  **Required.** When there is none, `No maker's mark found.` is the
+  correct content — absence is information a buyer wants, and it is also
+  the honest alternative to implying attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
+- **The close** — the standing block, same on every listing, from
+  `store.closing_block` in [`../config.yaml`](../config.yaml): the
+  questions line, the terms line, the sign-off. It is boilerplate on
+  purpose — a buyer reads it once and it answers the questions that
+  otherwise arrive as messages. Render it verbatim from config; **do not
+  compose it per listing** and do not add claims to it. If a line in
+  that block ever stops being true, the fix is config, not a listing.
+  When `store.display_name` is set, the sign-off names the store; when
+  it is empty, the unnamed thank-you ships — never invent a brand name.
+
+**Length:** aim ~130–180 words (their median body is 133 across 245
+listings; ours carries the same spine plus the opener and close). Short
+paragraphs, ~20 words per sentence. A body under ~100 words is usually a
+section left empty — check which one before shipping it.
+
+**Voice: first person, ours.** Write as the seller — "I picked this up
+from a local estate", "I haven't tested it". It reads as a person, and
+that is the point: the studied seller is in first person on 100% of
+bodies. Two things do not follow it into our copy:
+
+- **Sentence case, never an all-caps body.** Caps is shouting, it is
+  harder to read on a phone, and it flattens the emphasis we do want.
+- **First person is not a licence to speculate.** "I think this might be
+  Georgian" is exactly the guess the claim bar exists to stop — first
+  person makes a claim sound softer without making it any more
+  supported. What I say in my own voice still has to be something
+  INVESTIGATE established. Where I genuinely don't know, say that
+  plainly and say what I did to check.
 
 Hard rules: never include a claim absent from INVESTIGATE's listing-safe
 / observable lists; never anything INVESTIGATE marked NOT defensible;

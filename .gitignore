@@ -162,3 +162,9 @@ desktop.ini
 # what mattered is written into prompts/prep.md, not kept here.
 /.tonecheck/
 /.comps/
+
+# Raw seller style samples: another seller's live titles and description HTML,
+# pulled for measurement. The measured study (_studies/*.md) and the guide are
+# committed; the verbatim sample stays local so it can never be mistaken for
+# listing input. Re-derive with `python lib/seller_style.py sample <seller>`.
+/styleguides/_studies/*.json

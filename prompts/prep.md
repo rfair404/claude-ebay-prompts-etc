@@ -15,6 +15,96 @@ from a processed file. Only DRAFT reads `listing/`.
 
 ---
 
+## Style guide (optional overlay — OFF unless the run turns it on)
+
+A **style guide** under [`../styleguides/`](../styleguides/README.md) carries a
+studied seller's photo conventions: photo count target, backdrop lightness and
+neutrality, framing/subject fill, colour cast. **Off by default.** Load one only
+when the run names it or a batch config sets `style_guide: <slug>`, then read
+that guide's **PREP — photography** section.
+
+It is **advisory**, and it lands on the review card, not in the stage contract:
+the four approved stages (orientation → unskew → crop → colour), the look
+defaults, `--category` handling, and the "printed media takes no crop" rule are
+unchanged. A guide can say "keep the backdrop light and neutral, crop tight"; it
+cannot add a stage, override a look, or justify a drained frame. Note the loaded
+guide on the review card (`style_guide: <slug>`) so the reviewer knows which
+conventions were in play.
+
+**The patinaelements guide is no longer an overlay** — its conventions were
+adopted as house style on 2026-08-24 and are written into the frame-count rule
+below. The overlay mechanism stays for the *next* seller we study.
+
+---
+
+## Frame count — the house target
+
+**Ten frames per listing**, and count them before PREP runs, not after.
+Measured across 245 active listings of a seller worth matching: median 10
+photos, 38% at 12 or more, effectively none at the 24 cap
+([study](../styleguides/_studies/patinaelements.md)). Eight good frames beat
+twelve padded ones, but a three-frame listing is a thin listing, and the fix
+is a reshoot, not processing.
+
+PREP does not invent frames. When a shoot comes in under target, **say so on
+the review card** — `frames: 6 (house target 10)` — and name the shots that
+are missing: the marked/signed detail, the underside, each disclosed defect,
+a scale reference. That list is the reshoot request; it is not a reason to
+hold the listing.
+
+The photo-protocol conventions for marbles stay as they are — that spec is a
+per-item agreement, not a count target.
+
+---
+
+## The hero is a MONTAGE — decided per listing
+
+The gallery frame can carry two or three views composed into one image: the
+object whole, plus the detail that sells it — the maker's mark, the piece
+open, the box it came in. A buyer scrolling a search page sees one thumbnail,
+and one thumbnail can say more than one thing.
+
+    python -m lib.photo_prep.hero_montage propose <shoot>
+    python -m lib.photo_prep.hero_montage apply   <shoot> --style m2 --repoint
+
+**There is no default style, and no default to montage at all.** `propose`
+renders BOTH candidates side by side over a numbered strip of every frame, and
+the operator picks: **montage 1** (main + one supporting view — inset when
+that view is a detail, split panels when it is a different state or object),
+**montage 2** (main + two thumbnails down the quietest corner), or **neither**,
+which ships the clean frame and leaves the details in slots 2 onward. The
+studied seller montages roughly 18% of their listings, not all of them; a
+single clear object often needs no help.
+
+Frame choice is a guess and gets reviewed. The picker takes the main view from
+listing order — never reordering, that is the operator's decision — and
+chooses companions for DISTINCTNESS: each has to be unlike the main view AND
+unlike the companions already chosen. That rule exists because scoring against
+the main view alone put two photographs of the same presentation box in the
+same hero, twice: each was a fine answer to "unlike the macro", and together
+they said one thing twice. If nothing left is distinct enough, it says so and
+offers the two-frame hero only. Override with `--frames 1,6,3` — the numbers
+are the strip.
+
+It also checks the main frame against PREP's subject detector and says so when
+the object runs off the edge of the picture, naming the frames that show it
+whole.
+
+**The honesty rule this tool cannot enforce:** a montage must never imply the
+buyer gets more than one item. Panels show one listing's contents, and two
+panels that read as two objects for sale is a misleading gallery image no
+matter how good it looks. When in doubt, thumbnails rather than equal panels —
+a thumbnail reads as a detail, equal panels read as an inventory.
+
+**Known risk, accepted deliberately:** eBay's picture standards discourage
+added borders and composited artwork on the gallery image. The studied seller
+runs montages at scale on live listings, which is the evidence that it is
+tolerated in practice, but it is tolerance and not a guarantee. If eBay ever
+pulls a gallery image for it, the fix is to ship the clean frame as the hero
+and move the montage to slot two — nothing else in the pipeline changes.
+
+---
+
 ## The run OPENS with a best attempt, made without asking
 
     python -m lib.photo_prep.prep <shoot> --auto
