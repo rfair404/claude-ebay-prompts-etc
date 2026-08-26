@@ -2113,6 +2113,22 @@ def _print_status(shoot: Path, m: dict) -> None:
     print(f"  review: {shoot / '.prep' / 'prep_review.jpg'}")
 
 
+# EVERY OCCURRENCE OF A PER-FRAME FLAG COUNTS, NOT JUST THE LAST ONE.
+#
+# These flags take NAME=VALUE pairs, and a generated command routinely repeats
+# the flag once per frame rather than listing thirteen values after one. With a
+# plain nargs="+" argparse keeps only the final occurrence and drops the rest
+# in silence: `--crop A=off --crop B=off` set B and left A cropped, with the log
+# showing one line and the operator believing both had been set. `action=
+# "append"` keeps them all; this flattens the list-of-lists back into the flat
+# pair list every run_* helper already expects.
+def _pairs(v) -> list:
+    """Flatten an appended nargs list-of-lists into one list (None -> [])."""
+    if not v:
+        return []
+    return [x for group in v for x in group]
+
+
 def main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -2134,11 +2150,11 @@ def main(argv=None) -> int:
                     help="open a review stage: orientation | crop | color")
     ap.add_argument("--approve-stage", metavar="NAME",
                     help="sign off ONE stage (orientation | crop | color)")
-    ap.add_argument("--detail", nargs="+", metavar="NAME=on|off",
+    ap.add_argument("--detail", action="append", nargs="+", metavar="NAME=on|off",
                     help="mark named frames as detail macros (on) so the colour pass leaves "
                          "the non-subject pixels alone — use when the 'backdrop' is the item's "
                          "own card, box or mount; off hands them back to backdrop treatment")
-    ap.add_argument("--crop", nargs="+", metavar="NAME=off|on|padF",
+    ap.add_argument("--crop", action="append", nargs="+", metavar="NAME=off|on|padF",
                     help="override the crop decision for named frames")
     ap.add_argument("--sheet", action="store_true",
                     help="rebuild the rotation sheet from the manifest (no segmentation)")
@@ -2147,9 +2163,9 @@ def main(argv=None) -> int:
     ap.add_argument("--apply-repoint", action="store_true",
                     help="actually write draft.md for --repoint-draft")
     ap.add_argument("--approve", action="store_true", help="stamp approval (explicit operator yes only)")
-    ap.add_argument("--rotate", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
-    ap.add_argument("--only", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
-    ap.add_argument("--set-rotate", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
+    ap.add_argument("--rotate", action="append", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
+    ap.add_argument("--only", action="append", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
+    ap.add_argument("--set-rotate", action="append", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--gc", action="store_true",
                     help="list the regenerable byproducts an APPROVED shoot is still holding "
                          "(unchosen preset renders, answered ask panels); removes nothing")
@@ -2218,9 +2234,9 @@ def main(argv=None) -> int:
         print(f"  {catmod.describe(category)}")
 
     if args.rotate:
-        m = run_rotate(shoot, args.rotate)
+        m = run_rotate(shoot, _pairs(args.rotate))
     if getattr(args, "set_rotate", None):
-        m = run_rotate(shoot, args.set_rotate, absolute=True)
+        m = run_rotate(shoot, _pairs(args.set_rotate), absolute=True)
         _print_status(shoot, m)
         return 0
     if args.auto:
@@ -2237,10 +2253,10 @@ def main(argv=None) -> int:
         run_approve_stage(shoot, args.approve_stage)
         return 0
     if args.crop:
-        run_set_crop(shoot, args.crop)
+        run_set_crop(shoot, _pairs(args.crop))
         return 0
     if args.detail:
-        run_set_detail(shoot, args.detail)
+        run_set_detail(shoot, _pairs(args.detail))
         return 0
     if args.sheet:
         run_sheet(shoot, quiet=args.quiet)
@@ -2289,7 +2305,7 @@ def main(argv=None) -> int:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
             run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=True)
-        m = run_apply(shoot, quiet=args.quiet, only=tuple(getattr(args, 'only', None) or ()))
+        m = run_apply(shoot, quiet=args.quiet, only=tuple(_pairs(getattr(args, 'only', None))))
         _print_status(shoot, m)
     return 0
 

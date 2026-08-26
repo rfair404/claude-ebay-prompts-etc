@@ -1430,6 +1430,56 @@ def test_force_is_available_for_a_deliberate_overwrite():
         assert set(P.load_manifest(shoot)["photos"]) == {"mine"}
 
 
+def test_a_repeated_per_frame_flag_sets_every_frame():
+    """Thirteen --crop flags must set thirteen frames, not just the last one.
+
+    Observed on inventory/FR/books/coloring2: one invocation passed --crop
+    NAME=off once per frame, argparse kept only the final occurrence, and three
+    frames shipped cropped while the log showed a single REFUSED line. Printed
+    media makes this a live hazard — prompts/prep.md tells the operator to force
+    --crop <every frame>=off, so a silently dropped argument is the normal case,
+    not an edge one.
+    """
+    names = ["IMG_0.jpg", "IMG_1.jpg", "IMG_2.jpg"]
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=3)
+        m = P.load_manifest(shoot)
+        m["photos"] = {n: {"orientation": {"exif_angle": 0, "subject_angle": 0,
+                                           "applied": 0, "needs_ask": False},
+                           "crop": {"applied": True, "box": [0, 0, 10, 10]}}
+                       for n in names}
+        P.save_manifest(shoot, m)
+
+        argv = [str(shoot)]
+        for n in names:
+            argv += ["--crop", f"{n}=off"]
+        assert P.main(argv) == 0
+
+        photos = P.load_manifest(shoot)["photos"]
+        for n in names:
+            assert photos[n]["crop"]["applied"] is False, f"{n} kept its crop"
+            assert photos[n]["crop"]["operator"] is True, f"{n} was never set"
+
+
+def test_a_repeated_rotation_flag_sets_every_frame():
+    """Same accumulation contract for the other per-frame flags."""
+    names = ["IMG_0.jpg", "IMG_1.jpg"]
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        m = P.load_manifest(shoot)
+        m["photos"] = {n: {"orientation": {"exif_angle": 0, "subject_angle": 0,
+                                           "applied": 0, "needs_ask": True}}
+                       for n in names}
+        P.save_manifest(shoot, m)
+
+        P.main([str(shoot), "--set-rotate", "IMG_0.jpg=90",
+                "--set-rotate", "IMG_1.jpg=270"])
+
+        photos = P.load_manifest(shoot)["photos"]
+        assert photos["IMG_0.jpg"]["orientation"]["subject_angle"] == 90
+        assert photos["IMG_1.jpg"]["orientation"]["subject_angle"] == 270
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
