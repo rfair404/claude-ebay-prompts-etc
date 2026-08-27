@@ -71,6 +71,10 @@ from . import categories as catmod
 from . import subject as subjectmod
 from . import unskew as skewmod
 from .subject import mask_for
+try:
+    from ..verdict import emit as verdict_emit
+except ImportError:          # lib/ itself on sys.path: photo_prep is top-level
+    from verdict import emit as verdict_emit
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".tif", ".tiff"}
 MANIFEST_VERSION = 1
@@ -727,9 +731,11 @@ def plan_geometry(shoot: Path, quiet: bool = False,
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
     smode = subject_mode(m)
 
+    refused = []
     for key, rec in m["photos"].items():
         src = shoot / key
         if not src.exists():
+            refused.append((key, "source file missing"))
             continue
         upright = orientmod.rotate_bgr(_load_bgr(src), rec["orientation"]["applied"])
         sm = mask_for(upright, smode)
@@ -757,14 +763,16 @@ def plan_geometry(shoot: Path, quiet: bool = False,
                                        bg_class_effective=stats.bg_class))
         rec["status"] = "SHIP" if crop["applied"] else "PASSTHROUGH"
         rec.pop("pending_orientation", None)
-        if not quiet:
-            print(f"  {key:28} "
-                  f"{'crop' if crop['applied'] else 'no crop: ' + (crop.get('reason') or '')[:44]}")
+        # An operator's crop-off is an answer, not a refusal — only the
+        # pipeline's own refusals are exceptions worth a line.
+        if not crop["applied"] and not crop.get("operator"):
+            refused.append((key, "no crop: " + (crop.get("reason") or "")[:60]))
 
     m["backdrop"] = _unify_backdrop(m["photos"], quiet)
     save_manifest(shoot, m)
     if not quiet:
-        print(f"\n{shoot.name}: geometry and colour planned on the approved rotations")
+        verdict_emit(f"{shoot.name} geometry", len(m["photos"]), refused,
+                     detail=shoot / ".prep" / "prep.json")
     return m
 
 
@@ -881,11 +889,6 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         # confirming something that is not what will ship.
         thumbs.append((key, _thumb(cam)))
 
-        if not quiet:
-            rot = f"exif {v.exif_angle}+subj {v.subject_angle}={v.applied}"
-            print(f"  {key:28} {rot:<26} {v.source:<12}"
-                  + ("  [ASK]" if v.needs_ask else ""))
-
     m["photos"] = photos
     _corroborate_orientation(photos, quiet)
     # The backdrop verdict is a MEASUREMENT of the upright frame, so it belongs
@@ -898,12 +901,11 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
 
     _rotation_sheet(thumbs, photos, shoot / ".prep" / "rotation_sheet.jpg")
     if not quiet:
-        asks = sum(1 for r in photos.values() if r["orientation"]["needs_ask"])
-        print(f"\n{shoot.name}: {len(photos)} photos · "
-              f"{asks} awaiting an orientation answer")
-        print("  orientation is the first stage and nothing else is measured "
-              "until it is approved.")
-        print(f"  next: --stage orientation")
+        flags = [(k, f"orientation ASK ({r['orientation']['source']})")
+                 for k, r in photos.items() if r["orientation"]["needs_ask"]]
+        verdict_emit(f"{shoot.name} check", len(photos), flags,
+                     detail=shoot / ".prep" / "prep.json",
+                     next_hint="--stage orientation")
     return m
 
 
@@ -965,11 +967,13 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     out_dir = shoot / "listing"
     out_dir.mkdir(exist_ok=True)
     rows = []
+    flags = []
 
     for name, rec in m["photos"].items():
         src = shoot / name
         if not src.exists():
             rec["status"] = "MISSING"
+            flags.append((name, "source file MISSING"))
             continue
 
         before = _load_bgr(src)
@@ -1041,12 +1045,16 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         rec["status"] = "ASK" if rec["orientation"]["needs_ask"] else "PICK"
 
         rows.append((name, before, variants, rec))
-        if not quiet:
-            c = creport
-            print(f"  {name:28} {len(variants)} presets  "
-                  f"bg {c['bg_luma_before']:.0f}->{c['bg_luma_after']:.0f} "
-                  f"str={c['strength']} new-clip={c['subject_newly_clipped']} "
-                  f"new-crush={c['subject_newly_crushed']}")
+        # Exceptions only: the colour pass measuring its own output as having
+        # damaged item pixels, or an orientation still unresolved. Routine
+        # per-frame render stats live in the manifest.
+        c = creport
+        if c["subject_newly_clipped"] or c["subject_newly_crushed"]:
+            flags.append((name, f"colour pass touched item pixels "
+                                f"(new-clip={c['subject_newly_clipped']}, "
+                                f"new-crush={c['subject_newly_crushed']})"))
+        if rec["orientation"]["needs_ask"]:
+            flags.append((name, "orientation still ASK"))
 
     m["approved"] = False
     m["approved_at"] = None
@@ -1056,6 +1064,9 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     # 3.5 GB of them. See _sweep_unreferenced_presets.
     _sweep_unreferenced_presets(shoot, m, quiet=quiet)
     _presets_sheet(rows, shoot / ".prep" / "prep_presets.jpg")
+    if not quiet:
+        verdict_emit(f"{shoot.name} apply", len(m["photos"]), flags,
+                     detail=shoot / ".prep" / "prep.json")
 
     # Adopt the backdrop's default look so `listing/` is populated without a
     # separate step. Both looks stay rendered and `--pick` swaps them; the
@@ -1538,12 +1549,13 @@ def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
 
     photos = m.get("photos") or {}
     cropped = [n for n, r in photos.items() if (r.get("crop") or {}).get("applied")]
-    print(f"\n{shoot.name}: auto first pass — {len(photos)} frames, "
-          f"{len(cropped)} cropped, {len(guessed)} orientation guessed")
-    if guessed:
-        print("  guessed (worth a look): " + ", ".join(guessed))
-    print("  nothing is approved. --approve-auto to take it as it stands, "
-          "or --stage orientation to open the review.")
+    print(f"\n{shoot.name}: auto first pass — {len(cropped)}/{len(photos)} "
+          f"cropped, nothing approved")
+    verdict_emit("auto", len(photos),
+                 [(k, "orientation guessed — worth a look") for k in guessed],
+                 detail=shoot / ".prep" / "prep.json",
+                 next_hint="--approve-auto takes it as it stands; "
+                           "--stage orientation opens the review")
     return m
 
 
