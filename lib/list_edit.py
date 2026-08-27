@@ -84,6 +84,7 @@ from typing import Optional
 from config import ConfigError, config_path, load_config
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
+from voice_check import check_voice
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -462,6 +463,12 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
         v = draft.get(dotpath)
         if v not in (None, "") and len(str(v)) > cap:
             issues.append(f"{dotpath}: {v!r} exceeds maxLen {cap}")
+
+    # In-hand voice (prompts/draft.md, GH #40). Camera-frame language in
+    # buyer-visible copy blocks the sync — it is cheap to fix in the file and
+    # expensive to fix once live. Soft normalizations are warnings and do not
+    # block; run `python lib/voice_check.py --audit inventory/ --warnings`.
+    issues.extend(check_voice(draft))
 
     return issues
 
@@ -1530,6 +1537,71 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
                 listing_id=listing.get("listingId"), reason=reason)
 
 
+def resolve_draft_state(draft_path: Path,
+                        creds: Optional[EbayCredentials] = None) -> dict:
+    """What state is this draft ACTUALLY in? Ask eBay, keyed on SKU.
+
+    Read-only. Makes no writes and cannot publish.
+
+    A draft's own `meta.ebay_*` fields are a log of what happened at sync time,
+    not a record of what is true now — and they go stale silently. During the
+    2026-08 voice sweep, `inventory/FR/christmas-elk/draft.md` carried
+    `ebay_offer_id: null` and no listing id while being LIVE on eBay as
+    206494264413. It was classified as an unpublished draft and skipped.
+
+    `offer_sellable_state()` already asks eBay the right question, but it was
+    only reachable from inside `update_listing_fields()` — so the only way to
+    learn a draft's real state was to attempt a write. This exposes it for
+    triage, which is what any audit or bulk sweep actually needs. Same doctrine
+    as tools/ledger_reconcile.py, one level down: the API is truth, the local
+    copy is assumed stale.
+
+    Returns the offer_sellable_state dict plus `sku`, `draft_offer_id`,
+    `draft_listing_id` and `meta_stale` (True when the draft disagrees).
+    """
+    creds = creds or load_credentials()
+    draft_path = _resolve_draft_path(draft_path)
+    draft = parse_draft(draft_path)
+    sku = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if not sku:
+        return dict(sellable=False, status="NO_SKU", quantity=0, offer_id=None,
+                    listing_id=None, reason="draft has no meta.ebay_inventory_sku",
+                    sku=None, draft_offer_id=None, draft_listing_id=None,
+                    meta_stale=False, path=draft_path)
+
+    state = offer_sellable_state(sku, creds)
+    d_offer = str(draft.get("meta.ebay_offer_id") or "").strip() or None
+    d_listing = str(draft.get("meta.ebay_listing_id") or "").strip() or None
+    state.update(sku=sku, draft_offer_id=d_offer, draft_listing_id=d_listing,
+                 path=draft_path)
+    state["meta_stale"] = (
+        (state.get("offer_id") and d_offer != str(state["offer_id"])) or
+        (state.get("listing_id") and d_listing != str(state["listing_id"]))
+    )
+    return state
+
+
+def repair_draft_meta(draft_path: Path, creds: Optional[EbayCredentials] = None,
+                      apply: bool = False) -> dict:
+    """Write eBay's true offer/listing ids back into a draft whose meta is stale.
+
+    No-op on a draft that already agrees. Touches only `meta.*` — never copy,
+    price, photos, or anything eBay serves.
+    """
+    state = resolve_draft_state(draft_path, creds)
+    if not state.get("meta_stale"):
+        return state
+    updates: dict[str, str] = {}
+    if state.get("offer_id"):
+        updates["ebay_offer_id"] = str(state["offer_id"])
+    if state.get("listing_id"):
+        updates["ebay_listing_id"] = str(state["listing_id"])
+    if updates and apply:
+        update_meta(state["path"], updates)
+    state["repairs"] = updates
+    return state
+
+
 def update_listing_fields(draft_path: Path, fields,
                           creds: Optional[EbayCredentials] = None,
                           allow_not_sellable: bool = False) -> list[str]:
@@ -1994,6 +2066,8 @@ def _cli() -> None:
     ap.add_argument("--allow-not-sellable", action="store_true",
                     help="update even if the SKU's offer is not live (DANGEROUS: writing to a sold item can relist it)")
     ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
+    ap.add_argument("--status", metavar="TARGET", help="Read-only: ask eBay (by SKU) what state a draft is really in. Accepts a draft.md, a shoot dir, or a tree to walk. Never writes.")
+    ap.add_argument("--repair-meta", metavar="TARGET", help="Backfill eBay's true offer/listing ids into drafts whose meta.* is stale. DRY RUN unless --confirm.")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
@@ -2016,6 +2090,54 @@ def _cli() -> None:
                 for i in issues:
                     print(f"  - {i}")
                 sys.exit(1)
+            return
+        if args.status:
+            root = Path(args.status)
+            targets = sorted(root.rglob("draft.md")) if root.is_dir() and not (root / "draft.md").exists() else [root]
+            creds = load_credentials()
+            rows = []
+            for t in targets:
+                if ".prior-run-bak" in str(t):
+                    continue
+                try:
+                    st = resolve_draft_state(t, creds)
+                except Exception as e:
+                    print(f"  ERR  {t}: {e}")
+                    continue
+                flag = " STALE-META" if st.get("meta_stale") else ""
+                name = t.parent.name if t.name == "draft.md" else t.name
+                print(f"  {st['status']:<12} {name:<42} sku={st.get('sku')} "
+                      f"listing={st.get('listing_id')}{flag}")
+                rows.append(st)
+            stale = sum(1 for r in rows if r.get("meta_stale"))
+            live = sum(1 for r in rows if r.get("status") == "PUBLISHED")
+            print(f"\n{len(rows)} draft(s): {live} live, {stale} with stale meta.")
+            if stale:
+                print("  fix with: python lib/list_edit.py --repair-meta <dir> --confirm")
+            return
+        if args.repair_meta:
+            root = Path(args.repair_meta)
+            targets = sorted(root.rglob("draft.md")) if root.is_dir() and not (root / "draft.md").exists() else [root]
+            creds = load_credentials()
+            fixed = 0
+            for t in targets:
+                if ".prior-run-bak" in str(t):
+                    continue
+                try:
+                    st = repair_draft_meta(t, creds, apply=args.confirm)
+                except Exception as e:
+                    print(f"  ERR  {t}: {e}")
+                    continue
+                if st.get("repairs"):
+                    fixed += 1
+                    verb = "repaired" if args.confirm else "WOULD repair"
+                    print(f"  {verb} {t.parent.name}: {st['repairs']}")
+            if not fixed:
+                print("[OK] no stale draft metadata found.")
+            elif not args.confirm:
+                print(f"\nDRY RUN — {fixed} draft(s) would change. Re-run with --confirm.")
+            else:
+                print(f"\n[OK] repaired {fixed} draft(s).")
             return
         if args.record:
             sku, ledger = record_draft(Path(args.record))
