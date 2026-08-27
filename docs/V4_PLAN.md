@@ -20,7 +20,8 @@ only to AGREE?
 
 - [x] `prep.md` — 629→340 + `reference/prep-notes.md` (190); the two
       near-duplicate review-page sections merged into one
-- [ ] `draft.md` (543)
+- [x] `draft.md` — 543→402 + `reference/draft-notes.md` (111); the
+      superseded old-chain procedure moved wholesale to the notes
 - [ ] `identify.md` (364)
 - [ ] `list_edit_chrome.md` (276)
 - [ ] `_shared.md` (208)
