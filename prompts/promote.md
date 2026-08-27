@@ -1,4 +1,4 @@
-# PROMOTE — v3, Function 8 (paid placement)
+# PROMOTE — v4, Function 8 (paid placement)
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
@@ -32,8 +32,7 @@ call is printed and not sent:
     --bidding DYNAMIC   hand bid management to eBay
     --delete ID         remove a campaign
 
-This is not timidity about the API. It is that an ad added by mistake is not
-free to undo: it spends before anyone notices.
+An ad added by mistake is not free to undo: it spends before anyone notices.
 
 ## What the funding model decides — and what decides the funding model
 
@@ -106,10 +105,10 @@ score as measured return.
 
 ## Reuse a campaign before creating one
 
-The account accumulates campaigns — five already, four of them paused, 81 ads
-inside them doing nothing. Resuming a paused ON_SITE campaign keeps the ads it
-already holds and costs one call; a new campaign starts from zero and adds
-another thing to reconcile. Create one only when there is nothing to reuse.
+The account accumulates campaigns. Resuming a paused ON_SITE campaign keeps
+the ads it already holds and costs one call; a new campaign starts from zero
+and adds another thing to reconcile. Create one only when there is nothing to
+reuse.
 
 **Items already carrying an ACTIVE ad in a RUNNING campaign are excluded** —
 they are already promoted, and adding them again is not a second bet.

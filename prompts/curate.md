@@ -1,4 +1,4 @@
-# CURATE — v3, Function 3
+# CURATE — v4, Function 3
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 

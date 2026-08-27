@@ -1,4 +1,4 @@
-# PRICE — v3, Function 2
+# PRICE — v4, Function 2
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
