@@ -1,4 +1,4 @@
-# PREP — v3, Function 2.5 (photo preparation)
+# PREP — v4, Function 2.5 (photo preparation)
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
@@ -8,495 +8,256 @@ Obeys [`_shared.md`](_shared.md). Read it first.
 
 Turn a shoot's raw frames into listing-ready photos: upright, cropped to the
 item, backdrop softened, foreground sharpened. Runs **after IDENTIFY, before
-INVESTIGATE/DRAFT**.
-
-INVESTIGATE keeps reading the **originals** — condition evidence must never come
-from a processed file. Only DRAFT reads `listing/`.
-
----
+INVESTIGATE/DRAFT**. INVESTIGATE keeps reading the **originals** — condition
+evidence never comes from a processed file. Only DRAFT reads `listing/`.
+Rationale, history and the measurements behind every rule:
+[reference/prep-notes.md](reference/prep-notes.md).
 
 ## Style guide (optional overlay — OFF unless the run turns it on)
 
-A **style guide** under [`../styleguides/`](../styleguides/README.md) carries a
-studied seller's photo conventions: photo count target, backdrop lightness and
-neutrality, framing/subject fill, colour cast. **Off by default.** Load one only
-when the run names it or a batch config sets `style_guide: <slug>`, then read
-that guide's **PREP — photography** section.
+- Guides live under [`../styleguides/`](../styleguides/README.md). Load one
+  only when the run names it or a batch config sets `style_guide: <slug>`,
+  then read that guide's **PREP — photography** section.
+- Advisory only, and it lands on the review card, not in the stage contract:
+  a guide may tune backdrop/framing/count taste; it cannot add a stage,
+  override a look, or justify a drained frame. The stages (orientation →
+  crop → colour), look defaults, `--category` handling and the printed-media
+  rules are unchanged.
+- Note the loaded guide on the review card (`style_guide: <slug>`).
 
-It is **advisory**, and it lands on the review card, not in the stage contract:
-the four approved stages (orientation → unskew → crop → colour), the look
-defaults, `--category` handling, and the "printed media takes no crop" rule are
-unchanged. A guide can say "keep the backdrop light and neutral, crop tight"; it
-cannot add a stage, override a look, or justify a drained frame. Note the loaded
-guide on the review card (`style_guide: <slug>`) so the reviewer knows which
-conventions were in play.
+## Frame count — house target 10
 
-**The patinaelements guide is no longer an overlay** — its conventions were
-adopted as house style on 2026-08-24 and are written into the frame-count rule
-below. The overlay mechanism stays for the *next* seller we study.
+- Count frames BEFORE PREP runs. Under target → say so on the review card
+  (`frames: 6 (house target 10)`) and name the missing shots: the
+  marked/signed detail, the underside, each disclosed defect, a scale
+  reference. That list is the reshoot request; it is not a reason to hold the
+  listing.
+- PREP never invents frames. Eight good frames beat twelve padded ones.
+- Marble photo-protocol shoots keep their own spec — that is a per-item
+  agreement, not a count target.
 
----
-
-## Frame count — the house target
-
-**Ten frames per listing**, and count them before PREP runs, not after.
-Measured across 245 active listings of a seller worth matching: median 10
-photos, 38% at 12 or more, effectively none at the 24 cap
-([study](../styleguides/_studies/patinaelements.md)). Eight good frames beat
-twelve padded ones, but a three-frame listing is a thin listing, and the fix
-is a reshoot, not processing.
-
-PREP does not invent frames. When a shoot comes in under target, **say so on
-the review card** — `frames: 6 (house target 10)` — and name the shots that
-are missing: the marked/signed detail, the underside, each disclosed defect,
-a scale reference. That list is the reshoot request; it is not a reason to
-hold the listing.
-
-The photo-protocol conventions for marbles stay as they are — that spec is a
-per-item agreement, not a count target.
-
----
-
-## The hero is a MONTAGE — decided per listing
-
-The gallery frame can carry two or three views composed into one image: the
-object whole, plus the detail that sells it — the maker's mark, the piece
-open, the box it came in. A buyer scrolling a search page sees one thumbnail,
-and one thumbnail can say more than one thing.
+## The hero MAY be a montage — decided per listing
 
     python -m lib.photo_prep.hero_montage propose <shoot>
     python -m lib.photo_prep.hero_montage apply   <shoot> --style m2 --repoint
 
-**There is no default style, and no default to montage at all.** `propose`
-renders BOTH candidates side by side over a numbered strip of every frame, and
-the operator picks: **montage 1** (main + one supporting view — inset when
-that view is a detail, split panels when it is a different state or object),
-**montage 2** (main + two thumbnails down the quietest corner), or **neither**,
-which ships the clean frame and leaves the details in slots 2 onward. The
-studied seller montages roughly 18% of their listings, not all of them; a
-single clear object often needs no help.
-
-Frame choice is a guess and gets reviewed. The picker takes the main view from
-listing order — never reordering, that is the operator's decision — and
-chooses companions for DISTINCTNESS: each has to be unlike the main view AND
-unlike the companions already chosen. That rule exists because scoring against
-the main view alone put two photographs of the same presentation box in the
-same hero, twice: each was a fine answer to "unlike the macro", and together
-they said one thing twice. If nothing left is distinct enough, it says so and
-offers the two-frame hero only. Override with `--frames 1,6,3` — the numbers
-are the strip.
-
-It also checks the main frame against PREP's subject detector and says so when
-the object runs off the edge of the picture, naming the frames that show it
-whole.
-
-**The honesty rule this tool cannot enforce:** a montage must never imply the
-buyer gets more than one item. Panels show one listing's contents, and two
-panels that read as two objects for sale is a misleading gallery image no
-matter how good it looks. When in doubt, thumbnails rather than equal panels —
-a thumbnail reads as a detail, equal panels read as an inventory.
-
-**Known risk, accepted deliberately:** eBay's picture standards discourage
-added borders and composited artwork on the gallery image. The studied seller
-runs montages at scale on live listings, which is the evidence that it is
-tolerated in practice, but it is tolerance and not a guarantee. If eBay ever
-pulls a gallery image for it, the fix is to ship the clean frame as the hero
-and move the montage to slot two — nothing else in the pipeline changes.
-
----
+- **No default style, and no default to montage at all.** `propose` renders
+  both candidates over a numbered strip of every frame; the operator picks:
+  **montage 1** (main + one supporting view — inset for a detail, split
+  panels for a different state or object), **montage 2** (main + two
+  thumbnails down the quietest corner), or **neither** (clean frame as hero,
+  details in slots 2 onward). A single clear object often needs no help.
+- The picker takes the main view from listing order — never reordering, that
+  is the operator's decision — and chooses companions for DISTINCTNESS: each
+  unlike the main view AND unlike the companions already chosen. If nothing
+  left is distinct enough it says so and offers the two-frame hero only.
+  Override with `--frames 1,6,3` — the numbers are the strip.
+- It warns when the main frame's subject runs off the edge of the picture,
+  naming the frames that show it whole.
+- **Honesty rule the tool cannot enforce:** a montage must never imply the
+  buyer gets more than one item. When in doubt, thumbnails rather than equal
+  panels — a thumbnail reads as a detail, equal panels read as an inventory.
+- eBay's picture standards discourage composited gallery images; running them
+  is a deliberate, revocable risk. If eBay ever pulls one: clean frame to
+  hero, montage to slot two, nothing else changes.
 
 ## The run OPENS with a best attempt, made without asking
 
     python -m lib.photo_prep.prep <shoot> --auto
 
 One pass, no questions: every frame turned the way PREP reads it, every crop
-planned, nothing approved and nothing rendered. Then the operator looks ONCE at
-what it did and either takes it or opens the stages.
+planned, nothing approved and nothing rendered. Two protections are enforced
+in code:
 
-Why it is allowed to guess. The staged review below is the point of PREP, and it
-also spends the operator's attention on frames where the answer was never in
-doubt. Deciding first and asking second costs nothing as long as two things hold,
-and they are enforced in code:
+- **A guess is labelled a guess.** A frame the resolver cannot read takes the
+  best signal it has (the OSD proposal, else 0) and records `guessed: true`.
+  Report guessed frames by name, every time — a guess presented as a
+  resolution is the one way this pass can hurt.
+- **The crop is deliberately loose.** `DEFAULT_PAD` 0.28 of the item's box,
+  `MIN_FRAME_KEPT` 0.55 floor: a crop trims edges and always leaves backdrop.
 
-- **A guess is labelled a guess.** A frame the resolver cannot read would
-  normally become an ASK and stop the run. Here it takes the best signal it has
-  (the OSD proposal, else 0) and records `guessed: true`. Report those frames by
-  name, every time — they are exactly the ones worth a human look, and a guess
-  presented as a resolution is the one way this pass can hurt.
-- **The crop is deliberately loose.** `DEFAULT_PAD` is 0.28 of the item's own
-  box, and `MIN_FRAME_KEPT` (0.55) is a floor under the whole box: a crop trims
-  the edges and always leaves backdrop around the item. Too generous costs a
-  second look. Too tight has already thrown pixels away, and nobody re-shoots.
-
-Apply the pass, then gate on confidence, not on the operator (operator's
+Apply the pass, then **gate on confidence, not on the operator** (operator's
 call, 2026-08-27):
 
 - **Every frame resolved, nothing guessed, every self-check clean** — the
-  normal case — run `--approve-auto` yourself, which signs off orientation AND
-  crop together, and move straight to colour. Show ONE card
+  normal case — run `--approve-auto` yourself (signs off orientation AND crop
+  together) and move straight to colour. Show ONE card
   (`python tools/prep_card.py <shoot>`) of the revised frames as a record of
-  what shipped, not as a question. The operator can still override anything
-  from the card, but the run does not stop to wait for it.
-- **Anything guessed or flagged** — a `guessed: true` frame, a mask the colour
-  stage cannot trust, a crop the pipeline refused — ask about THOSE frames
-  only, by name, and approve the rest. The one question is about the
+  what shipped, not as a question; the run does not stop to wait.
+- **Anything guessed or flagged** — a `guessed: true` frame, a mask the
+  colour stage cannot trust, a crop the pipeline refused — ask about THOSE
+  frames only, by name, and approve the rest. The one question is about the
   exception, never "may I continue".
 
-Auto-approval never buys a lower bar. `--auto` still approves nothing by
-itself, `listing/` is still written only after the stages are signed off, and
-`--approve-auto` stamps the same per-stage digest a sheet approval does — so
-any later edit invalidates it the same way. What changed is who clicks it when
-the pipeline has nothing to ask.
+Auto-approval never buys a lower bar: `--auto` approves nothing by itself,
+`listing/` is still written only after sign-off, and `--approve-auto` stamps
+the same per-stage digest a sheet approval does — any later edit invalidates
+it the same way.
 
-## The interactive review is the EXCEPTION path — and it is STAGED
+## The interactive review — the exception path, STAGED
 
-This is where an override lands, and where a shoot goes whenever the auto pass
-is not good enough. Three corrections, in this order, and **you do not move on
-until the operator says the current one is right**:
+Where an override lands, and where a shoot goes when the auto pass is not
+good enough. Three corrections, in dependency order, and you do not move on
+until the operator says the current one is right:
 
     1. ORIENTATION  ->  2. CROP  ->  3. COLOUR / touch-up
 
-This ordering is not a preference, it is a dependency. A crop is only meaningful
-once the frame is the right way up. A colour judgement is only meaningful on the
-final framing. Shown together, a bad crop and a bad rotation look the same on
-the page and neither can be answered.
-
-**There used to be an UNSKEW stage between orientation and crop**, warping a
-rectangular item so its edges met the picture's. It was removed in 2026-08 on
-the operator's call: it cost a quad fit and a full-frame resample on every
-frame, it damaged more photos than it saved — a quad landing on a mat, a mount
-or a soft shadow squares up the wrong rectangle — and two degrees of tilt is not
-something a buyer sees in a thumbnail. Nothing plans one now. A shoot that was
-squared before it went still REPLAYS its recorded warp, so re-running PREP on a
-live shoot returns the pixels a buyer is already looking at.
+A crop is only meaningful once the frame is upright; a colour judgement only
+on the final framing. (UNSKEW was removed 2026-08; nothing plans one, but a
+previously squared shoot REPLAYS its recorded warp, so re-running PREP on a
+live shoot returns the pixels a buyer is already looking at.)
 
 ## Orientation is DECIDED, not asked — above 95% confidence
 
-Orientation is the one stage where the answer is usually in the picture, and it
-is not a good use of the operator's attention. So the model decides it:
-
     python tools/prep_orient_review.py <shoot>   # -> .prep/orient_review_N.jpg
 
-A row per frame, all four turns side by side, big enough to read printed body
-copy, current call ruled green, with the OSD reading printed for reference.
-**Read it, decide, apply with `--set-rotate`, and only surface the frames that
-fall below the bar.** Do not build a clickable picker for this stage and do not
-ask the operator to rule on frames you can read.
+Read the sheet (a row per frame, all four turns, OSD reading printed for
+reference), decide, apply with `--set-rotate`, and surface only the frames
+below the bar. Do not build a clickable picker for this stage, and never ask
+the operator to rule on frames you can read.
 
-**What clears 95%** — a positive, legible signal:
+**Clears 95%** — a positive, legible signal:
 
-- printed text whose baseline you can read (a masthead, body copy, a caption);
-- a human figure, which in a fashion or catalog frame is the strongest cue there
-  is: head up, garment hanging down;
-- an object with an unambiguous upright (a locomotive on its wheels);
-- **and** agreement with the rest of the shoot where the frames are alike — as a
-  *prompt to look again*, never as the answer. This used to read "six spreads
-  photographed in one session cannot correctly differ by 90°", and that is
-  false: on `paul-fredrick` the cover was shot portrait-wise and the spreads
-  were laid on the bedspread turned 90°, so the subject half genuinely differed
-  within one session. The camera half is shared across a session; the way the
-  item was laid down is not. Treating disagreement as proof of error is what
-  made a correct OSD reading look wrong (see `docs/osd-audit-2026-08-21.md`).
+- printed text whose baseline you can read;
+- a human figure (head up, garment hanging down) — the strongest cue in a
+  fashion or catalog frame;
+- an object with an unambiguous upright;
+- **and** agreement with like frames in the shoot — as a *prompt to look
+  again*, never as the answer: the camera half is shared across a session,
+  the way the item was laid down is not.
 
-**What does NOT clear it**, and goes to the operator with the sheet:
+**Does NOT clear** (→ operator, with the sheet): "looks more natural" with
+nothing legible to point at; a frame whose two halves disagree (say which cue
+you followed and why); a round or flat item with no defined upright; anything
+resting on OSD alone.
 
-- "it looks more natural this way" with nothing legible to point at;
-- a frame whose two halves disagree — a masthead upright on one page and a model
-  upright on the other. Say which cue you followed and why;
-- a round or flat item with no defined upright;
-- anything resting on OSD alone. **OSD is reference, not evidence.** Measured
-  across 73 frames where a human look was recorded beside the reading, OSD
-  agreed with the operator **49%** of the time at the old confidence floor —
-  a coin toss. The floor is now 4.0, where it agrees 84% of the time and
-  answers 42% of frames; below that it reports no answer and the frame becomes
-  an ASK. Regenerate the numbers with `python tools/osd_audit.py --bands`.
+**OSD is reference, not evidence.** Confidence floor 4.0; below it OSD
+reports no answer and the frame becomes an ASK (regenerate the bands with
+`python tools/osd_audit.py --bands`). A reading above the floor is STILL
+reference: high orientation confidence with weak script confidence means
+tesseract is confident about marks it does not recognise as language, and on
+flat printed media OSD can be confidently wrong — the orientation gate is
+what catches it.
 
-  Note what this does NOT license: a reading that clears 4.0 is still
-  reference. 84% is not 100%, and the one frame that shipped sideways on
-  `paul-fredrick` read confidence 12.29 — well clear of any bar — on a script
-  confidence of 0.6. High orientation confidence with weak script confidence
-  means tesseract is confident about marks it does not recognise as language.
+State the confidence per frame and name the cue. A number without a cue is
+not a judgement.
 
-State the confidence per frame when you report, and name the cue. A number
-without a cue is not a judgement.
+**Orientation is first — nothing else is measured yet.** `--check` resolves
+which way is up and stops; it does NOT plan crop or colour, which would
+otherwise be measured against a rotation nobody confirmed.
+`--approve-stage orientation` then runs `plan_geometry()` itself against the
+just-approved rotations; planning refuses outright while orientation is
+unapproved.
 
-**Orientation is first, and that means nothing else is measured yet.**
-`--check` reads EXIF, segments, runs the text detector and resolves which way is
-up — and stops there. It does NOT plan the crop or the colour reading, because
-each of those describes the geometry it was computed on: measure them against a
-rotation nobody has confirmed, and a later turn silently invalidates both. Six catalog spreads shipped exactly that way, with crops
-planned at 0° while the manifest ended up saying 270°.
+## The Frame Check page — the locked review format
 
-`--approve-stage orientation` then runs `plan_geometry()` itself, against the
-rotations just approved, so the operator never has to remember a second command.
-Planning refuses outright while orientation is unapproved. It costs one extra
-decode per frame; it buys the guarantee that no downstream number was ever
-computed against a rotation that later changed.
-
-Each stage shows **a card per photo with a thumbnail for every option at that
-stage, side by side**, current choice ruled green. The operator is picking from
-pictures, never reading a description of a picture.
-
-**Present it as the Frame Check page, every time — orientation, crop AND
-colour.** This is the settled format. Do not hand over a JPEG contact sheet, do
-not describe the frames in prose, and do not invent a different layout for any
-stage: all three use the same page, the same card, the same controls.
+Every stage — orientation, crop AND colour — and every modified image is
+shown the same way: same page, same card, same controls. Never a JPEG contact
+sheet, never prose in place of a picture, never a per-stage improvisation.
 
     python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
 
-then publish that file as an artifact and give the user the link. Republish the
-SAME file path after every change so the link never moves.
+Publish that file as an artifact and link it; republish the SAME path after
+every change so the link never moves. Pair it with a one-click accept in chat
+so the operator never copies a command by hand. (The JPEG builders —
+`--stage NAME` → `.prep/stage_N_*.jpg` — remain the fallback when no page can
+be published.)
 
-What the page must have, on every stage:
-
-| | |
-|---|---|
-| **A card per frame** | one picture per card, big enough to judge |
-| **Every option side by side** | as clickable thumbnails, current one ruled green |
-| **An override on every card** | including frames the pipeline refused — a card you cannot argue with is not a review. A refused crop still offers *force a crop* |
-| **A free-text box on every card** | the options only cover the overrides we thought of; "the smokestack is clipped" has to have somewhere to go. Typed notes ride along with the command |
-| **An Accept button per stage** | says plainly that it sends the stage as shown, with any changes and notes attached |
-| **Click any picture to open it full size** | the thumbnail is enough to make the call, the detail is what the call rests on |
-| **The exact command, copyable** | the page cannot reach the CLI; a fake Apply button would be worse than admitting that |
-
-**The page must work with JavaScript switched off.** This is the rule that cost
-the most to learn. Selection is native radio inputs, the picture shown is a CSS
-`:has()` rule, the tabs are a radio group, the full-size preview is `:target`.
-Script is layered on top for one job — assembling the command — and the page is
-fully usable when it never runs. Two versions built the DOM in JS and routed
-every click through a handler; both rendered perfectly and neither responded to
-a single click in the viewer the operator actually uses. Script-dependent UI
-fails as a page that looks finished and does nothing.
-
-Rules that follow from getting it wrong, in order of how much they cost:
-
-1. **No inline `onclick`, and no JS-built DOM.** Render the markup from Python.
-2. **Never assume a key event landed on an element** — it can land on the
-   document, which has no `closest()`, and the handler dies silently.
-3. **Never render a lone option as a button.** One option is not a choice; it
-   reads as broken. Give it a real alternative or no button row at all.
-4. **Write each image's bytes once**, as a CSS custom property on the card, and
-   paint the thumbnail, the option chip and the full-size preview from it. Three
-   copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
-5. **Anything that looks clickable must be clickable**; anything that is not
-   gets no affordance.
-0. **Nothing may depend on a modern selector, a URL or a script.** Three
-   mechanisms have been tried and abandoned, each of which worked perfectly in a
-   normal tab and was dead in the frame the operator reads these pages in: a
-   JS-built DOM (script never ran), `:target` for the previews and the Accept
-   panel (a URL fragment never lands in a sandboxed frame), and `:has()` for
-   selection, tabs and chips (a 2022 selector — where it is missing the page
-   draws perfectly and answers nothing). Every piece of state is a native input
-   at the TOP of its container and everything it drives is a following sibling
-   reached by `~`, which has worked since CSS2. A control whose input is nested
-   inside the thing it styles cannot work — that is how the Accept button
-   shipped inert. Held by `tests/test_prep_sheet_html.py`.
-6. **Never hand-list the options in CSS.** The rule that decides which picture a
-   card shows matches on the option's **index**, generated up to `MAX_OPTS` — not
-   on its value. An earlier version spelled the values out (`"0"`, `"90"`, `"on"`,
-   `"off"`, `"studio"`, `"punch"`), so the day the colour stage grew `half`,
-   `tenth` and `crisp`, picking any of the three matched no rule: the card went
-   blank and the full-size preview opened empty, on the stage the operator uses
-   most. A stage must be able to add an option without anyone remembering to edit
-   a stylesheet. Held by `tests/test_prep_sheet_html.py`, which fails if the rules
-   go back to being hand-listed or a stage outgrows the generated range.
-
-**Verify the page in a browser before handing it over** — every option on every
-card, checking that the picture changes in BOTH the card and the full-size
-preview. Both bugs above rendered perfectly and did nothing; neither is visible
-in the markup, and neither would have shipped if one pass had actually clicked
-through the options. `tests/test_prep_sheet_html.py` covers the generator; the
-click-through covers the page.
-
-The JPEG builders still exist (`--stage NAME` writes `.prep/stage_N_*.jpg`) and
-are the fallback when no page can be published.
-
-## SHOWING A MODIFIED IMAGE — the locked template
-
-Every time PREP changes a picture, the operator sees it this way. No
-exceptions, no per-stage improvisation, and never a prose description in place
-of the picture.
-
-**The rule: never show a result without what it came from.** A cropped frame
-alone is unreviewable — the question is not "is this a good picture", it is
-"was the right thing removed". The same holds for a rotation and a colour pass.
-
-    BEFORE            →   AFTER              →   why, in the operator's words
-    (what it was)         (what will ship)       ("would cut 10% off the page")
+**Never show a result without what it came from.** The question is "was the
+right thing removed", never "is this a good picture":
 
 | Stage | Before | After | Options offered |
 |---|---|---|---|
-| orientation | the frame as the camera gave it | at the chosen turn | all four turns |
+| orientation | as the camera gave it | at the chosen turn | all four turns |
 | crop | the full frame | the crop result | cropped / as shot / force a crop |
 | colour | as shot | each rendered look | as shot + every look |
 
-Requirements, all of them load-bearing:
+The page must have, on every stage — all load-bearing:
 
 1. **A card per frame**, one picture per card, big enough to judge.
-2. **Every option side by side as a thumbnail**, current choice ruled green.
-3. **Click any picture to open it full size**; arrow keys step frame to frame.
-4. **An override on every card**, including frames the pipeline refused. A card
-   you cannot argue with is not a review. A refused crop still offers *force a
-   crop*, and says it cannot be previewed.
-5. **A free-text box on every card.** The options only cover the overrides we
-   thought of; "the smokestack is clipped" needs somewhere to go.
-6. **The reason, per frame, in words** — "no studio backdrop (luma 192)", "would
-   cut 10% off the subject". A refusal without a reason reads as a failure.
-7. **An Accept button per stage**, stating that it sends the stage as shown.
-8. **The exact command, copyable**, and generated in an IDEMPOTENT form
-   (`--set-rotate`, not `--rotate`) — see the rules below.
+2. **Every option side by side as thumbnails**, current choice ruled green —
+   the operator picks from pictures, never a description of a picture.
+3. **Click any picture to open it full size**; arrow keys step frame to
+   frame.
+4. **An override on every card**, including frames the pipeline refused — a
+   card you cannot argue with is not a review. A refused crop still offers
+   *force a crop*, and says it cannot be previewed.
+5. **A free-text box on every card** — "the smokestack is clipped" needs
+   somewhere to go; typed notes ride along with the command.
+6. **The reason, per frame, in words** ("no studio backdrop (luma 192)"). A
+   refusal without a reason reads as a failure.
+7. **An Accept button per stage**, stating it sends the stage as shown.
+8. **The exact command, copyable, in IDEMPOTENT form** (`--set-rotate`, never
+   `--rotate` — a relative command moves the frame again on every paste).
 
-Build it with:
+**The page must work with JavaScript OFF, in a sandboxed frame, on old CSS.**
+Held by `tests/test_prep_sheet_html.py`:
 
-    python tools/prep_sheet_html.py <shoot>      # -> <shoot>/.prep/review.html
+1. No inline `onclick`, no JS-built DOM — render the markup from Python.
+   Script does ONE job (assembling the command); the page is fully usable
+   when it never runs.
+2. Nothing may depend on a modern selector, a URL or a script — no `:has()`,
+   no `:target`. Every piece of state is a native input at the TOP of its
+   container, driving following siblings via `~`. A control whose input is
+   nested inside the thing it styles cannot work.
+3. Selector rules match the option's **index**, generated up to `MAX_OPTS` —
+   never hand-listed values. A stage must be able to add an option without
+   anyone editing a stylesheet.
+4. Write each image's bytes ONCE, as a CSS custom property on the card, and
+   paint thumbnail, option chip and preview from it.
+5. Never assume a key event landed on an element — it can land on the
+   document, which has no `closest()`.
+6. Never render a lone option as a button; anything that looks clickable must
+   be clickable, and anything that is not gets no affordance.
 
-publish that file as an artifact, link it, and republish the SAME path after
-every change so the link never moves. Pair it with a one-click accept in chat
-so the operator never copies a command by hand.
-
-**The page must work with JavaScript switched off.** Selection is native radio
-inputs, the shown picture is a CSS `:has()` rule, tabs are a radio group, the
-preview is `:target`. Script does one job — assembling the command — and the
-page is fully usable when it never runs. Two versions built the DOM in JS and
-routed every click through a handler; both rendered perfectly and neither
-responded to a single click in the viewer the operator actually uses.
-
-Rules learned by breaking them, in order of what they cost:
-
-1. **No inline `onclick`, and no JS-built DOM.** Render the markup from Python.
-2. **A generated command must be idempotent.** `--rotate` is relative to what
-   the sheet shows; a page that emits it as if it were absolute moves the frame
-   again on every paste. Use `--set-rotate`.
-3. **Never assume a key event landed on an element** — it can land on the
-   document, which has no `closest()`, and the handler dies silently.
-4. **Never render a lone option as a button.** One option is not a choice.
-5. **Write each image's bytes once**, as a CSS custom property on the card.
-   Three copies took a fourteen-frame shoot to 15 MB against a 16 MB ceiling.
-6. **Anything that looks clickable must be clickable**; anything that is not
-   gets no affordance.
-
-The JPEG builders (`--stage NAME`) remain as the fallback when no page can be
-published.
-
----
-
-## What the audit found, and what it changed
-
-An audit of 819 already-published frames (`tools/prep_saturation_audit.py`, then
-`tools/prep_saturation_verify.py` against the subject mask) found item colour
-destroyed on **14 frames across 10 shoots**, 9 of them live. Worth keeping in
-mind because every one had the same shape:
-
-- the correction was behaving **correctly on a wrong premise**. Segmentation
-  handed part of the item to the backdrop, and the backdrop pass neutralised it,
-  which is exactly what it is told to do to cloth;
-- the tell is **mask coverage**: 43–70% on flat printed catalog covers, 5–9% on
-  thin silver on a light ground. Those two subjects are the weakness;
-- the first-pass sweep flagged 39 shoots, but **54 of 76 frames were the
-  correction working** — a backdrop cast being removed. Measure inside the mask
-  before calling anything damage.
-
-Mitigations now in the code: `_protect_objects` tests chroma as well as luma
-(`CHROMA_OBJECT_MIN`, measured — cloth reaches 24, paint starts at 54), `crisp`
-is the default for new items, and `asshot` exists for when a shoot's mask cannot
-be trusted at all.
-
-**Open defect — OSD can be confidently wrong.** On paul-fredrick the detector
-read subject 270 on five frames at confidence up to 12.2 with recognised script,
-all corroborating each other, and all wrong: the pages ship at 270 applied, not
-0. The one frame it could not read is the one the operator kept correcting by
-hand, and they were right every time. "High confidence, corroborated" is exactly
-the state in which a headless run would ship these unreviewed. Do not trust OSD
-alone on flat printed media; the orientation gate is what catches it.
+**Verify the page in a browser before handing it over** — every option on
+every card, checking the picture changes in BOTH the card and the full-size
+preview. The costliest bugs rendered perfectly and did nothing.
 
 ## The looks
 
-Both render every time; the operator picks. They differ only in how hard they
+All render for comparison; the operator picks. They differ in how hard they
 push, never in what they may touch.
 
 | Preset | Backdrop | Item |
 |---|---|---|
-| `half` | studio at half strength — every move halved | half the pop and sharpen |
+| `half` | studio with every move halved (`k=0.5`) | half the pop and sharpen |
 | `studio` | neutralised to true black/white, fuzz blurred | sharpened |
 | `punch` | same | stronger contrast and colour |
 
-`half` is not a fourth set of numbers to keep in step. It is studio with `k=0.5`,
-the same multiplier the rail guard already backs off with, so it halves the
-white-balance gain, the backdrop curve, the neutralise, the blur, the pop and
-the sharpen together. Reach for it when a look reads washed out: the wash comes
-from the correction, so less correction is less wash.
+Reach for `half` when a look reads washed out: the wash comes from the
+correction, so less correction is less wash.
 
-### Printed media takes NO crop, either.
+**Defaults:**
 
-**On books, magazines, catalogs and mailers, force `--crop <every frame>=off`.**
+- **`crisp` for any NEW item, whatever the backdrop** — the only look that
+  cannot misrepresent the goods: full-strength backdrop cleanup, item colour
+  exactly as the camera recorded it.
+- **An item ALREADY LIVE keeps the look it was published under.** Change one
+  on purpose with `--pick`, never in bulk — re-rendering silently changes
+  pictures a buyer may have seen.
+- Backdrop-led defaults for existing shoots: `punch` on dark or navy cloth,
+  `studio` on a light sweep. The default decides what is SHOWN at the gate,
+  never what publishes.
 
-Same cause as the colour rule, a different stage. The crop stage looks for the
-highest-contrast object in the frame; on an open catalog that object is the
-photograph PRINTED IN THE LAYOUT, not the catalog. So it crops the merchandise
-away and keeps the picture of it.
+## Printed media — books, magazines, catalogs, mailers
 
-Measured on live listings before the fix: `j-crew/3` shipped cropped to a
-printed boot with the J.CREW masthead — the thing that identifies the listing —
-outside the frame; `mark-shale-business-casual` to a printed chair, keeping 24%
-of the original; `brother-tree` into the body text at 18.9%; and the
-`fall-and-winter-1980` mailer to a bare black bar, because the crop locked onto
-the redaction rectangle over the address. Of 56 cropped media frames the median
-kept 75% and the tail ran to 19%.
-
-There is no crop worth making here. The object of the listing is the whole page,
-edges included: a buyer judging a catalog is judging its cover wear, its corners
-and its squareness, all of which live exactly where a tight crop cuts. Set crop
-off for the class rather than trying to teach the detector what a catalog is.
-
-Order matters when re-rendering: set the crop off BEFORE `--apply`. A crop
-change invalidates the renders, so doing it afterwards renders every frame
-twice.
-
-### Printed media renders `asshot`. No exceptions from the default path.
-
-**Books, magazines, catalogs, mailers — any shoot whose subject is printed paper
-— default to `asshot` (k=0), not to `studio`.**
-
-The correction cannot be trusted on this class, and the reason is structural
-rather than a tuning miss. A catalog is photographed open on a light sweep, so
-the printed page IS a large light field with ink on it: the segmenter hands that
-page to the backdrop, and the backdrop pass then does exactly what it is told to
-do to a backdrop — neutralise it toward paper white. White balance has nothing
-reliable to lock onto either, because the page's own ink is the dominant colour
-and glossy stock throws the sweep's cast straight back into the lens.
-
-Measured on `more-mags-444/fall-and-winter-1980`, on renders that were already
-live: saturation against source-selected pixels fell 51.8% on the hero, 60.9%
-and 61.3% on two interior spreads, and 94.0% on the mailer. The damage scales
-linearly with `k` — studio -39.4%, half -19.2%, tenth -3.5%, asshot -0.2% —
-which is the signature of the backdrop pass eating the subject, not of a bad
-curve. Re-running under the chroma guard did not change those numbers.
-
-`tenth` is the compromise if a genuine cast has to come off. `asshot` is the
-default because the failure is silent: a drained catalog spread still looks like
-a catalog spread, and nothing in the pipeline flags it.
-
-**Default: `crisp` for any NEW item, whatever the backdrop.** It is the only
-look that cannot misrepresent the goods — full-strength backdrop cleanup, the
-item's colour left exactly as the camera recorded it. An item ALREADY LIVE keeps
-the look it was published under; re-rendering it into a different one silently
-changes pictures a buyer may already have seen. Change one on purpose with
-`--pick`, never in bulk.
-
-The older backdrop-led defaults still apply to existing shoots:
-**`punch` on a dark or navy cloth, `studio` on a light sweep.** A
-deepened backdrop gives the item something to separate against, so the extra
-push pays off; on a white sweep the same push has nothing to separate from and
-reads as over-processed. `--pick` overrides. The default decides what is SHOWN
-at the gate, never what publishes.
-
----
+- **NO crop: force `--crop <every frame>=off`.** The crop detector locks onto
+  the photograph PRINTED in the layout and crops the merchandise away. The
+  object of the listing is the whole page, edges included — cover wear,
+  corners and squareness live exactly where a tight crop cuts. Set crop off
+  BEFORE `--apply`; a crop change afterwards invalidates the renders and
+  renders every frame twice.
+- **Colour: `asshot` (k=0), no exceptions from the default path.** The
+  segmenter hands the printed page to the backdrop pass, which neutralises it
+  toward paper white; the damage scales linearly with `k` and the failure is
+  silent — a drained spread still looks like a spread. `tenth` is the
+  compromise when a genuine cast has to come off.
+- **Orientation: prefer the OSD read over the vision estimate** when the two
+  disagree — text is the one thing on a page with an unambiguous upright, and
+  the corroboration rule guards OSD's known false positive.
 
 ## Categories — say what the goods ARE, once
-
-Most of PREP's flags are not preferences. They are statements about what is in
-front of the camera, and they have the same answer every time for a given kind
-of goods. `--category` carries the whole set:
 
 ```bash
 python -m lib.photo_prep.prep <shoot> --category printed --check
@@ -507,40 +268,17 @@ python -m lib.photo_prep.prep <shoot> --category printed --check
 | `default` | `auto` — both detectors, arbitrated on agreement | all six, for comparison |
 | `printed` | `paper` — LAB decides; u2net kept as a second opinion | `asshot` only |
 
-**Why `printed` needs its own detector.** On a catalog the salient object is the
-picture PRINTED ON the item, so u2net cuts out the cover model and returns a
-mask that is a strict sub-region of the paper. The containment test cannot catch
-that — a box wholly inside the paper's box scores 1.0. LAB has no such
-confusion: paper against a sweep is the figure/ground split it measures.
-
-**Why it renders one look.** The section above already says printed media ships
-`asshot`, always. Rendering the other five produces images nobody opens, at
-~25s a frame each. Measured on five 12 MP catalog frames, same decisions and
-the same gates: **8m10s under `default` → 45.6s under `printed`, 10.7×**. Per
-frame, once u2net is loaded, that is ~94s → ~5.1s.
-
-Two of those seconds came back from `asshot` itself: at `k=0` every term in the
-colour correction is multiplied by zero and the result discarded, so the loop is
-now skipped outright rather than computed and thrown away (26s → 3.9s a frame).
-The pixels and the full colour report are asserted identical to the old path.
-
-`looks` narrows what is RENDERED, never what is picked. The operator still
-chooses at the colour stage and `--pick` still overrides. A one-look category
-says *the comparison is not live for this kind of item* — not *this look is
-approved*.
-
-**The category persists in the manifest**, so a later `--check` or `--apply`
-that does not repeat the flag gets the same answer. Changing it drops the
-crop/colour sign-offs, because every box downstream of the detector was
-measured against the old one. `--subject auto|paper` remains available as the
-escape hatch for a shoot its category gets wrong, and outranks it.
-
-Categories live in `lib/photo_prep/categories.py`. Adding one is data, not code
-— but keep it grounded: every field should trace to something observed on a real
-shoot. A category invented from taste is a policy change wearing a config file,
-and it reaches hundreds of frames before anyone notices it was a guess.
-
----
+- `looks` narrows what is RENDERED, never what is picked. A one-look category
+  says *the comparison is not live for this kind of item*, not *this look is
+  approved*. `--pick` still overrides.
+- The category persists in the manifest, so a later `--check`/`--apply` that
+  omits the flag gets the same answer. Changing it drops the crop/colour
+  sign-offs — every box downstream of the detector was measured against the
+  old one. `--subject auto|paper` is the per-shoot escape hatch and outranks
+  it.
+- Categories are data (`lib/photo_prep/categories.py`), but every field must
+  trace to something observed on a real shoot. A category invented from taste
+  is a policy change wearing a config file.
 
 ## What it will not do
 
@@ -548,19 +286,17 @@ The line is between **the studio** and **the goods**. Re-toning, neutralising
 and blurring the backdrop are fair game. On the item itself: white balance,
 exposure, contrast and sharpening only.
 
-**No denoise, no smoothing, no blemish removal, ever.** Those are what soften
-scratches and even out tarnish, and a listing photo that disagrees with its own
-condition disclosure is worse than a flat one. Sharpening earns its place by
-cutting the other way — it makes fine wear *more* legible.
+**No denoise, no smoothing, no blemish removal, ever.** Those soften
+scratches and even out tarnish, and a listing photo that disagrees with its
+own condition disclosure is worse than a flat one. Sharpening earns its place
+by cutting the other way — it makes fine wear *more* legible.
 
-Automatic refusals, all reported per frame on the sheet:
+Automatic refusals, each reported per frame on the sheet:
 
-- **No studio backdrop** → no crop, no backdrop move. A macro of a maker's mark
-  or a serial stamp has the item's own surface behind it; lifting aged tan paper
-  toward white is cosmetically nicer and a misrepresentation.
-- **A large object in the backdrop** → protected from neutralising and blurring.
-  A ruler laid alongside for scale falls outside the subject mask and is *not*
-  cloth; blurring it destroys measurement evidence.
+- **No studio backdrop** → no crop, no backdrop move (a mark macro's
+  "backdrop" is the item's own surface; lifting it is misrepresentation).
+- **A large object in the backdrop** → protected from neutralising and
+  blurring (a scale ruler is measurement evidence).
 - **Mask failure** (subject under 2% of frame) → every backdrop operation off.
 - **Detectors disagree** on where the item is → no crop.
 - **The item would be cut**, or the crop lands under 1400px → no crop.
@@ -568,62 +304,37 @@ Automatic refusals, all reported per frame on the sheet:
 The colour pass also measures its own output: no correction may push an item
 pixel to pure black or white that was not already there.
 
----
+**When a frame looks damaged, measure INSIDE the subject mask before calling
+it damage** — most flagged frames are the correction correctly removing a
+backdrop cast. Low mask coverage (flat printed covers; thin silver on a light
+ground) is the tell that segmentation handed item to backdrop.
 
 ## Orientation: what is trusted
 
-Two independent rotations, composed:
+Two independent rotations, composed: **camera** (the EXIF Orientation tag —
+objective, always applied) and **subject** (how the item was laid in the
+frame — no metadata knows this).
 
-- **Camera** — the EXIF Orientation tag. Objective, always applied.
-- **Subject** — how the item was laid in the frame. **No metadata knows this.**
+The subject half comes from OSD **corroborated by another like frame in the
+same shoot**, or from a recorded look, or it goes to ASK. Nothing infers
+"probably upright" from an aspect ratio; a round item is resolved by someone
+looking once and confirming `0`. Recorded rotations mirror into
+`<shoot>/orientation.json`, shared with
+[`lib/photo_prep/orient.py`](../lib/photo_prep/orient.py) — a call made in
+either tool is the call in both.
 
-The subject half comes from page-orientation detection (objective, but only when
-**corroborated by another frame in the same shoot** — measured false positives
-include a textless macro read as text at higher confidence than a real magazine
-cover), or from a recorded look, or it goes to ASK.
+## The old chain
 
-On printed media, prefer the page-orientation (OSD) read over the vision
-estimate when the two disagree. Text is the one thing on a catalog page that has
-an unambiguous upright, and the corroboration rule already guards OSD's known
-false positive. Measured on `fall-and-winter-1980`: the three frames resolved
-`exif+osd` all landed upright, while two of the three resolved `exif+vision`
-shipped rotated 90 degrees with the models on their sides and the body text
-running vertically — and none of them were flagged ASK, so the pipeline was
-confidently wrong rather than uncertain.
-
-Nothing infers "probably upright" from an aspect ratio. A round item with no
-defined upright is resolved the same way as everything else: someone looks once
-and confirms `0`.
-
-Recorded rotations mirror into `<shoot>/orientation.json`, the same file
-[`lib/photo_prep/orient.py`](../lib/photo_prep/orient.py) writes, so a call made
-in either tool is the call in both.
-
----
-
-## What replaced what
-
-| Old step | Now |
-|---|---|
-| `strip_exif` | PREP bakes EXIF internally; `no-exif/` is legacy output |
-| `even_background`, `trim_whitespace` | PREP's backdrop pass (mask-driven, works on dark felt too) |
-| `center_crop` | PREP's crop (its safety guards are reused, not reimplemented) |
-| `orient.py --set` | still works; PREP reads AND writes its manifest |
-| DRAFT step 1/1b/2/3 | this prompt |
-
-`strip_exif` and `orient.py` remain useful on their own for a quick one-off.
-What must not happen is running the old chain *and* PREP on one shoot and then
-guessing which directory the draft points at — that ambiguity is what the single
-`listing/` output and the code-level gate exist to remove.
-
----
+`strip_exif` and `orient.py` remain useful for a quick one-off; PREP subsumes
+the rest (mapping in the notes). Never run the old chain AND PREP on one
+shoot — the single `listing/` output and the code-level gate exist to remove
+exactly that ambiguity.
 
 ## Gate contract
 
-PREP is a **HARD gate** and stops the run, including headless, until the user
-approves. It is enforced in code as well as here: `upload_photos_to_eps` refuses
-photos that are not prepped and approved, so an unapproved shoot cannot reach
-eBay even if this prompt is ignored. Approval goes stale automatically if a
-source or an output changes — what was approved must be what is uploaded.
-
-Flip it to soft only when the user says so.
+PREP is a **HARD gate** and stops the run, including headless, until
+approval. Enforced in code: `upload_photos_to_eps` refuses photos that are
+not prepped and approved, so an unapproved shoot cannot reach eBay even if
+this prompt is ignored. Approval goes stale automatically when a source or an
+output changes — what was approved must be what is uploaded. Flip to soft
+only when the user says so.
