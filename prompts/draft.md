@@ -1,4 +1,4 @@
-# DRAFT — v3, Function 5
+# DRAFT — v4, Function 5
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
@@ -8,109 +8,33 @@ A pure template-fill transform — no new identification, investigation, or
 pricing. Read the prior phases' files, render the template, validate
 against its constraints, write one self-contained local file. **Local
 file only — no eBay calls, no publishing** (firewall, per _shared).
+Rationale, history and the measurements behind the rules:
+[reference/draft-notes.md](reference/draft-notes.md).
 
 ## Photos come from PREP — DRAFT does not touch them up
 
-Photo preparation is its own phase now: **[PREP](prep.md)**, run after IDENTIFY.
-It handles orientation, crop, backdrop and the subject pass in one pass, writes
-`<shoot-dir>/listing/`, and stops at a HARD approval gate.
-
-**DRAFT's job here is only to point `photos:` at the prepped files:**
+Photo preparation is its own phase: **[PREP](prep.md)**, run after IDENTIFY.
+It writes `<shoot-dir>/listing/` and stops at a HARD approval gate. DRAFT's
+job is only to point `photos:` at the prepped files:
 
     python -m lib.photo_prep.prep <shoot-dir> --repoint-draft --apply-repoint
 
-That maps each existing entry to its prepped counterpart **in the same order** —
-entry one is the eBay gallery image and the list is often not lexicographic.
+That maps each existing entry to its prepped counterpart **in the same
+order** — entry one is the eBay gallery image and the list is often not
+lexicographic.
 
-If PREP has not been run, stop and run it; do not fall back to the old tools.
-`upload_photos_to_eps` enforces this in code, so an unprepped or unapproved
-shoot cannot publish regardless of what this prompt says.
+If PREP has not been run, stop and run it; do not fall back to the old tools
+(one-off exceptions in the notes). `upload_photos_to_eps` enforces this in
+code, so an unprepped or unapproved shoot cannot publish regardless of what
+this prompt says.
 
-<details>
-<summary>The old hand-chained sequence (superseded — kept for one-off use)</summary>
-
-The steps below ran as a chain: `strip_exif` → `even_background` →
-`trim_whitespace` → `center_crop`, each writing a subdirectory. **Do not run
-them as a chain any more.** Four subdirectories that all look plausible, plus a
-lexicographic photo picker at the end, is where 66 sideways photos hid until
-buyers complained. PREP replaces the whole sequence with one output directory
-and a manifest recording what was done to each frame.
-
-The individual tools still work for a quick one-off, and `orient.py`'s manifest
-is read *and written* by PREP so a rotation recorded in either is the call in
-both. What must not happen is running both on one shoot and then guessing which
-directory the draft points at.
-
-> ⛔ **The orientation test is CONTENT, not metadata.** "Would a buyer see this
-> the right way up?" is the only question that matters, and it cannot be answered
-> from EXIF. A clean metadata pass is necessary and nowhere near sufficient: a
-> phone held at an angle, a book laid on its side, a box shot end-on all produce
-> files that are correct by their EXIF and wrong on the page. Buyers complained
-> about exactly this, and it was declared fixed twice on the strength of the
-> metadata alone. **Never call photos good without looking at them, and never at
-> thumbnail size** — a whole batch was passed off small tiles with every frame
-> still rotated. See step 1b.
-
-Run the sequence (skip a step when it doesn't apply):
-
-1. **EXIF / orientation** — always. Bakes any real Orientation tag into the
-   pixels (`exif_transpose`), then strips metadata, so a viewer needs no tag to
-   get it right.
-       python -m lib.photo_prep.strip_exif <shoot-dir>            # -> <shoot-dir>/no-exif/
-       python -m lib.photo_prep.strip_exif <shoot-dir> --force    # after fixing a bug: stale
-                                                                 # outputs are NEWER than their
-                                                                 # sources and are skipped otherwise
-
-1b. **Orientation review — ALWAYS, and a HUMAN rules on it.** Step 1 only fixes
-   photos whose camera told the truth. For the rest:
-   - Build a numbered contact sheet of the SHIPPED files (`no-exif/`, opened with
-     NO transpose), frame numbers matching this draft's `photos:` order.
-   - Any frame that isn't obviously right: render it at **all four rotations side
-     by side** and pick by eye. Text baseline is the strongest cue (which way
-     would you tilt your head to read it), then how the object naturally sits.
-   - Record the call — never rotate a shipped file in place:
-         python -m lib.photo_prep.orient <shoot-dir> --set "1=180,2=ccw,3=cw"
-     It writes `<shoot-dir>/orientation.json` (degrees CW) and REBUILDS
-     `no-exif/` from the source every time, so a wrong call cannot stack and a
-     later strip_exif cannot silently revert a human's decision.
-   - **Show the user the sheet and get their ruling BEFORE anything publishes.**
-     They are looking at the real listings; you are not.
-   - On a flat lay with objects at odds, no rotation makes everything upright.
-     Pick the hero and SAY which secondary item stays inverted — that is a
-     re-shoot issue, not a rotation one. Don't claim the frame is perfect.
-2. **Backdrop cleanup — only for near-white/seamless backdrops** (NOT dark-felt
-   shots; the corner-sampling logic is tuned for light backgrounds). Evens
-   lighting/shadow, then trims the border to the subject.
-       python -m lib.photo_prep.even_background <dir>            # -> uniform backdrop
-       python -m lib.photo_prep.trim_whitespace <dir>           # -> <dir>/trimmed/
-3. **Center-crop — always.** Centers the item on its focal point at an
-   eBay-friendly aspect (square 1:1 default). Finds the subject by
-   background-contrast (works on dark felt AND light box interiors) and unions
-   ALL foreground pieces so a pair/set stays whole.
-       python -m lib.photo_prep.center_crop <dir> --check        # per-photo verdict + reason
-       python -m lib.photo_prep.center_crop <dir> --apply        # recenter in place (backs up to .orig/)
-   `--apply` overwrites in place so DRAFT's lexicographic photo picker uses the
-   centered files with no other change; default (no `--apply`) writes to
-   `cropped/`. Tunables: `--aspect 4:5`/`orig`, `--pad 0.12`, `--threshold` (flag
-   cutoff, default 6%). Writes a `crop_review.jpg` before|after contact sheet.
-   The tool REFUSES a crop it can't make safely (subject fills the frame, nothing
-   detected, detector locked onto a logo/fragment, or the crop would cut the
-   item): it prints `SKIPPED <reason>`, passes the original through untouched,
-   and labels that row on the review sheet. Expect a lot of skips on macro-heavy
-   shoots — that's the tool working. `--force` crops anyway; don't, unattended.
-
-Chaining: each tool reads a dir and writes a subdir — point the next step at the
-previous output. See [[feedback_center_crop_before_draft]].
-
-</details>
-
-**Check the photos before drafting (per [[feedback_crop_check_first]] ethos):**
-eyeball `<shoot-dir>/.prep/prep_review.jpg`. PREP self-skips the known misfires
-and prints the reason on each row, but that is a backstop, not a substitute — a
-crop can be merely ugly rather than unsafe, and a look can be wrong for the item
-without any rule catching it. Never draft on a bad pass: re-run PREP, `--pick`
-the other look, or record a different rotation. The approval that PREP's gate
-wants is the user's, on that sheet.
+**Check the photos before drafting:** eyeball
+`<shoot-dir>/.prep/prep_review.jpg`. PREP self-skips the known misfires and
+prints the reason on each row, but that is a backstop — a crop can be merely
+ugly rather than unsafe, and a look can be wrong for the item without any
+rule catching it. Never draft on a bad pass: re-run PREP, `--pick` the other
+look, or record a different rotation. The approval PREP's gate wants is the
+user's, on that sheet.
 
 ## Inputs
 
@@ -136,28 +60,20 @@ DRAFT never invents to fill gaps — missing inputs become flagged gaps.
 
 ## Style guide (optional overlay — OFF unless the run turns it on)
 
-A **style guide** under [`../styleguides/`](../styleguides/README.md) is a study
-of how one good seller lists — title slot order and budgets, body skeleton,
-voice. It is **off by default**. Load one only when the run names it ("use the
-patinaelements style guide") or a batch config sets `style_guide: <slug>`; then
-read `../styleguides/<slug>.md` and apply its **DRAFT — titles** and
-**DRAFT — description voice** sections while composing.
+A **style guide** under [`../styleguides/`](../styleguides/README.md) is a
+study of how one good seller lists. **Off by default.** Load one only when
+the run names it or a batch config sets `style_guide: <slug>`; then apply its
+**DRAFT — titles** and **DRAFT — description voice** sections while
+composing.
 
-It changes *how we say it*, never *what we may claim*. Every rule above and
-below still binds: INVESTIGATE remains the sole source of claims, no
-`[BEST-CASE]` language reaches copy, defects survive any trim, expected age
-gets one neutral clause, PII stays redacted (and disclosed), and the field
-constraints hold. **On any conflict, the house rule wins** — drop the guide's
-pattern, note it in `meta.notes`, and move on. Never reproduce a studied
-seller's title strings or sentences; the guide carries technique, not text.
-
-If a guide is loaded, say so in `meta.notes` (`style_guide: <slug>`) so the
-review card shows which listings were drafted under an overlay.
-
-**The patinaelements guide is no longer an overlay** — its title pattern and
-body skeleton were adopted as house style on 2026-08-24 and are written into
-the two sections below, claim bar intact. The overlay mechanism stays for the
-*next* seller we study.
+It changes *how we say it*, never *what we may claim*: INVESTIGATE remains
+the sole source of claims, no `[BEST-CASE]` language reaches copy, defects
+survive any trim, expected age gets one neutral clause, PII stays redacted
+(and disclosed), and the field constraints hold. **On any conflict, the house
+rule wins** — drop the guide's pattern, note it in `meta.notes`, move on.
+Never reproduce a studied seller's title strings or sentences; a guide
+carries technique, not text. If a guide is loaded, say so in `meta.notes`
+(`style_guide: <slug>`).
 
 ## Source-of-truth mapping
 
@@ -183,13 +99,14 @@ repeat a claim INVESTIGATE confirmed.
 **item_specifics:** from INVESTIGATE's "Item specifics" section ONLY. If
 INVESTIGATE listed it, copy; else `""` — do NOT fall back to IDENTIFY.
 Standard fields ≤65, `upc` ≤20. Extra specifics → `item_specifics.extra`.
-**Category-REQUIRED aspects must still be emitted** even if INVESTIGATE didn't
-itemize them and even when unbranded — eBay rejects the publish otherwise (errorId
-25002 "item specific <X> is missing"). A loaded specialization names its category's
-required aspects in its Output hooks (e.g. jewelry rings require `Metal` +
-`Metal Purity` + `Ring Size`); emit those into `item_specifics.extra` from
-INVESTIGATE/IDENTIFY. When unsure which a category requires, prefer including the
-obvious ones over a failed publish.
+**Category-REQUIRED aspects must still be emitted** even if INVESTIGATE
+didn't itemize them and even when unbranded — eBay rejects the publish
+otherwise (errorId 25002 "item specific <X> is missing"). A loaded
+specialization names its category's required aspects in its Output hooks
+(e.g. jewelry rings require `Metal` + `Metal Purity` + `Ring Size`); emit
+those into `item_specifics.extra` from INVESTIGATE/IDENTIFY. When unsure
+which a category requires, prefer including the obvious ones over a failed
+publish.
 
 **pricing:** `format` FIXED_PRICE (AUCTION only if price.txt says) ·
 `price` = working price as string, ≤13 · `cost_of_goods` null ·
@@ -200,94 +117,71 @@ list price sits ABOVE the supported price, so there's headroom to negotiate
 down to it.
 
 - Compare the list `price` to PRICE's **Recommended** tier (from price.txt).
-- **If `price` > Recommended** (listing in-between Recommended and Push-high,
-  or at/above Push-high): `best_offer.enabled` **true** ·
+- **If `price` > Recommended**: `best_offer.enabled` **true** ·
   `best_offer.auto_decline_amount` = **the Recommended tier price**, rounded
-  to the nearest whole dollar, as a string — auto-decline anything below the
-  supported price. (Fallback if price.txt has no Recommended tier: 85% of
-  list, nearest dollar.)
+  to the nearest whole dollar, as a string. (Fallback if price.txt has no
+  Recommended tier: 85% of list, nearest dollar.)
 - **If `price` ≤ Recommended**: `best_offer.enabled` **false**, both amounts
-  null — you're already at or below the supported price, so don't invite
-  offers.
+  null — don't invite offers below the supported price.
 - `best_offer.auto_accept_amount` is **always null** — never auto-accept;
   the user reviews and accepts offers manually.
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
 **Net-floor check (MANDATORY — the floor is a price we AGREE to, not a
-formality).** An auto-decline figure is a standing offer to sell at that number,
-so before writing it, compute what we'd actually keep if a buyer hit it exactly:
+formality).** An auto-decline figure is a standing offer to sell at that
+number. Before writing it, compute what we'd actually keep if a buyer hit it
+exactly:
 
     net_at_floor = floor − fee(floor) − our_postage
 
 using PRICE's **measured fee band** (16–18% depending on size — see
 [price.md](price.md); it is NOT 13%) and the REAL postage for this item
-(everything now ships Ground Advantage on the single fulfillment policy — the
-account's Media Mail policy was deleted 2026-08-25, so do NOT price a book at the
-media rate; magazines and anything with ads were never Media Mail eligible
-anyway, per DMM 173.4.2). If `net_at_floor` is implausibly
-thin for the handling — packing, a trip to the mailbox, and the return risk —
-**raise the floor until it isn't**, and say so in `meta.notes`.
-
-This exists because it was gotten wrong: two magazine lots went live with floors
-set from the Recommended tier under the old 13% fee assumption, and at those
-floors an accepted offer netted **$13.46 and $9.67** on heavy Ground Advantage
-parcels. Both were raised at the REPORT phase (2026-08-15). The failure mode is
-specific — a low floor looks generous and costs nothing until someone takes it.
-
-Postage weighs most on cheap heavy things, so the check bites hardest exactly
-where the old rule was loosest: sub-$50 lots of paper.
+(everything ships Ground Advantage on the single fulfillment policy — never
+price a book at the media rate; ad-carrying paper was never Media Mail
+eligible, per DMM 173.4.2). If `net_at_floor` is implausibly thin for the
+handling — packing, a trip to the mailbox, and the return risk — **raise the
+floor until it isn't**, and say so in `meta.notes`. The check bites hardest
+on cheap heavy things: sub-$50 lots of paper.
 
 **shipping:** weight/dims from IDENTIFY (round up); `free_shipping` true →
 `domestic_shipping_type` FREE_FLAT_RATE; `primary_service` per Service
 map; `handling_time_days` 1; `item_location_zip` blank. **Set
 `fulfillment_mode` per the Local-pickup gate below** — default `SHIP`.
 
-**Local-pickup gate (SOFT — suggest, never assume).** Some items are
-awkward or unsafe to parcel-ship (heavy, oversized, or fragile like stained
-glass). For these we flag local pickup in the **description**, and the offer
-still lists on the single fulfillment policy — the account's local-pickup-only
-policy was deleted 2026-08-25, so `list_edit.py` falls back to the default ground
-policy and prints a warning. That means a `LOCAL_PICKUP` draft is a
-*disclosure*, not a shipping configuration: the listing still shows parcel
-shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
+**Local-pickup gate (SOFT — suggest, never assume).** A `LOCAL_PICKUP` draft
+is a *disclosure*, not a shipping configuration: the account's
+local-pickup-only policy was deleted 2026-08-25, so the offer still lists on
+the single fulfillment policy (with a warning from `list_edit.py`) and shows
+parcel shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
 
-- **Default `SHIP`.** Most items ship normally — leave `fulfillment_mode:
-  SHIP` and fill the shipping fields as usual.
-- **Set `LOCAL_PICKUP` only when the user has indicated it** — either they
-  said so for this item ("local only", "pickup only", "too fragile to ship"),
-  or you asked and they confirmed. The user usually says so up front.
-- **When to ASK (and you must ask before assuming):** if IDENTIFY's **Ship
-  risk** is `suggest-pickup` (weight > 25 lb or any side > 24 in), OR the item
-  is clearly fragile (stained/blown glass, thin porcelain), surface the
-  suggestion: *"This looks <reason> — risky to ship. List as local pickup
-  (freight by quote), or ship normally?"* **Attended:** ask and honor the
-  answer. **Headless (no one to ask):** keep `SHIP` (the safe non-blocking
-  default), and append a NEEDS_REVIEW line suggesting local pickup so it's
-  raised again at REVIEW. Never silently flip an item to pickup-only.
-- **When `LOCAL_PICKUP`:** set `fulfillment_mode: LOCAL_PICKUP`,
+- **Default `SHIP`.**
+- **Set `LOCAL_PICKUP` only when the user has indicated it** — they said so
+  for this item ("local only", "too fragile to ship"), or you asked and they
+  confirmed.
+- **When to ASK (and you must ask before assuming):** IDENTIFY's **Ship
+  risk** is `suggest-pickup` (weight > 25 lb or any side > 24 in), OR the
+  item is clearly fragile (stained/blown glass, thin porcelain): *"This
+  looks <reason> — risky to ship. List as local pickup (freight by quote),
+  or ship normally?"* **Attended:** ask and honor the answer. **Headless:**
+  keep `SHIP` (the safe non-blocking default) and append a NEEDS_REVIEW line
+  so it's raised again at REVIEW. Never silently flip an item to
+  pickup-only.
+- **When `LOCAL_PICKUP`:** `fulfillment_mode: LOCAL_PICKUP`,
   `free_shipping: false`, `domestic_shipping_type` blank, `primary_service`
-  blank (no parcel service); still record weight/dims (useful for a freight
-  quote). Set `local_pickup.location_hint` from the seller's city/region if
-  known. Add a short closing line to the description body: *"Local pickup only
-  — <location_hint>. Not local? Message me for a freight quote."* Log the
-  decision (+ trigger) in `meta.notes`.
+  blank; still record weight/dims (useful for a freight quote).
+  `local_pickup.location_hint` from the seller's city/region if known. Add a
+  short closing line to the body: *"Local pickup only — <location_hint>. Not
+  local? Message me for a freight quote."* Log the decision (+ trigger) in
+  `meta.notes`.
 
 **Carrier: there is no carrier choice.** Every item ships on the one
 fulfillment policy, `296458692014` ("Free USPS Ground + eBay International
 Shipping", free calculated USPS Ground Advantage, 1 day handling). Do not
 propose a carrier switch, do not estimate a rival carrier's cost, and do not
-override the policy at LIST time.
-
-The FedEx vs USPS carrier-check gate that used to live here was removed on
-2026-08-25: the FedEx policy it named (`292460878014`, "FedEx SmartPost / Ground
-Economy") had been deleted from the eBay account and returned 404, so following
-the gate produced an offer that could not be published. See
-docs/top-rated-plus.md.
-
-Weight and dimensions are still worth recording — they drive the calculated rate
-the buyer sees, and a freight quote if an item is too big for parcel. If an item
-genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and append a
-NEEDS_REVIEW line rather than selecting a different policy.
+override the policy at LIST time. Weight and dimensions are still worth
+recording — they drive the calculated rate and a freight quote. If an item
+genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and
+append a NEEDS_REVIEW line rather than selecting a different policy.
 
 **photos:** image files in shoot dir, lexicographic (first = hero). If
 INVESTIGATE references photos by number, honor that order.
@@ -316,126 +210,96 @@ quote) — also a strong local-pickup candidate (gate above).
 
 ## The house title pattern
 
-Measured, not guessed: 245 active listings from a seller worth matching,
-and the pattern held in every category sampled — jewelry, collectibles,
-glass, antiques, clothing (see
-[`../styleguides/_studies/patinaelements.md`](../styleguides/_studies/patinaelements.md)).
-Adopted as house style 2026-08-24.
+Adopted as house style 2026-08-24, measured across a studied seller's 245
+active listings (numbers in the notes).
 
-**Slot order** — era → object/maker → material → distinguishing detail →
-measurement → unit phrase. Era leads (their mean era slot is 0.4, and
-97% of titles carry an era word); material sits mid-title around slot 6.
-
-**Fill the field.** Target 75–80 characters. Their median is 78 and 89%
-run ≥75. Stop only when the next true keyword will not fit — never
-because the title "reads finished" at 55.
-
-**Budget ~2 descriptors** (their mean is 1.8, max 4). Past that it reads
-as keyword soup, and every adjective spent is a searchable noun lost.
-
-**Measurement earns a slot** where size is a buying decision — 56% of
-their antiques titles carry one, 37% of glass, 0% of clothing. Include
-it when we have a measured number, not an estimate.
-
-**Casing:** sentence/title case, with ALL-CAPS reserved for one or two
-tokens that genuinely carry weight (a maker, a model). Whole-title caps
-is shouting, not emphasis. **Separators:** prefer `/` for alternatives,
-`-` sparingly; no pipes, no bullets, no decorative characters.
-
-**The lead slot goes to a condition or scarcity word when one is
-earned**, ahead of the era word — `MINT`, `NOS`, `RARE`, `SCARCE`,
-`FINE`. The studied seller leads this way constantly (their mean
-condition slot is 0.2) and it is the strongest thing in the field: it is
-the first word a scrolling buyer reads. Earn it like this:
-
-- `MINT` / `NOS` / `EXCELLENT` — from the condition grade INVESTIGATE
-  already assigned via [condition-rubric.md](condition-rubric.md).
-  The rubric decides the word; the title just carries it. Grade to the
-  top of the supported band, per house practice — a clean piece is Mint.
-- `RARE` / `SCARCE` / `HTF` — only where INVESTIGATE found actual
-  scarcity evidence (a low production figure, a short production window,
-  a thin comp field after a real hunt). "I haven't seen another" is not
-  evidence, and neither is a high asking price.
-- `FINE` — quality of make, when the piece supports it.
-
-No word is earned → **the era word leads instead**, and that is a normal
-outcome, not a failure. The rest of the slots work the same way: era,
-maker, and material enter the title only where INVESTIGATE supports
-them, and an empty slot is correct when the evidence is not there. We
-lead as hard as the evidence allows and not one word harder.
+- **Slot order** — era → object/maker → material → distinguishing detail →
+  measurement → unit phrase. Era leads; material sits mid-title.
+- **Fill the field.** Target 75–80 characters. Stop only when the next true
+  keyword will not fit — never because the title "reads finished" at 55.
+- **Budget ~2 descriptors** (max 4). Past that it reads as keyword soup, and
+  every adjective spent is a searchable noun lost.
+- **Measurement earns a slot** where size is a buying decision (antiques,
+  glass — not clothing). Include it when we have a measured number, not an
+  estimate.
+- **Casing:** sentence/title case; ALL-CAPS reserved for one or two tokens
+  that genuinely carry weight (a maker, a model). **Separators:** prefer `/`
+  for alternatives, `-` sparingly; no pipes, no bullets, no decorative
+  characters.
+- **The lead slot goes to a condition or scarcity word when one is earned**,
+  ahead of the era word — it is the first word a scrolling buyer reads.
+  Earn it like this:
+  - `MINT` / `NOS` / `EXCELLENT` — from the condition grade INVESTIGATE
+    assigned via [condition-rubric.md](condition-rubric.md). The rubric
+    decides the word; the title just carries it. Grade to the top of the
+    supported band — a clean piece is Mint.
+  - `RARE` / `SCARCE` / `HTF` — only where INVESTIGATE found actual scarcity
+    evidence (a low production figure, a short production window, a thin
+    comp field after a real hunt). "I haven't seen another" is not evidence,
+    and neither is a high asking price.
+  - `FINE` — quality of make, when the piece supports it.
+- No word is earned → **the era word leads instead**, and that is a normal
+  outcome, not a failure. Era, maker and material enter the title only where
+  INVESTIGATE supports them; an empty slot is correct when the evidence is
+  not there. We lead as hard as the evidence allows and not one word harder.
 
 ## Markdown body (description)
 
-Compose from INVESTIGATE's claim set only, in this **fixed section
-order**. The skeleton is house style as of 2026-08-24 — it is the spine
-the studied seller uses on 100% of their bodies, and a body missing a
-section reads as a thinner listing:
+Compose from INVESTIGATE's claim set only, in this **fixed section order**
+(house skeleton as of 2026-08-24 — a body missing a section reads as a
+thinner listing):
 
-- **Opener** — ONE sentence, ~20 words, that names the item in full:
-  era, maker, material, object. It is the title expanded into a
-  sentence, and it is the same claim set as the title, so it needs no
-  new evidence. Written in first person (see Voice below).
-- **The look-at-this line** — one sentence on why it is worth a look:
-  the feature that makes it, how it displays, what it does. The studied
-  seller does this on half their listings and it is what stops a scroll.
-  Enthusiasm is allowed here; **claims are not smuggled in with it**.
-  "This displays beautifully" is a matter of taste and always fine;
-  "this is a rare piece" is a scarcity claim and needs the same evidence
-  the title's `RARE` needs.
+- **Opener** — ONE sentence, ~20 words, naming the item in full: era,
+  maker, material, object. The title expanded into a sentence — same claim
+  set, no new evidence. First person (see Voice).
+- **The look-at-this line** — one sentence on why it is worth a look: the
+  feature that makes it, how it displays, what it does. Enthusiasm is
+  allowed here; **claims are not smuggled in with it**. "This displays
+  beautifully" is taste and always fine; "this is a rare piece" is a
+  scarcity claim and needs the same evidence the title's `RARE` needs.
 - **The cross-sell line** — "This is one of several … I'm listing this
-  week, so please take a look at my other listings." Include it **only
-  when it is true**: there are sibling items from the same estate or lot
-  actually going up. One-off item → drop the line rather than invent a
-  batch.
+  week, so please take a look at my other listings." Include it **only when
+  it is true**. One-off item → drop the line rather than invent a batch.
 - **What's Included** — bullets from observable components; unit-type
   vocabulary.
-- **Size** — the measured dimensions, plus weight where it matters to
-  the buyer. **Required whenever we have a measurement.** If nothing was
+- **Size** — measured dimensions, plus weight where it matters to the
+  buyer. **Required whenever we have a measurement.** If nothing was
   measured, say so plainly rather than dropping the section.
 - **Condition** — factual, minimal. Bullets enumerating EVERY defect
-  INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`.
-  At most one short context line for expected vintage wear; no warm
-  framing sentence, no marketing. Defects always survive any trim.
-  Close the section with the photos line — "Please see the photos and
-  read the description for full details" — which the studied seller
-  carries on 100% of listings. It sets the expectation that the photos
-  are part of the disclosure; it never substitutes for naming a defect
-  in words.
-- **Markings** — maker's mark, signature, hallmark, stamp, or label:
-  what it says and where it is, keyed to the photo that shows it.
-  **Required.** When there is none, `No maker's mark found.` is the
-  correct content — absence is information a buyer wants, and it is also
-  the honest alternative to implying attribution we cannot defend.
+  INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`. At
+  most one short context line for expected vintage wear; no warm framing,
+  no marketing. Defects always survive any trim. Close the section with the
+  photos line — "Please see the photos and read the description for full
+  details" — it sets the expectation that the photos are part of the
+  disclosure; it never substitutes for naming a defect in words.
+- **Markings** — maker's mark, signature, hallmark, stamp, or label: what
+  it says and where it is, keyed to the photo that shows it. **Required.**
+  When there is none, `No maker's mark found.` is the correct content —
+  absence is information, and the honest alternative to implying
+  attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
 - **The close** — the standing block, same on every listing, from
-  `store.closing_block` in [`../config.yaml`](../config.yaml): the
-  questions line, the terms line, the sign-off. It is boilerplate on
-  purpose — a buyer reads it once and it answers the questions that
-  otherwise arrive as messages. Render it verbatim from config; **do not
-  compose it per listing** and do not add claims to it. If a line in
-  that block ever stops being true, the fix is config, not a listing.
-  When `store.display_name` is set, the sign-off names the store; when
-  it is empty, the unnamed thank-you ships — never invent a brand name.
+  `store.closing_block` in [`../config.yaml`](../config.yaml). Boilerplate
+  on purpose. Render it verbatim; **do not compose it per listing**, do not
+  add claims to it. If a line stops being true, the fix is config, not a
+  listing. When `store.display_name` is set, the sign-off names the store;
+  when empty, the unnamed thank-you ships — never invent a brand name.
 
-**Length:** aim ~130–180 words (their median body is 133 across 245
-listings; ours carries the same spine plus the opener and close). Short
-paragraphs, ~20 words per sentence. A body under ~100 words is usually a
-section left empty — check which one before shipping it.
+**Length:** aim ~130–180 words. Short paragraphs, ~20 words per sentence. A
+body under ~100 words is usually a section left empty — check which one
+before shipping it.
 
-**Voice: first person, ours.** Write as the seller — "I picked this up
-from a local estate", "I haven't tested it". It reads as a person, and
-that is the point: the studied seller is in first person on 100% of
-bodies. Two things do not follow it into our copy:
+**Voice: first person, ours.** Write as the seller — "I picked this up from
+a local estate", "I haven't tested it". Two things do not follow it into our
+copy:
 
-- **Sentence case, never an all-caps body.** Caps is shouting, it is
-  harder to read on a phone, and it flattens the emphasis we do want.
+- **Sentence case, never an all-caps body.** Caps is shouting, harder to
+  read on a phone, and flattens the emphasis we do want.
 - **First person is not a licence to speculate.** "I think this might be
-  Georgian" is exactly the guess the claim bar exists to stop — first
-  person makes a claim sound softer without making it any more
-  supported. What I say in my own voice still has to be something
-  INVESTIGATE established. Where I genuinely don't know, say that
-  plainly and say what I did to check.
+  Georgian" is exactly the guess the claim bar exists to stop. What I say in
+  my own voice still has to be something INVESTIGATE established. Where I
+  genuinely don't know, say that plainly and say what I did to check.
 
 **In-hand voice — never from behind the camera** (house rule, adopted
 2026-08-26). The listing speaks as a seller holding the item. Language
@@ -449,29 +313,29 @@ field (title, body, `condition_description`, item specifics):
 - **inspection-process narration** — enumerating tests not run ("not
   shake-tested", "ring test not performed", "odor not verified").
 
-This is our internal evidence process leaking into the copy: it tells
-the buyer the seller never handled the item, and it manufactures doubt
-instead of preventing returns. **Rephrase rule: state the finding, never
-the method.** "No chips or cracks visible" → "No chips or cracks
-noted." "Knife handle seated tight in photos; not shake-tested" →
-"Knife handle sits tight." A photo-only observation ("UPC not shown in
-the photographed surfaces") is an internal note for `meta.notes` /
-NEEDS_REVIEW, never buyer copy.
+This is our internal evidence process leaking into the copy: it tells the
+buyer the seller never handled the item, and it manufactures doubt instead
+of preventing returns. **Rephrase rule: state the finding, never the
+method.** "No chips or cracks visible" → "No chips or cracks noted." "Knife
+handle seated tight in photos; not shake-tested" → "Knife handle sits
+tight." A photo-only observation ("UPC not shown in the photographed
+surfaces") is an internal note for `meta.notes` / NEEDS_REVIEW, never buyer
+copy.
 
 Untested status survives ONLY where it sets the grade (electronics /
-mechanical function, per condition-rubric): phrased plainly —
-"Untested; sold as-is." — with no photo excuse attached. Two things the
-rule does NOT touch: the internal record (IDENTIFY/INVESTIGATE still
-log every can't-assess — this rule governs only what reaches the
-buyer), and the standing close line "Please see the photos and read the
-description for full details" (it points the buyer at the photos as
-disclosure; it doesn't confess the inspection was photo-only). Defects
-themselves all still survive — the rule strips the camera frame off a
-disclosure, never the disclosure.
+mechanical function, per condition-rubric): phrased plainly — "Untested;
+sold as-is." — with no photo excuse attached. Two things the rule does NOT
+touch: the internal record (IDENTIFY/INVESTIGATE still log every
+can't-assess — this rule governs only what reaches the buyer), and the
+standing close line "Please see the photos and read the description for full
+details" (it points the buyer at the photos as disclosure; it doesn't
+confess the inspection was photo-only). Defects themselves all still
+survive — the rule strips the camera frame off a disclosure, never the
+disclosure.
 
-Hard rules: never include a claim absent from INVESTIGATE's listing-safe
-/ observable lists; never anything INVESTIGATE marked NOT defensible;
-never IDENTIFY `[BEST-CASE]` language; honor unit-type phrasing.
+Hard rules: never include a claim absent from INVESTIGATE's listing-safe /
+observable lists; never anything INVESTIGATE marked NOT defensible; never
+IDENTIFY `[BEST-CASE]` language; honor unit-type phrasing.
 
 ## Constraints — enforce before write (the hardest rule)
 
@@ -503,9 +367,8 @@ length ≤ max_len (rephrase if not) · required present (else flag) ·
 numeric parses positive (else flag, empty) · lookup canonical (else
 substitute + log). Also scan every buyer-visible field for camera-frame
 language (the in-hand-voice rule above) and rephrase any hit to the
-finding. Only then write draft.md. Re-read after write and
-confirm every constrained field fits and `_field_constraints` was copied
-verbatim.
+finding. Only then write draft.md. Re-read after write and confirm every
+constrained field fits and `_field_constraints` was copied verbatim.
 
 ## meta.notes (DRAFT NOTES)
 
@@ -516,23 +379,19 @@ substitution. These stay local — never pushed to eBay.
 
 ## Register the item (SKU + ledger record)
 
-**Whenever you finish writing `draft.md` — and again after any later edit to
-it — register the item:**
+**Whenever you finish writing `draft.md` — and again after any later edit
+to it — register the item:**
 
     python lib/list_edit.py --record <shoot-dir>
 
 This computes the item's **SKU** (a deterministic 8-hex hash of title +
 folder — no eBay call, no credentials), stamps it into the draft's
-`meta.ebay_inventory_sku`, and creates/refreshes the item's row in the
-listings ledger with status **DRAFTED**. It's idempotent — once the SKU is
-stamped it's reused, so an edit just refreshes the row's title/price and
-never duplicates it. The same row is later updated in place to
-SYNCED → PUBLISHED → ENDED/DELETED.
-
-This guarantees the record exists from draft time, **before REVIEW**.
-Belt-and-suspenders: `--review` (and `--sync`) also call `--record`
-internally, so a missed run is recovered; if you can't run a shell here, the
-record is created at the next step that can.
+`meta.ebay_inventory_sku`, and creates/refreshes the item's ledger row with
+status **DRAFTED**. Idempotent — once the SKU is stamped it's reused, so an
+edit refreshes the row and never duplicates it. The same row is later
+updated in place to SYNCED → PUBLISHED → ENDED/DELETED. This guarantees the
+record exists from draft time, **before REVIEW**; `--review` and `--sync`
+also call `--record` internally, so a missed run is recovered.
 
 ## Closing
 
