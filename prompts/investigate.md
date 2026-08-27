@@ -1,4 +1,4 @@
-# INVESTIGATE — v3, Function 4
+# INVESTIGATE — v4, Function 4
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 

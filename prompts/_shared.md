@@ -1,8 +1,7 @@
-# _shared — rules every v3 phase obeys
+# _shared — rules every phase obeys (v4)
 
-Single source for the rules that used to be copy-pasted into all five
-phase prompts. Each phase prompt references this file instead of
-restating it. Read this once per run; the phase prompts assume it.
+Single source for the cross-phase rules. Read this once per run; the
+phase prompts assume it.
 
 ---
 
@@ -29,10 +28,9 @@ all three of:
 
 1. its **thumbnail image, EMBEDDED as a base64 `data:` URI** — download the
    comp's `thumbnail` (`i.ebayimg.com/...`) yourself, resize small, and inline
-   it. **Do NOT use `<img src="https://i.ebayimg.com/...">`** — the widget /
-   artifact sandbox CSP blocks ALL remote image hosts, so a remote `src` renders
-   as a BROKEN image (this is the #1 failure the user has hit — do not repeat
-   it). Only self-contained `data:image/jpeg;base64,...` sources render.
+   it. **Never `<img src="https://i.ebayimg.com/...">`** — the widget /
+   artifact sandbox CSP blocks ALL remote image hosts and renders a BROKEN
+   image. Only self-contained `data:image/jpeg;base64,...` sources render.
 2. a **clickable link to the actual eBay listing** (`<a href>` to the comp's
    real `https://www.ebay.com/itm/<id>` URL) so the user can open and verify it
    themselves; and
@@ -44,21 +42,16 @@ all three of:
   large payload; OR
 - inline the same self-contained HTML into the visualize `show_widget` tool.
 
-Generate the HTML with a small script straight from the saved comp JSON (it has
-`thumbnail` + `url` per comp) — fetch+resize+base64 each thumbnail, and use each
-comp's REAL `url` (never hand-write an item id / thumbnail — a fabricated link
-defeats the whole point). Never present comps as a text-only list, a plain
-markdown table, or with remote `<img src>` — the user has explicitly required
-seeing real thumbnails and clicking through to verify each listing. A
-price/number without its embedded thumbnail AND clickable listing is not an
-acceptable way to show a comp. The text `price.txt` / `comps.csv` artifacts are
-still written as specified in PRICE; this rule governs the CHAT layer, in every
-phase, on top of them.
+Generate the HTML with a small script straight from the saved comp JSON (it
+has `thumbnail` + `url` per comp) — fetch+resize+base64 each thumbnail, and
+use each comp's REAL `url` (never hand-write an item id / thumbnail). Never
+present comps as a text-only list, a plain markdown table, or with remote
+`<img src>`. A price without its embedded thumbnail AND clickable listing is
+not an acceptable way to show a comp. The `price.txt` / `comps.csv` artifacts
+are still written as specified in PRICE; this rule governs the CHAT layer, in
+every phase, on top of them.
 
 ## Confidence (commit, don't hedge)
-
-The old prompts manufactured doubt — 5-scenario brackets, "effectively
-excluded" entries, best→worst ladders. v3 commits.
 
 - **State the single best-supported call.** Make it; don't narrate the
   alternatives you rejected.

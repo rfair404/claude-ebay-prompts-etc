@@ -1,4 +1,4 @@
-# REVIEW — v3, Function 5.5 (the publish gate)
+# REVIEW — v4, Function 5.5 (the publish gate)
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
