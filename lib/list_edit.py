@@ -1102,16 +1102,20 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
 
 
 def _insurance_notes(draft: Draft) -> list[str]:
-    """Remind to insure high-value items — only $100 is auto-included, and the
-    eBay API can't set insurance (it's bought at label time via ShipCover)."""
-    price = _to_decimal_str(draft.get("price"))
-    try:
-        if price and Decimal(price) > Decimal("100"):
-            return [f"insurance: price ${price} > $100 — only $100 ships included; "
-                    f"add ShipCover/added coverage when buying the label (Seller Hub -> "
-                    f"Get shipping label -> Additional liability coverage)."]
-    except InvalidOperation:
-        pass
+    """RETIRED 2026-08-26 — always returns no notes.
+
+    This used to fire on every listing over $100: only $100 of coverage is
+    auto-included and the API can't set insurance, so it reminded the operator
+    to add ShipCover at label time. The reminder was correct and useless — added
+    coverage is bought in the eBay UI when the label is bought, which the
+    operator already does as a matter of course, so the line was noise on every
+    high-value card. Turned off at the operator's request.
+
+    Kept as a no-op rather than deleted: both call sites (preflight and the
+    publish path) still ask for it, and a function that returns nothing is a
+    smaller change than unpicking those. To bring it back, restore the body —
+    the threshold was price > $100.
+    """
     return []
 
 
@@ -1153,7 +1157,7 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     # Shipping policy selection (media vs ground) + validation
     _chosen, ship = _resolve_shipping_policy(draft, policies, creds)
     msgs.extend(ship)
-    # Insurance reminder for high-value items
+    # Insurance: retired, no-op — see _insurance_notes
     msgs.extend(_insurance_notes(draft))
     return msgs
 
@@ -1168,7 +1172,7 @@ def build_review_card(draft_path: Path,
     (card_text, card_path). Does NOT publish.
 
     It (1) ensures the item is recorded (SKU + DRAFTED ledger row),
-    (2) runs preflight (condition remap + shipping policy + insurance flag),
+    (2) runs preflight (condition remap + shipping policy),
     and (3) assembles the decision card deterministically from the draft,
     comps, ledger, and preflight — written to <shoot>/review_card.md.
     """
@@ -1178,7 +1182,7 @@ def build_review_card(draft_path: Path,
     shoot = draft_path.parent
 
     sku, _ = record_draft(draft_path)                  # ensure SKU + DRAFTED
-    pf = preflight_listing(draft_path, creds=creds)    # remap + shipping + insurance
+    pf = preflight_listing(draft_path, creds=creds)    # remap + shipping
     draft = parse_draft(draft_path)                    # re-read (condition may have changed)
 
     title = str(draft.get("title") or "")
@@ -1311,7 +1315,7 @@ def build_review_card(draft_path: Path,
         f"Condition: {cond}",
         f"Quantity:  {qty}   ·   Photos: {len(photos)} (hero: {hero})",
         f"Fulfillment: {fulfill}",
-        "Preflight (condition / shipping / insurance):",
+        "Preflight (condition / shipping):",
         *[f"  • {m}" for m in pf],
         "International (eBay International Shipping):",
         *intl_lines,
