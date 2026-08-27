@@ -208,6 +208,12 @@ def _variation_inventory_item(draft, var: dict, varies_by: str,
         pkg["dimensions"] = {"length": float(length), "width": float(width),
                              "height": float(depth), "unit": "INCH"}
     if pkg:
+        # packageType is REQUIRED for CALCULATED shipping. The group path only
+        # ever ran on free flat-rate policies (tubes, Magic Rose), so this was
+        # missing until the Flair NOS lot moved onto the BUYER-PAID calculated
+        # policy; without it publish fails 25002 / err:216314 "Please provide a
+        # valid Shipping Package type". Same helper the single-item path uses.
+        pkg["packageType"] = le._package_type(draft)
         item["packageWeightAndSize"] = pkg
     return item
 
