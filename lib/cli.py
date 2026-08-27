@@ -36,6 +36,8 @@ COMMANDS = {
                      "survey/repair the return+fulfillment policy on every offer"),
     "price-audit":  ("tools.price_audit",
                      "live listings still asking above their own comp evidence"),
+    "comps-board":  ("tools.comps_board",
+                     "comp JSON -> the thumbnail board (_shared.md hard rule)"),
     "sales-report": ("tools.sales_report",
                      "sales / fees / promotion dashboard"),
     "promote":      ("tools.promote",
