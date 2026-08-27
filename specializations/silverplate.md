@@ -103,6 +103,16 @@ different companies. Read the mark exactly.
 - **Star + eagle flanking "Wm. Rogers"** = a *decorative pseudo-hallmark* imitating British/coin-
   silver stamps — **no legal/assay meaning**, do not read it as sterling or as a date.
 - **The pattern name is often printed on the box/chest** if NOS — easiest ID of all.
+- **A SEALED poly sleeve does NOT hide the mark — shoot it before you declare the pattern
+  unverifiable.** 1847 Rogers stamps the pattern name in script right of the `I S` boxes, and on a
+  raking-light macro it reads straight THROUGH the sleeve (proven 2026-08-25 on
+  `flair-child-fork-spoon-NOS-set/ZZ250012`: "1847 ROGERS BROS. [I][S] Flair"). A listing that says
+  "the backstamps cannot be assessed while sealed" is usually a listing where nobody tried. Getting
+  it also converts a hedged pattern guess into a provable claim, which is a selling point in a
+  market where nearly every sealed listing has to hedge.
+- **Sleeve creasing is NOT an identity signal.** Floppy poly re-creases every time a piece is set
+  down, so the "same" piece photographed three times looks like three different pieces. Do not count
+  inventory from sleeve appearance — count it in hand. (Cost me a wrong 3-pairs read, same day.)
 - Cross-check the handle-front design against **Replacements.com** (the pattern-ID bible) or
   silvercollection.it before committing a pattern name.
 
@@ -118,13 +128,13 @@ complete sets). Intro years from silvercollection.it:
 | **Daffodil** | 1950 | large daffodil blossom at handle top | beloved MCM pattern (disc. 1973) |
 | **Remembrance** | 1948 | traditional floral, symmetrical | "ever-popular" traditional |
 | **Heritage** | 1953 | ornate scrolled/beaded border | dressy, sought |
-| **Flair** | 1956 | slim, single flower spray, mid-century clean | very common but liked |
+| **Flair** | 1956 | **completely PLAIN** slim tapered handle — a bare swelled tip with a soft crimped edge and NO floral element at all | very common but liked. **ID trap:** "Flair" sounds floral and this row used to say "single flower spray" — it does not have one. A 1847 Rogers handle with an applied flower is NOT Flair; check Magic Rose / Springtime / Leilani / Daffodil first. (Corrected 2026-08-24 against dealer reference photos after a lot was mis-catalogued as Flair.) |
 | **Adoration** | 1930 | (Wm Rogers & Son line) rose/floral | one of the few Wm Rogers & Son patterns with a following |
 | **Marquise** | 1933 | geometric Deco | Deco collectors |
 | **Reflection** | 1959 | plain modern, tapered | MCM/minimal demand |
 | **Springtime** | 1957 | floral spray | MCM |
 | **Leilani** | 1961 | tropical/leaf | MCM niche |
-| **Magic Rose** | 1963 | rose | niche |
+| **Magic Rose** | 1963 | a single applied **open rose** on a diagonal stem, one leaf trailing back down the handle + a leaf/bud spraying forward past the bloom, on an otherwise plain softly-swelled tip | disc. 1969. Called "niche" here, but the live market is deep — 120+ active listings, singles and full services, and the **serving pieces carry it** (gravy ladle asks $13–19 vs $5–9 for place pieces) |
 
 Other IS-umbrella demand patterns to recognize: **Holmes & Edwards** *Danish Princess*, *Spring
 Garden*, *May Queen*; **Community** *Coronation*, *Milady*, *Evening Star*, *South Seas*, *White

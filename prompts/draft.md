@@ -437,6 +437,38 @@ bodies. Two things do not follow it into our copy:
   INVESTIGATE established. Where I genuinely don't know, say that
   plainly and say what I did to check.
 
+**In-hand voice — never from behind the camera** (house rule, adopted
+2026-08-26). The listing speaks as a seller holding the item. Language
+phrased from the camera's point of view is banned in every buyer-visible
+field (title, body, `condition_description`, item specifics):
+
+- **camera framing** — "visible in the photos", "shown/pictured",
+  "as-shown", "photographed surfaces", "undersides not photographed";
+- **photo-limit confessions** — "not identifiable/verifiable from the
+  photos", "can't be assessed from the pictures";
+- **inspection-process narration** — enumerating tests not run ("not
+  shake-tested", "ring test not performed", "odor not verified").
+
+This is our internal evidence process leaking into the copy: it tells
+the buyer the seller never handled the item, and it manufactures doubt
+instead of preventing returns. **Rephrase rule: state the finding, never
+the method.** "No chips or cracks visible" → "No chips or cracks
+noted." "Knife handle seated tight in photos; not shake-tested" →
+"Knife handle sits tight." A photo-only observation ("UPC not shown in
+the photographed surfaces") is an internal note for `meta.notes` /
+NEEDS_REVIEW, never buyer copy.
+
+Untested status survives ONLY where it sets the grade (electronics /
+mechanical function, per condition-rubric): phrased plainly —
+"Untested; sold as-is." — with no photo excuse attached. Two things the
+rule does NOT touch: the internal record (IDENTIFY/INVESTIGATE still
+log every can't-assess — this rule governs only what reaches the
+buyer), and the standing close line "Please see the photos and read the
+description for full details" (it points the buyer at the photos as
+disclosure; it doesn't confess the inspection was photo-only). Defects
+themselves all still survive — the rule strips the camera frame off a
+disclosure, never the disclosure.
+
 Hard rules: never include a claim absent from INVESTIGATE's listing-safe
 / observable lists; never anything INVESTIGATE marked NOT defensible;
 never IDENTIFY `[BEST-CASE]` language; honor unit-type phrasing.
@@ -469,7 +501,9 @@ Satisfy by **rephrasing, never mid-word truncation:**
 Walk every `_field_constraints` entry against the populated value:
 length ≤ max_len (rephrase if not) · required present (else flag) ·
 numeric parses positive (else flag, empty) · lookup canonical (else
-substitute + log). Only then write draft.md. Re-read after write and
+substitute + log). Also scan every buyer-visible field for camera-frame
+language (the in-hand-voice rule above) and rephrase any hit to the
+finding. Only then write draft.md. Re-read after write and
 confirm every constrained field fits and `_field_constraints` was copied
 verbatim.
 

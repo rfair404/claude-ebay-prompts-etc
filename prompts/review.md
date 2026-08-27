@@ -24,8 +24,15 @@ This does the whole pre-review prep in one shot:
    the `DRAFTED` ledger row (so a finished draft is always registered before
    review).
 2. **Preflight** — auto-remaps the condition to one the category accepts,
-   picks the shipping policy (Media Mail vs ground), and flags insurance on
-   items > $100.
+   and picks the shipping policy (Media Mail vs ground).
+
+   **Insurance is NOT a preflight concern — never raise it.** Preflight used to
+   flag every listing over $100 to add ShipCover, because only $100 of coverage
+   is auto-included and the API cannot set insurance. The operator buys added
+   coverage in the eBay UI at label time as a matter of course, so the reminder
+   was noise on every high-value card. Retired 2026-08-26 (`_insurance_notes`
+   in [`../lib/list_edit.py`](../lib/list_edit.py) is a no-op). Do not
+   reintroduce it in the card, in chat, or in the closing summary.
 3. **Assembles the card** from the draft, comps, ledger, and preflight, and
    writes `review_card.md`.
 
@@ -34,7 +41,7 @@ Present that card to the user **verbatim** and STOP. It contains:
     ━━ REVIEW: <item> (sku … · ledger …) ━━
     Title [N/80] · Price · Best Offer · Condition · Quantity · Photos
     Fulfillment (Ship · service, OR LOCAL PICKUP only — confirm pickup items)
-    Preflight (condition · shipping · insurance)
+    Preflight (condition · shipping)
     Comps (open to verify) — each with a URL
     Condition detail (every flagged defect, verbatim — never softened)
     ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines)
@@ -82,6 +89,16 @@ run `--record` first, then assemble the same fields by hand from `draft.md`
 **One item at a time.** In a multi-item shoot, run `--review` per item,
 present its card, take the decision, then the next. Only batch-publish if
 the user says "approve all".
+
+**Copy check — in-hand voice.** Before presenting the card, scan the
+draft's buyer-visible fields (title, description, condition_description,
+item specifics) for camera-frame language: "visible in the photos",
+"shown/pictured", "as-shown", "not identifiable/verifiable from the
+photos", or tests-not-run narration ("not shake-tested", "odor not
+verified"). Any hit is a copy defect, not a judgment call: fix it via
+DRAFT (rephrase to the finding, per draft.md's in-hand-voice rule), then
+re-run `--review`. The standing "Please see the photos…" close line is
+exempt. Grade-setting "Untested; sold as-is." is exempt.
 
 ## The gate (HARD — this is where the run stops)
 

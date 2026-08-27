@@ -18,9 +18,11 @@ prevents it. Dig in.
 2. **Run the material checklist** for the item's dominant material(s).
 3. **Record each defect** with location + severity (minor / moderate /
    significant) + photo reference. No defect is too small to note.
-4. **State what you cannot assess** from the photos (function untested,
-   undersides not shown, interior not visible) — silence reads as a
-   claim of "fine".
+4. **Record what you cannot assess** from the photos (function untested,
+   undersides not shown, interior not visible) — silence in the internal
+   record reads as a claim of "fine". This wording is **internal only**
+   (identify.txt / investigate.txt); what reaches buyer copy is governed
+   by the can't-assess rule under `condition_description` below.
 5. **Map to one eBay grade** using the tie-break rule below.
 
 ## Material defect checklists
@@ -102,11 +104,18 @@ Order, each part only if it applies:
    the defects a buyer would reasonably fear for this material/grade
    (e.g. `No chips, cracks, or repairs.`). Skip clears that don't bear on
    the grade.
-3. **Can't-assess** — untested function, undersides/interior unseen,
-   smoke-free not verifiable from photos. One fragment.
+3. **Can't-assess — grade-relevant only, phrased in-hand.** Include ONLY
+   when it sets the grade (electronics/mechanical function): `Untested;
+   sold as-is.` Never the photo excuse ("not verifiable from photos"),
+   never an inventory of tests not run (shake/ring/odor checks). All
+   other can't-assess items stay in INVESTIGATE's "NOT defensible" list
+   and out of buyer copy — see the in-hand-voice rule in
+   [draft.md](draft.md).
 
 **Never** include: narrative ("removed from box only to photograph"),
 marketing adjectives, decorative description of the item itself (that's
-the title/specifics), or what's-included (that's the body's What's
-Included). If a clause doesn't disclose a defect, a grade-relevant clear,
+the title/specifics), what's-included (that's the body's What's
+Included), or camera-frame language ("visible in photos", "as-shown",
+"not verifiable from the photos") — the in-hand-voice rule in
+[draft.md](draft.md) bans it in every buyer-visible field. If a clause doesn't disclose a defect, a grade-relevant clear,
 or a limit of inspection, it does not belong in this field.

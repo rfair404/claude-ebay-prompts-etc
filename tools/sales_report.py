@@ -262,10 +262,14 @@ def gather(days: int) -> dict:
                if c.get("campaignStatus") == "RUNNING"}
     out["live_count"] = len(live_ids)
     out["live_with_ad"] = len(live_ids & set(ad_by_listing))
+    # A cost-per-sale ad carries no `adStatus` at all — the field is CPC-only.
+    # Requiring "ACTIVE" therefore reported 0 of 141 promoted on the very day a
+    # rules-based CPS campaign filled itself with 130 ads. An ad in a RUNNING
+    # campaign counts unless it says otherwise.
     out["live_with_running_ad"] = len(
         {lid for lid, a in ad_by_listing.items()
          if lid in live_ids and a["campaignId"] in running
-         and a.get("adStatus") == "ACTIVE"})
+         and a.get("adStatus") in (None, "", "ACTIVE")})
     out["running_campaigns"] = len(running)
     out["ad_status_mix"] = Counter(a.get("adStatus") or "?" for a in ads_doc["ads"])
     # ---- the store as it stands, not just what sold -------------------------

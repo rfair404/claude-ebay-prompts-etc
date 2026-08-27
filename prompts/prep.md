@@ -128,21 +128,27 @@ and they are enforced in code:
   the edges and always leaves backdrop around the item. Too generous costs a
   second look. Too tight has already thrown pixels away, and nobody re-shoots.
 
-Present the result as a widget: every frame, the turn applied, the crop box on
-the frame, and the guessed ones flagged. Apply the pass, then show ONE card
-(`python tools/prep_card.py <shoot>`) of the revised frames, and ask a single
-question with two answers:
+Apply the pass, then gate on confidence, not on the operator (operator's
+call, 2026-08-27):
 
-- **approve** → `--approve-auto`, which signs off orientation AND crop together
-  and moves to colour;
-- **override** → open the interactive flow below, at `--stage orientation`.
+- **Every frame resolved, nothing guessed, every self-check clean** — the
+  normal case — run `--approve-auto` yourself, which signs off orientation AND
+  crop together, and move straight to colour. Show ONE card
+  (`python tools/prep_card.py <shoot>`) of the revised frames as a record of
+  what shipped, not as a question. The operator can still override anything
+  from the card, but the run does not stop to wait for it.
+- **Anything guessed or flagged** — a `guessed: true` frame, a mask the colour
+  stage cannot trust, a crop the pipeline refused — ask about THOSE frames
+  only, by name, and approve the rest. The one question is about the
+  exception, never "may I continue".
 
-Nothing about the gate changes. `--auto` approves nothing, `listing/` is still
-written only after the stages are signed off, and `--approve-auto` stamps the
-same per-stage digest a sheet approval does — so any later edit invalidates it
-the same way.
+Auto-approval never buys a lower bar. `--auto` still approves nothing by
+itself, `listing/` is still written only after the stages are signed off, and
+`--approve-auto` stamps the same per-stage digest a sheet approval does — so
+any later edit invalidates it the same way. What changed is who clicks it when
+the pipeline has nothing to ask.
 
-## The review is STAGED, and interactive. Always.
+## The interactive review is the EXCEPTION path — and it is STAGED
 
 This is where an override lands, and where a shoot goes whenever the auto pass
 is not good enough. Three corrections, in this order, and **you do not move on
