@@ -1,4 +1,4 @@
-# RUN — v3 headless runbook
+# RUN — v4 headless runbook
 
 The single entry point. To run the pipeline on a shoot, read THIS file
 plus [`prompts/_shared.md`](prompts/_shared.md), then load each phase
@@ -156,6 +156,21 @@ queue — the user reads it when convenient instead of being interrupted.
 ## Phase pointers
 
 Load each prompt when you reach its phase.
+
+## Ops commands — one entry point
+
+Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
+
+    python -m lib.cli                      # list the commands
+    python -m lib.cli <command> [args...]
+
+`reconcile` (ledger vs Sell API — eBay wins), `live-audit` (local files vs
+live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
+`policy-sweep`, `price-audit` (asks above their own comp evidence),
+`sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
+`listing` (the LIST/EDIT CLI), `prep`. Argv passes through untouched, so
+every flag documented for a tool works identically under `ebz`. The direct
+`python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
 
 ## Locking a format
 
