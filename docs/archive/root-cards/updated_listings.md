@@ -1,0 +1,64 @@
+# Updated listings — photo audit 2026-08-19
+
+60 listings re-rendered as-shot and pushed.
+
+- [FR/bronze-dog](https://www.ebay.com/itm/206494264255) — Vintage Solid Brass Hound Dog Figurine Beagle Foxhound Standing 5.75 i
+- [FR/calendar-towel](https://www.ebay.com/itm/206494482217) — Year 2000 Millennium Stevens Linen Calendar Towel Unused Original Mail
+- [FR/christmas-elk](https://www.ebay.com/itm/206494264413) — Vintage Gold Tone Elk Stag Figurine Christmas New Old Stock in Origina
+- [FR/christmas-tree-pin](https://www.ebay.com/itm/206494093050) — Vintage Best Signed Christmas Tree Brooch Pin Gold Silver Two Tone Sta
+- [FR/holly-pin](https://www.ebay.com/itm/206494093318) — Vintage Holly Leaves Berries Brooch Pin Gold Silver Two Tone Christmas
+- [FR/kellogs-car-set](https://www.ebay.com/itm/206467696348) — Matchbox Kellogg's Cereal Truck Lot of 4 Corn Pops Apple Jacks Raisin 
+- [JUG-1](https://www.ebay.com/itm/206340552296) — Antique Stoneware Whiskey Jug Brown Albany Slip Glaze Beehive Shoulder
+- [afairy](https://www.ebay.com/itm/206350426051) — Hallmark Keepsake 2005 Barbie Fairytopia Elina Ornament Magic Light QX
+- [backgammon-green](https://www.ebay.com/itm/206451202624) — Vintage Backgammon Set Green Attache Case Complete w/ Dice Cups Doubli
+- [backgammon2-alt](https://www.ebay.com/itm/206387490597) — Vintage 1970s Skor-Mor Backgammon Set Suede Felt Case Navy Blue Comple
+- [barbie](https://www.ebay.com/itm/206350364868) — 2005 Hallmark Keepsake Barbie as Titania Ornament Midsummer Night's Dr
+- [car-set](https://www.ebay.com/itm/206451574975) — Readers Digest Classic Car Miniatures Collectors Set of 6 Diecast 1989
+- [cats-mags/lot-mailers/lot1](https://www.ebay.com/itm/206449296949) — Britches of Georgetowne Everything Britches 5 Catalog Lot 1983-1984 Iv
+- [decatur-pubs/_prepped/lot1_athletics](https://www.ebay.com/itm/206446247446) — Decatur High School Bulldogs 1994-95 Athletics Sports Program Region 7
+- [decatur-pubs/_prepped/lot2_school](https://www.ebay.com/itm/206446247475) — Decatur High School 1993-95 Student Newspaper Literary Magazine Lot Sc
+- [ej-07-23/item2](https://www.ebay.com/itm/206436001998) — Vintage Barton & Chase Trufit Balance Staff Assortment Swiss Watch Via
+- [ej-07-23/item4](https://www.ebay.com/itm/206438564636) — Vintage Swank Twinitial Monogram Initials Lot NOS Jeweler Stock Gold S
+- [ej-07-23/item5](https://www.ebay.com/itm/206438565030) — Antique Carlos Lopez Wood Cigar Box Coronas Boite Nature Alabama Facto
+- [ej-08-04/10k-16-inch-1g-necklace](https://www.ebay.com/itm/206466348735) — 10K Solid Gold Rope Chain Necklace 16 Inch 1 Gram Dainty Estate Fine
+- [ej-08-04/bracelet](https://www.ebay.com/itm/206466277165) — George Austrian Crystal Butterfly Link Bracelet Black Clear Nickel Fre
+- [ej-08-15/bracelet-tara](https://www.ebay.com/itm/206494511917) — Vintage Tara Jewelry by Sperry Gold Tone Bracelet on Original Card wit
+- [ej-08-15/floating-opal](https://www.ebay.com/itm/206496595328) — Vintage Floating Opal Pendant Necklace 1/20 12K Gold Filled Original B
+- [ej-08-15/id-watchband](https://www.ebay.com/itm/206494512312) — Vintage GEMEX Gem-Lok Watch Band NOS in Original Box with Card and Pri
+- [ej-08-15/lustern-id-bracelet](https://www.ebay.com/itm/206494511322) — Vintage Lustern Baby ID Bracelet on Original Card 12K Gold Filled on S
+- [FR/books/FETTDSS](https://www.ebay.com/itm/206494074345) — From Enoch to the Dead Sea Scrolls Szekely 1981 Teachings of the Essen
+- [FR/books/TEJ](https://www.ebay.com/itm/206494074260) — The Essene Jesus A Revaluation from the Dead Sea Scrolls Szekely 1977 
+- [FR/books/TEWBL](https://www.ebay.com/itm/206494074096) — The Essene Way Biogenic Living Szekely 1989 Hardcover w Dust Jacket Li
+- [FR/books/TFC](https://www.ebay.com/itm/206494074182) — The Fiery Chariots A Play in Five Acts by Edmond Bordeaux Szekely 1996
+- [FR/books/a-brief-history-of-time](https://www.ebay.com/itm/206488640961) — A Brief History of Time Stephen Hawking 1988 Bantam Hardcover Dust Jac
+- [FR/books/archaeology-magazines](https://www.ebay.com/itm/206493958599) — Archaeology Magazine 2002 2003 Lot of 7 Consecutive Issues Pompeii Egy
+- [FR/books/bible-review-mags](https://www.ebay.com/itm/206494014477) — Bible Review Magazine Lot of 13 Issues 2002-2005 Biblical Archaeology 
+- [FR/books/brother-tree-marked](https://www.ebay.com/itm/206488641394) — Brother Tree Edmond Bordeaux Szekely 1977 Biogenic Society Spiral Illu
+- [FR/books/brother-tree-unmarked-set](https://www.ebay.com/itm/206488641490) — Brother Tree Edmond Bordeaux Szekely 1977 Biogenic Society Spiral Illu
+- [FR/books/death-of-the-new-world](https://www.ebay.com/itm/206488641172) — Death of the New World Edmond Bordeaux Szekely Biogenic Society Scarce
+- [FR/books/the-ufo-experience](https://www.ebay.com/itm/206488641056) — The UFO Experience Hynek Collectors Library of the Unknown Hardcover
+- [gear-catalogs-mailers](https://www.ebay.com/itm/206446264160) — GEAR New Country Gear Advertising Catalog Mailer Lot Raymond Waites Ma
+- [jewelry-07-15-2026/barrow-sterling-silger-american-eagle-pendant-stainless-chain-in-box](https://www.ebay.com/itm/206418132358) — Vintage Sterling US Army Eagle St Christopher Double Sided Medal Penda
+- [jewelry-07-15-2026/the-american-ace-harmonica-C-in-box](https://www.ebay.com/itm/206418135081) — Vintage Hohner American Ace Harmonica Key of C Made in Ireland Origina
+- [jug-2](https://www.ebay.com/itm/206340588404) — Antique Stoneware Whiskey Jug Brown Albany Slip Glaze Beehive Shoulder
+- [misc-08-13/faux-stag-1911-grips](https://www.ebay.com/itm/206488570569) — Faux Stag Imitation Grips Full Size 1911 Government Colt Pair Ivory Cr
+- [misc-08-13/knife-set](https://www.ebay.com/itm/206488604634) — Cuisinart Advantage 12-Pc Ceramic Coated Knife Set Aqua w/ Blade Guard
+- [misc-08-13/nikon-d5100](https://www.ebay.com/itm/206488570275) — Nikon D5100 DSLR 40mm Macro 55-300 VR 2-Lens Kit LOW SHUTTER ~3.7K Bag
+- [misc-08-14-a/heart-bracelet](https://www.ebay.com/itm/206493145393) — Vintage Lustern Dainty Maid Heart Bracelet NOS on Card 12K Gold Filled
+- [misc-08-14-a/tara-necklace-earrings-set](https://www.ebay.com/itm/206493144177) — Vintage Tara Signed Retro Necklace Screw Back Earrings Set Gold Tone N
+- [more-mags-444/95-ranger](https://www.ebay.com/itm/206454286425) — 1995 Ford Ranger Truck Dealer Sales Brochure XL XLT STX Splash Origina
+- [more-mags-444/fall-and-winter-1980](https://www.ebay.com/itm/206454286597) — Gilhe's Gentlemen's Attire Fall Winter 1980 Catalog Vintage Menswear T
+- [more-mags-444/folio-mailer](https://www.ebay.com/itm/206469093700) — Saks Fifth Avenue Folio Mens Store Fall 1987 Catalog Vintage 80s Mensw
+- [more-mags-444/mark-shale-presents](https://www.ebay.com/itm/206454287273) — Mark Shale Presents Holiday Gift Catalog Vintage 90s Menswear Zegna Ab
+- [more-mags-444/nautica-1990](https://www.ebay.com/itm/206454286787) — Nautica Autumn 1990 Catalog Vintage 90s Mens Sportswear Lookbook David
+- [more-mags-444/paul-fredrick](https://www.ebay.com/itm/206454287092) — Paul Fredrick MenStyle Summer 1995 Catalog Vintage 90s Dress Shirts Si
+- [quail-plate](https://www.ebay.com/itm/206345431119) — Vintage Norcrest Fine China Hand Painted Bobwhite Quail Plate 10.5\" N
+- [FR/buckles/bass](https://www.ebay.com/itm/206493719085) — Vintage 1986 B.A.S.S. Limited Edition Belt Buckle Largemouth Bass Memb
+- [FR/buckles/bass-leather](https://www.ebay.com/itm/206493720061) — Vintage Alumaline 4108 BB-317 Largemouth Bass Belt Buckle Tooled Paint
+- [FR/buckles/bass2](https://www.ebay.com/itm/206493716870) — Vintage 1978 Raintree Largemouth Bass Belt Buckle 3D Two-Tone Fishing 
+- [FR/buckles/ducks](https://www.ebay.com/itm/206493721151) — Vintage 1977 Bergamot Brass Works Z-144 Mallard Ducks Belt Buckle Pewt
+- [FR/buckles/eagle-1](https://www.ebay.com/itm/206493721236) — Vintage Brass Tone Bald Eagle Belt Buckle Rope Border Western Mountain
+- [FR/buckles/eagle-2](https://www.ebay.com/itm/206493721449) — Vintage 1982 Indiana Metal Craft Soaring Bald Eagle Belt Buckle Oval P
+- [FR/buckles/ga-waterfowl](https://www.ebay.com/itm/206493717553) — 1987 Georgia DNR Waterfowl Conservation Belt Buckle Limited Edition 05
+- [silver-teapot](https://www.ebay.com/itm/206340759004) — Antique Victorian Aesthetic Silverplate Teapot Engraved Bird Butterfly
+- [silverplate-SC-lot/rogers-set-boxed](https://www.ebay.com/itm/206455950753) — 1847 Rogers Bros Daffodil Childs Fork & Spoon Set NOS Boxed Silverplat
