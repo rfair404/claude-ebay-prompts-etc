@@ -41,6 +41,12 @@ Step 3 runs in the page, so it sees exactly what the user sees. The JSON it
 returns carries item URLs and thumbnails, which the text-scraping fallback
 (`--parse`) cannot recover.
 
+Walking the query ladder does NOT need one navigate per rung. From any loaded
+eBay page, `--js-multi` fetches every rung's URL same-origin (login cookies
+included), parses each with DOMParser and runs the same extractor over it — 4-5
+formulations in ONE javascript_tool call, measured with no bot challenge. Use
+it to find which formulation has a cohort, then ingest that one.
+
 ALWAYS hand the user the same URLs — they browse the identical comp set.
 
 ## Sort codes (read off eBay's own sort menu, not guessed)
@@ -144,8 +150,12 @@ def query_ladder(query: str) -> list[tuple[str, str]]:
 # ---------------------------------------------------------------------------
 # The in-page extractor
 # ---------------------------------------------------------------------------
-# Paste into claude-in-chrome's javascript_tool on a loaded sold-search page.
-# Returns {ok, header, n, rows:[...]} as a JSON string.
+# `_EXTRACT_CORE_JS` defines `__ebayExtract(doc)`. It takes the DOCUMENT as an
+# argument instead of closing over the global one, so the identical extraction
+# runs over either:
+#   * the live page  -> EXTRACTOR_JS   (navigate, then run)
+#   * a document parsed by DOMParser from a fetched sold-search URL
+#                    -> multi_query_js (N formulations, ONE call, no navigate)
 #
 # Design notes:
 #  * Anchors on `li.s-card` + a real /itm/<9+ digits> href. Both are far more
@@ -162,8 +172,20 @@ def query_ladder(query: str) -> list[tuple[str, str]]:
 #    regex over one string.
 #  * Strips `.clipped` / aria-hidden nodes from the title — eBay welds
 #    "Opens in a new window or tab" into the title element.
-EXTRACTOR_JS = r"""
-(()=>{
+#  * Reads href/src with an ATTRIBUTE fallback so a DOMParser document (no
+#    layout, no loaded images) yields the same rows as the live page.
+#  * PERFORMANCE — the "Results matching fewer words" marker is located with a
+#    TreeWalker over TEXT NODES. It used to be `querySelectorAll('*')` plus a
+#    `.textContent` read per node, which is O(nodes x subtree): on a full
+#    `_ipg=60` SRP (tens of thousands of nodes) that scan pinned the renderer's
+#    main thread hard enough that EVERY subsequent javascript_tool call on the
+#    tab timed out at the 45s CDP limit — trivial one-liners included — and the
+#    tab had to be closed and recreated (measured 2026-08-27). The TreeWalker
+#    is linear over short strings and finds the same marker. Per-CARD
+#    `c.querySelectorAll('*')` is fine, that subtree is tiny; never scan `*` at
+#    document scope.
+_EXTRACT_CORE_JS = r"""
+const __ebayExtract=(doc)=>{
 const T=n=>(n?.textContent||'').replace(/\s+/g,' ').trim();
 const clean=n=>{if(!n)return null;const k=n.cloneNode(true);
   k.querySelectorAll('.clipped,[aria-hidden="true"]').forEach(e=>e.remove());
@@ -172,9 +194,10 @@ const money=s=>{const m=String(s).replace(/,/g,'').match(/\$(\d+(?:\.\d{1,2})?)/
   return m?parseFloat(m[1]):null};
 const fbn=s=>{const m=String(s).replace(/,/g,'').match(/^([\d.]+)([KM]?)$/);if(!m)return null;
   let v=parseFloat(m[1]);if(m[2]==='K')v*=1e3;if(m[2]==='M')v*=1e6;return Math.round(v)};
-if(/Security Measure|verify yourself/i.test(document.body.innerText))
-  return JSON.stringify({ok:false,challenge:true,
-    error:'eBay served a verification challenge. Do NOT solve it programmatically.'});
+if(!doc||!doc.body) return {ok:false,error:'no document body'};
+if(/Security Measure|verify yourself/i.test(doc.body.innerText||doc.body.textContent||''))
+  return {ok:false,challenge:true,
+    error:'eBay served a verification challenge. Do NOT solve it programmatically.'};
 // eBay appends a "Results matching fewer words" section of LOOSE matches after
 // the real results. They are NOT part of the query's cohort and they are NOT
 // covered by the sort. Including them poisons the distribution (measured: a
@@ -182,20 +205,22 @@ if(/Security Measure|verify yourself/i.test(document.body.innerText))
 // $8-$264). Everything at/after that marker is dropped, and `loose` reports
 // how many were cut so a thin cohort can't hide behind a big raw count.
 let marker=null;
-for(const el of document.querySelectorAll('*')){
-  if(el.children.length===0&&/matching fewer words/i.test(el.textContent)){marker=el;break}}
+const tw=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT);
+let tn;while(tn=tw.nextNode()){
+  if(/matching fewer words/i.test(tn.nodeValue)){marker=tn.parentElement;break}}
 const rows=[];let loose=0;
-for(const c of document.querySelectorAll('li.s-card')){
+for(const c of doc.querySelectorAll('li.s-card')){
   if(marker&&!(c.compareDocumentPosition(marker)&Node.DOCUMENT_POSITION_FOLLOWING)){loose++;continue}
   const a=c.querySelector('a[href*="/itm/"]');
-  const idm=a&&a.href.match(/\/itm\/(\d{9,})/);
+  const idm=(a&&(a.getAttribute('href')||a.href)||'').match(/\/itm\/(\d{9,})/);
   if(!idm) continue;                                  // decoy/placeholder card
+  const im=c.querySelector('img');
   const leaves=[...c.querySelectorAll('*')]
     .filter(n=>!n.children.length&&n.textContent.trim()).map(T);
   const w=leaves.join('\n');            // NEVER T(c) — adjacent spans weld together
   const r={item_id:idm[1],url:'https://www.ebay.com/itm/'+idm[1],
     title:clean(c.querySelector('.s-card__title')),
-    thumbnail:(c.querySelector('img')?.src)||null,
+    thumbnail:(im&&(im.src||im.getAttribute('src')))||null,
     sold_price:money(T(c.querySelector('.s-card__price'))),
     sold_date:null,shipping_cost:null,shipping_type:null,listing_type:null,
     bids_count:null,bo_accepted:false,seller_username:null,
@@ -223,9 +248,15 @@ for(const c of document.querySelectorAll('li.s-card')){
       break}}
   if(r.title&&r.sold_price!=null) rows.push(r);
 }
-return JSON.stringify({ok:true,header:T(document.querySelector('h1,.srp-controls__count-heading')).slice(0,80),
-  n:rows.length,loose_dropped:loose,rows});})()
+return {ok:true,
+  header:T(doc.querySelector('h1,.srp-controls__count-heading')).slice(0,80),
+  n:rows.length,loose_dropped:loose,rows};};
 """
+
+# Paste into claude-in-chrome's javascript_tool on a loaded sold-search page.
+# Returns {ok, header, n, loose_dropped, rows:[...]} as a JSON string.
+EXTRACTOR_JS = ("(()=>{" + _EXTRACT_CORE_JS.strip()
+                + "\nreturn JSON.stringify(__ebayExtract(document));})()")
 
 
 def download_js(filename: str = "ebay_sold.json") -> str:
@@ -255,6 +286,124 @@ def download_js(filename: str = "ebay_sold.json") -> str:
             "document.body.appendChild(a);a.click();"
             "setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},2000);"
             "return 'SAVED '+a.download+' rows='+o.n+' loose_dropped='+o.loose_dropped;})()")
+
+
+# ---------------------------------------------------------------------------
+# Same-origin multi-query fetch — walk the ladder in ONE javascript_tool call
+# ---------------------------------------------------------------------------
+
+MULTI_DELAY_MS = 400          # look like a browser, not a loop, between fetches
+MULTI_MAX_FETCH = 8
+
+
+def multi_query_plan(query: str, sorts=DUAL_SORTS, *, also=None,
+                     ladder: bool = True, ipg: int = DEFAULT_IPG,
+                     condition: Optional[str] = None,
+                     limit: int = MULTI_MAX_FETCH) -> list[dict]:
+    """The [{label, rung, query, sort, url}] set `multi_query_js` will fetch.
+
+    Default = every ladder rung x every sort, so one call answers the question
+    the ladder in prompts/price.md exists to walk: which formulation actually
+    HAS a cohort. `also=[...]` adds hand-written formulations alongside.
+    """
+    rungs = query_ladder(query) if ladder else [("L1 (specific)", query)]
+    seen = {q.lower() for _, q in rungs}
+    for n, extra in enumerate(also or [], 1):
+        extra = extra.strip()
+        if extra and extra.lower() not in seen:
+            seen.add(extra.lower())
+            rungs.append((f"alt{n}", extra))
+    plan = []
+    for rung, q in rungs:
+        short = rung.split()[0]                       # "L1 (specific)" -> "L1"
+        for sort in sorts:
+            plan.append({"label": f"{short}|{sort}", "rung": rung,
+                         "query": q, "sort": sort,
+                         "url": build_search_url(q, sort, ipg=ipg,
+                                                 condition=condition)})
+    return plan[:limit]
+
+
+def multi_query_js(plan: list[dict], filename: Optional[str] = None, *,
+                   delay_ms: int = MULTI_DELAY_MS) -> str:
+    """JS that FETCHES several sold-search URLs from the already-loaded eBay tab.
+
+    One `javascript_tool` call replaces N navigate+extract round trips: the tab
+    is already on ebay.com, so `fetch(url,{credentials:'include'})` is
+    same-origin and carries the login cookies, and `DOMParser` turns each
+    response into a document `__ebayExtract(doc)` reads exactly like the live
+    one. Measured 2026-08-27: 4-5 formulations in one call, no bot challenge.
+
+    What comes BACK is per-query SUMMARIES only — n, loose_dropped, delivered
+    min/median/max (over the `delivered_n` rows whose shipping is KNOWN), three
+    sample titles — deliberately carrying no item ids, so
+    the MCP transport's content filter can't block the result (see
+    `download_js`). Pass `filename` to ALSO save the full rows to the browser's
+    download folder for `--ingest-json <file> --pick <label>`.
+
+    Fetches are sequential with a delay. Nothing here solves a challenge: a
+    query whose response is a verification page comes back `challenge:true`.
+    """
+    safe = (re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "ebay_sold_multi.json"
+            ) if filename else None
+    save_js = (
+        "const b=new Blob([JSON.stringify({queries:full})],{type:'application/json'});"
+        "const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;"
+        f"a.download={safe!r};document.body.appendChild(a);a.click();"
+        "setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},2000);\n"
+        "return JSON.stringify({ok:true,saved:a.download,queries:out});})()"
+    ) if safe else "return JSON.stringify({ok:true,saved:null,queries:out});})()"
+    return (
+        "(async()=>{" + _EXTRACT_CORE_JS.strip() + "\n"
+        "if(!/(^|\\.)ebay\\.com$/i.test(location.hostname))"
+        " return JSON.stringify({ok:false,error:'not on ebay.com — fetch would be "
+        "cross-origin; navigate the tab to an eBay page first'});\n"
+        "const Q=" + json.dumps(plan, separators=(",", ":")) + ";\n"
+        "const med=v=>{if(!v.length)return null;const s=[...v].sort((a,b)=>a-b),h=s.length>>1;"
+        "return s.length%2?s[h]:Math.round((s[h-1]+s[h])*50)/100};\n"
+        "const out=[],full=[];\n"
+        "for(let i=0;i<Q.length;i++){const q=Q[i];let r;\n"
+        f" if(i) await new Promise(r=>setTimeout(r,{int(delay_ms)}));\n"
+        " try{const res=await fetch(q.url,{credentials:'include'});\n"
+        "  if(!res.ok){out.push({label:q.label,query:q.query,sort:q.sort,ok:false,"
+        "error:'HTTP '+res.status});continue}\n"
+        "  r=__ebayExtract(new DOMParser().parseFromString(await res.text(),'text/html'));\n"
+        " }catch(e){out.push({label:q.label,query:q.query,sort:q.sort,ok:false,"
+        "error:String((e&&e.message)||e)});continue}\n"
+        " if(!r.ok){out.push({label:q.label,query:q.query,sort:q.sort,ok:false,"
+        "challenge:!!r.challenge,error:r.error});continue}\n"
+        " full.push(Object.assign({},q,r));\n"
+        # delivered basis only where shipping is KNOWN — an unknown ship cost is
+        # not a free one, and quietly calling it 0 understates the comp.
+        " const d=r.rows.filter(x=>x.shipping_cost!=null)"
+        ".map(x=>Math.round((x.sold_price+x.shipping_cost)*100)/100);\n"
+        " out.push({label:q.label,query:q.query,sort:q.sort,ok:true,n:r.n,"
+        "loose_dropped:r.loose_dropped,header:r.header,delivered_n:d.length,"
+        "delivered_min:d.length?Math.min(...d):null,delivered_med:med(d),"
+        "delivered_max:d.length?Math.max(...d):null,"
+        "sample:r.rows.slice(0,3).map(x=>String(x.title).slice(0,70))});\n"
+        "}\n" + save_js)
+
+
+def pick_multi_rows(data: dict, label: Optional[str] = None) -> tuple:
+    """Pull ONE query's rows out of a `--js-multi` save file -> (rows, label).
+
+    Raises ValueError listing the labels when `label` is missing or ambiguous:
+    silently picking a rung would mislabel which formulation the comps came
+    from, and the rung IS the provenance.
+    """
+    queries = data.get("queries") or []
+    if not label:
+        raise ValueError(
+            "multi-query file — choose one with --pick: "
+            + ", ".join(f"{q.get('label')} (n={q.get('n')}, {q.get('query')!r})"
+                        for q in queries))
+    hits = ([q for q in queries if q.get("label", "").lower() == label.lower()]
+            or [q for q in queries if label.lower() in q.get("label", "").lower()])
+    if len(hits) != 1:
+        raise ValueError(f"--pick {label!r} matched {len(hits)} of: "
+                         + ", ".join(q.get("label", "?") for q in queries))
+    return hits[0].get("rows", []), hits[0].get("label", label)
 
 
 def rows_to_comps(rows: list[dict], query: Optional[str] = None) -> list[CompRecord]:
@@ -400,8 +549,23 @@ def _cli() -> None:
                          "download folder instead of returning it. Use this for real "
                          "runs: the MCP transport blocks payloads containing many eBay "
                          "item ids, so returning the rows loses URLs/sellers.")
+    ap.add_argument("--js-multi", metavar="FILENAME", nargs="?", const="",
+                    help="Print JS that FETCHES several sold-search URLs from the "
+                         "already-loaded eBay tab (same-origin) and extracts each — "
+                         "the whole query ladder in ONE javascript_tool call instead "
+                         "of a navigate+extract per rung. Returns per-query summaries; "
+                         "give a FILENAME to also save the full rows for --pick.")
+    ap.add_argument("--also", action="append", metavar="QUERY", default=[],
+                    help="With --js-multi: an extra formulation to test alongside the "
+                         "ladder rungs (repeatable).")
+    ap.add_argument("--multi-sorts", default=",".join(DUAL_SORTS),
+                    help="With --js-multi: comma-separated sorts to fetch per rung "
+                         "(default %s)." % ",".join(DUAL_SORTS))
     ap.add_argument("--ingest-json", metavar="FILE",
                     help="Ingest EXTRACTOR_JS output (file, or '-' for stdin).")
+    ap.add_argument("--pick", metavar="LABEL",
+                    help="With --ingest-json on a --js-multi save file: which query's "
+                         "rows to ingest (e.g. 'L2|price_high').")
     ap.add_argument("--parse", metavar="TXT",
                     help="Fallback: parse captured page TEXT (no URLs).")
     ap.add_argument("--sort", default="best_match", choices=sorted(SORTS),
@@ -422,6 +586,28 @@ def _cli() -> None:
         print(download_js(args.js_download))
         return
 
+    if args.js_multi is not None:
+        if not query:
+            ap.error("--js-multi needs the query (the ladder is built from it)")
+        sorts = [x.strip() for x in args.multi_sorts.split(",") if x.strip()]
+        bad = [x for x in sorts if x not in SORTS]
+        if bad:
+            ap.error("--multi-sorts: unknown %s; pick from %s" % (bad, sorted(SORTS)))
+        full = multi_query_plan(query, sorts, also=args.also,
+                                condition=args.condition, limit=10 ** 6)
+        plan, dropped = full[:MULTI_MAX_FETCH], full[MULTI_MAX_FETCH:]
+        print(multi_query_js(plan, args.js_multi or None))
+        # Provenance goes to stderr so stdout stays pasteable JS.
+        print("\n%d fetch(es), run from any loaded ebay.com tab:" % len(plan),
+              file=sys.stderr)
+        for q in plan:
+            print("  %-16s %r" % (q["label"], q["query"]), file=sys.stderr)
+        if dropped:                    # never let a coverage cap go unsaid
+            print("  CAPPED at %d — NOT fetched: %s"
+                  % (MULTI_MAX_FETCH, ", ".join(q["label"] for q in dropped)),
+                  file=sys.stderr)
+        return
+
     if args.ingest_json or args.parse:
         if not query:
             ap.error("ingest/parse needs the query too (it tags the comps)")
@@ -435,7 +621,15 @@ def _cli() -> None:
                           "Do not solve it programmatically — reload in Chrome and retry.",
                           file=sys.stderr)
                     sys.exit(2)
-                rows = data.get("rows", [])
+                if "queries" in data:                  # a --js-multi save file
+                    try:
+                        rows, label = pick_multi_rows(data, args.pick)
+                    except ValueError as e:
+                        print("ERROR: %s" % e, file=sys.stderr)
+                        sys.exit(2)
+                    print("Picked %s from the multi-query capture" % label)
+                else:
+                    rows = data.get("rows", [])
             else:
                 rows = data
             comps = rows_to_comps(rows, query)
@@ -482,6 +676,8 @@ def _cli() -> None:
             print(f"  {label}: {q!r}\n    {build_search_url(q, 'best_match')}")
     print("\nThen, in claude-in-chrome on each page:")
     print("  python lib/ebay_sold_browse.py --js        # paste into javascript_tool")
+    print(f"  python lib/ebay_sold_browse.py \"{query}\" --js-multi   "
+          "# every ladder rung in ONE call, no navigate")
     print(f"  python lib/ebay_sold_browse.py \"{query}\" --ingest-json out.json --sort <sort>")
 
 
