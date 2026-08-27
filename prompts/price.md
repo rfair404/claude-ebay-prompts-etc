@@ -100,6 +100,16 @@ Escalate only as each stage dries up; never stop to ask.
    5. **ALWAYS give the user both URLs in your reply** — they price with you,
       not after you.
 
+   **Ladder walk = ONE call, not one navigate per rung.** From any loaded
+   ebay.com tab, `--js-multi <file.json>` fetches every rung × sort
+   same-origin and extracts each; read the returned per-query summaries
+   (`n`, `loose_dropped`, delivered min/med/max over the `delivered_n` rows
+   with known shipping, sample titles), pick the
+   formulation that has a real cohort, then ingest just that one with
+   `--ingest-json <file> --pick "<label>"`. Add `--also "<alt phrasing>"` to
+   test a formulation the ladder wouldn't generate. Still give the user the
+   URLs.
+
    `--parse <textfile>` is the no-JS fallback (no URLs/thumbnails).
    `Best offer accepted` on a comp ⇒ the ask wasn't the clearing price — treat
    as a **soft** ceiling. Do NOT "simplify" the extractor's anti-scrape guards
@@ -120,7 +130,8 @@ Escalate only as each stage dries up; never stop to ask.
    - L3: category noun (+ material)
 
    Run the dual query at L1; if unique surviving comps < 3, step down and
-   re-run. Log each formulation in the Hunt line. `price_high` often has data
+   re-run — or run every rung at once with `--js-multi`. Log each formulation
+   in the Hunt line. `price_high` often has data
    when `best_match` is empty — `price_stats` then uses it as the
    representative set (flagged).
 
@@ -146,6 +157,13 @@ hard you looked. An exact match beats any era-peer; commit to it (per _shared).
 - `"<query>" --urls [--ladder] [--condition <new|used>]` → the two URLs.
 - `--js` → the in-page extractor JS (returns `challenge:true` on a
   verification page — don't solve it).
+- `"<query>" --js-multi [FILENAME] [--also "<alt>"] [--multi-sorts a,b]` → JS
+  that fetches every ladder rung × sort from the current ebay.com tab and
+  returns per-query summaries; with FILENAME it also saves the full rows.
+  Rungs print to stderr. Max 8 fetches.
+- `--ingest-json <multi-file> --pick "<label>"` → ingest one rung out of a
+  `--js-multi` save (labels look like `L2|price_high`; omit `--pick` and it
+  lists them).
 - `"<query>" --ingest-json <file> --sort <best_match|price_high> [--page N] --save-dir <shoot-dir>`
   → field-coverage line + `Saved results: <path>`.
 - `--parse <pagetext.txt>` fallback.
