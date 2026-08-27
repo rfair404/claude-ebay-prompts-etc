@@ -168,3 +168,6 @@ desktop.ini
 # committed; the verbatim sample stays local so it can never be mistaken for
 # listing input. Re-derive with `python lib/seller_style.py sample <seller>`.
 /styleguides/_studies/*.json
+
+# local working backups (ledger/sales/config) — never committed
+backups/

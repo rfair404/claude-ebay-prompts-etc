@@ -1,0 +1,227 @@
+<title>PREP Backlog</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Sans+3:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#F1F4F3; --surface:#FFFFFF; --line:#DCE3E0; --line2:#EDF1EF;
+  --ink:#111817; --ink2:#4E5A56; --ink3:#7C8783;
+  --accent:#0B5A52; --accent-soft:#DCEDE9; --money:#8A5310;
+  --s2:#8E2137; --s2bg:#FBE9EC; --s3:#8A5310; --s3bg:#FBEFDD;
+  --s4:#1A6244; --s4bg:#E0F0E7;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#0E1413; --surface:#161E1C; --line:#2A3634; --line2:#202A28;
+  --ink:#E7EDEA; --ink2:#A3B0AC; --ink3:#78847F;
+  --accent:#4FC5B2; --accent-soft:#16302C; --money:#E0A44A;
+  --s2:#F09AAB; --s2bg:#33161D; --s3:#E0A44A; --s3bg:#33240F;
+  --s4:#6FD5A4; --s4bg:#122E22;
+}}
+:root[data-theme="dark"]{
+  --ground:#0E1413; --surface:#161E1C; --line:#2A3634; --line2:#202A28;
+  --ink:#E7EDEA; --ink2:#A3B0AC; --ink3:#78847F;
+  --accent:#4FC5B2; --accent-soft:#16302C; --money:#E0A44A;
+  --s2:#F09AAB; --s2bg:#33161D; --s3:#E0A44A; --s3bg:#33240F;
+  --s4:#6FD5A4; --s4bg:#122E22;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);
+  font:400 16px/1.55 "Source Sans 3",ui-sans-serif,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 24px 80px;
+  display:flex;flex-direction:column;gap:40px}
+h1{font:700 34px/1.1 Archivo,system-ui,sans-serif;letter-spacing:-.02em;margin:0;
+  text-wrap:balance}
+h2{font:600 13px/1 Archivo,system-ui,sans-serif;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink2);margin:0}
+.lede{margin:0;max-width:64ch;color:var(--ink2);font-size:17px}
+header{display:flex;flex-direction:column;gap:12px;border-bottom:2px solid var(--ink);
+  padding-bottom:20px}
+.eyebrow{font:500 12px/1 "IBM Plex Mono",monospace;letter-spacing:.1em;color:var(--accent);
+  text-transform:uppercase}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line)}
+.tile{background:var(--surface);padding:18px 20px;display:flex;flex-direction:column;gap:5px}
+.tile b{font:600 30px/1 Archivo,system-ui,sans-serif;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums}
+.tile .k{font:500 11px/1.3 "IBM Plex Mono",monospace;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink3)}
+.tile .n{font-size:13px;color:var(--ink2)}
+.tile.hi b{color:var(--money)}
+section{display:flex;flex-direction:column;gap:14px}
+.shead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+  flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
+.shead .amt{font:600 20px/1 Archivo,system-ui,sans-serif;color:var(--money);
+  font-variant-numeric:tabular-nums}
+.note{margin:0;color:var(--ink2);font-size:15px;max-width:66ch}
+.note code,footer code,.outlier code{font-family:"IBM Plex Mono",monospace;font-size:.86em}
+.scroll{overflow-x:auto;border:1px solid var(--line);background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:780px}
+th{font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ink3);text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);
+  background:var(--surface);white-space:nowrap}
+td{padding:11px 14px;border-bottom:1px solid var(--line2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.num{font:500 16px/1.4 "IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+  color:var(--money);white-space:nowrap}
+.ti{font-weight:600;line-height:1.35}
+td code{font:400 12px/1.5 "IBM Plex Mono",monospace;color:var(--ink3);word-break:break-all}
+.ph{font:400 14px/1.5 "IBM Plex Mono",monospace;color:var(--ink2);
+  font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.ph em{color:var(--s2);font-style:normal;font-weight:600}
+.pipe{white-space:nowrap}
+.dots{display:inline-flex;gap:3px;margin-bottom:6px}
+.d{width:16px;height:4px;border-radius:1px;display:block}
+.d.on{background:var(--accent)} .d.off{background:var(--line)}
+.chip{display:block;font:500 11px/1 "IBM Plex Mono",monospace;letter-spacing:.03em;
+  padding:4px 7px;border-radius:2px;width:max-content}
+.s2{color:var(--s2);background:var(--s2bg)}
+.s3{color:var(--s3);background:var(--s3bg)}
+.s4{color:var(--s4);background:var(--s4bg)}
+.st{white-space:nowrap;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.tag{font:500 11px/1 "IBM Plex Mono",monospace;padding:4px 7px;border-radius:2px;
+  border:1px solid var(--line)}
+.tag-e{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.tag-n{color:var(--ink3)}
+.tag-g{color:var(--ink2);background:var(--line2);border-color:transparent}
+.legend{display:flex;gap:18px;flex-wrap:wrap;font:500 11px/1 "IBM Plex Mono",monospace;
+  color:var(--ink3);letter-spacing:.06em;text-transform:uppercase;align-items:center}
+.legend span{display:flex;align-items:center;gap:6px}
+.outlier{border:1px solid var(--line);border-left:4px solid var(--money);
+  background:var(--surface);padding:22px 24px;display:flex;flex-direction:column;gap:10px}
+.outlier .amt{font:700 30px/1 Archivo,system-ui,sans-serif;color:var(--money);
+  font-variant-numeric:tabular-nums}
+.outlier p{margin:0;color:var(--ink2);max-width:66ch}
+footer{border-top:1px solid var(--line);padding-top:18px;color:var(--ink3);font-size:13px;
+  max-width:74ch}
+@media (max-width:640px){h1{font-size:27px} .wrap{padding:32px 16px 56px;gap:32px}}
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Reconciled against the eBay Sell API &middot; 23 Aug 2026</div>
+  <h1>PREP Backlog</h1>
+  <p class="lede">Photographed, priced stock that never reached a listing. Every item here
+  was found by joining the local <code>inventory/</code> tree against the 219 SKUs eBay
+  actually holds &mdash; these are the ones eBay has no record of. Not one is blocked by
+  eBay. They are blocked here. Hand-listed channels are excluded.</p>
+</header>
+
+<div class="tiles">
+  <div class="tile hi"><span class="k">Recoverable ask</span><b>$3,476</b>
+    <span class="n">63 items, pipeline-publishable</span></div>
+  <div class="tile"><span class="k">Blocked at PREP</span><b>42</b>
+    <span class="n">drafted, PREP never run</span></div>
+  <div class="tile"><span class="k">Already on eBay</span><b>9</b>
+    <span class="n">saved drafts &middot; $1,129 &middot; closest to live</span></div>
+  <div class="tile"><span class="k">Shot and waiting</span><b>57</b>
+    <span class="n">$3,225 &middot; photos on disk, nothing else needed</span></div>
+</div>
+
+<div class="legend">
+  <span>Pipeline</span>
+  <span><i class="d on"></i>cleared</span>
+  <span><i class="d off"></i>not reached</span>
+  <span>identify &rarr; price &rarr; draft &rarr; prep &rarr; publish</span>
+</div>
+
+<section>
+  <div class="shead"><h2>Drafted &middot; 46 items</h2>
+    <span class="amt">$2,773</span></div>
+  <p class="note">A <code>draft.md</code> exists with title, price, and condition already
+  written. 9 of them are further along than that &mdash; an eBay draft is saved
+  under &ldquo;Save for later&rdquo; and needs only photos and a publish. The rest have
+  never had <code>prep.py</code> run against them.</p>
+  <div class="scroll"><table>
+  <thead><tr><th>Ask</th><th>Item</th><th>Photos</th><th>Stopped at</th><th>State</th></tr></thead>
+  <tbody>
+<tr><td class="num">$250</td><td><div class="ti">Fenton Burmese Glass Roses Ball Shade Student Table Lamp Glows Pink Yellow Brass</div><code>inventory/fenton-lamps/one</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$225</td><td><div class="ti">Heidi Caillard La Poule Petit Modèle Ceramic Hen Brown White Hand Made France</div><code>inventory/hens/la-poule-black-white-small</code></td><td class="ph">22</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$222</td><td><div class="ti">Heidi Caillard La Poule Moyen Modèle Ceramic Hen Brown White Hand Made France</div><code>inventory/hens/la-poule-black-s-white-medium</code></td><td class="ph">22</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$215</td><td><div class="ti">Heidi Caillard Poulette Grand Modèle Ceramic Hen Red &amp; White France w/ Box</div><code>inventory/hens/poulette-red-white-large</code></td><td class="ph">22</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$175</td><td><div class="ti">Brooks Brothers Fall Winter 1981 Catalog Mawicke Art Vintage Ivy Style</div><code>inventory/bb-cats-pair/bb-pair/bb-cat-fall-winter-81</code></td><td class="ph">3</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$125</td><td><div class="ti">Antique Advertising Razor Hone Wood Case Brass Plaque REUBEN A POSNER &amp; CO FURS</div><code>inventory/hone</code></td><td class="ph">10</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$99</td><td><div class="ti">Vintage 1986 Signed Folk Art Hand Painted Wood Cat &amp; Dog Set of 2 Country Blue</div><code>inventory/FR/painted-dog-cat</code></td><td class="ph">16</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d on" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s4">rendered, no pick</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$95</td><td><div class="ti">1960s Handmade 1776 American Eagle Needlepoint Professionally Framed Patriotic</div><code>inventory/eagle-art</code></td><td class="ph">4</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$89</td><td><div class="ti">Softwaves MARIS Womens Denim Blue Sand Suede Platform Sandals EU 39 New in Box</div><code>inventory/softwaves/fourth-pair</code></td><td class="ph">9</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$89</td><td><div class="ti">Softwaves MARINI Womens Silver Platform Slide Sandals Mules EU 41 New in Box</div><code>inventory/softwaves/second-pair</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$89</td><td><div class="ti">Softwaves MARINI Womens Silver Platform Slide Sandals Mules EU 39.5 New in Box</div><code>inventory/softwaves/third-pair</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$88</td><td><div class="ti">PartyLite 5 Wick Yule Log Candle with Bronze Tone Log Stand Never Lit</div><code>inventory/FR/yule-log-candle</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d on" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s4">rendered, no pick</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$65</td><td><div class="ti">Antique Bisque Piano Baby Figurine Crawling Boy with Cracked Egg Vessel</div><code>inventory/baby-boy</code></td><td class="ph">11</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$65</td><td><div class="ti">Vintage Balinese Hand Carved Wood Demon Mask Red Indonesian Folk Art Wall</div><code>inventory/mask-red/.prior-run-bak</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$64</td><td><div class="ti">Vintage Radio Tube Lot CHOICE 117L7GT 7B6 14A7 1LC6 Tung-Sol Sylvania NU NOS</div><code>inventory/more-tube-lamps-lots/radio-tube-lots</code></td><td class="ph">90</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span> <span class="tag tag-g">4 SKUs</span></td></tr>
+<tr><td class="num">$60</td><td><div class="ti">Vintage Indonesian Folk Art Dance Mask Hand Carved Wood Yellow</div><code>inventory/mask-yel/.prior-run-bak</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$45</td><td><div class="ti">Cast Iron Amish Horse Drawn Buggy Carriage w/ Family Figures Toy Hand Painted</div><code>inventory/cast-figurines/1</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$45</td><td><div class="ti">Sylvania 6CG7 6FQ7 Twin Triode Vacuum Tube NOS in Original Box Audio Preamp</div><code>inventory/more-tube-lamps-lots/6cg7</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$43</td><td><div class="ti">Acacia Charcuterie Board Set Ceramic Dip Bowl + 4 Cheese Spreaders Knives New</div><code>inventory/misc/board-spreader-set</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$40</td><td><div class="ti">1847 Rogers Bros Silverplate Flatware Lot NOS Serving Spoons &amp; Youth Set</div><code>inventory/silverplate-SC-lot/misc-NOS/reflection</code></td><td class="ph">10</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$36</td><td><div class="ti">RITZ Velvet Wine Bottle Gift Bag Mixed Lot of 8 Teal Red Burgundy NOS Tags</div><code>inventory/FR/wine-bags/lot-mixed-8</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$35</td><td><div class="ti">Ben Silver Collection Fall Winter 1993 Catalog Charleston Regimental Ties</div><code>inventory/more-mags-444/ben-silver-collection/1</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$35</td><td><div class="ti">Ben Silver Collection Spring Summer 1994 Catalog Charleston Henley Regatta Ties</div><code>inventory/more-mags-444/ben-silver-collection/2</code></td><td class="ph">10</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$35</td><td><div class="ti">Vintage Iron Art LB-19 Cast Iron Wall Mount Match Holder Safe Hinged Lid Box</div><code>inventory/cast-figurines/2</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$33</td><td><div class="ti">Cast Iron Wall Match Holder Match Safe Fan Shell Victorian John Wright Vintage</div><code>inventory/cast-figurines/4</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$30</td><td><div class="ti">RITZ Velvet Wine Bottle Gift Bag Lot of 6 Red Tassel Cotton NOS with Tags</div><code>inventory/FR/wine-bags/lot-red-6</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$30</td><td><div class="ti">RITZ Velvet Wine Bottle Gift Bag Lot of 6 Teal Green Tassel Cotton NOS w Tags</div><code>inventory/FR/wine-bags/lot-teal-6</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$30</td><td><div class="ti">RITZ Velvet Wine Bottle Gift Bag Lot of 6 Burgundy Gold Tassel NOS with Tags</div><code>inventory/FR/wine-bags/lot-wine-6</code></td><td class="ph"><em>0</em></td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$30</td><td><div class="ti">Vintage Miniature Cast Iron Pot Belly Stove Toy Dollhouse Decor Flue Footed</div><code>inventory/cast-figurines/3</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$29</td><td><div class="ti">1847 Rogers Bros First Love Silverplate Flatware Lot 5 Pcs Forks Spoon NOS</div><code>inventory/silverplate-SC-lot/misc-NOS/first-love</code></td><td class="ph">32</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$23</td><td><div class="ti">Vintage Spoontiques Pewter Manatee Figurine w/ Calf Miniature Sea Life Statue</div><code>inventory/cast-figurines/9</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$22</td><td><div class="ti">Esquire Gentleman Fall 1993 Special Encore Issue Wardrobe Guide Fashion Magazine</div><code>inventory/esquire-gentleman</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d on" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s4">rendered, no pick</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$20</td><td><div class="ti">Vintage Hershey&#x27;s Kiss Charm Pendant Ornament Pewter Silver Tone Candy Novelty</div><code>inventory/cast-figurines/10</code></td><td class="ph">5</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$19</td><td><div class="ti">Vintage Pewter Cow Figurine Miniature Horned Cow Neck Bell Farm Animal Statue</div><code>inventory/cast-figurines/8</code></td><td class="ph">3</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$18</td><td><div class="ti">Vintage Swee-Touch-Nee Tea Tin Treasure Chest Flower Tea Consolidated Tea Co NY</div><code>inventory/tins/silver</code></td><td class="ph">16</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$18</td><td><div class="ti">Vintage Pewter Wolf Figurine Running on Rocky Base Miniature Collectible Animal</div><code>inventory/cast-figurines/6</code></td><td class="ph">13</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$18</td><td><div class="ti">Vintage Pewter Dairy Cow Figurine Miniature Bell Collar Farm Animal Statue</div><code>inventory/cast-figurines/7</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$17</td><td><div class="ti">Vintage Miniature Liberty Bell Replica Souvenir Metal Pass and Stow Crack Yoke</div><code>inventory/cast-figurines/5</code></td><td class="ph">13</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$17</td><td><div class="ti">Sylvania DFT Projector Lamp 1000W 120V Blue Top NOS Original Box 16mm Slide</div><code>inventory/more-tube-lamps-lots/sylvania</code></td><td class="ph">57</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$15</td><td><div class="ti">Coca-Cola 75th Anniversary Tray 1975 Atlanta Bottling Co Nordica No 077917 Coke</div><code>inventory/coke-tray</code></td><td class="ph">18</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d on" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s4">rendered, no pick</span></td><td class="st"><span class="tag tag-e">eBay draft saved</span></td></tr>
+<tr><td class="num">$15</td><td><div class="ti">Vintage Player&#x27;s Navy Cut Cigarettes Medium 100 Tin Tobacciana Blue England</div><code>inventory/tins/blue</code></td><td class="ph">15</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$15</td><td><div class="ti">Antique Golden Twins Climax Plug Chewing Tobacco Tin P Lorillard Co Tobacciana</div><code>inventory/tins/gold</code></td><td class="ph">17</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$13</td><td><div class="ti">1847 Rogers Bros Flair Serving Spoon NOS Silverplate Vintage MCM International</div><code>inventory/silverplate-SC-lot/flair/serving-spoon</code></td><td class="ph">4</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$13</td><td><div class="ti">Oneida Heirloom Stainless Teaspoon Vintage Floral Scroll NOS Sealed</div><code>inventory/silverplate-SC-lot/misc-NOS/spoon3</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$10</td><td><div class="ti">1847 Rogers Bros IS Silverplate Spoon Floral Repousse Handle NOS Orig Sleeve</div><code>inventory/silverplate-SC-lot/misc-NOS/spoon2</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$9</td><td><div class="ti">1847 Rogers Bros Reflection Silverplate Teaspoon NOS Sealed International Silver</div><code>inventory/silverplate-SC-lot/misc-NOS/spoon5</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d on" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s3">PREP never run</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+  </tbody></table></div>
+</section>
+
+<section>
+  <div class="shead"><h2>Priced or identified, no draft &middot; 17 items</h2>
+    <span class="amt">$703</span></div>
+  <p class="note">Research is done &mdash; <code>identify.txt</code> and
+  <code>price.txt</code> are on disk with a supported number. Nothing has been written into
+  a draft yet. Two carry no parseable price and want a PRICE pass first.</p>
+  <div class="scroll"><table>
+  <thead><tr><th>Ask</th><th>Item</th><th>Photos</th><th>Stopped at</th><th>State</th></tr></thead>
+  <tbody>
+<tr><td class="num">$125</td><td><div class="ti">Framed Jesus print (08-19 art group)</div><code>inventory/08-19-art/jesus-1</code></td><td class="ph">4</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$60</td><td><div class="ti">Dogwood pin</div><code>inventory/ej-07-21/dogwood-pin</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$55</td><td><div class="ti">Pearl ring</div><code>inventory/p-ring</code></td><td class="ph">10</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$55</td><td><div class="ti">Green stone ring</div><code>inventory/ring-gr</code></td><td class="ph">5</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$50</td><td><div class="ti">St. Christopher pendant</div><code>inventory/ej-07-21/st-christpoher-pendant</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$50</td><td><div class="ti">18K HGE men&#x27;s CZ pave ring (costume)</div><code>inventory/18k-mens-ring</code></td><td class="ph">9</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$50</td><td><div class="ti">Tara set</div><code>inventory/ej-07-21/tara-set</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$45</td><td><div class="ti">Anson gold-filled + nephrite jade cufflinks</div><code>inventory/ej-07-21/cufflinks</code></td><td class="ph">8</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$45</td><td><div class="ti">Hardback book lot, Group A Box 1 (13 vols)</div><code>inventory/dumpster-books-hardbacks</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$40</td><td><div class="ti">Mats Jonasson Folia lead glass</div><code>inventory/mats-jonasson-folia-lead-glass</code></td><td class="ph">12</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$33</td><td><div class="ti">Ring B</div><code>inventory/ring-b</code></td><td class="ph">21</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$30</td><td><div class="ti">Tie pin</div><code>inventory/ej-07-21/tie-pin</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$28</td><td><div class="ti">Blue stone ring</div><code>inventory/ring-bl</code></td><td class="ph">3</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$25</td><td><div class="ti">Vintage razor</div><code>inventory/ej-07-21/razor</code></td><td class="ph">6</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">$12</td><td><div class="ti">Espresso cup</div><code>inventory/expresso-cup</code></td><td class="ph">11</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">&mdash;</td><td><div class="ti">Red bottle</div><code>inventory/red-bottle</code></td><td class="ph">18</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+<tr><td class="num">&mdash;</td><td><div class="ti">Peacock piece</div><code>inventory/peacock</code></td><td class="ph">7</td><td class="pipe"><span class="dots"><i class="d on" title="IDENTIFY"></i><i class="d on" title="PRICE"></i><i class="d off" title="DRAFT"></i><i class="d off" title="PREP"></i><i class="d off" title="PUBLISH"></i></span><span class="chip s2">no DRAFT yet</span></td><td class="st"><span class="tag tag-n">not on eBay</span></td></tr>
+  </tbody></table></div>
+</section>
+
+<footer>
+  <p><b>Three fixes before PREP runs clean.</b> <code>more-tube-lamps-lots/6cg7</code> has
+  no images in its shoot root &mdash; its only photos sit in <code>cropped/</code>. The
+  four <code>FR/wine-bags</code> lots have no photos at all. The two
+  <code>.prior-run-bak</code> mask entries are empty shells whose SKUs belong to their
+  parent shoots and should be folded in rather than treated as items.</p>
+  <p><b>Not counted here:</b> the 1982 Hunter 33 Cherubini sloop at
+  <code>inventory/hunter-33-carrabelle</code> ($7,500 OBO, 98 photos). eBay Motors vehicle
+  listings do not go through the Sell Inventory/Offer API, so it is listed by hand and
+  tracked outside this pipeline &mdash; not a stalled draft and not part of the backlog.</p>
+</footer>
+</div>
