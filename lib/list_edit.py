@@ -84,6 +84,8 @@ from typing import Optional
 from config import ConfigError, config_path, load_config
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
+from verdict import emit as _verdict_emit
+from voice_check import check_voice
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -462,6 +464,10 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
         v = draft.get(dotpath)
         if v not in (None, "") and len(str(v)) > cap:
             issues.append(f"{dotpath}: {v!r} exceeds maxLen {cap}")
+
+    # In-hand voice (GH #40): camera-frame confessions in buyer copy block a
+    # sync. Warns are advisory — see `python lib/voice_check.py`.
+    issues += [f for f in check_voice(draft) if f.startswith("voice (block)")]
 
     return issues
 
@@ -1252,6 +1258,18 @@ def build_review_card(draft_path: Path,
     nr = shoot / "NEEDS_REVIEW.md"
     if nr.exists():
         flags = ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    # Stale-meta check (GH #40): surface a meta/eBay disagreement at the gate
+    # rather than in an audit months later. SOFT — an API failure never blocks
+    # the card.
+    try:
+        _st = resolve_draft_state(draft_path, creds)
+        if _st["stale"] and (_st["offer_id"] or _st["meta_offer_id"]):
+            flags.append(
+                f"  • ⚠ draft meta says offer {_st['meta_offer_id']}/listing "
+                f"{_st['meta_listing_id']} but eBay says {_st['offer_id']}/"
+                f"{_st['listing_id']} ({_st['status']}) — run --repair-meta")
+    except Exception:                                      # noqa: BLE001
+        pass
     if not flags:
         flags = ["  • None"]
 
@@ -1532,6 +1550,32 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
     return dict(sellable=not reason, status=status or lstatus or "unknown",
                 quantity=qty, offer_id=o.get("offerId"),
                 listing_id=listing.get("listingId"), reason=reason)
+
+
+def resolve_draft_state(draft_path: Path,
+                        creds: Optional[EbayCredentials] = None) -> dict:
+    """The eBay-API-is-truth rule applied to a single draft (GH #40).
+
+    A draft's own meta can lie about whether it is live — christmas-elk
+    carried `ebay_offer_id: null` while live as 206494264413 — so any triage
+    that reads `meta.ebay_*` inherits stale state. Resolve by SKU via the
+    Inventory API; never from draft meta, never from the ledger.
+
+    Returns {sku, status, sellable, quantity, offer_id, listing_id, reason,
+    meta_offer_id, meta_listing_id, stale}; `stale` means the draft's meta
+    disagrees with eBay and `--repair-meta` would rewrite it.
+    """
+    creds = creds or load_credentials()
+    draft = parse_draft(draft_path)
+    sku = _sku_for(draft)
+    st = offer_sellable_state(sku, creds)
+    api_offer = str(st.get("offer_id")) if st.get("offer_id") else None
+    api_listing = str(st.get("listing_id")) if st.get("listing_id") else None
+    meta_offer = str(draft.get("meta.ebay_offer_id") or "").strip() or None
+    meta_listing = str(draft.get("meta.ebay_listing_id") or "").strip() or None
+    return dict(sku=sku, meta_offer_id=meta_offer, meta_listing_id=meta_listing,
+                stale=(meta_offer != api_offer or meta_listing != api_listing),
+                **st)
 
 
 def update_listing_fields(draft_path: Path, fields,
@@ -1985,6 +2029,8 @@ def _cli() -> None:
         description="ebaybiz — LIST/EDIT (Function 6): sync draft.md -> eBay DRAFT; publish only via --publish/--list --confirm (post review-gate).",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=__doc__)
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
+    ap.add_argument("--status", metavar="TARGET", help="Read-only: resolve a draft's REAL eBay state by SKU via the API — never from meta or the ledger. TARGET is a draft.md, a shoot dir, or a tree (bulk triage). GH #40.")
+    ap.add_argument("--repair-meta", metavar="TARGET", help="--status plus: write the true ebay_offer_id/ebay_listing_id back into any draft whose meta is stale. No-op on already-correct drafts. GH #40.")
     ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
     ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
@@ -2020,6 +2066,37 @@ def _cli() -> None:
                 for i in issues:
                     print(f"  - {i}")
                 sys.exit(1)
+            return
+        if args.status or args.repair_meta:
+            target = Path(args.status or args.repair_meta)
+            repair = bool(args.repair_meta)
+            drafts = ([target] if target.is_file()
+                      else sorted(target.rglob("draft.md")))
+            if not drafts:
+                raise SystemExit(f"no draft.md under {target}")
+            creds = load_credentials()
+            flagged = []
+            for dp in drafts:
+                try:
+                    st = resolve_draft_state(dp, creds)
+                except Exception as e:                     # noqa: BLE001
+                    flagged.append((str(dp), f"resolve failed: {str(e)[:80]}"))
+                    continue
+                if len(drafts) == 1:
+                    print(f"  {st['sku']}  {st['status']}  offer {st['offer_id']}"
+                          f"  listing {st['listing_id']}"
+                          + (f"  ({st['reason']})" if st.get("reason") else ""))
+                if st["stale"]:
+                    note = (f"meta {st['meta_offer_id']}/{st['meta_listing_id']}"
+                            f" but eBay {st['offer_id']}/{st['listing_id']}"
+                            f" ({st['status']})")
+                    if repair:
+                        update_meta(dp, {"ebay_offer_id": st["offer_id"] or "",
+                                         "ebay_listing_id": st["listing_id"] or ""})
+                        note += " — REPAIRED"
+                    flagged.append((str(dp), note))
+            _verdict_emit("repair-meta" if repair else "status",
+                          len(drafts), flagged)
             return
         if args.record:
             sku, ledger = record_draft(Path(args.record))
