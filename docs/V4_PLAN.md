@@ -22,13 +22,21 @@ only to AGREE?
       near-duplicate review-page sections merged into one
 - [x] `draft.md` — 543→402 + `reference/draft-notes.md` (111); the
       superseded old-chain procedure moved wholesale to the notes
-- [ ] `identify.md` (364)
-- [ ] `list_edit_chrome.md` (276)
-- [ ] `_shared.md` (208)
-- [ ] `curate.md` (186)
-- [ ] `promote.md` (159)
-- [ ] `review.md` / `investigate.md` / `condition-rubric.md` (already short —
-      audit only, diet if a page of rationale hides in them)
+- [x] `identify.md` — 364→326 + `reference/identify-notes.md` (46); mostly
+      rules already, so the cut is prose compression
+- [x] `list_edit_chrome.md` — 276→222 + `reference/list-edit-chrome-notes.md`
+      (52); incident histories (hen run, 2026-06-07 photo findings) moved;
+      status corrected from "deprecated when API lands" to "fallback for
+      categories the API can't publish"
+- [x] `_shared.md` — 208→201; near-pure contract, light trim only
+- [x] `curate.md` — audited, already rules-only; header bump
+- [x] `promote.md` — 159→158, two small trims; header bump
+- [x] `review.md` / `investigate.md` / `condition-rubric.md` — audited,
+      already rules-only; header bumps
+
+Phase 1 result: the per-stage prompt set totals ~2,500 lines of rules (was
+~3,300 mixed), with ~490 lines of rationale parked in `prompts/reference/`
+loaded only on dispute.
 
 ## Phase 2 — terse tool output (#30)
 
