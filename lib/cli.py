@@ -50,6 +50,8 @@ COMMANDS = {
                      "session transcripts -> friction report (#36, read-only)"),
     "prep":         ("lib.photo_prep.prep",
                      "PREP photo pipeline: --auto --check --apply --approve ..."),
+    "single-pass":  ("lib.single_pass",
+                     "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
 }
 
 

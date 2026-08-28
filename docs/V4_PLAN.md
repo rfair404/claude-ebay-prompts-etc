@@ -76,9 +76,16 @@ tests so "read only when flagged" can be trusted.
 
 - [ ] On-disk cache for comp runs and eBay reads, keyed query+date, `--fresh`
       bypass.
-- [ ] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
+- [x] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
       run, ONE review card at the end, conversation reserved for flagged
       exceptions. Builds on PREP's confidence gate (#36, landed in PR #37).
+      `python -m lib.cli single-pass <shoot-dir>` — a read-only gate check
+      across IDENTIFY/PREP/PRICE/INVESTIGATE/DRAFT's own output files (real
+      dependency order per RUN.md; DRAFT hard-requires `investigate.txt`);
+      clean → the one card REVIEW already builds, else the specific
+      exception a stage's own interactive HARD stop caught, by name.
+      `prompts/single_pass.md` is the protocol; `.single_pass/ask.json` is
+      the sentinel a stage writes instead of pausing the chat.
 
 ## Phase 5 — the observer (#36)
 

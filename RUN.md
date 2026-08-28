@@ -168,10 +168,24 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
-`listing` (the LIST/EDIT CLI), `prep`, `observe` (session transcripts ->
-friction report; read-only, `--report` to print it). Argv passes through untouched, so
-every flag documented for a tool works identically under `ebz`. The direct
-`python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
+`listing` (the LIST/EDIT CLI), `prep`, `single-pass` (gate-check
+IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
+[prompts/single_pass.md](prompts/single_pass.md)), `observe` (session
+transcripts -> friction report; read-only, `--report` to print it). Argv
+passes through untouched, so every flag documented for a tool works
+identically under `ebz`. The direct `python tools/<x>.py` /
+`python lib/<x>.py` invocations keep working.
+
+**Single-pass mode (routine items, V4_PLAN Phase 4, #30).** For an item
+that never needs a mid-pipeline question — a single-item shoot, non-gate
+category, ordinary condition — run the five stages in one sitting instead
+of five conversational turns, and stop for exactly one review card at the
+end. `python -m lib.cli single-pass <shoot-dir>` is the read-only gate check
+across whatever each stage has already written: clean → the same card
+REVIEW would build; anything a stage's own interactive HARD stop caught
+(PREP's confidence gate, IDENTIFY's maker-mark/poll gate, the marble crop
+gate) → the specific exception, by name, never guessed. Full protocol:
+[prompts/single_pass.md](prompts/single_pass.md).
 
 ## Locking a format
 
