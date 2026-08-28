@@ -172,3 +172,7 @@ desktop.ini
 # local working backups (ledger/sales/config) — never committed
 backups/
 session_friction.json
+
+# Claude Code agent worktrees — transient checkouts for background subagents
+# launched with worktree isolation; never repo content.
+/.claude/worktrees/
