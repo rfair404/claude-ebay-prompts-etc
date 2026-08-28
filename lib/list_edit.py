@@ -777,7 +777,8 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     policies["payment_auction"] = _ebay_extra("payment_policy_id_auction")
     location = _ebay_extra("merchant_location_key")
     for k, v in policies.items():
-        if k in ("fulfillment_media", "fulfillment_local_pickup", "payment_auction"):
+        if k in ("fulfillment_media", "fulfillment_local_pickup", "fulfillment_us_only",
+                  "payment_auction"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
@@ -1055,6 +1056,13 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
         "true", "yes", "1", "on")
     msgs: list[str] = []
 
+    # LOCAL_PICKUP is checked first: a pickup-only item ships nowhere, so that
+    # is the real reason international is moot — regardless of US-export
+    # status — and it must not be masked by the US-only message below.
+    if wants_intl and mode == "LOCAL_PICKUP":
+        wants_intl = False
+        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
+                    "ignored (a pickup-only item has nothing to ship).")
     # A US export restriction is not a preference — it overrides an
     # international request rather than negotiating with it.
     if us_reasons and wants_intl:
@@ -1064,10 +1072,6 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                     "listing at all while it is reachable by eBay International "
                     "Shipping. See the routing message below for the policy "
                     "actually chosen.")
-    if wants_intl and mode == "LOCAL_PICKUP":
-        wants_intl = False
-        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
-                    "ignored (a pickup-only item has nothing to ship).")
     if wants_intl:
         blockers = _international_blockers(draft)
         if blockers:

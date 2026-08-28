@@ -54,6 +54,24 @@ def _fulfillment_policies_stub(ids):
             for fid in ids]
 
 
+class _patched_fulfillment_policies:
+    """Patch `list_edit.get_fulfillment_policies` for the block, then restore it.
+
+    A bare assignment leaks into later tests under pytest, which runs the
+    whole suite in one process — this makes the patch test-scoped instead.
+    """
+
+    def __init__(self, ids):
+        self._ids = ids
+
+    def __enter__(self):
+        self._orig = L.get_fulfillment_policies
+        L.get_fulfillment_policies = lambda creds=None: _fulfillment_policies_stub(self._ids)
+
+    def __exit__(self, *exc):
+        L.get_fulfillment_policies = self._orig
+
+
 # --------------------------------------------------------- strict=True (write paths)
 def test_strict_raises_when_us_only_policy_missing():
     draft = _draft({"title": RESTRICTED_TITLE})
@@ -68,27 +86,24 @@ def test_strict_raises_when_us_only_policy_missing():
 def test_strict_does_not_raise_when_us_only_policy_configured():
     policies = {**_BASE_POLICIES, "fulfillment_us_only": "usonly-fid"}
     draft = _draft({"title": RESTRICTED_TITLE})
-    L.get_fulfillment_policies = lambda creds=None: _fulfillment_policies_stub(
-        list(policies.values()))
-    chosen, msgs = L._resolve_shipping_policy(draft, policies, _Creds(), strict=True)
+    with _patched_fulfillment_policies(list(policies.values())):
+        chosen, msgs = L._resolve_shipping_policy(draft, policies, _Creds(), strict=True)
     assert chosen == "usonly-fid"
     assert any("US-ONLY" in m for m in msgs)
 
 
 def test_strict_does_not_raise_for_ordinary_item():
     draft = _draft({"title": ORDINARY_TITLE})
-    L.get_fulfillment_policies = lambda creds=None: _fulfillment_policies_stub(
-        list(_BASE_POLICIES.values()))
-    chosen, _msgs = L._resolve_shipping_policy(draft, dict(_BASE_POLICIES), _Creds(), strict=True)
+    with _patched_fulfillment_policies(list(_BASE_POLICIES.values())):
+        chosen, _msgs = L._resolve_shipping_policy(draft, dict(_BASE_POLICIES), _Creds(), strict=True)
     assert chosen == _BASE_POLICIES["fulfillment"]
 
 
 # --------------------------------------------------------- strict=False (preflight, advisory)
 def test_non_strict_falls_back_with_blocker_message():
     draft = _draft({"title": RESTRICTED_TITLE})
-    L.get_fulfillment_policies = lambda creds=None: _fulfillment_policies_stub(
-        list(_BASE_POLICIES.values()))
-    chosen, msgs = L._resolve_shipping_policy(draft, dict(_BASE_POLICIES), _Creds())
+    with _patched_fulfillment_policies(list(_BASE_POLICIES.values())):
+        chosen, msgs = L._resolve_shipping_policy(draft, dict(_BASE_POLICIES), _Creds())
     assert chosen == _BASE_POLICIES["fulfillment"]
     assert any("BLOCKER" in m for m in msgs)
 
