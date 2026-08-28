@@ -171,3 +171,4 @@ desktop.ini
 
 # local working backups (ledger/sales/config) — never committed
 backups/
+session_friction.json

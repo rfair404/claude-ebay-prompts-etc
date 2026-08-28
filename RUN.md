@@ -168,7 +168,8 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
-`listing` (the LIST/EDIT CLI), `prep`. Argv passes through untouched, so
+`listing` (the LIST/EDIT CLI), `prep`, `observe` (session transcripts ->
+friction report; read-only, `--report` to print it). Argv passes through untouched, so
 every flag documented for a tool works identically under `ebz`. The direct
 `python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
 
