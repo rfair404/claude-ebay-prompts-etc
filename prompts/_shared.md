@@ -51,6 +51,30 @@ not an acceptable way to show a comp. The `price.txt` / `comps.csv` artifacts
 are still written as specified in PRICE; this rule governs the CHAT layer, in
 every phase, on top of them.
 
+## Runtime discipline (every turn re-sends the whole conversation)
+
+A session-log audit (#61) found 89% of run cost going to re-sent context,
+not produced work — driven by one call per turn and ~300K tokens of that
+context being raw photos. Both are avoidable, in every phase:
+
+- **Batch independent tool calls into one turn.** Two `Read`s, a `Read` +
+  a `Grep`, several independent `Bash` calls — if none depends on another's
+  output, issue them together, not as serial single-call turns.
+- **Background anything that won't finish in a few seconds** (a `prep`
+  pass, any renderer) and keep working on the next item or phase while it
+  runs. Foreground only what the very next step actually depends on.
+- **Read the contact sheet, never the raw frames.** `prep_card.py` /
+  `prep_sheet_html.py` / `marble_triage` already build one sheet — read
+  that. Pulling individual `.jpg`/`.png` frames into the main thread is the
+  single largest source of wasted context in this pipeline; when a frame
+  truly needs full-resolution inspection, delegate that one look to a
+  subagent that returns text instead.
+- **A scratch `.py` file beats an inline heredoc or `python -c`.** Quoting
+  breaks it often enough to cost more than it saves.
+- **One command that reports everything beats a chain of `ls`/`cat`/`find`.**
+  Prefer whatever the tooling already exposes as a single status/summary
+  call over rebuilding the picture one thin read at a time.
+
 ## Confidence (commit, don't hedge)
 
 - **State the single best-supported call.** Make it; don't narrate the
