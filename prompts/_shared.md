@@ -166,6 +166,43 @@ The shoot directory is the directory containing the photos — by default an
 content store ("our" data: photos + per-item outputs); it is **gitignored and
 never version-controlled**.
 
+## Directory context (`context.txt` cascade)
+
+Items arrive as a batch from one source (an estate, a sale) that shares
+background — same household, era, storage, cost. An ancestor directory of
+the shoot dir may carry a `context.txt`; [`lib/dir_context.py`](../lib/dir_context.py)
+walks from `inventory/` down to the shoot dir, parses every one found
+(tolerant of empty / prose-only / `key:`+prose), and merges them
+nearest-wins into a struct (`source`, `acquired`, `environment`, `storage`,
+`era`, `cost`, `kind`, plus the merged prose):
+
+    from lib.dir_context import load_context, forbidden_claims
+    ctx = load_context(shoot_dir)      # walks up automatically
+    forbidden_claims(ctx)              # phrases DRAFT must not write
+
+**Context is background, never a claim upgrade** — it can forbid an
+assertion or supply a disclosure, never make an item something it isn't.
+Per phase:
+
+- **IDENTIFY / INVESTIGATE** — read `ctx` for era/provenance background;
+  narrows the search space, never upgrades a claim.
+- **PRICE** — provenance is a comp filter at most; `ctx.cost` is the
+  margin basis, never a floor on the ask.
+- **DRAFT** — call `forbidden_claims(ctx)` and never write a returned
+  phrase (e.g. no "smoke-free" under an estate with a smoker); where
+  `ctx.environment` / `ctx.storage` warrants it, add one neutral
+  disclosure clause in house voice.
+- **REVIEW** — list which `context.txt` file(s) applied
+  (`ctx.files_read`) and what they blocked/added on the card.
+
+**PII guardrail — never surface `source:`.** It may name a person for
+local reference only. Buyer-facing or on-card text uses
+`ctx.public_summary` (or `str(ctx)`), never `ctx.source` — both already
+omit it. Say "an estate", never the name.
+
+No `context.txt` in the chain, or every one empty (several are, on
+purpose), is today's behavior — nothing changes.
+
 ## Gate contract (what may stop a headless run)
 
 In a headless run, ONE gate stops it — REVIEW; everything else proceeds with a

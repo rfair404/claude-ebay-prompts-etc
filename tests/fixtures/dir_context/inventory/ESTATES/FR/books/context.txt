@@ -1,0 +1,4 @@
+kind: books
+
+Hardcovers and paperbacks from the same house, boxed in the back closet.
+Refines the estate context above; does not restate it.

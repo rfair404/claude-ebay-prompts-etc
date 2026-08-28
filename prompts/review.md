@@ -43,9 +43,17 @@ Present that card to the user **verbatim** and STOP. It contains:
     Fulfillment (Ship · service, OR LOCAL PICKUP only — confirm pickup items)
     Preflight (condition · shipping)
     Comps (open to verify) — each with a URL
+    Context (context.txt file(s) applied — what they blocked/added, if any)
     Condition detail (every flagged defect, verbatim — never softened)
     ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines)
     → Approve publishes LIVE at $<price>, with the exact --list … --confirm command
+
+**Context line.** If `lib.dir_context.load_context(shoot_dir)` finds
+anything (`ctx.has_context`), show which `context.txt` path(s) applied
+(`ctx.files_read`) and, if DRAFT's description carries a disclosure
+clause or a claim was blocked (per _shared "Directory context"), say so
+in one line — never the private `ctx.source`, only `ctx.public_summary`.
+Omit the line entirely when the chain is empty (today's behavior).
 
 ## The card is a page — every time, no exceptions
 

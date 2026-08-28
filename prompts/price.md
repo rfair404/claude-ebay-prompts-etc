@@ -22,6 +22,14 @@ single-item comps ×N are Tier C reference only); `duplicate` → price one piec
 (CURATE scales). Quoted prices are per-listing-unit except `duplicate`
 (per-piece).
 
+## Directory context — provenance is a filter, not a floor
+
+Per _shared's `context.txt` cascade: `lib.dir_context.load_context(shoot_dir)`
+can narrow comp selection (era/storage rule out mismatched comps) but
+never anchors a price. `ctx.cost` (kept a string — `FREE` and `spent
+$650` both occur) feeds margin math elsewhere; it is never a floor on the
+ask here.
+
 ## Delivered-price basis (default)
 
 A comp's `sold_price` is item-only; the buyer's real outlay is

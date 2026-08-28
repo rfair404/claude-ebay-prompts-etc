@@ -265,7 +265,11 @@ Then one block per item, `--- Item <N> ---`, fields in this order:
   bracket; genuinely markless or fantasy-marked → `Unknown` (last resort).
   ≤65.
 - **Type** — specific descriptor. Same marker convention. ≤65.
-- **Era** — date/range. `[ASSUMPTION]` if inferred from styling. ≤65.
+- **Era** — date/range. `[ASSUMPTION]` if inferred from styling. ≤65. If
+  the shoot dir has a `context.txt` chain (`lib/dir_context.py`, see
+  _shared "Directory context"), `ctx.era`/`ctx.acquired` narrow the
+  search space — background, not evidence, so it never upgrades a
+  scenario's marker.
 - **Collectability** — collectable / vintage / antique / modern /
   `none (not for sale)`.
 - **Condition** — per [`condition-rubric.md`](condition-rubric.md):

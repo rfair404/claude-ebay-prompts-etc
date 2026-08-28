@@ -26,6 +26,17 @@ Re-read only the decisive frames (hero + mark + the defects you'll claim), per
 IDENTIFY's "Photo intake" rule — don't re-open every angle you already saw at
 IDENTIFY. IDENTIFY's record tells you which frames matter.
 
+## Directory context (background, not evidence)
+
+Per _shared's `context.txt` cascade: `lib.dir_context.load_context(shoot_dir)`
+gives era/provenance background for the Summary, never a new claim
+source — photos stay the only evidence. Any phrase
+`forbidden_claims(ctx)` returns (e.g. "smoke-free" under a household
+context that names a smoker) is disallowed even where the photos alone
+are silent on it — put it in "NOT defensible", never leave it to be
+inferred safe by omission. Never surface `ctx.source` (the guardrail is
+enforced in the library; don't work around it here either).
+
 ## Unit-type phrasing
 
 Thread `unit_type` into every title/description: `single` singular noun;

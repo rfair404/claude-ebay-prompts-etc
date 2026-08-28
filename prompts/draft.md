@@ -46,6 +46,8 @@ user's, on that sheet.
    Recommended/provisional working price (logged in NEEDS_REVIEW).
 4. [`templates/listing-v1.md`](../templates/listing-v1.md) — the
    template; its `_field_constraints` block is the authoritative limits map.
+5. `context.txt` cascade (optional) — `lib.dir_context.load_context(shoot_dir)`.
+   See "Directory context" below.
 
 ## Preconditions
 
@@ -74,6 +76,31 @@ rule wins** — drop the guide's pattern, note it in `meta.notes`, move on.
 Never reproduce a studied seller's title strings or sentences; a guide
 carries technique, not text. If a guide is loaded, say so in `meta.notes`
 (`style_guide: <slug>`).
+
+## Directory context — block list + disclosure clause
+
+Call `ctx = lib.dir_context.load_context(shoot_dir)` and
+`forbidden_claims(ctx)` before writing title/body/item-specifics/condition
+text. Two directions, both hard rules, not suggestions:
+
+1. **Block.** Never write a phrase `forbidden_claims(ctx)` returns (e.g.
+   under an `environment:` naming a smoker, "smoke-free"/"odor-free" are
+   blocked outright — not softened, not hedged). This overrides
+   INVESTIGATE if INVESTIGATE somehow still contains one (see its own
+   "Directory context" note — it shouldn't, but DRAFT is the last gate
+   before buyer-visible copy).
+2. **Supply.** Where `ctx.environment` / `ctx.storage` warrants it, add
+   ONE neutral disclosure clause in house voice to the description, e.g.
+   "From a home where someone smoked; may carry faint odor." Don't
+   editorialize beyond the plain fact.
+
+**PII — never write `ctx.source`.** Use `ctx.public_summary` (already
+omits it) for anything that reaches buyer-facing copy. Provenance in
+listing copy says "an estate" — never a name, even if `context.txt`
+records one for local reference.
+
+No context in the chain (or every file empty) → this section is a no-op,
+today's behavior.
 
 ## Source-of-truth mapping
 
