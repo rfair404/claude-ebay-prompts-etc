@@ -72,13 +72,6 @@ _BLOCKS: list[tuple[str, tuple[str, ...], str]] = [
      "stored unclimatized"),
 ]
 
-# A trigger fires only if the context does not already assert the negative —
-# "no pets" mentions pets but forbids nothing.
-_NEGATED = {
-    "someone smoked in the source home": r"\b(?:no|non[- ]?)\s*smok\w*",
-    "pets in the source home": r"\bno\s+pets\b",
-}
-
 
 @dataclass
 class ContextFile:
@@ -175,8 +168,15 @@ def _derive_blocks(chain: list[ContextFile]) -> list[Blocked]:
         for trigger, phrases, why in _BLOCKS:
             if why in seen:
                 continue
-            neg = _NEGATED.get(why)
-            probe = re.sub(neg, " ", text) if neg else text
+            # A context asserting one of the forbidden phrases itself (the
+            # estate saying "smoke-free" or "no pets") is a NEGATION of the
+            # trigger, not evidence for it. Strip those phrases before
+            # testing the trigger, or "smoke-free" reads as "smoker" — the
+            # trigger regex matches on the bare root word, not on absence of
+            # a hyphenated qualifier.
+            probe = text
+            for p in phrases:
+                probe = probe.replace(p, " ")
             if not re.search(trigger, probe):
                 continue
             seen.add(why)
