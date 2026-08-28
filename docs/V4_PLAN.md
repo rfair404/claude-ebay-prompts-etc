@@ -74,8 +74,17 @@ tests so "read only when flagged" can be trusted.
 
 ## Phase 4 — fewer round-trips
 
-- [ ] On-disk cache for comp runs and eBay reads, keyed query+date, `--fresh`
-      bypass.
+- [x] On-disk cache for comp runs and eBay reads, keyed query+date, `--fresh`
+      bypass. `lib/read_cache.py` (generic primitive) wired into
+      `lib/ebay_sold_browse.py`'s comp-ingest path: keyed query+condition+UTC
+      date, so a same-day re-check of a query already ingested (both dual
+      sorts) skips the Chrome round trip entirely; `--fresh` forces it anyway
+      and repopulates. `lib/ebay_client.py`'s reads (policies, live
+      inventory/offers, category/condition metadata) are deliberately left
+      UNCACHED — every one of them feeds a policy or live-state decision
+      where staleness would silently misinform an outcome, the failure class
+      PR #50 fixed for `sync_actuals`; comp prices are a same-day snapshot
+      already, so re-serving one from earlier today changes nothing.
 - [x] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
       run, ONE review card at the end, conversation reserved for flagged
       exceptions. Builds on PREP's confidence gate (#36, landed in PR #37).
