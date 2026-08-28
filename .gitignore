@@ -63,6 +63,12 @@ letters/
 # Entity formation docs — contain PII (legal name, home address). Local only.
 /formation/
 
+# Written by tools/pick_list.py and tools/pick_list_html.py (--poll / --out /
+# the print-friendly HTML). Buyer name + street address — terminal, local
+# file, and printer only, never committed.
+/pick_lists/
+/.pick_list_state.json
+
 # ------------------------------------------------------- 3. HEAVY / GENERATED
 # Per-run phase output. These normally live under /inventory/ (already excluded
 # above), but a shoot directory can be pointed anywhere, so exclude the
