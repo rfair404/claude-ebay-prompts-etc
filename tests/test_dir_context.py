@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """lib/dir_context.py — key/prose parsing, cascade merge, and derived blocks.
 
-Written in response to the review on PR #51 (both the human scrutiny pass
-and Copilot): the module shipped with zero automated tests despite forbidding
+Written in response to review feedback (both the human scrutiny pass and
+Copilot): the module shipped with zero automated tests despite forbidding
 buyer-facing claims (smoke-free, pet-free, climate-controlled) on legal /
 disclosure grounds, where a silent regression in the negation or cascade
 logic is a real-world liability, not just a bug.
@@ -220,6 +220,22 @@ def test_sweep_is_empty_when_nothing_contradicts():
         "item/draft.md": "---\ntitle: x\n---\nAn ordinary description.\n",
     })
     assert DC.sweep(root=root) == []
+
+
+def test_sweep_does_not_raise_when_root_is_outside_repo():
+    """--root can point anywhere; sweep() must not assume REPO is an ancestor."""
+    outside_root = Path(tempfile.mkdtemp(prefix="dctx_outside_"))
+    _cleanup.append(outside_root)
+    (outside_root / "context.txt").write_text("environment: smoker.\n", encoding="utf-8")
+    item = outside_root / "item"
+    item.mkdir()
+    (item / "draft.md").write_text(
+        "---\ntitle: x\n---\nComes from a smoke-free home.\n", encoding="utf-8")
+
+    hits = DC.sweep(root=outside_root)
+    assert len(hits) == 1
+    d, _line, _b = hits[0]
+    assert d.endswith("item")
 
 
 if __name__ == "__main__":

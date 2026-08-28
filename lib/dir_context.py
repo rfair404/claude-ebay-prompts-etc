@@ -215,6 +215,22 @@ def brief(item_dir: Path, root: Path = INVENTORY) -> str:
     return "\n".join(out)
 
 
+def _display_path(item_dir: Path, root: Path) -> str:
+    """Best-effort relative path for a sweep hit.
+
+    item_dir is normally under REPO (the default INVENTORY root), but
+    --root lets a caller point sweep() anywhere, so relative_to(REPO) can
+    raise ValueError. Fall back to root-relative, then absolute, instead
+    of aborting the sweep.
+    """
+    for base in (REPO, root):
+        try:
+            return str(item_dir.relative_to(base)).replace("\\", "/")
+        except ValueError:
+            continue
+    return str(item_dir).replace("\\", "/")
+
+
 def sweep(root: Path = INVENTORY) -> list[tuple[str, str, Blocked]]:
     """Every drafted item asserting a claim its estate contradicts."""
     hits: list[tuple[str, str, Blocked]] = []
@@ -227,8 +243,7 @@ def sweep(root: Path = INVENTORY) -> list[tuple[str, str, Blocked]]:
         for b in ctx.blocks(text):
             phrase = next(p for p in b.phrases if p in low)
             line = text.splitlines()[low[:low.index(phrase)].count("\n")].strip()
-            hits.append((str(dr.parent.relative_to(REPO)).replace("\\", "/"),
-                         line[:120], b))
+            hits.append((_display_path(dr.parent, root), line[:120], b))
     return hits
 
 
