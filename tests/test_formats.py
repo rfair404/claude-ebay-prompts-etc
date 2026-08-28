@@ -266,6 +266,7 @@ CARD_SECTIONS = [
     "Preflight",
     "Comps (open to verify):",
     "Condition detail:",
+    "Context (estate background):",
     "Final photos",
     "⚠ Needs review / manual intervention:",
     "→ Approve publishes this LIVE",

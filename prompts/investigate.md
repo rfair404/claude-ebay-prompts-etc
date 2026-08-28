@@ -78,6 +78,9 @@ assessed (function untested, undersides unseen), map to one
     - <thing that cannot be claimed>
     REQUIRED. Common: specific maker w/o stamp, year w/o date, country
     w/o mark, working status w/o test evidence, material beyond visible.
+    Any directory-context block (`_shared.md`) goes here too — e.g. "smoke-
+    free home" — even where the photos alone are silent on it and would
+    otherwise support the claim.
 
     ## Listing-safe claims (DRAFT consumes)
     Title claims — 2–4, strongest first, EACH ≤80, with count:

@@ -362,6 +362,27 @@ Hard rules: never include a claim absent from INVESTIGATE's listing-safe /
 observable lists; never anything INVESTIGATE marked NOT defensible; never
 IDENTIFY `[BEST-CASE]` language; honor unit-type phrasing.
 
+## Estate context — forbidden claims (`context.txt`, GH #46)
+
+Same rail as in-hand voice above: this governs buyer-visible copy, not
+the internal record. Read via `lib/dir_context.py` (`_shared.md` has the
+full contract).
+
+- **Blocked phrases are HARD.** Anything in `ctx.blocked` — smoke-free,
+  pet-free, climate-controlled and variants — may not appear in title,
+  body, `condition_description`, or item specifics, at any confidence,
+  even if the photos alone would support it. This is the final gate: if
+  INVESTIGATE somehow still carried a blocked phrase through, DRAFT
+  strips it here.
+- **Supply the disclosure, don't dramatize it.** Where a block applies,
+  add ONE neutral in-hand clause to the body — "From a home where
+  someone smoked; may carry a faint odor." — same restraint as ordinary
+  wear disclosure, no location map, no colour adjectives.
+- **`source:` never appears in copy.** Buyer-facing text says "an
+  estate", never a name — `ctx.public_keys` / `brief()` already omit it;
+  reading the raw `context.txt` to work around that is not allowed.
+- **No context.txt in the chain → nothing to enforce.**
+
 ## Constraints — enforce before write (the hardest rule)
 
 Limits come from the template's `_field_constraints` (authoritative; read
@@ -391,9 +412,10 @@ Walk every `_field_constraints` entry against the populated value:
 length ≤ max_len (rephrase if not) · required present (else flag) ·
 numeric parses positive (else flag, empty) · lookup canonical (else
 substitute + log). Also scan every buyer-visible field for camera-frame
-language (the in-hand-voice rule above) and rephrase any hit to the
-finding. Only then write draft.md. Re-read after write and confirm every
-constrained field fits and `_field_constraints` was copied verbatim.
+language (the in-hand-voice rule above) and estate-forbidden phrases (the
+rule above); rephrase or strip any hit. Only then write draft.md. Re-read
+after write and confirm every constrained field fits and
+`_field_constraints` was copied verbatim.
 
 ## meta.notes (DRAFT NOTES)
 

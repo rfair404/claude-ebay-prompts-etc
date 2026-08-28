@@ -195,6 +195,29 @@ def test_brief_is_empty_string_with_no_context_file():
     assert DC.brief(root / "item", root=root) == ""
 
 
+# --------------------------------------------------- PII guardrail (source:)
+def test_public_keys_excludes_source_but_keeps_the_rest():
+    root = _make({"context.txt": "source: Frankie, estate, Greensboro NC\n"
+                                 "environment: smoker\n"})
+    ctx = DC.load(root, root=root)
+    assert "source" not in ctx.public_keys
+    assert ctx.public_keys["environment"] == "smoker"
+    assert ctx.keys["source"] == "Frankie, estate, Greensboro NC"  # still readable directly
+
+
+def test_brief_never_prints_source():
+    """The issue's own guardrail: source: may name a person for local
+    reference only. brief() is what a stage pastes into its working notes
+    (and, wired via list_edit's review card, what a human sees) — it must
+    never carry the name through, even though the raw parse keeps it."""
+    root = _make({"context.txt": "source: Frankie, estate, Greensboro NC\n"
+                                 "environment: smoker\n"})
+    text = DC.brief(root, root=root)
+    assert "Frankie" not in text
+    assert not any(ln.strip().lower().startswith("source:") for ln in text.splitlines())
+    assert "environment: smoker" in text
+
+
 # --------------------------------------------------------------------- sweep()
 def test_sweep_finds_a_contradicted_claim_in_a_multilevel_tree():
     root = _make({
