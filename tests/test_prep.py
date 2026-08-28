@@ -1290,14 +1290,16 @@ def test_printed_is_paper_and_asshot():
     assert CAT.looks_for("printed") == ("asshot",)
 
 
-def test_default_category_still_renders_everything():
-    """A filter that narrowed the generic case would be a silent policy change.
+def test_default_category_renders_only_crisp():
+    """The generic case narrows to the one look that ships automatically.
 
-    `looks_for` returns empty, not None, because that is what `run_apply`'s
-    `only` already treats as 'render them all'.
+    `crisp` is what `color.default_preset_for` already picks for every new
+    item, so rendering the other five by default cost real time for a
+    comparison almost nobody opened. `--filters` at --apply time (or an
+    explicit `--only`) is the escape hatch back to the full set.
     """
-    assert CAT.looks_for(None) == ()
-    assert CAT.looks_for("default") == ()
+    assert CAT.looks_for(None) == ("crisp",)
+    assert CAT.looks_for("default") == ("crisp",)
     assert CAT.subject_for(None) == "auto"
 
 
