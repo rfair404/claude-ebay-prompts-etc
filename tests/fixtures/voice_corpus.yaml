@@ -1,0 +1,140 @@
+# Regression corpus for the in-hand voice linter (lib/voice_check.py).
+#
+# Every phrase here is REAL copy from the 2026-08 sweep — either something that
+# shipped to a live buyer and had to be corrected, or correct copy that a naive
+# checker wrongly flags. Patterns drift; a corpus of what actually happened is
+# what stops the same wording coming back a third time.
+#
+# Add to this file whenever a voice miss is found in the wild. Cite the listing.
+
+block:            # must produce a BLOCK finding
+  - phrase: "Knife handle seated tight in photos; not shake-tested."
+    src: silverplate/tudor-plate-set-1 206514938926
+  - phrase: "Undersides not photographed on every piece."
+    src: silverplate/tudor-plate-set-1 206514938926
+  - phrase: "Spreader: 6 7/8 inches, measured against a ruler in the photos"
+    src: silverplate/tudor-plate-set-1 206514938926
+  - phrase: "No wear-through or brassing noted on the surfaces shown."
+    src: ej-08-04/broach 206466235008
+  - phrase: "Reverse gold-fill wear and stamp legibility could not be assessed from the photos."
+    src: ej-08-04/broach 206466235008
+  - phrase: "Boards square; no tears noted on the shown surfaces."
+    src: FR/books/a-brief-history-of-time 206488640961
+  - phrase: "Bindings intact in frames shown; order form present."
+    src: cats-mags/lot-mailers/lot1 206449296949
+  - phrase: "Binding tight; no detached or missing pages in the frames shown."
+    src: more-mags-444/style-incentives 206454286878
+  - phrase: "Exact page count, any page missing between shown spreads, and spine staples not assessable from photos."
+    src: more-mags-444/style-incentives 206454286878
+  - phrase: "Not assessed: backs of interior panels; any soiling/foxing not shown."
+    src: more-mags-444/th-mailer 206454286927
+  - phrase: "Cannot assess from photos: stone material beyond rhinestone."
+    src: ej-08-23/earrings-3-rhinestone 206511940397
+  - phrase: "with no chips, cracks, flaking, or hairlines visible in any photo."
+    src: hens/* (seven sibling drafts)
+  - phrase: "Photographed through the packaging."
+    src: FR/christmas-elk 206494264413
+  - phrase: "Sold uncleaned, as photographed."
+    src: misc-08-14-a/tara-necklace-earrings-set 206493144177
+  - phrase: "Original box worn. Sold as pictured."
+    src: ej-08-04/lady-louise 206469102021
+  - phrase: "height approximately 3 in, estimated - no vertical ruler frame was shot."
+    src: FR/bronze-dog 206494264255
+  - phrase: "the underside was examined at full resolution."
+    src: FR/bronze-dog 206494264255
+  - phrase: "Country of origin and UPC are not shown in the photographed surfaces."
+    src: afairy 206350426051
+  - phrase: "Measured off the photos rather than with a caliper."
+    src: ej-08-23/cufflinks-2 206512781275
+  - phrase: "Only the top and front faces are photographed."
+    src: music-boy 206340845880
+  - phrase: "All five undersides are photographed."
+    src: FR/christmas-train 206502904506
+  - phrase: "Both are shown in the photos."
+    src: backgammon2-alt 206387490597
+
+  # --- the three the linter's first cut missed; see GH #40 follow-up ---
+  - phrase: "A genuine antique with honest age and use, shown exactly as it is."
+    src: silver-teapot 206340759004 (missed by three hand-rolled sweeps)
+  - phrase: "Sold as-is: interior-page completeness and exact piece count not verified; some pieces shown stacked/fanned."
+    src: gear-catalogs-mailers 206446264160 (alternation said `piece`, not `pieces`)
+  - phrase: "Never lit, never used - the wicks are pristine and photographed."
+    src: misc/candle 206379482748 (sentence-final form)
+  - phrase: "the wicks are still pristine - you can see them in the photos."
+    src: misc/candle 206379482748
+
+clean:            # correct copy — must NOT be flagged
+  - phrase: "the recipient name and address are redacted in the photos."
+    why: PII redaction disclosure, required by another house rule
+    src: cats-mags/lot-mailers/lot2 206449295393
+  - phrase: "addressee blocked out for privacy in the photos."
+    why: PII redaction disclosure
+    src: cats-mags/gilhes 206449282835
+  - phrase: "subscriber name and street masked in the photographs for privacy."
+    why: PII redaction disclosure
+    src: FR/the-eagle 206516993433
+  - phrase: "Odour cannot be assessed while the bag is sealed."
+    why: physical sealed-item limit, not a camera limit
+    src: FR/joan-rivers-shirt 206494264800
+  - phrase: "Backs of pieces and the individual backstamps cannot be assessed while the sleeves are sealed."
+    why: physical sealed-item limit
+    src: silverplate/IS-rememberance 206502961414
+  - phrase: "Please see the photos and read the description for full details."
+    why: the standing close line
+    src: house boilerplate
+  - phrase: "a full individual player photo section in which every athlete is pictured and named"
+    why: describes the item's own printed content
+    src: decatur-pubs/lot1_athletics 206446247446
+  - phrase: "Full-bleed editorial fashion photography by Fabrizio Ferri."
+    why: the item's own content
+    src: cats-mags/j-a 206449282908
+  - phrase: "Saddle-stitched (staples visible in gutter); binding sound."
+    why: in-hand observation
+    src: more-mags-444/fall-and-winter-1980 206454286597
+  - phrase: "Hinged bar: straight, seated in the frame, moves freely."
+    why: a physical frame, not a photo frame
+    src: ej-08-15/belt-stubby-sterling 206496594033
+  - phrase: "No glass in the frame, so there is nothing to break in transit"
+    why: a physical picture frame
+    src: FR/art/lonnie-oniell-painting 206502324229
+  - phrase: "I checked both backs under raking light: no maker's stamp, no metal mark."
+    why: an inspection that was actually performed, described in-hand
+    src: ej-08-23/cufflinks-2 206512781275
+  - phrase: "the gold/gilt bands show wear and rubbing from age and handling"
+    why: 'the phrase "show wear" is in-hand, not camera framing'
+    src: vtg-jap-teapot 206455986454
+  - phrase: "Full mirror polish on the show face, no scratch field."
+    why: 'the phrase "show face" is a jewellery term'
+    src: misc-08-14-a/anson-bar-wave 206493504759
+  - phrase: "light haze in the foil backing, visible under magnification only"
+    why: in-hand observation
+    src: ej-08-23/earrings-3-rhinestone 206511940397
+  - phrase: "UNTESTED, sold AS-IS as a vintage electronic component."
+    why: grade-setting untested status
+    src: more-tube-lamps-lots/6cg7
+  # --- the AFTER side of real fixes: the rewrites must lint clean ---
+  - phrase: "Knife handle sits tight."
+    why: the sanctioned rewrite
+    src: silverplate/tudor-plate-set-1
+  - phrase: "Not collated page by page; completeness not individually verified."
+    why: the sanctioned in-hand scope limit
+    src: more-mags-444/*
+  - phrase: "The foot rim sits beneath the original label."
+    why: physical fact replacing a tests-not-run inventory
+    src: hens/*
+  - phrase: "Sold sealed in the original packaging; assessed through the bag."
+    why: physical sealed-item limit
+    src: FR/christmas-elk
+  - phrase: "A genuine antique with honest age and use, described exactly as it is."
+    why: the rewrite of the silver-teapot miss
+    src: silver-teapot 206340759004
+
+known_gaps:       # documented misses — asserted NOT caught, so closing one is deliberate
+  - phrase: "Interior odor and lid seal untested."
+    src: barnum-tin 206354378246
+    why: >
+      A tests-not-run inventory the sweep deleted, but the sentence contains
+      "untested", which is exempted wholesale as a grade-setter. Tightening that
+      exemption to the grade-setting forms only ("Untested; sold as-is") would
+      catch it — at the risk of flagging legitimate untested disclosures. Left
+      open deliberately; decide before changing.

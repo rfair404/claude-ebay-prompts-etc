@@ -84,6 +84,18 @@ def test_exemptions_do_not_flag():
         assert not _blocks(check_voice(_draft(phrase))), phrase
 
 
+def test_photo_word_boundary_does_not_catch_photographic_or_photobook():
+    # Copilot review on PR #48: the "from/off the photo(s)" rule was missing
+    # a trailing \b, so it matched any word merely STARTING with "photo".
+    for phrase in [
+        "Assessed from the photographic archive included with the lot.",
+        "Cleared off the photobook shelf before shipping.",
+    ]:
+        assert not _blocks(check_voice(_draft(phrase))), phrase
+    # The rule's actual target must still fire.
+    assert _blocks(check_voice(_draft("Measured off the photos rather than with a caliper.")))
+
+
 def test_no_x_visible_warns_but_does_not_block():
     fs = check_voice(_draft("No chips or cracks visible."))
     assert not _blocks(fs)
