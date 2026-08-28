@@ -96,7 +96,7 @@ def transcripts_dir(repo: Path) -> Path:
 
 def _ts(rec: dict):
     t = rec.get("timestamp")
-    if not t:
+    if not isinstance(t, str) or not t:
         return None
     try:
         parsed = datetime.fromisoformat(t.replace("Z", "+00:00"))

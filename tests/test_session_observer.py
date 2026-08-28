@@ -174,6 +174,16 @@ def test_ts_normalizes_a_naive_timestamp_to_utc():
     assert (aware - naive).total_seconds() == 0.0
 
 
+def test_ts_returns_none_for_a_non_string_timestamp():
+    # Copilot review on PR #47: rec["timestamp"] isn't guaranteed to be a
+    # string in a malformed line — _ts() called .replace() on it directly
+    # and raised AttributeError on a number or null, breaking the "never
+    # raises on bad lines" guarantee.
+    assert _ts({"timestamp": None}) is None
+    assert _ts({"timestamp": 12345}) is None
+    assert _ts({"timestamp": ["2026-08-27T10:00:00Z"]}) is None
+
+
 def test_wall_time_does_not_raise_on_a_mixed_naive_and_aware_transcript():
     d = Path(tempfile.mkdtemp())
     p = d / "s.jsonl"
