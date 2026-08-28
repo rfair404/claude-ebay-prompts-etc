@@ -62,6 +62,16 @@ def test_key_block_parses_leading_keys_then_prose():
     assert cf.prose == "She smoked most of her life."
 
 
+def test_single_letter_key_is_recognized():
+    """The docstring promises keys are 'a single lowercase word', with no
+    stated minimum length — a one-letter key like 'x:' must parse like any
+    other, not silently fall through to prose."""
+    root = _make({"context.txt": "x: shorthand value\n"})
+    cf = DC.parse(root / "context.txt")
+    assert cf.keys == {"x": "shorthand value"}
+    assert cf.prose == ""
+
+
 def test_prose_line_ending_in_colon_is_not_swallowed_as_a_key():
     """The narrow key regex is the whole point: a prose sentence that
     happens to end in a colon must stay prose, not become a bogus key with

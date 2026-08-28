@@ -53,7 +53,7 @@ CONTEXT_NAME = "context.txt"
 # A key line: one lowercase word, colon, then something. Anchored and narrow on
 # purpose — "Items that I've purchased from my neighbors:" is prose and must
 # not be swallowed as a key with an empty value.
-_KEY_RE = re.compile(r"^([a-z][a-z_]{1,19}):[ \t]+(\S.*)$")
+_KEY_RE = re.compile(r"^([a-z][a-z_]{0,19}):[ \t]+(\S.*)$")
 
 # Claims the estate can forbid. Each entry: (trigger regex over the merged
 # context text, the phrases DRAFT may not emit, why). The trigger reads BOTH
