@@ -1,0 +1,4 @@
+source: Frankie, estate, Greensboro NC
+environment: smoker
+
+She smoked most of her life.

@@ -43,13 +43,26 @@ _B = [  # camera-frame confessions — BLOCK
     r"\b(shown|pictured|photographed)\s+(in|on|fully|honestly|close|exactly|as|through|base-)",
     r"\b(pages|frames|spreads|surfaces|areas|views|faces|sections|lot|car|piece)\s+(shown|photographed|pictured)\b",
     r"\b(shown|pictured|photographed)\s+(surfaces?|pages?|frames?|spreads?|areas?|views?|sides?|sections?)\b",
+    # Camera-verb-FINAL forms. Every rule above anchors on a word following
+    # the camera verb, so a phrase where nothing follows it in that clause
+    # slipped through: three live listings shipped with "the wicks are
+    # pristine and photographed", "Only the top face is photographed" and
+    # "Sold uncleaned, as photographed". These match wherever the phrase
+    # appears in the sentence, not only at the sentence's literal end (that
+    # would miss "is photographed, not guaranteed" — a second confession in
+    # the same clause).
+    r"\b(is|are|was|were|and)\s+photographed\b",
+    r"\bas\s+photographed\b",
+    # Plural nouns the singular list missed — "some pieces shown stacked/fanned"
+    # was live on 206446264160 because the alternation said `piece`, not `pieces`.
+    r"\b(pieces|panels|items|sheets|cards|copies|issues)\s+(shown|photographed|pictured)\b",
     r"\bin\s+the\s+(frames|photos|photographs|pictures)\b",
     r"\bas[-\s]shown\b",
     r"\bas\s+pictured\b",
     r"\bunshown\b",
     r"\bunphotographed\b",
     r"for\s+(these|the)\s+photo(graph)?s\b",
-    r"from\s+(the\s+)?photo",
+    r"\b(from|off)\s+(the\s+)?photos?\b",   # "measured off the photos" shipped live
     r"assessable\s+from",
     r"\bnot\s+(verifiable|identifiable|assessable)\b",
     r"\bcannot\s+be\s+(verified|identified|assessed)\s+from\b",
@@ -69,6 +82,12 @@ _W = [  # softer normalizations — WARN, never block
      "prefer 'no X noted' over 'no X visible'"),
     (r"\bodou?r\b",
      "odor: fine as a defect disclosure, never as a test not run"),
+    # A pointer is fine in the close line ("Please see the photos…") and as a
+    # bare "(see photo 4)", both exempt below. Inside a condition claim it is
+    # doing different work — "wicks pristine, see photo." leans on the picture
+    # to carry the grade. Warn, don't block; the call is the writer's.
+    (r"\bsee\s+photos?\b",
+     "a photo pointer belongs in the close line, not inside a condition claim"),
 ]
 WARN = [(re.compile(p, re.IGNORECASE), why) for p, why in _W]
 
@@ -80,7 +99,7 @@ _E = [  # sentence-level exemptions — correct copy that must NOT be flagged
     r"\buntested\b",                                         # grade-setter
     r"photography\s+by",                                     # the item's own content
     r"pictured\s+(and\s+named|include)",
-    r"\(\s*(see\s+)?photo\s*\d*\s*\)",                       # bare photo pointer
+    r"\(\s*(see\s+)?photos?\s*\d*\s*\)",                     # bare photo pointer, sing. or pl.
 ]
 EXEMPT = [re.compile(p, re.IGNORECASE) for p in _E]
 

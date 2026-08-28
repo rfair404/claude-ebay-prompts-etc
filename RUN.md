@@ -170,10 +170,11 @@ live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
 `listing` (the LIST/EDIT CLI), `prep`, `single-pass` (gate-check
 IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
-[prompts/single_pass.md](prompts/single_pass.md)). Argv passes through
-untouched, so every flag documented for a tool works identically under
-`ebz`. The direct `python tools/<x>.py` / `python lib/<x>.py` invocations
-keep working.
+[prompts/single_pass.md](prompts/single_pass.md)), `observe` (session
+transcripts -> friction report; read-only, `--report` to print it). Argv
+passes through untouched, so every flag documented for a tool works
+identically under `ebz`. The direct `python tools/<x>.py` /
+`python lib/<x>.py` invocations keep working.
 
 **Single-pass mode (routine items, V4_PLAN Phase 4, #30).** For an item
 that never needs a mid-pipeline question — a single-item shoot, non-gate
