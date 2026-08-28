@@ -157,6 +157,55 @@ queue — the user reads it when convenient instead of being interrupted.
 
 Load each prompt when you reach its phase.
 
+## Concurrency and delegation
+
+A multi-item batch is not one long conversation — it is one conductor plus
+one worker per item. The trigger is a **multi-item batch**; a single item, or
+an interactive back-and-forth about one piece, stays in the main thread.
+
+**Conductor (main thread) holds only:** the batch manifest (which items,
+which phase each is in), the gates, and ledger writes. It never holds
+photos, comp JSON, forum matches or per-item research — those are what
+blow the context window up.
+
+**One `Agent` worker per item**, ≤4 concurrent, covering IDENTIFY → PRICE →
+INVESTIGATE → DRAFT:
+
+- fresh context per worker; it reads `prompts/_shared.md` plus the phase
+  prompt it needs — not optional, see `_shared.md`'s standing rules;
+- writes outputs to the shoot dir exactly as a foreground run would
+  (`identify.txt`, `price.txt`, `comps.csv`, `investigate.txt`, `draft.md`);
+- returns a **compact verdict only** — item name, proposed title, price +
+  tier, the ⚠ list, and the path to `draft.md` — never its full reasoning.
+  `python -m lib.cli status <shoot-dir>` is the one call to check any
+  item's state (phase files, PREP gate, ledger row, next action) instead
+  of re-deriving it from `ls`/`cat`.
+- writes a short trace file into the item dir on failure, so a failed
+  worker is inspectable after the fact — a verdict alone isn't a transcript.
+
+**The gate queue, not a gate barrier.** REVIEW still stops and requires one
+explicit approval per item — that discipline doesn't weaken. What changes is
+that a finished item's card joins a queue instead of blocking every other
+item: answer gates whenever convenient while other workers keep running.
+
+**What may run in a worker vs. only in the conductor:**
+
+| writes | parallel-safe? |
+|---|---|
+| `identify.txt`, `price.txt`+`comps.csv`, `investigate.txt`, `draft.md` (per-item dirs) | ✅ disjoint dirs |
+| `.prep/`, `listing/` | ✅ disjoint dirs |
+| `listings_ledger.csv` via `list_edit.py --record` | ❌ one shared unlocked CSV — **conductor only, serialized** |
+| `--list --confirm` (publish) | ❌ conductor only, behind the REVIEW gate |
+
+Two workers calling `--record` at once can lose a row — every ledger-touching
+call belongs in the conductor.
+
+**Background anything over ~30s.** `prep --auto` and any other runner that
+takes tens of seconds (Apify comp hunts, Chrome browse) go to
+`run_in_background`; keep working the item (or another item) while it
+renders, collect the result when it lands. Don't block the whole run on one
+runner that nothing downstream is waiting on yet.
+
 ## Ops commands — one entry point
 
 Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
@@ -168,9 +217,11 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
-`listing` (the LIST/EDIT CLI), `prep`. Argv passes through untouched, so
-every flag documented for a tool works identically under `ebz`. The direct
-`python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
+`listing` (the LIST/EDIT CLI), `prep`, `status` (one-call shoot state —
+phase files, PREP gate, ledger row, next action; see "Concurrency and
+delegation" above). Argv passes through untouched, so every flag documented
+for a tool works identically under `ebz`. The direct `python tools/<x>.py` /
+`python lib/<x>.py` invocations keep working.
 
 ## Locking a format
 

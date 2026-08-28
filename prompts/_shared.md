@@ -51,6 +51,24 @@ not an acceptable way to show a comp. The `price.txt` / `comps.csv` artifacts
 are still written as specified in PRICE; this rule governs the CHAT layer, in
 every phase, on top of them.
 
+## Context discipline (keep the window small)
+
+Three standing rules — every phase loads this file, so they apply everywhere:
+
+- **Never `Read` a raw frame into the main thread.** Read the contact sheet
+  (`tools/prep_card.py`, `tools/prep_sheet_html.py`) instead, or delegate the
+  looking to a worker (`Agent`) that returns text. A full-resolution photo in
+  the main thread's context costs orders of magnitude more than the fact it
+  contains.
+- **Batch independent tool calls into one turn.** If two calls don't depend
+  on each other's result, issue them together rather than one-per-turn.
+- **Write a scratch `.py` and run it, rather than an inline heredoc**, for
+  anything beyond a one-liner. Heredoc quoting inside a shell call is a
+  routine, avoidable failure mode.
+
+See [RUN.md](../RUN.md) "Concurrency and delegation" for the conductor/worker
+shape a multi-item batch runs under.
+
 ## Confidence (commit, don't hedge)
 
 - **State the single best-supported call.** Make it; don't narrate the

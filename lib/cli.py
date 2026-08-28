@@ -38,6 +38,8 @@ COMMANDS = {
                      "live listings still asking above their own comp evidence"),
     "comps-board":  ("tools.comps_board",
                      "comp JSON -> the thumbnail board (_shared.md hard rule)"),
+    "status":       ("tools.shoot_status",
+                     "one-call shoot status: phase files, prep gate, ledger row, next action"),
     "sales-report": ("tools.sales_report",
                      "sales / fees / promotion dashboard"),
     "promote":      ("tools.promote",
