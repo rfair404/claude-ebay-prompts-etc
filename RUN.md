@@ -226,8 +226,11 @@ IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
 transcripts -> friction report; read-only, `--report` to print it,
 `--economics` for the #61 run-cost table — context/turn, tool-call
 batching, image Read payload, gate wall-clock by name — the standing
-version of the one-off `.scratch/analyze*.py` audit), `status` (one-shot
-shoot state: phase files, PREP gate, frames, ledger row, next action —
+version of the one-off `.scratch/analyze*.py` audit, `--propose` for
+#36's ranked, evidence-cited proposed fixes — add `--file` to actually
+create/comment the house `Idea:` issue via `gh`; without `--file` it's a
+dry run that only prints what it would do), `status` (one-shot shoot
+state: phase files, PREP gate, frames, ledger row, next action —
 #61/#62). Argv passes through untouched, so every flag documented for a
 tool works identically under `ebz`. The direct `python tools/<x>.py` /
 `python lib/<x>.py` invocations keep working.

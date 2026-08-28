@@ -104,10 +104,14 @@ tests so "read only when flagged" can be trusted.
       `redo`, `repeat`, `long_loop`. Terse summary to stdout per the Phase 2
       convention, detail to `session_friction.json`, full report on `--report`.
       Read-only: it never writes to the tracker and never touches a listing.
-- [ ] Friction report → auto-filed `Idea:` issue, deduped against open ones.
-      Held deliberately: a counter is evidence, a filed issue is a claim. The
-      signals are heuristics over text (see the module's honesty notes) and
-      want a few weeks of eyeballing before anything writes to the tracker.
+- [x] Friction report → ranked, evidence-cited proposed fixes
+      (`propose_fixes`, `ebz observe --propose`) → filed as a house `Idea:`
+      issue, or a comment on a matching OPEN one, deduped by keyword
+      (`format_idea_issue` / `_match_open_issue` / `file_proposals`). "A
+      counter is evidence, a filed issue is a claim" is kept as a live
+      safety default rather than dropped: `--propose` alone only ever
+      prints what it found and what it WOULD file; nothing reaches GitHub
+      without also passing `--file`, explicitly, every time.
 
 ## Ground rules
 

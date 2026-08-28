@@ -8,8 +8,8 @@ happening — a tool that errors the same way every batch, a question I ask that
 you have already answered three sessions running, a prompt that takes twenty
 round-trips because the first answer missed.
 
-This is stage 1 of the observer: the parser and the report. It measures where
-the time and the tokens went, and it counts six friction signals:
+Stage 1 is the parser and the report. It measures where the time and the
+tokens went, and it counts six friction signals:
 
   tool_error   a tool call came back is_error — the loop paid for a retry
   denied       a permission prompt was declined — I asked for the wrong thing
@@ -18,11 +18,17 @@ the time and the tokens went, and it counts six friction signals:
   repeat       the same Bash command or file read 3+ times in one session
   long_loop    one ask that needed LOOP_TURNS+ assistant turns to answer
 
-Stage 2 (auto-filing an `Idea:` issue, deduped against the open ones) is NOT
-here on purpose. A counter is evidence; a filed issue is a claim. The counts
-want a few weeks of eyeballing before anything writes to the tracker.
+Stage 2 turns those signals (plus the #61 economics numbers) into ranked,
+concrete proposed fixes (`propose_fixes`) and can file them as a house
+`Idea:` issue — or a comment on a matching OPEN one, so ten review windows
+with the same finding produce one issue with ten data points, not ten
+issues (`file_proposals`). "A counter is evidence; a filed issue is a
+claim" still holds: `--propose` alone only ever prints what it found and
+what it WOULD file — nothing reaches GitHub unless `--file` is also
+passed, explicitly, by a human, every time.
 
-  session_observer.py [--days 7] [--limit 20] [--all] [--report] [--json out.json]
+  session_observer.py [--days 7] [--limit 20] [--all] [--report]
+                       [--economics] [--propose [--file]] [--json out.json]
 
 Three honesty notes. The signals are heuristics over text: "redo" reads the
 first words of your message, so a cheerful "no, that's perfect" counts as a
@@ -39,10 +45,12 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -333,13 +341,15 @@ def _k(n) -> str:
     return f"{n / 1000:.0f}k" if n >= 1000 else str(n)
 
 
-def report(sessions: list[dict], top: int = 8) -> str:
-    """The human-readable friction report — what to read before filing anything."""
-    out = []
-    kinds = Counter()
+def aggregate_friction(sessions: list[dict], top: int = 8) -> dict:
+    """The structured numbers `report()` renders — split out so
+    `propose_fixes()` builds its proposals from the exact same aggregate the
+    human report shows, instead of a second, driftable computation of the
+    same thing."""
+    kinds: Counter = Counter()
     samples = defaultdict(list)
     stages = defaultdict(lambda: {"asks": 0, "turns": 0, "seconds": 0.0, "out_tokens": 0})
-    tok = Counter()
+    tok: Counter = Counter()
     for s in sessions:
         for f in s["friction"]:
             kinds[f["kind"]] += 1
@@ -349,12 +359,25 @@ def report(sessions: list[dict], top: int = 8) -> str:
             for k in ("asks", "turns", "seconds", "out_tokens"):
                 stages[name][k] += v[k]
         tok.update(s["tokens"])
+    hot = sorted((h for s in sessions for h in s["hot_spots"]),
+                key=lambda h: -h["turns"])[:top]
+    return {
+        "n_sessions": len(sessions),
+        "asks": sum(s["asks"] for s in sessions),
+        "turns": sum(s["turns"] for s in sessions),
+        "active_seconds": sum(s["active_seconds"] for s in sessions),
+        "kinds": kinds, "samples": samples, "stages": dict(stages),
+        "tokens": tok, "hot_spots": hot,
+    }
 
-    asks = sum(s["asks"] for s in sessions)
-    turns = sum(s["turns"] for s in sessions)
-    active = sum(s["active_seconds"] for s in sessions)
-    out.append(f"SESSIONS {len(sessions)}  asks {asks}  turns {turns}  "
-               f"active {_hms(active)}  out {_k(tok['output_tokens'])} tok "
+
+def report(sessions: list[dict], top: int = 8) -> str:
+    """The human-readable friction report — what to read before filing anything."""
+    agg = aggregate_friction(sessions, top)
+    kinds, samples, stages, tok = agg["kinds"], agg["samples"], agg["stages"], agg["tokens"]
+    out = []
+    out.append(f"SESSIONS {agg['n_sessions']}  asks {agg['asks']}  turns {agg['turns']}  "
+               f"active {_hms(agg['active_seconds'])}  out {_k(tok['output_tokens'])} tok "
                f"(cache read {_k(tok['cache_read_input_tokens'])})")
     out.append("")
     out.append("WHERE THE WORK WENT")
@@ -378,9 +401,7 @@ def report(sessions: list[dict], top: int = 8) -> str:
             out.append(f"      {sid}  {f['detail']}  {f.get('sample', '')[:110]}")
     out.append("")
     out.append("LONGEST ASKS")
-    hot = sorted((h for s in sessions for h in s["hot_spots"]),
-                 key=lambda h: -h["turns"])[:top]
-    for h in hot:
+    for h in agg["hot_spots"]:
         flag = (" [" + ",".join(h["friction"]) + "]") if h["friction"] else ""
         out.append(f"  {h['stage']:<9} {h['turns']:>3} turns  {_hms(h['seconds']):>5}  "
                    f"{_k(h['out_tokens']):>5}  {h['prompt'][:80]}{flag}")
@@ -490,9 +511,9 @@ def parse_economics(path: Path) -> dict:
     }
 
 
-def economics_report(paths: list[Path]) -> str:
-    """Aggregate `parse_economics` across sessions into the #61 headline
-    table — the standing version of `.scratch/analyze{,2,3,4}.py`."""
+def economics_aggregate(paths: list[Path]) -> dict:
+    """`parse_economics` summed across sessions — the numbers both
+    `economics_report()` and `propose_fixes()` read, computed once."""
     all_ctx: list[int] = []
     all_tools: list[int] = []
     same_tool_adjacent = total_turns = 0
@@ -516,29 +537,259 @@ def economics_report(paths: list[Path]) -> str:
         ask_count.update(e["ask_count"])
         ask_wait.update(e["ask_wait_secs"])
 
-    out = [f"=== ECONOMICS — {len(paths)} session(s), {total_turns} tool-calling turn(s)"]
-    if all_ctx:
-        s = sorted(all_ctx)
+    return {
+        "n_sessions": len(paths), "total_turns": total_turns,
+        "context_per_turn": sorted(all_ctx), "tools_per_turn": all_tools,
+        "same_tool_adjacent": same_tool_adjacent,
+        "read_bytes": dict(read_bytes),
+        "bash_total": bash_total, "bg_bash": bg_bash,
+        "bash_over30": bash_over30, "bash_over30_secs": bash_over30_secs,
+        "ask_count": dict(ask_count), "ask_wait_secs": dict(ask_wait),
+    }
+
+
+def economics_report(paths: list[Path]) -> str:
+    """Aggregate `parse_economics` across sessions into the #61 headline
+    table — the standing version of `.scratch/analyze{,2,3,4}.py`."""
+    agg = economics_aggregate(paths)
+    s = agg["context_per_turn"]
+    all_tools = agg["tools_per_turn"]
+    total_turns = agg["total_turns"]
+    read_bytes = agg["read_bytes"]
+    ask_wait = agg["ask_wait_secs"]
+    ask_count = agg["ask_count"]
+
+    out = [f"=== ECONOMICS — {agg['n_sessions']} session(s), {total_turns} tool-calling turn(s)"]
+    if s:
         out.append(f"  context/turn: mean {_k(int(sum(s) / len(s)))}  "
                    f"median {_k(s[len(s) // 2])}  p90 {_k(s[int(len(s) * .9)])}  "
                    f"max {_k(s[-1])}")
     if all_tools:
         out.append(f"  tool calls/turn: mean {sum(all_tools) / len(all_tools):.2f}  "
-                   f"same-tool-adjacent {same_tool_adjacent / max(total_turns, 1) * 100:.0f}% of turns")
+                   f"same-tool-adjacent {agg['same_tool_adjacent'] / max(total_turns, 1) * 100:.0f}% of turns")
     img_bytes = sum(v for k, v in read_bytes.items() if k in IMAGE_EXT)
     tot_bytes = sum(read_bytes.values())
     if tot_bytes:
         out.append(f"  Read payload: {img_bytes / 1e6:.1f} MB images of "
                    f"{tot_bytes / 1e6:.1f} MB total ({img_bytes / tot_bytes * 100:.0f}%)")
-    if bash_total:
-        out.append(f"  Bash/PowerShell: {bash_total} calls, "
-                   f"{bg_bash / bash_total * 100:.1f}% backgrounded, "
-                   f"{bash_over30} over 30s totalling {bash_over30_secs / 3600:.1f}h")
+    if agg["bash_total"]:
+        out.append(f"  Bash/PowerShell: {agg['bash_total']} calls, "
+                   f"{agg['bg_bash'] / agg['bash_total'] * 100:.1f}% backgrounded, "
+                   f"{agg['bash_over30']} over 30s totalling {agg['bash_over30_secs'] / 3600:.1f}h")
     if ask_wait:
         out.append("  AskUserQuestion wait by gate:")
         for h, secs in sorted(ask_wait.items(), key=lambda kv: -kv[1])[:8]:
             out.append(f"    {ask_count.get(h, 0):>3}  {secs / 3600:>6.1f}h  {h}")
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------
+# stage 2a — friction signals + economics -> ranked, concrete proposed fixes
+# ---------------------------------------------------------------------------
+
+# (key, min-hours-to-lead-the-ranking) — impact_hours is 0 for signals that
+# don't have a direct time cost (e.g. tool_error), so they still rank behind
+# anything with a measured wall-clock number attached.
+def propose_fixes(friction_agg: dict, econ_agg: dict) -> list[dict]:
+    """Turn the observer's raw numbers into ranked, concrete proposed fixes.
+
+    Every rule is threshold-gated and cites the exact number that tripped
+    it — a proposal is a measurement with a recommendation attached, never
+    a guess. Thresholds are deliberately the same shape as the fixes #61
+    and #74 actually shipped (same categories, same kind of evidence), so
+    this is the automated version of the manual pass, not a new heuristic
+    invented for this file."""
+    proposals: list[dict] = []
+
+    def add(key, title, evidence, fix, impact_hours=0.0):
+        proposals.append({"key": key, "title": title, "evidence": evidence,
+                          "proposed_fix": fix, "impact_hours": round(impact_hours, 1)})
+
+    read_bytes = econ_agg.get("read_bytes") or {}
+    tot_bytes = sum(read_bytes.values())
+    img_bytes = sum(v for k, v in read_bytes.items() if k in IMAGE_EXT)
+    if tot_bytes > 1_000_000 and img_bytes / tot_bytes > 0.5:
+        add("raw_frame_reads",
+            "Raw photo frames are being Read into the main thread",
+            f"{img_bytes / 1e6:.1f} MB of {tot_bytes / 1e6:.1f} MB of Read payload "
+            f"({img_bytes / tot_bytes * 100:.0f}%) is images",
+            "Read the contact sheet (tools/prep_card.py / prep_sheet_html.py) or "
+            "delegate frame-level looking to a worker subagent that returns text, "
+            "instead of Reading raw frames into the main thread.")
+
+    tools_per_turn = econ_agg.get("tools_per_turn") or []
+    total_turns = econ_agg.get("total_turns") or 0
+    if tools_per_turn and total_turns > 20:
+        mean_tools = sum(tools_per_turn) / len(tools_per_turn)
+        adjacent_pct = econ_agg.get("same_tool_adjacent", 0) / max(total_turns, 1) * 100
+        if mean_tools < 1.3 and adjacent_pct > 30:
+            add("tool_batching",
+                "Independent tool calls aren't being batched into one turn",
+                f"mean {mean_tools:.2f} tool call(s)/turn across {total_turns} turns; "
+                f"{adjacent_pct:.0f}% of turns immediately followed a same-tool turn",
+                "Batch independent tool calls into one turn instead of one call per "
+                "turn — each turn re-sends the full context, so N sequential "
+                "same-tool calls cost N re-sends of everything already in the window.")
+
+    bash_total = econ_agg.get("bash_total") or 0
+    bash_over30 = econ_agg.get("bash_over30") or 0
+    bg_bash = econ_agg.get("bg_bash") or 0
+    if bash_total > 10 and bash_over30 > 0:
+        bg_pct = bg_bash / bash_total * 100
+        hrs = econ_agg.get("bash_over30_secs", 0) / 3600
+        if bg_pct < 20 and hrs > 0.5:
+            add("background_long_calls",
+                "Long shell calls are blocking the run in the foreground",
+                f"{bash_over30} Bash/PowerShell call(s) over 30s totalling {hrs:.1f}h; "
+                f"only {bg_pct:.0f}% of {bash_total} call(s) used run_in_background",
+                "Background any runner over ~30s (prep --auto foremost) with "
+                "run_in_background and collect the result when it's needed, instead "
+                "of blocking the whole turn on it.",
+                impact_hours=hrs)
+
+    ask_wait = econ_agg.get("ask_wait_secs") or {}
+    ask_count = econ_agg.get("ask_count") or {}
+    for header, secs in sorted(ask_wait.items(), key=lambda kv: -kv[1])[:3]:
+        hrs = secs / 3600
+        if hrs > 2:
+            add(f"gate_wait::{header}",
+                f'The "{header}" gate accounts for {hrs:.1f}h of blocked wall-clock',
+                f"{ask_count.get(header, 0)} ask(s) under this gate header, "
+                f"{hrs:.1f}h total wait",
+                f'Check whether "{header}" already has (or should get) a '
+                f"confidence-gate default the pipeline can self-approve when clean, "
+                f"the way PREP's orientation/crop/colour gates do — reserving the "
+                f"question for genuine exceptions rather than every occurrence.",
+                impact_hours=hrs)
+
+    kinds = friction_agg.get("kinds") or Counter()
+    samples = friction_agg.get("samples") or {}
+    n_sessions = friction_agg.get("n_sessions") or 0
+    if n_sessions:
+        if kinds.get("repeat", 0) >= max(2, n_sessions // 5):
+            add("repeat_calls",
+                "The same tool call is repeating 3+ times within a session",
+                f"{kinds['repeat']} repeat-call signal(s) across {n_sessions} session(s)",
+                "A tool re-run 3+ times with the same input in one session is either "
+                "a silent failure being retried blind or a result that should have "
+                "been cached — check the samples and fix the root cause rather than "
+                "the retry.")
+        if kinds.get("tool_error", 0) >= max(3, n_sessions // 3):
+            by_tool = Counter(f["detail"] for _, f in samples.get("tool_error", []))
+            worst = by_tool.most_common(1)
+            worst_txt = f" ({worst[0][0]} most often)" if worst else ""
+            add("tool_error_rate",
+                "Tool calls are erroring often enough to be worth a guard",
+                f"{kinds['tool_error']} tool_error signal(s) across {n_sessions} "
+                f"session(s){worst_txt}",
+                "Read the tool_error samples in the friction report and either fix "
+                "the root cause or add a guard that catches the failure mode before "
+                "it reaches the tool call.")
+        if kinds.get("long_loop", 0) >= 1:
+            add("long_loops",
+                "At least one ask needed an unusually long back-and-forth to resolve",
+                f"{kinds['long_loop']} long_loop signal(s) (>= {LOOP_TURNS} assistant "
+                f"turns on one ask) across {n_sessions} session(s)",
+                "Read the LONGEST ASKS section for the flagged ask(s) and see whether "
+                "the back-and-forth traces to a missing tool, an ambiguous "
+                "instruction, or a genuinely hard case — the fix differs by cause.")
+
+    return sorted(proposals, key=lambda p: -p["impact_hours"])
+
+
+# ---------------------------------------------------------------------------
+# stage 2b — file proposals as a house `Idea:` issue, deduped against open ones
+# ---------------------------------------------------------------------------
+
+def format_idea_issue(proposals: list[dict], *, window: str) -> tuple[str, str]:
+    """House `Idea:` format (see #30/#61/#74): a short title, then
+    `## Findings` (one subsection per proposal, evidence + impact) and
+    `## Suggested edits` (the concrete fix, one bullet per proposal)."""
+    if not proposals:
+        return "", ""
+    top = proposals[0]
+    title = f"Idea: {top['title']} ({window} session review)"
+    lines = ["## Findings", "",
+             f"Auto-generated by `ebz observe --propose` from the session "
+             f"transcripts, window: {window}.", ""]
+    for p in proposals:
+        lines.append(f"### {p['title']}")
+        lines.append(f"- Evidence: {p['evidence']}")
+        if p["impact_hours"]:
+            lines.append(f"- Estimated impact: {p['impact_hours']:.1f}h")
+        lines.append("")
+    lines.append("## Suggested edits")
+    lines.append("")
+    for p in proposals:
+        lines.append(f"- **{p['title']}:** {p['proposed_fix']}")
+    return title, "\n".join(lines)
+
+
+def _open_idea_issues() -> list[dict]:
+    """Every currently-open 'Idea:' issue — number + title, for dedup.
+    Never raises: if `gh` isn't available or isn't authed, filing degrades
+    to 'no match found' (files a new issue) rather than crashing — the
+    same fail-open posture as the rest of this module's `gh`-free parsing."""
+    try:
+        out = subprocess.run(
+            ["gh", "issue", "list", "--search", "Idea in:title", "--state", "open",
+             "--json", "number,title", "--limit", "50"],
+            capture_output=True, text=True, timeout=30, check=True)
+        return json.loads(out.stdout)
+    except Exception:                                             # noqa: BLE001
+        return []
+
+
+def _match_open_issue(key: str, open_issues: list[dict]) -> Optional[dict]:
+    """A proposal dedupes against an open issue when a keyword from its key
+    appears in that issue's title. Deliberately coarse: a false negative
+    (a near-duplicate issue) costs a human five seconds to close-as-dup; a
+    false positive (a comment landing on the wrong issue) is worse and
+    harder to notice, so the match stays conservative."""
+    needle = key.split("::")[0].replace("_", " ")
+    for issue in open_issues:
+        if needle in issue["title"].lower():
+            return issue
+    return None
+
+
+def file_proposals(proposals: list[dict], *, window: str, dry_run: bool = True) -> dict:
+    """File one `Idea:` issue for this review window's findings — or, if
+    the top-ranked finding already has an open issue, one comment there
+    instead. This is the actual house pattern: #61 opened fresh, #71 later
+    commented "nothing changed" on #62 rather than re-filing — ten review
+    windows with the same finding become one issue with ten data points.
+
+    `dry_run=True` (the default) never calls `gh issue create`/`comment` —
+    it returns exactly what WOULD be filed. Only `dry_run=False`, which
+    the CLI only reaches via an explicit `--file` flag, writes to GitHub."""
+    if not proposals:
+        return {"action": "none", "reason": "no proposals cleared threshold"}
+
+    open_issues = _open_idea_issues()
+    top = proposals[0]
+    match = _match_open_issue(top["key"], open_issues)
+    title, body = format_idea_issue(proposals, window=window)
+
+    if match:
+        comment = (f"Friction review, window {window} — {len(proposals)} finding(s), "
+                  f"top: {top['title']} ({top['evidence']}).\n\n" + body)
+        result = {"action": "comment", "target": match["number"], "title": match["title"]}
+        if dry_run:
+            result["dry_run_body"] = comment
+        else:
+            subprocess.run(["gh", "issue", "comment", str(match["number"]),
+                           "--body", comment], check=True, timeout=30)
+        return result
+
+    result = {"action": "create", "title": title}
+    if dry_run:
+        result["dry_run_body"] = body
+    else:
+        out = subprocess.run(["gh", "issue", "create", "--title", title, "--body", body],
+                            capture_output=True, text=True, check=True, timeout=30)
+        result["url"] = out.stdout.strip()
+    return result
 
 
 def main(argv=None) -> int:
@@ -553,6 +804,13 @@ def main(argv=None) -> int:
                     help="print the #61 run-economics table (context/turn, tool-call "
                          "batching, image Read payload, gate wait) instead of the "
                          "friction report")
+    ap.add_argument("--propose", action="store_true",
+                    help="print the #36 ranked friction/economics -> concrete-fix "
+                         "proposals, and what would be filed to GitHub for them "
+                         "(dry run unless --file is also passed)")
+    ap.add_argument("--file", action="store_true",
+                    help="with --propose: actually create/comment on GitHub via `gh` "
+                         "(default: dry run only — nothing reaches GitHub without this)")
     ap.add_argument("--json", dest="json_path", default="session_friction.json",
                     help="detail file (default session_friction.json)")
     args = ap.parse_args(argv)
@@ -573,6 +831,37 @@ def main(argv=None) -> int:
 
     if args.economics:
         print(economics_report(files))
+        return 0
+
+    if args.propose:
+        window = "all" if args.all else f"{args.days}d"
+        friction_sessions = [s for s in (parse_session(f) for f in files) if s["asks"]]
+        proposals = propose_fixes(aggregate_friction(friction_sessions),
+                                  economics_aggregate(files))
+        if not proposals:
+            print(f"propose: no findings cleared threshold over {len(files)} "
+                  f"session(s) ({window}) — nothing to file")
+            return 0
+        for p in proposals:
+            print(f"[{p['impact_hours']:>5.1f}h] {p['title']}")
+            print(f"  evidence: {p['evidence']}")
+            print(f"  fix: {p['proposed_fix']}")
+            print()
+        result = file_proposals(proposals, window=window, dry_run=not args.file)
+        if args.file:
+            if result["action"] == "create":
+                print(f"[FILED] {result.get('url', result['title'])}")
+            elif result["action"] == "comment":
+                print(f"[COMMENTED] on #{result['target']} ({result['title']})")
+            else:
+                print(f"[SKIPPED] {result.get('reason', '')}")
+        else:
+            if result["action"] == "comment":
+                print(f"[DRY RUN] would comment on #{result['target']} "
+                      f"({result['title']})")
+            elif result["action"] == "create":
+                print(f"[DRY RUN] would create: {result['title']}")
+            print("  pass --file to actually write to GitHub")
         return 0
 
     sessions = [parse_session(f) for f in files]
