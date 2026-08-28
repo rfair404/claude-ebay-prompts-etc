@@ -99,9 +99,15 @@ def _ts(rec: dict):
     if not t:
         return None
     try:
-        return datetime.fromisoformat(t.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(t.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # A transcript timestamp without an offset would otherwise come back
+    # naive, and mixing naive/aware datetimes raises on any later comparison
+    # or subtraction (wall/active time) — exactly what "never raises on bad
+    # lines" is supposed to prevent. Same normalization as _date() in
+    # tools/sales_report.py: absent offset means UTC.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _text_of(content) -> str:

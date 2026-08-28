@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.session_observer import (  # noqa: E402
-    _classify, _clean_prompt, _tool_signature, parse_session, report,
+    _classify, _clean_prompt, _ts, _tool_signature, parse_session, report,
     transcripts_dir,
 )
 
@@ -162,6 +162,31 @@ def test_bad_lines_and_oversized_lines_never_raise():
     ]), encoding="utf-8")
     s = parse_session(p)
     assert s["asks"] == 1 and s["skipped_lines"] == 1
+
+
+def test_ts_normalizes_a_naive_timestamp_to_utc():
+    # Copilot review on PR #47: a transcript timestamp missing its offset
+    # parsed as naive, and comparing/subtracting it against an aware one
+    # raises TypeError — same fix as _date() in tools/sales_report.py.
+    aware = _ts({"timestamp": "2026-08-27T10:00:00Z"})
+    naive = _ts({"timestamp": "2026-08-27T10:00:00"})
+    assert aware.tzinfo is not None and naive.tzinfo is not None
+    assert (aware - naive).total_seconds() == 0.0
+
+
+def test_wall_time_does_not_raise_on_a_mixed_naive_and_aware_transcript():
+    d = Path(tempfile.mkdtemp())
+    p = d / "s.jsonl"
+    records = [
+        {"type": "user", "timestamp": "2026-08-27T10:00:00",
+         "message": {"role": "user", "content": "hi"}},
+        {"type": "assistant", "timestamp": "2026-08-27T10:00:05.000Z",
+         "message": {"role": "assistant", "model": "claude-opus-5", "content": [],
+                     "usage": {"input_tokens": 1, "output_tokens": 1}}},
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    s = parse_session(p)   # would previously raise TypeError comparing naive/aware
+    assert s["wall_seconds"] == 5.0
 
 
 def test_report_renders_every_section():
