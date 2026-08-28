@@ -1008,7 +1008,8 @@ def _international_warnings(draft: Draft) -> list[str]:
 
 
 def _resolve_shipping_policy(draft: Draft, policies: dict,
-                             creds: EbayCredentials) -> tuple[str, list[str]]:
+                             creds: EbayCredentials,
+                             strict: bool = False) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
 
     Routing, in order:
@@ -1032,6 +1033,15 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     is an account-level enrollment, so the moment a listing uses a policy whose
     shipToLocations include Worldwide, eIS offers it abroad — including for
     items eIS will refuse at the hub. The gate below is what stops that.
+
+    `strict` distinguishes advisory callers (preflight, which only reports
+    problems for a human to read) from callers that are about to WRITE the
+    resolved policy into an offer (sync, offer-field updates). A US-export
+    restriction with no US-only policy configured is a hard stop for the
+    latter: raises ValueError instead of returning the Worldwide default,
+    because writing that default is exactly the publish-time failure (or,
+    if eBay ever stopped catching it, the export) this function exists to
+    prevent.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
@@ -1092,13 +1102,16 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             # Worldwide, so falling back would not merely be suboptimal — the
             # publish would fail, and if eBay ever stopped catching it we would
             # be exporting a restricted item.
+            blocker = ("shipping: BLOCKER — item is US-export-restricted (" +
+                       "; ".join(us_reasons) + ") but "
+                       "ebay.fulfillment_policy_id_us_only is unset. The default "
+                       "policy ships Worldwide, so eBay will refuse this publish. "
+                       "Create a US-only fulfillment policy (shipToLocations = US) "
+                       "and set that key before listing this item.")
+            if strict:
+                raise ValueError(blocker)
             chosen, label = default_fid, "default ground (NO US-only policy configured)"
-            msgs.append("shipping: BLOCKER — item is US-export-restricted (" +
-                        "; ".join(us_reasons) + ") but "
-                        "ebay.fulfillment_policy_id_us_only is unset. The default "
-                        "policy ships Worldwide, so eBay will refuse this publish. "
-                        "Create a US-only fulfillment policy (shipToLocations = US) "
-                        "and set that key before listing this item.")
+            msgs.append(blocker)
         if _is_media_service(want):
             msgs.append("shipping: item wanted Media Mail but is US-export-"
                         "restricted — the US-only policy carries Ground "
@@ -1439,7 +1452,7 @@ def create_or_update_listing(draft_path: Path,
             print(f"  [preflight] {reason}")
     # Shipping: pick the right fulfillment policy (Media Mail for media items,
     # else default ground) and use it for this offer.
-    chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds)
+    chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds, strict=True)
     policies = {**policies, "fulfillment": chosen_fulfillment}
     for _m in ship_msgs + _insurance_notes(draft):
         print(f"  [preflight] {_m}")
@@ -1746,7 +1759,7 @@ def update_listing_fields(draft_path: Path, fields,
             # dangerous-goods gate runs here too, so an item that must not go
             # abroad silently stays on the domestic policy.
             pol_ids, _loc = _resolve_policies_and_location(creds)
-            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds)
+            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds, strict=True)
             lp = offer.setdefault("listingPolicies", {})
             prev = lp.get("fulfillmentPolicyId")
             lp["fulfillmentPolicyId"] = fid
