@@ -172,6 +172,24 @@ live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 every flag documented for a tool works identically under `ebz`. The direct
 `python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
 
+## Background dispatch (optional, #59)
+
+PRICE, IDENTIFY's non-photo research (maker/pattern lookups, forum
+cross-reference), DRAFT, and REVIEW's card-build touch no local state —
+each reads only the prior phase's file already written to the shoot dir.
+On a batch of shoots, dispatch these four as background agents (`Agent`
+tool, `run_in_background: true`) instead of blocking the foreground
+conversation, e.g. running item 2's PRICE/DRAFT while the operator is
+still in item 1's PREP. PREP and the REVIEW gate stay foreground: PREP
+reads/writes photo files and needs the operator looking at their own
+images; REVIEW is the human approval that authorizes publish (see the
+gate contract above — untouched by dispatch).
+
+If a dispatched stage turns out to need local state mid-run (e.g. IDENTIFY
+needs another photo angle), it surfaces the question back to the operator
+instead of failing — same as a foreground run would. Same prompts, same
+`_shared.md` rules, same gates; dispatch only changes where a stage runs.
+
 ## Locking a format
 
 Every artefact passed between phases carries a version stamp — `template_version`
