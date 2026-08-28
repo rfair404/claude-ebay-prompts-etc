@@ -62,6 +62,9 @@ INTERRUPT = re.compile(r"\[Request interrupted", re.I)
 # A pasted photo arrives as a size placeholder ahead of the actual words; it is
 # not what you asked, and left in it becomes the label on every PRICE hot spot.
 IMAGE_LINE = re.compile(r"^\s*\[Image:[^\]]*\]\s*$", re.M)
+# The observer prints its own samples, so a session where it ran contains the
+# marker text it looks for. Results from its own invocations are not evidence.
+SELF = re.compile(r"session_observer|cli observe|ebz observe", re.I)
 
 # Stage attribution. Each stage owns prompt words and tool-input fragments; the
 # stage with the most hits over one ask wins. Deliberately coarse — this says
@@ -169,6 +172,7 @@ def parse_session(path: Path) -> dict:
     asks: list[Ask] = []
     cur = None
     tool_names: dict[str, str] = {}       # tool_use_id -> tool name
+    tool_sigs: dict[str, str] = {}        # tool_use_id -> full call signature
     sigs = Counter()
     tokens = Counter()
     stamps = []
@@ -210,7 +214,10 @@ def parse_session(path: Path) -> dict:
                            if isinstance(b, dict) and b.get("type") == "tool_result"]
                 if results:
                     for b in results:
-                        name = tool_names.get(b.get("tool_use_id"), "?")
+                        tid = b.get("tool_use_id")
+                        name = tool_names.get(tid, "?")
+                        if SELF.search(tool_sigs.get(tid, "")):
+                            continue          # the observer reading itself
                         body = _text_of(b.get("content")) or str(b.get("content") or "")
                         if b.get("is_error"):
                             if DENIED.search(body):
@@ -251,6 +258,7 @@ def parse_session(path: Path) -> dict:
                 name = b.get("name") or "?"
                 tool_names[b.get("id")] = name
                 sig = _tool_signature(name, b.get("input") or {})
+                tool_sigs[b.get("id")] = sig
                 sigs[sig] += 1
                 if cur is not None:
                     cur.tools += 1

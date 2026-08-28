@@ -174,3 +174,15 @@ def test_report_renders_every_section():
     for header in ("SESSIONS", "WHERE THE WORK WENT", "FRICTION", "LONGEST ASKS"):
         assert header in body
     assert "tool_error" in body
+
+
+def test_the_observer_does_not_count_its_own_output_as_friction():
+    p = _write([
+        _user("show me the friction report", 0),
+        _assistant(1, [("Bash", {"command": "python -m lib.cli observe --report"})]),
+        _result("t0", "interrupt 2\n  [Request interrupted by user]\n  tool_error 72"),
+        _assistant(2, [("Bash", {"command": "cat notes.txt"})]),
+        _result("t0", "[Request interrupted by user]"),
+    ])
+    kinds = [f["kind"] for f in parse_session(p)["friction"]]
+    assert kinds.count("interrupt") == 1        # the real one only
