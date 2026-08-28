@@ -172,7 +172,7 @@ def parse_session(path: Path) -> dict:
     asks: list[Ask] = []
     cur = None
     tool_names: dict[str, str] = {}       # tool_use_id -> tool name
-    tool_sigs: dict[str, str] = {}        # tool_use_id -> full call signature
+    self_calls: set = set()               # tool_use_ids of the observer's own runs
     sigs = Counter()
     tokens = Counter()
     stamps = []
@@ -216,7 +216,7 @@ def parse_session(path: Path) -> dict:
                     for b in results:
                         tid = b.get("tool_use_id")
                         name = tool_names.get(tid, "?")
-                        if SELF.search(tool_sigs.get(tid, "")):
+                        if tid in self_calls:
                             continue          # the observer reading itself
                         body = _text_of(b.get("content")) or str(b.get("content") or "")
                         if b.get("is_error"):
@@ -258,7 +258,12 @@ def parse_session(path: Path) -> dict:
                 name = b.get("name") or "?"
                 tool_names[b.get("id")] = name
                 sig = _tool_signature(name, b.get("input") or {})
-                tool_sigs[b.get("id")] = sig
+                # Match the WHOLE input, not the truncated signature: a long cd
+                # prefix pushes "observe" past the signature's 160-char cut.
+                if SELF.search(json.dumps(b.get("input") or {})):
+                    self_calls.add(b.get("id"))
+                else:
+                    self_calls.discard(b.get("id"))   # last write wins, as for names
                 sigs[sig] += 1
                 if cur is not None:
                     cur.tools += 1

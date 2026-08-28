@@ -186,3 +186,15 @@ def test_the_observer_does_not_count_its_own_output_as_friction():
     ])
     kinds = [f["kind"] for f in parse_session(p)["friction"]]
     assert kinds.count("interrupt") == 1        # the real one only
+
+
+def test_self_guard_survives_a_long_command_prefix():
+    # The signature truncates at 160 chars; a cd + long temp path can push
+    # "observe" past the cut, which is how two false interrupts got through.
+    prefix = 'cd "C:/Users/x/' + "deep/" * 40 + '" && '
+    p = _write([
+        _user("full history please", 0),
+        _assistant(1, [("Bash", {"command": prefix + "python -m lib.cli observe --all --report"})]),
+        _result("t0", "interrupt 13\n  [Request interrupted by user]"),
+    ])
+    assert not [f for f in parse_session(p)["friction"] if f["kind"] == "interrupt"]
