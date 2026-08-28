@@ -82,10 +82,16 @@ tests so "read only when flagged" can be trusted.
 
 ## Phase 5 — the observer (#36)
 
-- [ ] `tools/session_observer.py`: parse session transcripts (timestamps +
-      token usage are already in the JSONL), compute per-stage wall time,
-      token attribution, interaction hot spots, repeats.
+- [x] `tools/session_observer.py` (+ `ebz observe`, `tests/test_session_observer.py`):
+      streams the session JSONLs into per-stage wall time, token attribution,
+      hot spots and six friction signals — `tool_error`, `denied`, `interrupt`,
+      `redo`, `repeat`, `long_loop`. Terse summary to stdout per the Phase 2
+      convention, detail to `session_friction.json`, full report on `--report`.
+      Read-only: it never writes to the tracker and never touches a listing.
 - [ ] Friction report → auto-filed `Idea:` issue, deduped against open ones.
+      Held deliberately: a counter is evidence, a filed issue is a claim. The
+      signals are heuristics over text (see the module's honesty notes) and
+      want a few weeks of eyeballing before anything writes to the tracker.
 
 ## Ground rules
 
