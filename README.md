@@ -47,7 +47,7 @@ waits for query approval and no longer gates on its comp source — Stage B
 runs automatically through the user's logged-in browser
 ([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py); Apify was retired
 2026-08-15 after repeated silent blocking, see
-[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md)) — and the
+[`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)) — and the
 working price is auto-adopted (Recommended tier, provisional) so the pipeline
 finishes straight through to the review card.
 

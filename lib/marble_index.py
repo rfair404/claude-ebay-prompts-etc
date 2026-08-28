@@ -422,7 +422,6 @@ def _acquire_lock(stale_s=900):
     or None if a fresh run already holds it (so an overlapping tick skips instead
     of corrupting the index with a concurrent writer). A lock older than stale_s
     is treated as a crashed run and taken over."""
-    import time
     IDX.dir.mkdir(parents=True, exist_ok=True)
     lock = IDX.dir / ".next.lock"
     try:
