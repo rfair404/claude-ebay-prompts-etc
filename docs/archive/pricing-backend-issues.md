@@ -35,7 +35,7 @@
 
 _Status: 2026-07-29. Written after a multi-day Stage B outage during the more-mags-444 / cats-mags estate batches._
 
-Stage B (Apify eBay-sold scraping) is the pricing tool's comp source. It has proven **flaky**, and this note documents *why*, the *mitigation shipped*, and *options for a durable fix*. See also [price-strategy-v2.md](price-strategy-v2.md) and memory `apify_actor_down_2026_07_27`.
+Stage B (Apify eBay-sold scraping) is the pricing tool's comp source. It has proven **flaky**, and this note documents *why*, the *mitigation shipped*, and *options for a durable fix*. See also [price-strategy-v2.md](../price-strategy-v2.md) and memory `apify_actor_down_2026_07_27`.
 
 ## What went wrong
 
