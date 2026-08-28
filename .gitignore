@@ -113,6 +113,9 @@ venv/
 Thumbs.db
 desktop.ini
 
+# Claude Code agent tooling — isolated git worktrees for background subagents.
+/.claude/worktrees/
+
 # Historical business working data that predates the /inventory/ convention.
 # Removed from tracking 2026-08-15: real listing drafts, prices, eBay draft ids,
 # and the seller ZIP. Kept on disk; not for a public repo.
