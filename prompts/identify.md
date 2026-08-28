@@ -271,6 +271,8 @@ Then one block per item, `--- Item <N> ---`, fields in this order:
   ≤65.
 - **Type** — specific descriptor. Same marker convention. ≤65.
 - **Era** — date/range. `[ASSUMPTION]` if inferred from styling. ≤65.
+  Directory context (`_shared.md`) may narrow the range — a household's
+  accumulation window is a prior, never a date on the item itself.
 - **Collectability** — collectable / vintage / antique / modern /
   `none (not for sale)`.
 - **Condition** — per [`condition-rubric.md`](condition-rubric.md):

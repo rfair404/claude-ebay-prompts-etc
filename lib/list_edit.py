@@ -87,6 +87,7 @@ from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from us_only import us_only_reasons
+from dir_context import load as load_dir_context
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -1313,11 +1314,36 @@ def build_review_card(draft_path: Path,
         intl_lines = ["  • eligible, not enabled (shipping.international: false). "
                       "Set true to offer it worldwide."]
 
+    # Estate context (GH #46) — which context.txt file(s) applied, what they
+    # supply, and what they forbid, so a reviewer can see the estate was
+    # actually consulted before approving a publish. `source:` never
+    # appears here — public_keys/brief() drop it (PII guardrail).
+    ctx = load_dir_context(shoot)
+    ctx_lines: list[str] = []
+    ctx_draft_hits = []
+    if ctx:
+        ctx_lines.append(f"  applied: {', '.join(ctx.sources)}")
+        for k, v in ctx.public_keys.items():
+            ctx_lines.append(f"  {k}: {v}")
+        if ctx.blocked:
+            ctx_lines.append("  MUST NOT CLAIM:")
+            for b in ctx.blocked:
+                ctx_lines.append(f"    - {' / '.join(b.phrases[:2])} — {b.why} ({b.source})")
+        _buyer_text = "\n".join([title, str(draft.get("condition_description") or ""),
+                                 str(draft.body or ""),
+                                 *(str(v) for v in (draft.get("item_specifics") or {}).values())])
+        ctx_draft_hits = ctx.blocks(_buyer_text)
+    else:
+        ctx_lines.append("  (no context.txt in chain — no change to behavior)")
+
     # Flags worth a human eye.
     flags: list[str] = []
+    for _hit in ctx_draft_hits:
+        flags.append(f"  • ⚠ draft asserts a claim the estate forbids: "
+                     f"'{_hit.phrases[0]}' — {_hit.why} ({_hit.source}). Rephrase before approving.")
     nr = shoot / "NEEDS_REVIEW.md"
     if nr.exists():
-        flags = ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        flags += ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
     # Stale-meta check (GH #40): surface a meta/eBay disagreement at the gate
     # rather than in an audit months later. SOFT — an API failure never blocks
     # the card.
@@ -1401,6 +1427,8 @@ def build_review_card(draft_path: Path,
         *comps,
         "Condition detail:",
         f"  {cond_desc}",
+        "Context (estate background):",
+        *ctx_lines,
         f"Final photos - exactly what publishes ({len(photos)}):{prep_note}",
         *photo_lines,
         "⚠ Needs review / manual intervention:",

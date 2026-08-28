@@ -95,6 +95,36 @@ prior identification. Visual similarity is not equivalence; markets
 shift. Re-derive every time. Never write "V1 said X" / "previously
 identified as Y".
 
+## Directory context (`context.txt` cascade)
+
+Items arrive as a batch — an estate, a sale — not one at a time. A parent
+directory under `inventory/` may carry a `context.txt` (household, era,
+storage, cost); every item under it inherits it. `lib/dir_context.py`
+walks from the inventory root down to the item dir and merges every
+`context.txt` on the way, nearest-wins:
+
+    python lib/dir_context.py <item-dir>     # brief() — paste into working notes
+    python lib/dir_context.py --sweep        # drafts asserting a blocked claim
+
+**Background, never a claim upgrade.** It narrows a prior (era, likely
+source) — it never makes a marble German or a book first-edition. Same
+rail the specializations carry: refine, don't override.
+
+**Blocks are hard.** A claim in `ctx.blocked` (smoke-free, pet-free,
+climate-controlled and variants) is forbidden, not flagged, at any
+confidence — even where photos alone would support it. DRAFT is the
+enforcement point (see draft.md); it also applies to IDENTIFY/
+INVESTIGATE/PRICE simply by never asserting it.
+
+**`source:` never leaves this file.** It may name a person for local
+reference; nothing downstream — chat, a stage's own output file, the
+review card, buyer-facing copy — repeats it. `brief()`/`public_keys`
+already omit it; don't read `.keys["source"]` into anything that isn't
+purely local.
+
+**Absent chain = today's behavior.** No `context.txt` anywhere in the
+chain changes nothing.
+
 ## Unit type and quantity
 
 Every item record carries `unit_type` + `quantity`.

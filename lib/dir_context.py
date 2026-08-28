@@ -35,7 +35,10 @@ WHAT IT DOES NOT DO (the clamps — same rails the specializations carry):
   * Negative constraints are HARD. A blocked claim is blocked, not "flagged" —
     DRAFT refuses to emit it, at any confidence.
   * No PII in buyer copy. The file may name the person for our own reference;
-    listing copy says "an estate" unless explicitly opted in.
+    listing copy says "an estate" unless explicitly opted in. Enforced here,
+    not left to callers: `MergedContext.public_keys` and `brief()` both drop
+    `source` unconditionally — read `.keys["source"]` directly for the
+    local-only case.
   * Absent file = today's behavior. No context.txt in the chain changes nothing.
 """
 from __future__ import annotations
@@ -110,6 +113,16 @@ class MergedContext:
     @property
     def sources(self) -> list[str]:
         return [c.rel for c in self.chain]
+
+    @property
+    def public_keys(self) -> dict[str, str]:
+        """`.keys` minus `source` — the PII guardrail. `source` may name a
+        person for local reference only (per the issue: "the parser should
+        treat source: as reference-only and never pass it into draft
+        copy"); nothing that reaches a stage's working notes, the review
+        card, or buyer-facing copy may include it. Use `.keys["source"]`
+        directly for the local-only case."""
+        return {k: v for k, v in self.keys.items() if k != "source"}
 
     def blocks(self, text: str) -> list[Blocked]:
         """Which forbidden claims does `text` actually make? (DRAFT/REVIEW)"""
@@ -204,7 +217,7 @@ def brief(item_dir: Path, root: Path = INVENTORY) -> str:
         return ""
     out = ["ESTATE CONTEXT (background only — never a claim upgrade)",
            f"  applied: {', '.join(ctx.sources)}"]
-    for k, v in ctx.keys.items():
+    for k, v in ctx.public_keys.items():          # never source: — PII guardrail
         out.append(f"  {k}: {v}")
     if ctx.blocked:
         out.append("  MUST NOT CLAIM:")

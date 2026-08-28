@@ -46,6 +46,7 @@ Run:  python tests/test_list_edit.py
 import contextlib
 import csv
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -634,6 +635,53 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
     updates = [c for c in calls if c[0] == "PUT" and "/offer/OFFER-9" in c[1]]
     assert len(creates) == 1, "exactly one createOffer across both syncs"
     assert len(updates) == 1, "the second sync must PUT (update) the existing offer"
+
+
+# ---------------------------------------------------------------------------
+# build_review_card() — estate context wiring (GH #46)
+# ---------------------------------------------------------------------------
+
+def test_build_review_card_shows_estate_context_and_flags_a_blocked_claim():
+    """`_BODY` (the shared draft fixture) already says "climate-controlled
+    space" — pairing it with an estate context.txt that records unclimatized
+    storage should make the card show the block AND flag that the draft
+    itself asserts the forbidden claim (defense-in-depth past DRAFT)."""
+    import dir_context as DC
+    DC.INVENTORY.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="dctx_", dir=str(DC.INVENTORY)))
+    try:
+        (tmp / "context.txt").write_text(
+            "source: Frankie, estate, Greensboro NC\n"
+            "storage: attic, unclimatized\n", encoding="utf-8")
+        draft_path = _write_single_draft(tmp)
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(tmp):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+        assert "Context (estate background):" in card
+        assert "climate-controlled" in card          # in MUST NOT CLAIM
+        assert "MUST NOT CLAIM" in card
+        assert any("draft asserts a claim the estate forbids" in ln
+                  for ln in card.splitlines()), "the flag list must catch the leaked claim"
+        assert "Frankie" not in card, "source: must never reach the card (PII guardrail)"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_build_review_card_context_section_is_quiet_with_no_context_txt():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    assert "Context (estate background):" in card
+    assert "no context.txt in chain" in card
+    assert "estate forbids" not in card
 
 
 if __name__ == "__main__":

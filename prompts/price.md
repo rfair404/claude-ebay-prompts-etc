@@ -48,6 +48,14 @@ price on a comp's item-only `sold_price`.
 
 State the basis (`delivered` / `item-only`) on the Distribution line.
 
+## Directory context (comp filter, never a floor)
+
+If `lib/dir_context.py` surfaces provenance (single-owner estate, not
+dealer stock), use it only to filter which comps are representative —
+never to justify a higher tier than the distribution supports. `cost:`
+is the margin basis for later profit math, not a floor on the ask; a
+$650 acquisition cost does not raise the price if the market says less.
+
 ## Silver — category override: rarity-check, exact comp, push HIGH
 
 Trigger: "silver" in ANY sense, regardless of content — sterling/.925, coin,
