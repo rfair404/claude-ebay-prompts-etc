@@ -15,6 +15,7 @@ Order dicts are hand-built in the shape the Fulfillment API actually returns
 
 Run:  pytest tests/test_sync_actuals.py
 """
+import csv
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -177,3 +178,48 @@ def test_a_clear_title_winner_still_matches():
            "title": "McSpadden T34-W Mountain Dulcimer 1984 Walnut Scroll Headstock w/ Case"}
     shoot, ask, how = SA.match_sale(row, drafts, [])
     assert shoot == "inventory/dulcimer" and how.startswith("title~")
+
+
+# --------------------------------------------------------------------------
+# write_sales_ledger must merge, never overwrite — a narrow --days window
+# used to erase every older sale outright (measured: a plain rewrite with
+# the default --days 90 would have dropped anything sold before that).
+# --------------------------------------------------------------------------
+def _sale_row(order_id, sku, sold_at, item_price="10.00"):
+    return {"order_id": order_id, "sold_at": sold_at, "listing_id": f"L{sku}",
+            "sku": sku, "title": f"item {sku}", "quantity": "1",
+            "sold_format": "FIXED_PRICE", "item_price": Decimal(item_price),
+            "buyer_shipping": Decimal("0.00"), "refunded": Decimal("0.00"),
+            "gross": Decimal(item_price), "ebay_fee": Decimal("1.00"),
+            "net_before_postage": Decimal("9.00"), "listed_price": "10.00",
+            "pct_of_ask": "100%", "shoot_dir": "", "matched_by": "sku"}
+
+
+def test_write_sales_ledger_preserves_rows_outside_the_fetch_window(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    # An old sale, written in a prior --apply, is already on disk...
+    SA.write_sales_ledger([_sale_row("1-000", "old-sku", "2025-01-01T00:00:00Z")])
+    # ...then a new --apply with a narrow window only fetches a recent sale.
+    SA.write_sales_ledger([_sale_row("2-000", "new-sku", "2026-08-01T00:00:00Z")])
+
+    with ledger.open(encoding="utf-8") as f:
+        rows = {r["sku"]: r for r in csv.DictReader(f)}
+    assert set(rows) == {"old-sku", "new-sku"}, \
+        "the old sale must survive a later --apply that never re-fetched it"
+
+
+def test_write_sales_ledger_updates_a_row_thats_refetched(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z", "10.00")])
+    # Same order+sku re-fetched later (e.g. a refund posted since) — must
+    # replace the row in place, not duplicate it.
+    SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z", "8.00")])
+
+    with ledger.open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["item_price"] == "8.00"
