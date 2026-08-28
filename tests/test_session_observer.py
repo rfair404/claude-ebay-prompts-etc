@@ -223,3 +223,25 @@ def test_self_guard_survives_a_long_command_prefix():
         _result("t0", "interrupt 13\n  [Request interrupted by user]"),
     ])
     assert not [f for f in parse_session(p)["friction"] if f["kind"] == "interrupt"]
+
+
+def test_ts_returns_none_for_a_non_string_timestamp():
+    # Copilot review on PR #47: _ts() called .replace() on whatever sat in the
+    # timestamp field, so a malformed line carrying a number/null/object raised
+    # AttributeError — "never raises on bad lines" has to cover the wrong TYPE
+    # as well as the wrong format.
+    for bad in (12345, None, {"t": 1}, ["2026-08-27T10:00:00Z"], True):
+        assert _ts({"timestamp": bad}) is None
+    assert _ts({}) is None
+    assert _ts({"timestamp": ""}) is None
+    assert _ts({"timestamp": "not a date"}) is None
+
+
+def test_a_transcript_with_non_string_timestamps_still_parses():
+    d = Path(tempfile.mkdtemp())
+    p = d / "s.jsonl"
+    recs = [_user("do the thing", 0), _assistant(1)]
+    recs[0]["timestamp"] = 1756300000            # epoch int, not a string
+    p.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
+    s = parse_session(p)                          # must not raise
+    assert s["asks"] == 1

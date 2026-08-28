@@ -96,7 +96,10 @@ def transcripts_dir(repo: Path) -> Path:
 
 def _ts(rec: dict):
     t = rec.get("timestamp")
-    if not t:
+    if not isinstance(t, str) or not t:
+        # A malformed line can carry a number, a null or a nested object here.
+        # Anything but a string is unparseable, and "never raises on bad lines"
+        # has to hold for the wrong TYPE as well as the wrong format.
         return None
     try:
         parsed = datetime.fromisoformat(t.replace("Z", "+00:00"))
@@ -355,8 +358,12 @@ def report(sessions: list[dict], top: int = 8) -> str:
                f"(cache read {_k(tok['cache_read_input_tokens'])})")
     out.append("")
     out.append("WHERE THE WORK WENT")
+    # "elapsed", not "active": the session line above sums gap-capped deltas
+    # between turns, this column sums each ask's start-to-end span (capped at
+    # IDLE_GAP * 12). One ask that sat open over lunch counts here and not
+    # there, so giving both the same label would overstate stage time.
     out.append(f"  {'stage':<9} {'asks':>5} {'turns':>6} {'turns/ask':>10} "
-               f"{'active':>8} {'out tok':>9}")
+               f"{'elapsed':>8} {'out tok':>9}")
     for name, v in sorted(stages.items(), key=lambda kv: -kv[1]["turns"]):
         per = v["turns"] / v["asks"] if v["asks"] else 0
         out.append(f"  {name:<9} {v['asks']:>5} {v['turns']:>6} {per:>10.1f} "
