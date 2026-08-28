@@ -1062,7 +1062,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
         msgs.append("shipping: INTERNATIONAL REFUSED — US-export-restricted ("
                     + "; ".join(us_reasons) + "). eBay will not publish this "
                     "listing at all while it is reachable by eBay International "
-                    "Shipping. Routed US-only.")
+                    "Shipping. See the routing message below for the policy "
+                    "actually chosen.")
     if wants_intl and mode == "LOCAL_PICKUP":
         wants_intl = False
         msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
