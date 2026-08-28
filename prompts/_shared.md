@@ -19,6 +19,30 @@ Default to terse. A phase that finishes well says so in a few lines.
   reference adds information.
 - When in doubt, cut.
 
+### Execution discipline (#61/#62)
+
+Three rules that hold in every phase, because they're what the session-log
+audit (#61) found costing the most tokens and wall-clock:
+
+1. **Never `Read` a raw photo frame into the main thread.** Read the
+   contact sheet (`tools/prep_card.py`, `tools/prep_sheet_html.py`,
+   `tools/marble_triage.py`) or delegate frame-level looking to a worker
+   subagent that returns text. Measured: 99.4% of all `Read` payload
+   across 114 sessions was photos, at ~0.68 MB a frame, sitting in context
+   for every later turn of that session.
+2. **Batch independent tool calls into one turn.** If two calls don't
+   depend on each other's result, issue them together rather than one
+   call per turn. Measured: 1.00 tool calls per assistant turn on average,
+   and ~55% of tool turns immediately followed a same-tool turn that could
+   have shipped with it.
+3. **Write a scratch `.py` file and run it, rather than an inline
+   `python -c` or a heredoc.** Quoting inside a heredoc is the single
+   largest cause of avoidable Bash failures (46 measured cases — this rule
+   included, on the first attempt at writing it down).
+
+See [RUN.md](../RUN.md) "Concurrency and delegation" for the multi-item
+fan-out pattern these rules feed into.
+
 ### Showing comps to the user — HARD RULE (never optional)
 
 Any time you surface eBay comps / sold listings to the user in chat — in

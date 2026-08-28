@@ -14,7 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.session_observer import (  # noqa: E402
-    _classify, _clean_prompt, _ts, _tool_signature, parse_session, report,
+    _classify, _clean_prompt, _ts, _tool_signature, _turn_context,
+    economics_report, parse_economics, parse_session, report,
     transcripts_dir,
 )
 
@@ -255,3 +256,141 @@ def test_a_transcript_with_non_string_timestamps_still_parses():
     p.write_text("\n".join(json.dumps(r) for r in recs), encoding="utf-8")
     s = parse_session(p)                          # must not raise
     assert s["asks"] == 1
+
+
+# ---------------------------------------------------------------------------
+# economics (#61) — context/turn, tool-call batching, Read payload, gate wait
+# ---------------------------------------------------------------------------
+def _at(iso: str) -> str:
+    return iso
+
+
+def _tool_use_msg(ts, tools, usage=None):
+    content = [{"type": "tool_use", "id": tid, "name": name, "input": inp}
+               for tid, name, inp in tools]
+    return {"type": "assistant", "timestamp": _at(ts),
+            "message": {"role": "assistant", "model": "claude-opus-5",
+                        "content": content,
+                        "usage": usage or {"input_tokens": 1, "output_tokens": 10,
+                                            "cache_read_input_tokens": 100,
+                                            "cache_creation_input_tokens": 0}}}
+
+
+def _tool_result_msg(ts, tool_use_id, body, is_error=False):
+    block = {"type": "tool_result", "tool_use_id": tool_use_id, "content": body}
+    if is_error:
+        block["is_error"] = True
+    return {"type": "user", "timestamp": _at(ts),
+            "message": {"role": "user", "content": [block]}}
+
+
+def _write_economics(records) -> Path:
+    d = Path(tempfile.mkdtemp())
+    p = d / "0000abcd-0000-0000-0000-000000000000.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+    return p
+
+
+def test_turn_context_sums_the_three_token_fields():
+    assert _turn_context({"input_tokens": 1, "cache_creation_input_tokens": 5,
+                          "cache_read_input_tokens": 100}) == 106
+    assert _turn_context({}) == 0
+
+
+def test_parse_economics_records_context_and_tool_count_per_turn():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "Bash", {"command": "ls"}),
+                       ("t2", "Bash", {"command": "pwd"})],
+                      usage={"input_tokens": 1, "cache_creation_input_tokens": 5,
+                             "cache_read_input_tokens": 100, "output_tokens": 10}),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t2", "b"),
+    ])
+    e = parse_economics(p)
+    assert e["context_per_turn"] == [106]
+    assert e["tools_per_turn"] == [2]
+
+
+def test_parse_economics_flags_consecutive_same_tool_calls():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t1", "Bash", {"command": "ls"})]),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+        _tool_use_msg("2026-08-27T10:00:02Z", [("t2", "Bash", {"command": "pwd"})]),
+        _tool_result_msg("2026-08-27T10:00:03Z", "t2", "b"),
+        _tool_use_msg("2026-08-27T10:00:04Z", [("t3", "Read", {"file_path": "x.py"})]),
+        _tool_result_msg("2026-08-27T10:00:05Z", "t3", "c"),
+    ])
+    e = parse_economics(p)
+    # Bash -> Bash is adjacent (1); Bash -> Read is not.
+    assert e["same_tool_adjacent"] == 1
+
+
+def test_parse_economics_sizes_read_payload_by_extension():
+    body = [{"type": "text", "text": "x" * 1000}]
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "Read", {"file_path": "inventory/x/photo.jpg"})]),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", body),
+    ])
+    e = parse_economics(p)
+    assert e["read_calls"] == {".jpg": 1}
+    assert e["read_bytes"][".jpg"] == len(json.dumps(body))
+
+
+def test_parse_economics_flags_bash_over_30_seconds():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "Bash", {"command": "python long_thing.py"})]),
+        _tool_result_msg("2026-08-27T10:00:45Z", "t1", "done"),
+    ])
+    e = parse_economics(p)
+    assert e["bash_over30"] == 1
+    assert e["bash_over30_secs"] == 45.0
+    assert e["bash_total"] == 1
+    assert e["bg_bash"] == 0
+
+
+def test_parse_economics_backgrounded_bash_is_counted():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "Bash", {"command": "long", "run_in_background": True})]),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "started"),
+    ])
+    e = parse_economics(p)
+    assert e["bg_bash"] == 1
+
+
+def test_parse_economics_tracks_ask_wait_by_gate_header():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "AskUserQuestion",
+                        {"questions": [{"header": "Colour", "question": "which look?"}]})]),
+        _tool_result_msg("2026-08-27T11:00:00Z", "t1", "punch"),
+    ])
+    e = parse_economics(p)
+    assert e["ask_count"] == {"Colour": 1}
+    assert e["ask_wait_secs"]["Colour"] == 3600.0
+
+
+def test_economics_report_aggregates_across_sessions_and_names_the_gate():
+    p1 = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t1", "Bash", {"command": "ls"})]),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+    ])
+    p2 = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z",
+                      [("t1", "AskUserQuestion",
+                        {"questions": [{"header": "Publish", "question": "go?"}]})]),
+        _tool_result_msg("2026-08-27T10:30:00Z", "t1", "yes"),
+    ])
+    out = economics_report([p1, p2])
+    assert "2 session(s)" in out
+    assert "context/turn:" in out
+    assert "tool calls/turn:" in out
+    assert "Publish" in out
+
+
+def test_economics_report_on_no_sessions_does_not_crash():
+    out = economics_report([])
+    assert "0 session(s)" in out
