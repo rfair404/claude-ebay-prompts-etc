@@ -174,11 +174,36 @@ parcel shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
   local? Message me for a freight quote."* Log the decision (+ trigger) in
   `meta.notes`.
 
-**Carrier: there is no carrier choice.** Every item ships on the one
-fulfillment policy, `296458692014` ("Free USPS Ground + eBay International
-Shipping", free calculated USPS Ground Advantage, 1 day handling). Do not
-propose a carrier switch, do not estimate a rival carrier's cost, and do not
-override the policy at LIST time. Weight and dimensions are still worth
+**US-only gate (automatic — do not hand-route).** Some items are legal to sell
+on eBay.com but ONLY to US buyers, by US export law: firearm magazines and
+parts, body armor, night vision and thermal optics, anything marked ITAR. These
+route to the **US-only fulfillment policy** (`fulfillment_policy_id_us_only`),
+and `lib/us_only.py` decides it automatically from the title and item specifics
+— you do not set it per item. Set `shipping.us_only: true` by hand ONLY when
+you know an item is export-restricted and its wording does not say so.
+
+Understand why it is a separate policy, because the obvious fix does not work:
+`shipping.international: false` is NOT enough. The default policy carries
+`shipToLocations: Worldwide`, and that alone makes a listing eBay-International-
+Shipping eligible, which makes eBay refuse the publish outright — errorId 25019,
+firearms policy plus ITAR Part 121. eIS is an account-level enrollment, so a
+US-only `shipToLocations` is the only lever. Measured on a Ruger Mini-14
+magazine, 2026-08-27.
+
+Two consequences worth stating: the US-only route **outranks an international
+request** (a legal restriction beats reach) and it **outranks Media Mail** (it
+beats the postage saving too). If an item is US-restricted and no US-only policy
+is configured, preflight raises a BLOCKER rather than falling back — the
+fallback would fail at publish anyway, and would mean offering a restricted item
+abroad. Also set `shipping.international: false` on these for tidiness, but do
+not mistake that flag for the protection.
+
+**Carrier: there is no carrier choice.** Every item ships on one of the account's
+policies — normally `296458692014` ("Free USPS Ground + eBay International
+Shipping", free calculated USPS Ground Advantage, 1 day handling), or
+`297194269014` ("US Only - Free USPS Ground") when the gate above fires. Same
+terms either way. Do not propose a carrier switch, do not estimate a rival
+carrier's cost, and do not override the policy at LIST time. Weight and dimensions are still worth
 recording — they drive the calculated rate and a freight quote. If an item
 genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and
 append a NEEDS_REVIEW line rather than selecting a different policy.

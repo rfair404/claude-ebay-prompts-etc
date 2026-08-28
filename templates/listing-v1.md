@@ -133,6 +133,19 @@ shipping:
   # NOTE: with international ON the delivered-price basis no longer holds —
   # our free-shipping domestic price is NOT what an overseas buyer pays.
   international: false
+  # Force this item onto the US-ONLY fulfillment policy
+  # (ebay.fulfillment_policy_id_us_only). Leave false and let lib/us_only.py
+  # detect it — firearm magazines and parts, body armor, night vision and
+  # anything marked ITAR are routed automatically off the title and item
+  # specifics. Set true by hand only when you know an item is export-restricted
+  # and the wording does not say so.
+  #
+  # NOTE: this is NOT the same as `international: false`. That flag only
+  # declines to use the eIS policy; the DEFAULT policy still carries
+  # shipToLocations "Worldwide", which is what makes a listing eIS-eligible and
+  # trips eBay's ITAR refusal (errorId 25019). Only the US-only policy prevents
+  # it. Measured on a Ruger Mini-14 magazine, 2026-08-27.
+  us_only: false
   free_shipping: true          # eBay form field [61] — default ON; ignored when LOCAL_PICKUP
   # CALCULATED | FLAT_RATE | FREE_FLAT_RATE
   # When free_shipping is true this is FREE_FLAT_RATE.
