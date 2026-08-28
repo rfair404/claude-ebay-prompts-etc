@@ -43,10 +43,14 @@ _B = [  # camera-frame confessions — BLOCK
     r"\b(shown|pictured|photographed)\s+(in|on|fully|honestly|close|exactly|as|through|base-)",
     r"\b(pages|frames|spreads|surfaces|areas|views|faces|sections|lot|car|piece)\s+(shown|photographed|pictured)\b",
     r"\b(shown|pictured|photographed)\s+(surfaces?|pages?|frames?|spreads?|areas?|views?|sides?|sections?)\b",
-    # Sentence-FINAL forms. Every rule above anchors on a word following the
-    # camera verb, so a phrase that simply ends there slipped through: three
-    # live listings shipped with "the wicks are pristine and photographed",
-    # "Only the top face is photographed" and "Sold uncleaned, as photographed".
+    # Camera-verb-FINAL forms. Every rule above anchors on a word following
+    # the camera verb, so a phrase where nothing follows it in that clause
+    # slipped through: three live listings shipped with "the wicks are
+    # pristine and photographed", "Only the top face is photographed" and
+    # "Sold uncleaned, as photographed". These match wherever the phrase
+    # appears in the sentence, not only at the sentence's literal end (that
+    # would miss "is photographed, not guaranteed" — a second confession in
+    # the same clause).
     r"\b(is|are|was|were|and)\s+photographed\b",
     r"\bas\s+photographed\b",
     # Plural nouns the singular list missed — "some pieces shown stacked/fanned"
@@ -58,7 +62,7 @@ _B = [  # camera-frame confessions — BLOCK
     r"\bunshown\b",
     r"\bunphotographed\b",
     r"for\s+(these|the)\s+photo(graph)?s\b",
-    r"\b(from|off)\s+(the\s+)?photo",   # "measured off the photos" shipped live
+    r"\b(from|off)\s+(the\s+)?photos?\b",   # "measured off the photos" shipped live
     r"assessable\s+from",
     r"\bnot\s+(verifiable|identifiable|assessable)\b",
     r"\bcannot\s+be\s+(verified|identified|assessed)\s+from\b",

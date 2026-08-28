@@ -34,8 +34,11 @@ CORPUS = yaml.safe_load(
     (ROOT / "tests" / "fixtures" / "voice_corpus.yaml").read_text(encoding="utf-8"))
 
 
-def _blocks(phrase: str, field: str = "condition_description") -> list[str]:
-    """Run the linter over one phrase placed in a buyer-visible field."""
+def _findings(phrase: str, field: str = "condition_description") -> list[str]:
+    """Run the linter over one phrase placed in a buyer-visible field.
+    Every finding — block AND warn — so a WARN regression on a phrase that
+    must "stay silent" is not invisible to a check that only looks at blocks.
+    """
     fm = {"title": "A vintage thing", "condition_description": "",
           "meta": {"notes": "internal: odor not verified; undersides not photographed"}}
     body = ""
@@ -44,7 +47,11 @@ def _blocks(phrase: str, field: str = "condition_description") -> list[str]:
     else:
         body = phrase
     d = Draft(path=Path("draft.md"), frontmatter=fm, body=body)
-    return [f for f in V.check_voice(d) if f.startswith("voice (block)")]
+    return V.check_voice(d)
+
+
+def _blocks(phrase: str, field: str = "condition_description") -> list[str]:
+    return [f for f in _findings(phrase, field) if f.startswith("voice (block)")]
 
 
 def test_every_shipped_phrase_is_blocked():
@@ -69,10 +76,11 @@ def test_shipped_phrases_are_caught_in_the_body_too():
 
 
 def test_correct_copy_is_never_flagged():
-    """A linter that cries wolf gets muted. These must stay silent."""
+    """A linter that cries wolf gets muted. These must stay silent — not just
+    unblocked; a WARN is a finding too, and 'must stay silent' means neither."""
     wrong = []
     for entry in CORPUS["clean"]:
-        hits = _blocks(entry["phrase"])
+        hits = _findings(entry["phrase"])
         if hits:
             wrong.append(f"{entry['phrase']!r} ({entry['why']}) -> {hits}")
     assert not wrong, "correct copy wrongly flagged:\n  " + "\n  ".join(wrong)
@@ -82,11 +90,12 @@ def test_known_gaps_are_still_gaps():
     """Characterization test, not an endorsement.
 
     These are real misses left open on purpose, each with a reason in the
-    corpus. If one starts being caught, this fails LOUDLY so the change is a
-    decision rather than a side effect — move the entry up to `block:`.
+    corpus. If one starts producing ANY finding — block or warn — this fails
+    LOUDLY so the change is a decision rather than a side effect — move the
+    entry up to `block:`.
     """
     for entry in CORPUS.get("known_gaps") or []:
-        assert not _blocks(entry["phrase"]), (
+        assert not _findings(entry["phrase"]), (
             f"known gap is now CAUGHT: {entry['phrase']!r}\n"
             f"  If that was intended, move it from `known_gaps:` to `block:` "
             f"in tests/fixtures/voice_corpus.yaml.")
