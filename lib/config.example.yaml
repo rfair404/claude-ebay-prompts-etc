@@ -76,6 +76,17 @@ ebay:
                                          # used for ship-risky items (fragile/over-
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.
                                          # Create via `--create-pickup-policy`.
+    fulfillment_policy_id_us_only: null  # optional but REQUIRED to list firearm
+                                         # magazines/parts, body armor or night
+                                         # vision: a policy whose shipToLocations
+                                         # is US only. eBay refuses those publishes
+                                         # (errorId 25019, ITAR Part 121) while a
+                                         # listing is eBay-International-Shipping
+                                         # eligible, and eIS eligibility comes from
+                                         # shipToLocations "Worldwide" on the policy
+                                         # — NOT from globalShipping and NOT from
+                                         # the draft's shipping.international flag.
+                                         # Routing is automatic; see lib/us_only.py.
     payment_policy_id: null
     payment_policy_id_auction: null      # optional: a payment policy with immediate
                                          # payment OFF; required for AUCTION offers
@@ -103,6 +114,17 @@ ebay:
                                          # used for ship-risky items (fragile/over-
                                          # sized) marked fulfillment_mode LOCAL_PICKUP.
                                          # Create via `--create-pickup-policy`.
+    fulfillment_policy_id_us_only: null  # optional but REQUIRED to list firearm
+                                         # magazines/parts, body armor or night
+                                         # vision: a policy whose shipToLocations
+                                         # is US only. eBay refuses those publishes
+                                         # (errorId 25019, ITAR Part 121) while a
+                                         # listing is eBay-International-Shipping
+                                         # eligible, and eIS eligibility comes from
+                                         # shipToLocations "Worldwide" on the policy
+                                         # — NOT from globalShipping and NOT from
+                                         # the draft's shipping.international flag.
+                                         # Routing is automatic; see lib/us_only.py.
     payment_policy_id: null
     payment_policy_id_auction: null      # optional: a payment policy with immediate
                                          # payment OFF; required for AUCTION offers

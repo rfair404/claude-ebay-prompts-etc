@@ -63,6 +63,11 @@ DRAFT_SHIPPING = {
     "domestic_shipping_type", "free_shipping", "fulfillment_mode",
     "handling_time_days", "international", "item_location_zip", "local_pickup",
     "package_in", "primary_service", "weight",
+    # Added 2026-08-27, additive and safe: absent means false, so drafts
+    # written before it read identically. Routes US-export-restricted items
+    # (firearm parts, body armor, night vision) to the US-only fulfillment
+    # policy. Normally set by lib/us_only.py, not by hand.
+    "us_only",
 }
 # The limits the eBay form actually enforces. A wrong number here is a publish
 # rejection or a silently truncated listing, so they are pinned by value.
