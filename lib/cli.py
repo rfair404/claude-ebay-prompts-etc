@@ -46,8 +46,12 @@ COMMANDS = {
                      "in-hand voice linter (draft or --audit tree) — GH #40"),
     "listing":      ("lib.list_edit",
                      "LIST/EDIT: --validate --status --review --sync --publish ..."),
+    "observe":      ("tools.session_observer",
+                     "session transcripts -> friction report (#36, read-only)"),
     "prep":         ("lib.photo_prep.prep",
                      "PREP photo pipeline: --auto --check --apply --approve ..."),
+    "single-pass":  ("lib.single_pass",
+                     "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
 }
 
 

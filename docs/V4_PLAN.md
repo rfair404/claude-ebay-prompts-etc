@@ -85,16 +85,29 @@ tests so "read only when flagged" can be trusted.
       where staleness would silently misinform an outcome, the failure class
       PR #50 fixed for `sync_actuals`; comp prices are a same-day snapshot
       already, so re-serving one from earlier today changes nothing.
-- [ ] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
+- [x] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
       run, ONE review card at the end, conversation reserved for flagged
       exceptions. Builds on PREP's confidence gate (#36, landed in PR #37).
+      `python -m lib.cli single-pass <shoot-dir>` — a read-only gate check
+      across IDENTIFY/PREP/PRICE/INVESTIGATE/DRAFT's own output files (real
+      dependency order per RUN.md; DRAFT hard-requires `investigate.txt`);
+      clean → the one card REVIEW already builds, else the specific
+      exception a stage's own interactive HARD stop caught, by name.
+      `prompts/single_pass.md` is the protocol; `.single_pass/ask.json` is
+      the sentinel a stage writes instead of pausing the chat.
 
 ## Phase 5 — the observer (#36)
 
-- [ ] `tools/session_observer.py`: parse session transcripts (timestamps +
-      token usage are already in the JSONL), compute per-stage wall time,
-      token attribution, interaction hot spots, repeats.
+- [x] `tools/session_observer.py` (+ `ebz observe`, `tests/test_session_observer.py`):
+      streams the session JSONLs into per-stage wall time, token attribution,
+      hot spots and six friction signals — `tool_error`, `denied`, `interrupt`,
+      `redo`, `repeat`, `long_loop`. Terse summary to stdout per the Phase 2
+      convention, detail to `session_friction.json`, full report on `--report`.
+      Read-only: it never writes to the tracker and never touches a listing.
 - [ ] Friction report → auto-filed `Idea:` issue, deduped against open ones.
+      Held deliberately: a counter is evidence, a filed issue is a claim. The
+      signals are heuristics over text (see the module's honesty notes) and
+      want a few weeks of eyeballing before anything writes to the tracker.
 
 ## Ground rules
 
