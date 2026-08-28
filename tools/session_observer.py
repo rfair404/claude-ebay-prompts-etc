@@ -387,6 +387,160 @@ def report(sessions: list[dict], top: int = 8) -> str:
     return "\n".join(out)
 
 
+IMAGE_EXT = (".jpg", ".jpeg", ".png", ".heic", ".webp", ".tiff", ".gif")
+
+
+def _turn_context(usage: dict) -> int:
+    """The full payload one assistant API call re-sent — the number the bill
+    actually scales with (#61: "bill ~= turns x context per turn")."""
+    return ((usage.get("input_tokens") or 0)
+            + (usage.get("cache_creation_input_tokens") or 0)
+            + (usage.get("cache_read_input_tokens") or 0))
+
+
+def parse_economics(path: Path) -> dict:
+    """One session's #61-style run economics: context/turn, tool-call
+    batching, Read payload by extension, backgrounding, and gate wall-clock
+    by header. A separate pass from parse_session's friction walk on
+    purpose — it answers "what did this session cost", not "what went
+    wrong", and bolting a second question onto the six-signal walk risks
+    the signals that walk already locks down."""
+    context_per_turn: list[int] = []
+    tools_per_turn: list[int] = []
+    same_tool_adjacent = 0
+    last_tool = None
+    read_bytes: Counter = Counter()
+    read_calls: Counter = Counter()
+    bash_total = bg_bash = bash_over30 = 0
+    bash_over30_secs = 0.0
+    ask_count: Counter = Counter()
+    ask_wait: Counter = Counter()
+    pending: dict = {}   # tool_use_id -> (ts, name, input)
+
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if len(line) > MAX_LINE:
+                continue
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if rec.get("isSidechain"):
+                continue
+            kind = rec.get("type")
+            when = _ts(rec)
+
+            if kind == "assistant":
+                msg = rec.get("message") or {}
+                blocks = [b for b in (msg.get("content") or [])
+                          if isinstance(b, dict) and b.get("type") == "tool_use"]
+                if blocks:
+                    context_per_turn.append(_turn_context(msg.get("usage") or {}))
+                    tools_per_turn.append(len(blocks))
+                for b in blocks:
+                    name = b.get("name") or "?"
+                    inp = b.get("input") or {}
+                    pending[b.get("id")] = (when, name, inp)
+                    if last_tool == name:
+                        same_tool_adjacent += 1
+                    last_tool = name
+                    if name == "Read":
+                        ext = Path(str(inp.get("file_path") or "")).suffix.lower() or "(none)"
+                        read_calls[ext] += 1
+                    elif name in ("Bash", "PowerShell"):
+                        bash_total += 1
+                        if inp.get("run_in_background"):
+                            bg_bash += 1
+                    elif name == "AskUserQuestion":
+                        for q in (inp.get("questions") or []):
+                            ask_count[(q.get("header") or "?")[:24]] += 1
+
+            elif kind == "user":
+                content = (rec.get("message") or {}).get("content")
+                if not isinstance(content, list):
+                    continue
+                for b in content:
+                    if not isinstance(b, dict) or b.get("type") != "tool_result":
+                        continue
+                    st, name, inp = pending.pop(b.get("tool_use_id"), (None, None, {}))
+                    if not (st and when and name):
+                        continue
+                    if name == "Read":
+                        body = b.get("content")
+                        sz = len(json.dumps(body)) if body is not None else 0
+                        ext = Path(str(inp.get("file_path") or "")).suffix.lower() or "(none)"
+                        read_bytes[ext] += sz
+                        continue
+                    secs = (when - st).total_seconds()
+                    if name in ("Bash", "PowerShell") and secs > 30:
+                        bash_over30 += 1
+                        bash_over30_secs += secs
+                    elif name == "AskUserQuestion":
+                        for q in (inp.get("questions") or []):
+                            ask_wait[(q.get("header") or "?")[:24]] += secs
+                            break
+
+    return {
+        "context_per_turn": context_per_turn, "tools_per_turn": tools_per_turn,
+        "same_tool_adjacent": same_tool_adjacent,
+        "read_calls": dict(read_calls), "read_bytes": dict(read_bytes),
+        "bash_total": bash_total, "bg_bash": bg_bash,
+        "bash_over30": bash_over30, "bash_over30_secs": bash_over30_secs,
+        "ask_count": dict(ask_count), "ask_wait_secs": dict(ask_wait),
+    }
+
+
+def economics_report(paths: list[Path]) -> str:
+    """Aggregate `parse_economics` across sessions into the #61 headline
+    table — the standing version of `.scratch/analyze{,2,3,4}.py`."""
+    all_ctx: list[int] = []
+    all_tools: list[int] = []
+    same_tool_adjacent = total_turns = 0
+    read_bytes: Counter = Counter()
+    bash_total = bg_bash = bash_over30 = 0
+    bash_over30_secs = 0.0
+    ask_count: Counter = Counter()
+    ask_wait: Counter = Counter()
+
+    for p in paths:
+        e = parse_economics(p)
+        all_ctx.extend(e["context_per_turn"])
+        all_tools.extend(e["tools_per_turn"])
+        same_tool_adjacent += e["same_tool_adjacent"]
+        total_turns += len(e["tools_per_turn"])
+        read_bytes.update(e["read_bytes"])
+        bash_total += e["bash_total"]
+        bg_bash += e["bg_bash"]
+        bash_over30 += e["bash_over30"]
+        bash_over30_secs += e["bash_over30_secs"]
+        ask_count.update(e["ask_count"])
+        ask_wait.update(e["ask_wait_secs"])
+
+    out = [f"=== ECONOMICS — {len(paths)} session(s), {total_turns} tool-calling turn(s)"]
+    if all_ctx:
+        s = sorted(all_ctx)
+        out.append(f"  context/turn: mean {_k(int(sum(s) / len(s)))}  "
+                   f"median {_k(s[len(s) // 2])}  p90 {_k(s[int(len(s) * .9)])}  "
+                   f"max {_k(s[-1])}")
+    if all_tools:
+        out.append(f"  tool calls/turn: mean {sum(all_tools) / len(all_tools):.2f}  "
+                   f"same-tool-adjacent {same_tool_adjacent / max(total_turns, 1) * 100:.0f}% of turns")
+    img_bytes = sum(v for k, v in read_bytes.items() if k in IMAGE_EXT)
+    tot_bytes = sum(read_bytes.values())
+    if tot_bytes:
+        out.append(f"  Read payload: {img_bytes / 1e6:.1f} MB images of "
+                   f"{tot_bytes / 1e6:.1f} MB total ({img_bytes / tot_bytes * 100:.0f}%)")
+    if bash_total:
+        out.append(f"  Bash/PowerShell: {bash_total} calls, "
+                   f"{bg_bash / bash_total * 100:.1f}% backgrounded, "
+                   f"{bash_over30} over 30s totalling {bash_over30_secs / 3600:.1f}h")
+    if ask_wait:
+        out.append("  AskUserQuestion wait by gate:")
+        for h, secs in sorted(ask_wait.items(), key=lambda kv: -kv[1])[:8]:
+            out.append(f"    {ask_count.get(h, 0):>3}  {secs / 3600:>6.1f}h  {h}")
+    return "\n".join(out)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Parse Claude Code session transcripts into a friction report.")
@@ -395,6 +549,10 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=20, help="most recent N sessions (default 20)")
     ap.add_argument("--all", action="store_true", help="every session, no window")
     ap.add_argument("--report", action="store_true", help="print the full report to stdout")
+    ap.add_argument("--economics", action="store_true",
+                    help="print the #61 run-economics table (context/turn, tool-call "
+                         "batching, image Read payload, gate wait) instead of the "
+                         "friction report")
     ap.add_argument("--json", dest="json_path", default="session_friction.json",
                     help="detail file (default session_friction.json)")
     args = ap.parse_args(argv)
@@ -411,6 +569,10 @@ def main(argv=None) -> int:
         files = files[:args.limit]
     if not files:
         print(f"no sessions in the last {args.days}d under {root}")
+        return 0
+
+    if args.economics:
+        print(economics_report(files))
         return 0
 
     sessions = [parse_session(f) for f in files]
