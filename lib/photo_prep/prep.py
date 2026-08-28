@@ -779,8 +779,19 @@ def plan_geometry(shoot: Path, quiet: bool = False,
 def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
               subject: Optional[str] = None,
               category: Optional[str] = None,
-              quiet: bool = False) -> dict:
-    """Analyse every frame; write the manifest, rotation sheet and ask panels."""
+              quiet: bool = False,
+              check_rotation: bool = False) -> dict:
+    """Analyse every frame; write the manifest, rotation sheet and ask panels.
+
+    `check_rotation` is opt-in. The shoot convention is now "shot right-side
+    up", so by default no OSD pass runs at all — the most time-consuming part
+    of `--check` on a multi-frame shoot — and every frame with no recorded
+    look (`--rotate` / `orient.py`) is left at 0 with `source: assumed` (see
+    `orientation.resolve`). Pass `check_rotation=True` (CLI: `--check-rotation`)
+    for a shoot where that assumption might not hold — a mixed box of catalogs
+    shot at whatever angle they landed, say — to get the old OSD + ask-panel
+    behaviour back.
+    """
     from .center_crop import _parse_aspect
 
     images = find_images(shoot)
@@ -798,7 +809,7 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
     prior = m.get("photos", {})
     photos: dict = {}
 
-    osd_on = orientmod.osd_available()
+    osd_on = check_rotation and orientmod.osd_available()
     looks = orientmod.recorded_looks(shoot)
     thumbs = []
     ask_dir = shoot / ".prep" / "ask"
@@ -817,8 +828,12 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         # before reading it (see orient.osd_angle).
         cam = orientmod.rotate_bgr(bgr, orientmod.EXIF_ROT.get(exif_tag or 1, 0))
         sm = mask_for(cam, subject)
-        osd = (orientmod.osd_angle(_subject_region(cam, sm.bbox))
-               if osd_on else (None, 0.0, "tesseract not installed"))
+        if osd_on:
+            osd = orientmod.osd_angle(_subject_region(cam, sm.bbox))
+        else:
+            note = ("tesseract not installed" if check_rotation else
+                    "rotation check off — assumed upright (pass --check-rotation to verify)")
+            osd = (None, 0.0, note)
 
         # A recorded look for this frame survives a re-run. The sibling
         # orient.py tool stores the same quantity (degrees CW on top of the EXIF
@@ -828,7 +843,8 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         vision = prev.get("orientation", {}).get("vision_angle")
         if vision is None:
             vision = looks.get(key) or looks.get(path.name)
-        v = orientmod.resolve(path.name, exif_tag, osd, vision)
+        v = orientmod.resolve(path.name, exif_tag, osd, vision,
+                              assume_upright=not check_rotation)
 
         # Segmentation is rotation-invariant — turn the mask with the image.
         upright = orientmod.rotate_bgr(cam, v.subject_angle)
@@ -940,12 +956,15 @@ def _already_listed(shoot: Path) -> bool:
 def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     """Render listing/ from the manifest's decisions + the review sheet.
 
-    `only` restricts which presets are rendered. Rendering all six exists so the
-    operator can compare looks at the gate; a batch that has already decided —
-    printed media is always `asshot` — spends five sixths of its time producing
-    images nothing will read. At ~64s per frame per preset that is the
-    difference between a 3-hour run and a 17-hour one. The gate is unchanged for
-    anyone who does not pass this: default is still every preset.
+    `only` restricts which presets are rendered. The default category now
+    narrows this to `("crisp",)` — the house default for new items anyway
+    (`color.default_preset_for`) — so a shoot renders and auto-picks ONE look
+    unless something says otherwise: `--only NAME...` for specific looks
+    (`--only asshot` to skip colour correction entirely), or `--filters` to
+    render every preset in `color.PRESETS` for a side-by-side comparison. At
+    ~64s per frame per preset, that comparison is expensive on purpose to skip
+    by default — it is the difference between a 3-hour run and a 17-hour one on
+    a batch that was never going to look at five of the six looks anyway.
     """
     from .center_crop import _parse_aspect
 
@@ -1509,7 +1528,7 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
 
 def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
              subject: Optional[str] = None, category: Optional[str] = None,
-             quiet: bool = False) -> dict:
+             quiet: bool = False, check_rotation: bool = False) -> dict:
     """The FIRST PASS: turn every frame and plan every crop, asking nothing.
 
     The staged review is what PREP is for, and it is also a lot of the
@@ -1539,7 +1558,7 @@ def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
     only after the gate, and the gate still wants a human.
     """
     m = run_check(shoot, aspect_s, pad, pop, subject=subject,
-                  category=category, quiet=quiet)
+                  category=category, quiet=quiet, check_rotation=check_rotation)
 
     guessed = []
     for key, rec in m["photos"].items():
@@ -2206,7 +2225,11 @@ def main(argv=None) -> int:
                     help="actually write draft.md for --repoint-draft")
     ap.add_argument("--approve", action="store_true", help="stamp approval (explicit operator yes only)")
     ap.add_argument("--rotate", action="append", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
-    ap.add_argument("--only", action="append", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
+    ap.add_argument("--only", action="append", nargs="+", metavar="PRESET", help="render ONLY these presets (default: just `crisp` — the house default; --filters for every preset)")
+    ap.add_argument("--filters", action="store_true",
+                    help="render every preset in color.PRESETS for a side-by-side "
+                         "comparison, instead of just `crisp` (default). Overridden "
+                         "by an explicit --only.")
     ap.add_argument("--set-rotate", action="append", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--gc", action="store_true",
                     help="list the regenerable byproducts an APPROVED shoot is still holding "
@@ -2239,6 +2262,11 @@ def main(argv=None) -> int:
                          "item. Persists in the manifest.")
     ap.add_argument("--pop", default="gentle", choices=["off", "gentle", "strong"],
                     help="subject pass: saturation/contrast/unsharp (default gentle)")
+    ap.add_argument("--check-rotation", action="store_true", dest="check_rotation",
+                    help="run the OSD rotation check + ask panel for frames it "
+                         "can't read (default: OFF — items are shot right-side "
+                         "up, so every frame with no recorded --rotate answer "
+                         "is assumed upright and no OSD pass runs at all)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -2302,7 +2330,8 @@ def main(argv=None) -> int:
         return 0
     if args.auto:
         run_auto(shoot, aspect_s, pad, args.pop,
-                 subject=subject, category=category, quiet=args.quiet)
+                 subject=subject, category=category, quiet=args.quiet,
+                 check_rotation=args.check_rotation)
         return 0
     if args.approve_auto:
         run_approve_auto(shoot)
@@ -2359,14 +2388,21 @@ def main(argv=None) -> int:
 
     if args.check or not args.apply:
         print(f"PREP check — {shoot}")
-        m = run_check(shoot, aspect_s, pad, args.pop, subject, category, quiet=args.quiet)
+        m = run_check(shoot, aspect_s, pad, args.pop, subject, category,
+                      quiet=args.quiet, check_rotation=args.check_rotation)
         _print_status(shoot, m)
         print(f"  rotation sheet: {shoot / '.prep' / 'rotation_sheet.jpg'}")
     if args.apply:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
-            run_check(shoot, aspect_s, pad, args.pop, subject, category, quiet=True)
-        m = run_apply(shoot, quiet=args.quiet, only=tuple(_pairs(getattr(args, 'only', None))))
+            run_check(shoot, aspect_s, pad, args.pop, subject, category,
+                      quiet=True, check_rotation=args.check_rotation)
+        # An explicit --only always wins. --filters is the "show me every look"
+        # escape hatch for a shoot whose category would otherwise narrow to one.
+        only = tuple(_pairs(getattr(args, 'only', None)))
+        if not only and args.filters:
+            only = tuple(colormod.PRESETS)
+        m = run_apply(shoot, quiet=args.quiet, only=only)
         _print_status(shoot, m)
     return 0
 
