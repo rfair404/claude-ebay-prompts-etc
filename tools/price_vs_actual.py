@@ -75,7 +75,10 @@ def read_price(shoot: Path) -> dict:
 
 def gather() -> list[dict]:
     rows = []
-    with (REPO / "sales_ledger.csv").open(newline="", encoding="utf-8-sig") as fh:
+    ledger = REPO / "sales_ledger.csv"
+    if not ledger.exists():
+        return rows                            # fresh checkout, nothing sold yet
+    with ledger.open(newline="", encoding="utf-8-sig") as fh:
         for r in csv.DictReader(fh):
             shoot_rel = (r.get("shoot_dir") or "").strip()
             if not shoot_rel:

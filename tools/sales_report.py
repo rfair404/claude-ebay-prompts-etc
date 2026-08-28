@@ -233,15 +233,9 @@ def gather(days: int) -> dict:
             months[k]["gross"] += r["gross"]
     out["months"] = sorted(months.items())[-12:]
 
-    # by collection (top two path segments of the shoot dir)
-    coll = defaultdict(lambda: {"n": 0, "gross": 0.0, "net": 0.0})
-    for r in rows:
-        parts = [p for p in r["shoot"].replace("\\", "/").split("/") if p and p != "inventory"]
-        key = "/".join(parts[:2]) if len(parts) > 1 else (parts[0] if parts else "— untracked —")
-        coll[key]["n"] += 1
-        coll[key]["gross"] += r["gross"]
-        coll[key]["net"] += r["net"]
-    out["collections"] = sorted(coll.items(), key=lambda kv: -kv[1]["gross"])
+    # by source (#56) — bucket = the directory that owns a context.txt, not
+    # however many slashes happen to be in the shoot path.
+    out["by_source"] = by_source(rows)
 
     # promoted
     promoted = [r for r in rows if r["ad"]]
@@ -298,6 +292,63 @@ def gather(days: int) -> dict:
     return out
 
 
+def by_source(rows: list[dict]) -> dict:
+    """Bucket-level ROI (#56).
+
+    Bucket = the nearest ancestor of a sale's shoot dir that owns a
+    context.txt, resolved by `dir_context.bucket_for` — never path depth, so
+    a re-org changes which sales fall in a bucket, not what a bucket IS.
+
+    A bucket's `kind:` decides what a missing `spend:` means: on an `event`
+    bucket (a single purchase) it is a data gap and ROI is suppressed; on a
+    `channel` bucket (an ongoing source like FREE or THRIFT) it is simply
+    correct and ROI was never meaningful to begin with. Profit here is still
+    NET BEFORE POSTAGE — see the caption this feeds into the page with.
+    """
+    import dir_context as dc
+
+    buckets: dict[str, dict] = defaultdict(lambda: {"n": 0, "gross": 0.0, "net": 0.0})
+    unattributed = {"n": 0, "gross": 0.0, "net": 0.0}
+    excluded_backup = 0
+    for r in rows:
+        shoot = r["shoot"].replace("\\", "/").strip()
+        item_dir = (REPO / shoot) if shoot else None
+        if item_dir is not None and dc.is_backup_dir(item_dir):
+            excluded_backup += 1
+            continue
+        bucket = dc.bucket_for(item_dir, dc.INVENTORY) if item_dir else None
+        if bucket is None:
+            unattributed["n"] += 1
+            unattributed["gross"] += r["gross"]
+            unattributed["net"] += r["net"]
+            continue
+        rel = bucket.relative_to(dc.INVENTORY).as_posix()
+        b = buckets[rel]
+        b["n"] += 1
+        b["gross"] += r["gross"]
+        b["net"] += r["net"]
+
+    out = []
+    for rel, b in buckets.items():
+        ctx = dc.context_for(dc.INVENTORY / rel, dc.INVENTORY)
+        kind = ctx["keys"].get("kind", "event")
+        spend = dc.spend_amount(ctx["keys"].get("spend") or ctx["keys"].get("cost"))
+        profit = (b["net"] - spend) if spend is not None else None
+        roi = (b["net"] / spend) if (spend and kind == "event") else None
+        out.append({
+            "bucket": rel, "kind": kind, "spend": spend,
+            "basis_gap": kind == "event" and spend is None,
+            "profit": profit, "roi": roi, **b,
+        })
+    out.sort(key=lambda b: -b["gross"])
+    total_gross = sum(b["gross"] for b in out) + unattributed["gross"]
+    return {
+        "buckets": out, "unattributed": unattributed,
+        "excluded_backup": excluded_backup,
+        "unattributed_pct": (unattributed["gross"] / total_gross * 100) if total_gross else 0,
+    }
+
+
 def band_stats() -> dict:
     """Ask/realised against the Conservative-Recommended-Push-high band.
 
@@ -308,10 +359,12 @@ def band_stats() -> dict:
     """
     try:
         import price_vs_actual as pva
+        rows = pva.gather()
     except Exception:                                                # noqa: BLE001
+        # No sales_ledger.csv yet (fresh checkout) or price_vs_actual itself
+        # unavailable — degrade to "no band data", never crash the dashboard.
         return {"n": 0, "rows": [], "breaches": [], "cohorts": []}
 
-    rows = pva.gather()
     for r in rows:
         r["where"] = pva.classify(r)
     withceil = [r for r in rows if r["ask"] and r["ceiling"]]
@@ -569,17 +622,57 @@ def draw(d: dict) -> str:
             'settings problem, not a pricing one. A cohort well under 100% is the comp '
             'read needing a refit.</p></div></div>')
 
-    # collections
+    # by source (#56) — bucket ROI, resolved from context.txt, not path depth
+    src = d["by_source"]
+
+    def _roi_cell(b) -> str:
+        if b["basis_gap"]:
+            return '<td class="num warn">basis not recorded</td>'
+        if b["roi"] is None:                   # channel bucket, or a $0 basis
+            return '<td class="num dim">—</td>'
+        return f'<td class="num">{b["roi"]:.2f}x</td>'
+
+    def _profit_cell(b) -> str:
+        if b["profit"] is None:
+            return '<td class="num dim">—</td>'
+        cls = "ok" if b["profit"] >= 0 else "warn"
+        return f'<td class="num {cls}">{_money(b["profit"])}</td>'
+
     rows = "".join(
-        f'<tr><td>{_e(k)}</td><td class="num">{v["n"]}</td>'
-        f'<td class="num">{_money(v["gross"])}</td>'
-        f'<td class="num">{_money(v["net"])}</td></tr>'
-        for k, v in d["collections"][:16])
-    P.append('<div class="card"><div class="pad"><h2>Realised by collection</h2>'
-             '<div class="scroll"><table><tr><th>Collection</th><th class="num">Sold</th>'
-             f'<th class="num">Gross</th><th class="num">Net</th></tr>{rows}</table></div>'
-             f'<p class="note">{d["untracked"]} of {d["count"]} sales have no local '
-             'shoot folder — listed outside the pipeline.</p></div></div>')
+        f'<tr><td>{_e(b["bucket"])}'
+        f'<div class="dim" style="font-size:11.5px">{_e(b["kind"])}'
+        + (f' · spend {_money(b["spend"])}' if b["spend"] is not None else '') + '</div></td>'
+        f'<td class="num">{b["n"]}</td>'
+        f'<td class="num">{_money(b["gross"])}</td>'
+        f'<td class="num">{_money(b["net"])}</td>'
+        + _profit_cell(b) + _roi_cell(b) + '</tr>'
+        for b in src["buckets"][:20])
+    u = src["unattributed"]
+    P.append(
+        '<div class="card"><div class="pad"><h2>Realised by source</h2>'
+        '<div class="scroll"><table><tr><th>Bucket</th><th class="num">Sold</th>'
+        '<th class="num">Gross</th><th class="num">Net</th><th class="num">Profit</th>'
+        f'<th class="num">ROI</th></tr>{rows}'
+        f'<tr><td>— unattributed —<div class="dim" style="font-size:11.5px">'
+        f'no local shoot folder</div></td>'
+        f'<td class="num">{u["n"]}</td><td class="num">{_money(u["gross"])}</td>'
+        f'<td class="num">{_money(u["net"])}</td><td class="num dim">—</td>'
+        f'<td class="num dim">—</td></tr>'
+        '</table></div>'
+        f'<p class="note">{u["n"]} of {d["count"]} sales ({src["unattributed_pct"]:.0f}% of '
+        'gross) have no local shoot folder and cannot be attributed to a bucket. '
+        + (f'{src["excluded_backup"]} sale(s) in a <code>_prepped/</code> or '
+           '<code>.prior-run-bak</code> staging copy excluded from every count above. '
+           if src["excluded_backup"] else '')
+        + 'Bucket resolution is <code>context.txt</code> ownership, not path depth — a '
+        're-org changes this table\'s contents, never its correctness. '
+        '"basis not recorded" means an <code>event</code> bucket has no <code>spend:</code> '
+        'in its context.txt yet — treat it as a gap, not as free money. ROI is suppressed '
+        'for <code>channel</code> buckets (FREE, THRIFT — an ongoing source, not a single '
+        'purchase) since dividing by a basis that was never a basis is meaningless. '
+        '<b>Profit here is still net BEFORE POSTAGE</b> — actual postage is not yet a ledger '
+        'column, and for paper goods it typically runs 25-35% of the sale, so every profit '
+        'figure on this page is an overstatement until that column exists.</p></div></div>')
 
     # below ask
     rows = "".join(
@@ -613,10 +706,27 @@ def draw(d: dict) -> str:
             f'<style>{STYLE}</style>\n<div class="wrap">\n' + "\n".join(P) + "\n</div>\n")
 
 
+def print_by_source(src: dict) -> None:
+    """Terminal table for `--by-source` (#56) — the numbers with no HTML redraw."""
+    hdr = f'{"BUCKET":<28} {"KIND":<8} {"SOLD":>5} {"GROSS":>11} {"NET":>11} {"PROFIT":>11} {"ROI":>7}'
+    print(hdr)
+    for b in src["buckets"]:
+        profit = (_money(b["profit"]) if b["profit"] is not None
+                  else ("gap" if b["basis_gap"] else "—"))
+        roi = f'{b["roi"]:.2f}x' if b["roi"] is not None else "—"
+        print(f'{b["bucket"]:<28} {b["kind"]:<8} {b["n"]:>5} {_money(b["gross"]):>11} '
+              f'{_money(b["net"]):>11} {profit:>11} {roi:>7}')
+    u = src["unattributed"]
+    print(f'{"— unattributed —":<28} {"":<8} {u["n"]:>5} {_money(u["gross"]):>11} '
+          f'{_money(u["net"]):>11} {"—":>11} {"—":>7}')
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--days", type=int, default=365, help="order window (default 365)")
     ap.add_argument("--no-sync", action="store_true", help="draw from local data only")
+    ap.add_argument("--by-source", action="store_true",
+                     help="print the bucket ROI table (#56) and exit, no HTML redraw")
     ap.add_argument("--out", default=str(OUT_HTML))
     a = ap.parse_args()
 
@@ -624,6 +734,11 @@ def main() -> int:
     if not a.no_sync:
         sync(a.days)
     d = gather(a.days)
+
+    if a.by_source:
+        print_by_source(d["by_source"])
+        return 0
+
     out = Path(a.out)
     out.write_text(draw(d), encoding="utf-8")
 
