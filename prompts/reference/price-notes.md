@@ -77,6 +77,39 @@ Three traps the in-page extractor already handles, each learned the hard way:
 3. **Welded spans** — adjacent spans have no whitespace, so raw `textContent`
    joins them ("Sell one like this" + seller name →
    `thiscelticitaliansilver`); the extractor joins leaf nodes with newlines.
+4. **"Results matching fewer words"** — loose matches eBay appends after the
+   real cohort; not covered by the sort, and they poison the distribution (a
+   3-match query returned 62 cards spanning $8–$264). Everything at/after that
+   marker is dropped and counted in `loose_dropped`.
+
+### …and never scan `*` at document scope (2026-08-27)
+
+Guard 4 used to find its marker with `document.querySelectorAll('*')` plus a
+`.textContent` read per node — O(nodes × subtree). On a full `_ipg=60` SRP that
+pinned the renderer's main thread so hard that every *later* `javascript_tool`
+call on the tab timed out at the 45s CDP limit, trivial one-liners included;
+the tab had to be closed and recreated. It is now a `TreeWalker` over text
+nodes: linear, short strings, same marker element. Measured side by side on a
+32k-node document: **1083 ms → 18 ms**, identical result. Per-*card*
+`c.querySelectorAll('*')` is fine — that subtree is tiny.
+
+## Multi-query fetch (walking the ladder cheaply)
+
+The extractor takes the DOCUMENT as an argument (`__ebayExtract(doc)`), so it
+runs unchanged over a document `DOMParser` built from a fetched sold-search
+URL. From an already-loaded ebay.com tab the fetch is same-origin and carries
+the login cookies, so `--js-multi` tests every ladder rung × sort in ONE
+`javascript_tool` call instead of a navigate+extract round trip per rung —
+measured 2026-08-27: 4–5 formulations in one call, no bot challenge, fetches
+spaced 400 ms.
+
+What comes back is per-query SUMMARIES only (n, loose_dropped, delivered
+min/median/max, three sample titles). That is deliberate: a payload carrying
+dozens of eBay item ids trips the MCP transport's content filter, which is the
+same reason `--js-download` exists. Pass a FILENAME to `--js-multi` to also
+save the full rows, then ingest the rung you chose with `--pick <label>` —
+`--pick` is required rather than defaulted because the rung IS the provenance
+of the comps.
 
 ## Why the thumbnail board is a hard rule
 
