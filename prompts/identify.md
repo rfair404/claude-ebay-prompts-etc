@@ -72,7 +72,8 @@ When you genuinely cannot tell which tier AND it swings value, do **not**
 silently pick the low one. **Poll the user with the SPECIFIC discriminating
 question(s)** the specialization names — interactive: a stop-and-ask (same
 gate as the maker-mark stop below); headless: degrade to the SOFT path
-(`needs_followup_photo` + `NEEDS_REVIEW.md`). Ask only what the photos can't
+(`needs_followup_photo` + `NEEDS_REVIEW.md`); single-pass: same stop, written
+to `.single_pass/ask.json` ([single_pass.md](single_pass.md)). Ask only what the photos can't
 answer — settle everything you can read yourself; never offload an expert
 read (pattern, seam, ribbons-vs-patch) onto the user.
 
@@ -100,7 +101,8 @@ normal.
 > (`tools/marble_triage.py <dir> --crops-only --expect N`), **show the user
 > the contact sheet, and STOP** — begin IDENTIFY only on their go-ahead.
 > HARD interactive stop; headless degrades to self-verify-count + log to
-> `NEEDS_REVIEW.md`. See the ⛔ CROP GATE block in
+> `NEEDS_REVIEW.md`; single-pass keeps it HARD, via `.single_pass/ask.json`
+> ([single_pass.md](single_pass.md)). See the ⛔ CROP GATE block in
 > [`../specializations/marbles.md`](../specializations/marbles.md).
 
 > 🚫 **CLIP/forum-index DISABLED for IDENTIFY (marbles).** The forum CLIP
@@ -156,7 +158,10 @@ missed mark is the most expensive thing to leave on the table.
 
 HARD stop in an **interactive** run. **Headless** degrades to the SOFT
 path: `needs_followup_photo: yes` naming the exact macro shot, log the
-question to `NEEDS_REVIEW.md`, proceed with the pass below.
+question to `NEEDS_REVIEW.md`, proceed with the pass below. **Single-pass
+mode** ([single_pass.md](single_pass.md)) keeps this a HARD stop — same
+trigger — but writes the question to `.single_pass/ask.json` instead of
+pausing the chat.
 
 1. **Hunt every mark.** Scan ALL surfaces — base/underside, foot rim, back,
    lid underside, inside rim, handle/spout joins, seams, stickers/labels.

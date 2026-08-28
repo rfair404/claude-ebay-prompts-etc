@@ -48,6 +48,8 @@ COMMANDS = {
                      "LIST/EDIT: --validate --status --review --sync --publish ..."),
     "prep":         ("lib.photo_prep.prep",
                      "PREP photo pipeline: --auto --check --apply --approve ..."),
+    "single-pass":  ("lib.single_pass",
+                     "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
 }
 
 
