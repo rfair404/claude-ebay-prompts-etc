@@ -1,1 +1,0 @@
-environment: two cats lived in the house.

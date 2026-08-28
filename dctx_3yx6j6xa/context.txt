@@ -1,3 +1,0 @@
-environment: smoker.
-
-Some background prose.
