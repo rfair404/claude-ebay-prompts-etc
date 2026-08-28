@@ -256,7 +256,7 @@ def load_listings_ledger() -> list[dict]:
 def scan_drafts() -> list[dict]:
     """Every local draft: its folder, title, ask, SKU and listing id."""
     out = []
-    for dr in sorted(INVENTORY.glob("*/draft.md")) + sorted(INVENTORY.glob("*/*/draft.md")):
+    for dr in sorted(INVENTORY.rglob("draft.md")):
         try:
             t = dr.read_text(encoding="utf-8", errors="ignore")
         except OSError:
