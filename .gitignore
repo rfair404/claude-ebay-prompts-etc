@@ -86,6 +86,11 @@ apify_runs/
 .scratch/
 /kb/index/
 
+# On-disk read cache — comp runs + eBay reads, keyed query+date (V4_PLAN
+# Phase 4, #30). Every entry is regenerable from a live query; see
+# lib/read_cache.py.
+/.cache/
+
 # Shoot images — heavy binaries, kept on disk only.
 *.jpg
 *.jpeg
