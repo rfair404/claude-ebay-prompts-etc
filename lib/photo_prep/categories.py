@@ -53,12 +53,16 @@ DEFAULT_CATEGORY = "default"
 # is absent means "keep PREP's own default", so a profile stays readable as the
 # short list of ways this category actually differs.
 CATEGORIES: dict[str, dict] = {
-    # The unchanged pipeline: believe both detectors, render every look so the
-    # operator can compare at the colour gate.
+    # `crisp` only: camera colour kept, backdrop cleaned, item sharpened hard —
+    # the one look that cannot misrepresent the goods (color.default_preset_for
+    # already picks it for every new item; this just stops rendering the other
+    # five nobody was going to pick instead). Rendering all six cost ~25s/frame
+    # EACH for a comparison that was almost never used — `--filters` at --apply
+    # time renders every look when a shoot genuinely wants the comparison.
     "default": dict(
-        label="no category — every look rendered for comparison",
+        label="crisp only — the house default, auto-applied; --filters for the full comparison",
         subject="auto",
-        looks=None,          # None = all of color.PRESETS
+        looks=("crisp",),
     ),
 
     # Catalogs, magazines, record sleeves, printed ephemera.
