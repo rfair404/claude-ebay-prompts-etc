@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -156,31 +157,14 @@ def ebay_truth(verbose: bool = True) -> dict:
     return truth
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true",
-                    help="rewrite the ledger from eBay (default: report only)")
-    ap.add_argument("--prune-unknown", action="store_true", dest="prune",
-                    help="drop ledger rows for SKUs eBay has no inventory item for "
-                         "(default: keep them and flag)")
-    a = ap.parse_args()
+def compute_drift(by_sku: dict, truth: dict, sold: set) -> dict:
+    """Diff the ledger against eBay's truth. No I/O, no printing — a pure function
+    so the reconciliation logic can be tested without hitting the API.
 
-    if not LEDGER.exists():
-        print(f"no ledger at {LEDGER}")
-        return 1
-
-    with LEDGER.open(encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.DictReader(f))
-    by_sku = {r["sku"]: r for r in rows}
-
-    print("reading eBay ...")
-    truth = ebay_truth()
-    print()
-
-    sold = _sold_skus()
-    drift, missing, orphan, never_listed, blanked = [], [], [], [], []
-    protected = 0
+    Returns a dict with keys: drift, missing, orphan, never_listed, blanked,
+    unbacked (lists) and protected (count).
+    """
+    drift, missing, never_listed, blanked = [], [], [], []
 
     for sku, t in truth.items():
         row = by_sku.get(sku)
@@ -211,54 +195,86 @@ def main() -> int:
     protected = sum(1 for s, r in by_sku.items()
                     if (r.get("status") or "") == "SOLD" and s in sold
                     and truth.get(s) and truth[s]["status"] != "PUBLISHED")
-
-    for sku in by_sku:
-        if sku not in truth:
-            orphan.append(sku)
-
-    if drift:
-        print(f"DRIFT — {len(drift)} field(s) where the ledger disagrees with eBay:")
-        for sku, k, was, now in drift:
-            print(f"  {sku}  {k:11} ledger {was:>28}  ->  eBay {now}")
-    else:
-        print("DRIFT — none. Every ledger field matches eBay.")
-    print()
+    orphan = [sku for sku in by_sku if sku not in truth]
     unbacked = sorted(s for s, r in by_sku.items()
                       if (r.get("status") or "") == "SOLD" and s not in sold
                       and truth.get(s) and truth[s]["status"] != "PUBLISHED")
-    if unbacked:
-        print(f"REVIEW — {len(unbacked)} row(s) marked SOLD with no order in sales_ledger.csv.")
-        print("  Kept as SOLD, but nothing corroborates the sale. Check each one:")
-        for s in unbacked:
-            r = by_sku[s]
-            print(f"  {s}  ${r.get('price','')}  {r.get('title','')[:52]}")
-            print(f"       {r.get('url','')}")
-        print()
-    if protected:
-        print(f"HELD — {protected} SOLD row(s) kept over eBay's SYNCED. The Inventory API")
-        print("  does not carry sale state; each of these has a real order in sales_ledger.csv.")
-        print()
-    if blanked:
-        print(f"KEPT — {len(blanked)} field(s) eBay returned empty; local value retained:")
-        for sku, k, was in blanked:
-            print(f"  {sku}  {k:11} {was}")
-        print()
-    if missing:
-        print(f"MISSING — {len(missing)} SKU(s) live on eBay with no ledger row:")
-        for t in missing:
-            print(f"  {t['sku']}  {t['status']}  ${t['price']}  {t['url']}")
-        print()
-    if orphan:
-        print(f"UNKNOWN TO EBAY — {len(orphan)} ledger row(s) with no eBay inventory item:")
-        for s in orphan:
-            print(f"  {s}  {by_sku[s].get('status','')}  {by_sku[s].get('title','')[:54]}")
-        print("  (these are drafts eBay never received; kept unless --prune-unknown)")
-        print()
-    if never_listed:
-        print(f"NO OFFER — {len(never_listed)} SKU(s) exist on eBay but carry no offer:")
-        for s, st in never_listed:
-            print(f"  {s}  ledger says {st}")
-        print()
+
+    return {"drift": drift, "missing": missing, "orphan": orphan,
+            "never_listed": never_listed, "blanked": blanked,
+            "unbacked": unbacked, "protected": protected}
+
+
+def write_report(path: Path, by_sku: dict, result: dict) -> None:
+    """Full detail, for when the terse summary says something is flagged."""
+    doc = {
+        "checked_at": _now(),
+        "drift": [{"sku": s, "field": k, "ledger": was, "ebay": now}
+                  for s, k, was, now in result["drift"]],
+        "missing": [{"sku": t["sku"], "status": t["status"], "price": t["price"],
+                     "url": t["url"]} for t in result["missing"]],
+        "orphan": [{"sku": s, "status": by_sku[s].get("status", ""),
+                    "title": by_sku[s].get("title", "")} for s in result["orphan"]],
+        "never_listed": [{"sku": s, "ledger_status": st}
+                         for s, st in result["never_listed"]],
+        "blanked": [{"sku": s, "field": k, "kept_value": was}
+                    for s, k, was in result["blanked"]],
+        "unbacked_sold": [{"sku": s, "price": by_sku[s].get("price", ""),
+                           "title": by_sku[s].get("title", ""),
+                           "url": by_sku[s].get("url", "")}
+                          for s in result["unbacked"]],
+        "protected_sold": result["protected"],
+    }
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply", action="store_true",
+                    help="rewrite the ledger from eBay (default: report only)")
+    ap.add_argument("--prune-unknown", action="store_true", dest="prune",
+                    help="drop ledger rows for SKUs eBay has no inventory item for "
+                         "(default: keep them and flag)")
+    a = ap.parse_args()
+
+    if not LEDGER.exists():
+        print(f"no ledger at {LEDGER}")
+        return 1
+
+    with LEDGER.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    by_sku = {r["sku"]: r for r in rows}
+
+    print("reading eBay ...")
+    truth = ebay_truth()
+    print()
+
+    sold = _sold_skus()
+    result = compute_drift(by_sku, truth, sold)
+    drift, missing, orphan = result["drift"], result["missing"], result["orphan"]
+    never_listed, blanked, unbacked = (result["never_listed"], result["blanked"],
+                                       result["unbacked"])
+    protected = result["protected"]
+
+    flagged = (len(drift) + len(missing) + len(orphan) + len(never_listed)
+              + len(blanked) + len(unbacked))
+    # Always (re)written, flagged or not — otherwise a fixed drift leaves a
+    # stale report describing a problem that no longer exists.
+    report = LEDGER.with_name("ledger_reconcile_report.json")
+    write_report(report, by_sku, result)
+    if not flagged:
+        print(f"OK — {len(truth)} SKUs checked, ledger matches eBay"
+             + (f" ({protected} SOLD row(s) protected)." if protected else "."))
+    else:
+        print(f"{flagged} flagged across {len(truth)} SKUs checked -> {report.name}")
+        for label, items in (("drift", drift), ("missing", missing), ("orphan", orphan),
+                             ("no-offer", never_listed), ("kept", blanked),
+                             ("review (SOLD, no order)", unbacked)):
+            if items:
+                print(f"  {label}: {len(items)}")
+        if protected:
+            print(f"  protected (SOLD kept over eBay): {protected}")
 
     if not a.apply:
         if drift or missing:

@@ -35,6 +35,9 @@ sales_ledger.csv
 *.backup-*.csv
 *_ledger.backup*.csv
 
+# tools/ledger_reconcile.py detail dump — SKU, price, title, url for flagged rows.
+ledger_reconcile_report.json
+
 # Performance reports — REPORT-phase output. Gross, fees, net, per-category
 # medians and item-level sale prices. Regenerate with:
 #   python lib/report.py --performance
