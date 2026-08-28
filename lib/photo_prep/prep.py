@@ -955,6 +955,16 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
+    # NOT forwarded to colormod.correct below, and that is deliberate rather
+    # than the wart it looks like (#23). Every render here goes through a
+    # PRESET, and every preset in color.PRESETS already bakes in its own `pop`
+    # level -- `correct()`'s standalone `pop` argument is only ever read when
+    # NO preset is given, which run_apply never does. A category re-exposing
+    # this as a second knob would either be silently overridden by the
+    # preset's own `pop` or have to fight it, so categories.py refuses to let
+    # a profile set it at all (see its module docstring). This local stays
+    # only so it keeps showing up in the manifest's `settings` for the
+    # standalone `color.correct(..., preset=None)` path the unit tests use.
     pop = m["settings"].get("pop", "gentle")
     smode = subject_mode(m)
 
@@ -1102,19 +1112,32 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
             print(f"  kept the look already chosen for this shoot: {prior}")
         return m
 
-    default = colormod.default_preset_for(
-        shoot_class, warm_subject=warm, new_item=not _already_listed(shoot))
-    # Nothing else was rendered, so the backdrop's usual default cannot be shown
-    # or picked. Adopting it anyway would point listing/ at files that do not
-    # exist.
-    if only and default not in only:
-        default = only[0]
+    # A category's declared default_look (#23) replaces the backdrop/warmth
+    # heuristic outright rather than competing with it -- "for this kind of
+    # goods, THIS look is the one worth showing first" is the same authority
+    # the heuristic already had (a default, subordinate to --pick and to the
+    # approval gate either way), just stated per category instead of derived
+    # per shoot. Only honoured when it was actually rendered under `only`;
+    # otherwise fall through so a narrowed batch never adopts a look it never
+    # produced.
+    cat_default = catmod.default_look_for(category_of(m))
+    if cat_default and (not only or cat_default in only):
+        default = cat_default
+    else:
+        default = colormod.default_preset_for(
+            shoot_class, warm_subject=warm, new_item=not _already_listed(shoot))
+        # Nothing else was rendered, so the backdrop's usual default cannot be
+        # shown or picked. Adopting it anyway would point listing/ at files
+        # that do not exist.
+        if only and default not in only:
+            default = only[0]
     save_manifest(shoot, m)
     m = run_pick(shoot, default, quiet=True, auto=True)
     if not quiet:
         warm_note = (f", warm-metal subject (median R-B {shoot_rb:.0f})" if warm
                      else f" (median R-B {shoot_rb:.0f})")
-        print(f"  default look for a {shoot_class or 'mixed'} backdrop{warm_note}: "
+        source = "category default" if default == cat_default and cat_default else f"{shoot_class or 'mixed'} backdrop"
+        print(f"  default look for a {source}{warm_note}: "
               f"{default} (--pick {'|'.join(colormod.PRESETS)} to change)")
     return m
 
@@ -1622,7 +1645,14 @@ def _unskewed(img: np.ndarray, sm, sk) -> tuple:
     sheets — is looking at identical pixels.
 
     The unskew stage is gone. This exists so the frames that were published with
-    a warp recorded re-render to the pixels a buyer is already looking at."""
+    a warp recorded re-render to the pixels a buyer is already looking at.
+
+    Deliberately does not consult `categories.unskew_applies_for` (#23). That
+    field says whether a category's goods HAVE a rectangle worth squaring, were
+    the stage ever revived -- it says nothing about a warp a shoot was already
+    PUBLISHED with. A category declaring itself unskew-inapplicable must not be
+    able to retroactively un-publish a real historical decision; only the
+    per-frame recorded `Skew` decides whether this replays anything."""
     if not getattr(sk, "applied", False):
         return img, sm
     return (skewmod.apply(img, sk),
@@ -2187,8 +2217,17 @@ def main(argv=None) -> int:
     ap.add_argument("--decisions", action="store_true",
                     help="print the decision record and its digest, and report "
                          "any stage whose decisions have changed since sign-off")
-    ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
-    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help=f"margin around the subject, as a fraction of its own box (default {DEFAULT_PAD})")
+    # No hardcoded default here any more: None means "nothing explicit", and
+    # main() below resolves that to the CATEGORY's aspect/pad (categories.py
+    # #23) before falling back to DEFAULT_ASPECT/DEFAULT_PAD -- so an explicit
+    # flag still outranks the category, exactly like --subject already does.
+    ap.add_argument("--aspect", default=None,
+                    help=f"target aspect W:H (default {DEFAULT_ASPECT}, or the "
+                         f"category's own if it sets one; 'orig' to keep)")
+    ap.add_argument("--pad", type=float, default=None,
+                    help=f"margin around the subject, as a fraction of its own "
+                         f"box (default {DEFAULT_PAD}, or the category's own "
+                         f"if it sets one)")
     ap.add_argument("--category", default=None, choices=list(catmod.names()),
                     help="what KIND of goods this shoot is: sets the subject "
                          "detector and which looks are rendered, in one flag. "
@@ -2225,6 +2264,16 @@ def main(argv=None) -> int:
     subject = args.subject or (catmod.subject_for(args.category) if args.category
                                else stored_subject)
 
+    # Framing is category-shaped too (#23): a flat catalog and a ring do not
+    # want the same margin. Same precedence as --subject above -- an explicit
+    # flag always outranks the category, which is the one place a category may
+    # feed a MEASUREMENT (plan_crop's aspect/pad inputs), never its result.
+    cat_pad = catmod.pad_for(category)
+    aspect_s = args.aspect if args.aspect is not None else (
+        catmod.aspect_for(category) or DEFAULT_ASPECT)
+    pad = args.pad if args.pad is not None else (
+        cat_pad if cat_pad is not None else DEFAULT_PAD)
+
     # Changing either one re-measures every box downstream, so the sign-offs
     # those boxes earned are dropped HERE rather than silently carried over onto
     # different numbers. This is the invalidation issue #21 wants to make
@@ -2252,7 +2301,7 @@ def main(argv=None) -> int:
         _print_status(shoot, m)
         return 0
     if args.auto:
-        run_auto(shoot, args.aspect, args.pad, args.pop,
+        run_auto(shoot, aspect_s, pad, args.pop,
                  subject=subject, category=category, quiet=args.quiet)
         return 0
     if args.approve_auto:
@@ -2310,13 +2359,13 @@ def main(argv=None) -> int:
 
     if args.check or not args.apply:
         print(f"PREP check — {shoot}")
-        m = run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=args.quiet)
+        m = run_check(shoot, aspect_s, pad, args.pop, subject, category, quiet=args.quiet)
         _print_status(shoot, m)
         print(f"  rotation sheet: {shoot / '.prep' / 'rotation_sheet.jpg'}")
     if args.apply:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
-            run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=True)
+            run_check(shoot, aspect_s, pad, args.pop, subject, category, quiet=True)
         m = run_apply(shoot, quiet=args.quiet, only=tuple(_pairs(getattr(args, 'only', None))))
         _print_status(shoot, m)
     return 0
