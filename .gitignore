@@ -32,8 +32,9 @@ listings_ledger.csv
 sales_ledger.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
-# Written by tools/pick_list.py (--poll / --out). Terminal, local file, and
-# printer only, per GH #32's PII guardrail; never committed. Regenerate with
+# Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
+# Terminal, local file, and printer only, per GH #32's PII guardrail; never
+# committed. Regenerate with
 #   python -m lib.cli pick-list --poll
 /pick_lists/
 
