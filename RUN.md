@@ -64,6 +64,59 @@ shoot directory, so phases compose without re-deriving.
 
 ---
 
+## Concurrency and delegation (#61/#62)
+
+**Trigger: a multi-item batch** — "run everything in `<folder>`", a plan-mode
+estate scene with several saleable items, a backlog sweep. A single item, or
+an interactive back-and-forth about one piece, stays in the main thread; fan
+out only earns its overhead across several items. Measured cost of *not*
+doing this: mean 291,787 tokens of accumulated context per turn, 1.00 tool
+calls per assistant turn, one "run all" session that took 725 turns for a
+single folder (#61).
+
+**Main thread = conductor.** It holds only: the batch manifest (which items,
+what phase each is in), the **gates**, and any write that touches shared
+state. It never holds a raw photo, a comp JSON, forum matches, or a worker's
+full reasoning — those are what make the window huge.
+
+**One worker (`Agent` tool) per item**, covering IDENTIFY→PRICE→
+INVESTIGATE→DRAFT, **capped at 4 concurrent** (PRICE hits the logged-in
+browser and eBay Browse; more trips rate limits). Each worker starts on a
+fresh context, reads
+[`prompts/_shared.md`](prompts/_shared.md) plus the phase prompt it needs —
+not optional, the honesty rules and in-hand voice live only in the prompt
+files — writes its outputs to the shoot dir exactly as a normal run would,
+and returns a **compact verdict only**: item name, proposed title, price +
+tier, the ⚠ list, and the path to `draft.md`. The filesystem is the handoff;
+the conductor never needs a worker's reasoning, only its verdict.
+
+**The ledger is the one hard constraint.** `listings_ledger.csv` is a single
+unlocked CSV — `list_edit.py --record` / `--sync` / `--list --confirm` all
+read-modify-write it, and two callers at once lose a row. Every ledger-
+touching call runs in the conductor, serialized, never inside a worker —
+which is also where it already belongs, since it follows the gate.
+
+**Gates become a queue, not a barrier.** A finished item's review card joins
+a queue instead of stopping the run; the user answers gates whenever they're
+next at the machine, and other workers keep going the whole time. The gates
+themselves do not weaken — REVIEW still publishes on one explicit
+per-item approval, never inferred, never batched into "approve all" — they
+just stop being a global stall. (Measured: 229h blocked across 229 asks,
+mean 1h each; colour alone was 81h against a confidence gate `prep.md`
+already specifies — see PREP's `--auto`/`--approve-auto` above.)
+
+**Background anything over ~30s.** `prep --auto` renders images and nothing
+else in the run depends on it finishing — kick it off with
+`run_in_background`, run PRICE Stage A/B while it renders, collect it when
+it lands. The same applies to any other foreground call in that range.
+
+**`ebz status <shoot>`** (`python -m lib.cli status <shoot-dir>`) replaces
+the `ls`/`cat`/`grep` sequence for "where is this item": phase files
+present, PREP's approval state, frame count, ledger row, and the next
+action — one call instead of several.
+
+---
+
 ## The gate contract (the whole point of headless)
 
 Reclassify every "ask the user" moment as HARD or SOFT.
@@ -106,11 +159,13 @@ Reclassify every "ask the user" moment as HARD or SOFT.
 **PREP and REVIEW both stop a headless run** — PREP because photos are the first
 thing a buyer judges and the rules alone did not hold, REVIEW because it is what
 authorises publishing. The maker-mark gate above is interactive-only and
-degrades. PRICE's Apify call (Stage B) used to
-be a second HARD gate; it no longer is — Apify runs automatically as part
-of the comp hunt (`automation-lab/ebay-sold-scraper`, ~$0.10/run), no cost
-confirmation. See PRICE for the Stage-A/B/C ordering and the currency-leak
-validator on Apify.
+degrades. PRICE's Stage B comp call used to
+be a second HARD gate (when it ran through Apify, a paid per-run API); it
+no longer is — Stage B now runs automatically through the operator's own
+logged-in eBay session (`lib/ebay_sold_browse.py`; Apify was retired
+2026-08-15, see [`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)),
+which has no per-run cost to confirm. See PRICE for the Stage-A/B/C
+ordering and the currency-leak validator.
 
 ### SOFT gates — proceed with the default, log it
 
@@ -168,9 +223,49 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
-`listing` (the LIST/EDIT CLI), `prep`. Argv passes through untouched, so
-every flag documented for a tool works identically under `ebz`. The direct
-`python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
+`listing` (the LIST/EDIT CLI), `prep`, `single-pass` (gate-check
+IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
+[prompts/single_pass.md](prompts/single_pass.md)), `observe` (session
+transcripts -> friction report; read-only, `--report` to print it,
+`--economics` for the #61 run-cost table — context/turn, tool-call
+batching, image Read payload, gate wall-clock by name — the standing
+version of the one-off `.scratch/analyze*.py` audit, `--propose` for
+#36's ranked, evidence-cited proposed fixes — add `--file` to actually
+create/comment the house `Idea:` issue via `gh`; without `--file` it's a
+dry run that only prints what it would do), `status` (one-shot shoot
+state: phase files, PREP gate, frames, ledger row, next action —
+#61/#62). Argv passes through untouched, so every flag documented for a
+tool works identically under `ebz`. The direct `python tools/<x>.py` /
+`python lib/<x>.py` invocations keep working.
+
+**Single-pass mode (routine items, V4_PLAN Phase 4, #30).** For an item
+that never needs a mid-pipeline question — a single-item shoot, non-gate
+category, ordinary condition — run the five stages in one sitting instead
+of five conversational turns, and stop for exactly one review card at the
+end. `python -m lib.cli single-pass <shoot-dir>` is the read-only gate check
+across whatever each stage has already written: clean → the same card
+REVIEW would build; anything a stage's own interactive HARD stop caught
+(PREP's confidence gate, IDENTIFY's maker-mark/poll gate, the marble crop
+gate) → the specific exception, by name, never guessed. Full protocol:
+[prompts/single_pass.md](prompts/single_pass.md).
+
+## Background dispatch (optional, #59)
+
+PRICE, IDENTIFY's non-photo research (maker/pattern lookups, forum
+cross-reference), DRAFT, and REVIEW's card-build touch no local state —
+each reads only the prior phase's file already written to the shoot dir.
+On a batch of shoots, dispatch these four as background agents (`Agent`
+tool, `run_in_background: true`) instead of blocking the foreground
+conversation, e.g. running item 2's PRICE/DRAFT while the operator is
+still in item 1's PREP. PREP and the REVIEW gate stay foreground: PREP
+reads/writes photo files and needs the operator looking at their own
+images; REVIEW is the human approval that authorizes publish (see the
+gate contract above — untouched by dispatch).
+
+If a dispatched stage turns out to need local state mid-run (e.g. IDENTIFY
+needs another photo angle), it surfaces the question back to the operator
+instead of failing — same as a foreground run would. Same prompts, same
+`_shared.md` rules, same gates; dispatch only changes where a stage runs.
 
 ## Locking a format
 
@@ -275,14 +370,14 @@ Cross-cutting depth rules:
   by default**; a run turns one on by name. It is a stylistic overlay: house
   rules (honesty bar, wear phrasing, PII, stage contract) always win.
 - PRICE runs the autonomous exact-match hunt (Stage A WebSearch → Stage B
-  Apify eBay-sold → optional Stage C Chrome when confidence is low) before
-  any era-peer fallback; see its prompt.
+  eBay sold via the logged-in browser → optional Stage C Chrome when
+  confidence is low) before any era-peer fallback; see its prompt.
 
 Shared rules (style, confidence, firewall, unit_type, char limits,
 persistence) live in [prompts/_shared.md](prompts/_shared.md).
 
-Python infrastructure (config, eBay client, Apify wrapper, photo prep)
-is unchanged and shared from `lib/` — v3 does not duplicate code.
+Python infrastructure (config, eBay client, logged-in-browser comp
+fetch, photo prep) is shared from `lib/` — no phase duplicates it.
 
 ---
 
@@ -312,9 +407,9 @@ is unchanged and shared from `lib/` — v3 does not duplicate code.
    `--approve-stage color` → `--approve`. Photos land in `listing/`;
    INVESTIGATE still reads the originals.
 3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
-   → Stage B Apify eBay-sold → Stage C Chrome only if confidence is low);
-   adopt Recommended tier as provisional working price; write `price.txt`.
-   Never stops.
+   → Stage B eBay sold via the logged-in browser → Stage C Chrome only if
+   confidence is low); adopt Recommended tier as provisional working
+   price; write `price.txt`. Never stops.
 4. CURATE (plan mode) → write `review.md`.
 5. INVESTIGATE (list mode), per item → commit to the confident
    assessment; log open questions; write `investigate.txt`.

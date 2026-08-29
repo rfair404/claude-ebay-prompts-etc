@@ -79,7 +79,11 @@ sources:
 > verify crop count == expected yourself, log any mismatch to `NEEDS_REVIEW.md`,
 > and proceed — never identify on a count you couldn't verify. (Extends the
 > standing crop-check-first rule: crops are now shown for approval, not just
-> self-checked.)
+> self-checked.) **Single-pass mode**
+> ([../prompts/single_pass.md](../prompts/single_pass.md)) keeps this HARD —
+> write `{"stage": "identify", "detail": "<contact sheet path> — N crops vs
+> expected M, go-ahead needed"}` to `<shoot>/.single_pass/ask.json` instead of
+> pausing the chat, and stop before IDENTIFY starts.
 
 > 🚫 **CLIP / forum-index are DISABLED for IDENTIFY (proved ineffective — kept, not used).**
 >

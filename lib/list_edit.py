@@ -86,6 +86,8 @@ from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
+from us_only import us_only_reasons
+from dir_context import load as load_dir_context
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     EbayAPIError,
@@ -263,9 +265,10 @@ def _to_decimal_str(val: object) -> Optional[str]:
 
 _LEDGER_FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
-                  "updated_at"]
+                  "shipped_at", "updated_at"]
 _LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
-                  "PUBLISHED": "published_at", "ENDED": "ended_at"}
+                  "PUBLISHED": "published_at", "ENDED": "ended_at",
+                  "SHIPPED": "shipped_at"}
 
 
 def _ledger_path() -> Path:
@@ -308,7 +311,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
-        else:                       # PUBLISHED / ENDED / DELETED
+        else:                       # PUBLISHED / ENDED / DELETED / SHIPPED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
         if tsfield and not row.get(tsfield):
@@ -766,13 +769,18 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # `shipping.international: true` use it, and only if they clear the
     # dangerous-goods gate in _international_blockers().
     policies["fulfillment_international"] = _ebay_extra("fulfillment_policy_id_international")
+    # US-ONLY: items US export law keeps in the country (firearm magazines and
+    # parts, body armor, night vision). Needs its own policy because the
+    # default one ships Worldwide — see lib/us_only.py for why that matters.
+    policies["fulfillment_us_only"] = _ebay_extra("fulfillment_policy_id_us_only")
     # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
     # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
     # listings need it; falls back to the default payment policy otherwise.
     policies["payment_auction"] = _ebay_extra("payment_policy_id_auction")
     location = _ebay_extra("merchant_location_key")
     for k, v in policies.items():
-        if k in ("fulfillment_media", "fulfillment_local_pickup", "payment_auction"):
+        if k in ("fulfillment_media", "fulfillment_local_pickup", "fulfillment_us_only",
+                  "payment_auction"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
@@ -1003,41 +1011,69 @@ def _international_warnings(draft: Draft) -> list[str]:
 
 
 def _resolve_shipping_policy(draft: Draft, policies: dict,
-                             creds: EbayCredentials) -> tuple[str, list[str]]:
+                             creds: EbayCredentials,
+                             strict: bool = False) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
 
     Routing, in order:
     1. If the draft is `fulfillment_mode: LOCAL_PICKUP` (DRAFT sets this for
        ship-risky items the user confirmed as local-pickup), use the
        local-pickup policy.
-    2. Else if `shipping.international: true` AND the item clears the
+    2. Else if the item is US-EXPORT-RESTRICTED (firearm magazines and parts,
+       body armor, night vision, anything marked ITAR — see lib/us_only.py),
+       use the US-only policy. This OUTRANKS an international request: a legal
+       restriction beats reach, and beats the media rate too.
+    3. Else if `shipping.international: true` AND the item clears the
        dangerous-goods / weight gate, use the international (eIS) policy.
-    3. Else if `primary_service` is Media Mail (DRAFT sets this for books /
+    4. Else if `primary_service` is Media Mail (DRAFT sets this for books /
        sheet music / recordings / computer media — NOT magazines, catalogs, or
        anything carrying advertising, which are excluded from Media Mail by
        DMM 173.4.2) AND a media policy is configured, use it.
-    4. Else use the default (USPS Ground) policy.
+    5. Else use the default (USPS Ground) policy.
     Returns (chosen_fulfillment_id, messages).
 
     International is OPT-IN per item, never global. eBay International Shipping
     is an account-level enrollment, so the moment a listing uses a policy whose
     shipToLocations include Worldwide, eIS offers it abroad — including for
     items eIS will refuse at the hub. The gate below is what stops that.
+
+    `strict` distinguishes advisory callers (preflight, which only reports
+    problems for a human to read) from callers that are about to WRITE the
+    resolved policy into an offer (sync, offer-field updates). A US-export
+    restriction with no US-only policy configured is a hard stop for the
+    latter: raises ValueError instead of returning the Worldwide default,
+    because writing that default is exactly the publish-time failure (or,
+    if eBay ever stopped catching it, the export) this function exists to
+    prevent.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
     pickup_fid = str(policies.get("fulfillment_local_pickup") or "")
     intl_fid = str(policies.get("fulfillment_international") or "")
+    usonly_fid = str(policies.get("fulfillment_us_only") or "")
+    us_reasons = us_only_reasons(draft)
     mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
     wants_intl = str(draft.get("shipping.international") or "").strip().lower() in (
         "true", "yes", "1", "on")
     msgs: list[str] = []
 
+    # LOCAL_PICKUP is checked first: a pickup-only item ships nowhere, so that
+    # is the real reason international is moot — regardless of US-export
+    # status — and it must not be masked by the US-only message below.
     if wants_intl and mode == "LOCAL_PICKUP":
         wants_intl = False
         msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
                     "ignored (a pickup-only item has nothing to ship).")
+    # A US export restriction is not a preference — it overrides an
+    # international request rather than negotiating with it.
+    if us_reasons and wants_intl:
+        wants_intl = False
+        msgs.append("shipping: INTERNATIONAL REFUSED — US-export-restricted ("
+                    + "; ".join(us_reasons) + "). eBay will not publish this "
+                    "listing at all while it is reachable by eBay International "
+                    "Shipping. See the routing message below for the policy "
+                    "actually chosen.")
     if wants_intl:
         blockers = _international_blockers(draft)
         if blockers:
@@ -1061,6 +1097,32 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             msgs.append("shipping: item is LOCAL_PICKUP but ebay.fulfillment_policy_id_local_pickup "
                         "is unset — falling back to the default ground policy. Add a local-pickup "
                         "policy (see SETUP_EBAY_API.md) so ship-risky items list as pickup-only.")
+    elif us_reasons:
+        if usonly_fid:
+            chosen, label = usonly_fid, "US-ONLY (export-restricted policy)"
+            msgs.append("shipping: US-ONLY — " + "; ".join(us_reasons) +
+                        ". Routed to the US-only policy so the listing is not "
+                        "eBay-International-Shipping eligible; without it eBay "
+                        "refuses the publish outright (errorId 25019, ITAR).")
+        else:
+            # Refusing to fall back is the point. The default policy ships
+            # Worldwide, so falling back would not merely be suboptimal — the
+            # publish would fail, and if eBay ever stopped catching it we would
+            # be exporting a restricted item.
+            blocker = ("shipping: BLOCKER — item is US-export-restricted (" +
+                       "; ".join(us_reasons) + ") but "
+                       "ebay.fulfillment_policy_id_us_only is unset. The default "
+                       "policy ships Worldwide, so eBay will refuse this publish. "
+                       "Create a US-only fulfillment policy (shipToLocations = US) "
+                       "and set that key before listing this item.")
+            if strict:
+                raise ValueError(blocker)
+            chosen, label = default_fid, "default ground (NO US-only policy configured)"
+            msgs.append(blocker)
+        if _is_media_service(want):
+            msgs.append("shipping: item wanted Media Mail but is US-export-"
+                        "restricted — the US-only policy carries Ground "
+                        "Advantage. Legal routing wins over the media rate.")
     elif wants_intl:
         chosen, label = intl_fid, "international (eIS-enabled policy)"
         for w in _international_warnings(draft):
@@ -1253,11 +1315,36 @@ def build_review_card(draft_path: Path,
         intl_lines = ["  • eligible, not enabled (shipping.international: false). "
                       "Set true to offer it worldwide."]
 
+    # Estate context (GH #46) — which context.txt file(s) applied, what they
+    # supply, and what they forbid, so a reviewer can see the estate was
+    # actually consulted before approving a publish. `source:` never
+    # appears here — public_keys/brief() drop it (PII guardrail).
+    ctx = load_dir_context(shoot)
+    ctx_lines: list[str] = []
+    ctx_draft_hits = []
+    if ctx:
+        ctx_lines.append(f"  applied: {', '.join(ctx.sources)}")
+        for k, v in ctx.public_keys.items():
+            ctx_lines.append(f"  {k}: {v}")
+        if ctx.blocked:
+            ctx_lines.append("  MUST NOT CLAIM:")
+            for b in ctx.blocked:
+                ctx_lines.append(f"    - {' / '.join(b.phrases[:2])} — {b.why} ({b.source})")
+        _buyer_text = "\n".join([title, str(draft.get("condition_description") or ""),
+                                 str(draft.body or ""),
+                                 *(str(v) for v in (draft.get("item_specifics") or {}).values())])
+        ctx_draft_hits = ctx.blocks(_buyer_text)
+    else:
+        ctx_lines.append("  (no context.txt in chain — no change to behavior)")
+
     # Flags worth a human eye.
     flags: list[str] = []
+    for _hit in ctx_draft_hits:
+        flags.append(f"  • ⚠ draft asserts a claim the estate forbids: "
+                     f"'{_hit.phrases[0]}' — {_hit.why} ({_hit.source}). Rephrase before approving.")
     nr = shoot / "NEEDS_REVIEW.md"
     if nr.exists():
-        flags = ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        flags += ["  • " + ln.strip() for ln in nr.read_text(encoding="utf-8").splitlines() if ln.strip()]
     # Stale-meta check (GH #40): surface a meta/eBay disagreement at the gate
     # rather than in an audit months later. SOFT — an API failure never blocks
     # the card.
@@ -1341,6 +1428,8 @@ def build_review_card(draft_path: Path,
         *comps,
         "Condition detail:",
         f"  {cond_desc}",
+        "Context (estate background):",
+        *ctx_lines,
         f"Final photos - exactly what publishes ({len(photos)}):{prep_note}",
         *photo_lines,
         "⚠ Needs review / manual intervention:",
@@ -1397,7 +1486,7 @@ def create_or_update_listing(draft_path: Path,
             print(f"  [preflight] {reason}")
     # Shipping: pick the right fulfillment policy (Media Mail for media items,
     # else default ground) and use it for this offer.
-    chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds)
+    chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds, strict=True)
     policies = {**policies, "fulfillment": chosen_fulfillment}
     for _m in ship_msgs + _insurance_notes(draft):
         print(f"  [preflight] {_m}")
@@ -1704,7 +1793,7 @@ def update_listing_fields(draft_path: Path, fields,
             # dangerous-goods gate runs here too, so an item that must not go
             # abroad silently stays on the domestic policy.
             pol_ids, _loc = _resolve_policies_and_location(creds)
-            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds)
+            fid, pol_msgs = _resolve_shipping_policy(draft, pol_ids, creds, strict=True)
             lp = offer.setdefault("listingPolicies", {})
             prev = lp.get("fulfillmentPolicyId")
             lp["fulfillmentPolicyId"] = fid

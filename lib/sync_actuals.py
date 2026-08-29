@@ -256,7 +256,7 @@ def load_listings_ledger() -> list[dict]:
 def scan_drafts() -> list[dict]:
     """Every local draft: its folder, title, ask, SKU and listing id."""
     out = []
-    for dr in sorted(INVENTORY.glob("*/draft.md")) + sorted(INVENTORY.glob("*/*/draft.md")):
+    for dr in sorted(INVENTORY.rglob("draft.md")):
         try:
             t = dr.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -315,15 +315,38 @@ def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, 
 # --------------------------------------------------------------------------- #
 # writers
 # --------------------------------------------------------------------------- #
+def _sale_key(row: dict) -> tuple:
+    """(order_id, sku or listing_id) — stable across re-fetches of the same
+    order, and distinct per line item within a multi-SKU order."""
+    return (row.get("order_id", ""), row.get("sku") or row.get("listing_id", ""))
+
+
+def _load_sales_ledger() -> dict:
+    """sale_key -> row, for whatever sales_ledger.csv already holds."""
+    if not SALES_LEDGER.exists():
+        return {}
+    with SALES_LEDGER.open(encoding="utf-8-sig", newline="") as f:
+        return {_sale_key(r): r for r in csv.DictReader(f)}
+
+
 def write_sales_ledger(rows: list[dict]) -> None:
+    """Merge `rows` into sales_ledger.csv — never a wholesale overwrite.
+
+    `rows` only covers the current `--days` window; a plain rewrite would
+    drop every sale outside it. Existing rows survive untouched unless a
+    fetched row shares their (order_id, sku) key, in which case the fresh
+    fetch wins (it may carry a refund the earlier write didn't know about)."""
+    merged = _load_sales_ledger()
+    for r in rows:
+        out = dict(r)
+        for k in _MONEY_FIELDS:
+            out[k] = _money(r[k])
+        merged[_sale_key(out)] = out
     with SALES_LEDGER.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SALES_FIELDS, extrasaction="ignore")
         w.writeheader()
-        for r in sorted(rows, key=lambda x: x["sold_at"], reverse=True):
-            out = dict(r)
-            for k in _MONEY_FIELDS:
-                out[k] = _money(r[k])
-            w.writerow(out)
+        for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True):
+            w.writerow(r)
 
 
 def stamp_folder(row: dict) -> bool:

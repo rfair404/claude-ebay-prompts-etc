@@ -44,7 +44,11 @@ Present that card to the user **verbatim** and STOP. It contains:
     Preflight (condition · shipping)
     Comps (open to verify) — each with a URL
     Condition detail (every flagged defect, verbatim — never softened)
-    ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines)
+    Context (estate background) — which context.txt file(s) applied, any
+      supplied field, and any claim they forbid (never `source:` — see
+      `_shared.md`'s PII guardrail)
+    ⚠ Needs review / manual intervention (NEEDS_REVIEW.md lines, plus a
+      flag if the draft actually asserts a claim the estate forbids)
     → Approve publishes LIVE at $<price>, with the exact --list … --confirm command
 
 ## The card is a page — every time, no exceptions

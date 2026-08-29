@@ -19,6 +19,7 @@ download needed — the colour tests pass an explicit mask.
 Run:  python tests/test_prep.py
   or: pytest tests/test_prep.py
 """
+import contextlib
 import json
 import sys
 import tempfile
@@ -1289,14 +1290,16 @@ def test_printed_is_paper_and_asshot():
     assert CAT.looks_for("printed") == ("asshot",)
 
 
-def test_default_category_still_renders_everything():
-    """A filter that narrowed the generic case would be a silent policy change.
+def test_default_category_renders_only_crisp():
+    """The generic case narrows to the one look that ships automatically.
 
-    `looks_for` returns empty, not None, because that is what `run_apply`'s
-    `only` already treats as 'render them all'.
+    `crisp` is what `color.default_preset_for` already picks for every new
+    item, so rendering the other five by default cost real time for a
+    comparison almost nobody opened. `--filters` at --apply time (or an
+    explicit `--only`) is the escape hatch back to the full set.
     """
-    assert CAT.looks_for(None) == ()
-    assert CAT.looks_for("default") == ()
+    assert CAT.looks_for(None) == ("crisp",)
+    assert CAT.looks_for("default") == ("crisp",)
     assert CAT.subject_for(None) == "auto"
 
 
@@ -1633,3 +1636,227 @@ def test_gc_keeps_the_chosen_look_and_is_dry_by_default():
         assert left == [chosen], left
         # The shipped files are the point of the whole exercise.
         assert list((shoot / "listing").glob("*.jpg"))
+
+
+# ---------------------------------------------------------------------------
+# category profiles, extended schema (#23) — aspect/pad/default_look/unskew
+#
+# The two shipped categories (`default`, `printed`) must keep behaving exactly
+# as before: neither sets any of the new fields, so every one of these has to
+# fall back to PREP's own default. The new wiring is exercised with a
+# TEMPORARY third category, registered and torn down per test, so a mistake in
+# one of these tests can never leak a fake category into the real registry
+# that ships.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _temp_category(name: str, prof: dict):
+    """Register `name` -> `prof` in the live CATEGORIES table for one test.
+
+    Runs the same `_validate()` the real table runs at import time, so a test
+    fixture that would itself be rejected (an unknown key, a bad default_look)
+    fails loudly rather than silently exercising something invalid.
+    """
+    assert name not in CAT.CATEGORIES, f"{name!r} collides with a real category"
+    CAT.CATEGORIES[name] = prof
+    try:
+        CAT._validate()
+        yield
+    finally:
+        del CAT.CATEGORIES[name]
+
+
+def test_default_and_printed_carry_no_new_fields():
+    """Backward compatibility, stated as data rather than as an assertion
+    about behaviour: if either shipped category ever grows one of these
+    fields, it becomes a deliberate change to what already ships, not a
+    silent side effect of #23 landing."""
+    for name in ("default", "printed"):
+        assert CAT.aspect_for(name) is None, name
+        assert CAT.pad_for(name) is None, name
+        assert CAT.default_look_for(name) is None, name
+        assert CAT.unskew_applies_for(name) is True, name
+        assert CAT.specialization_for(name) is None, name
+
+
+def test_unknown_field_is_refused_at_validation_time():
+    """A typo in a profile is not a syntax error — catch it here, not three
+    re-runs later on a real batch (see categories._validate's docstring)."""
+    try:
+        with _temp_category("bogus_field_cat", dict(label="t", nonsense_key=1)):
+            pass
+    except ValueError as e:
+        assert "nonsense_key" in str(e)
+    else:
+        raise AssertionError("an unknown field was accepted")
+
+
+def test_pop_is_refused_even_though_it_looks_plausible():
+    """The one field candidate this issue deliberately rejected (see the
+    module docstring's WHAT WAS DELIBERATELY LEFT OUT): every preset already
+    bakes in its own subject-pass strength, so a category-level `pop` would
+    either be silently overridden or fight the preset's own value."""
+    assert "pop" not in CAT._ALLOWED_KEYS
+    try:
+        with _temp_category("popcat", dict(label="t", pop="strong")):
+            pass
+    except ValueError as e:
+        assert "pop" in str(e)
+    else:
+        raise AssertionError("a category-level pop override was accepted")
+
+
+def test_default_look_must_be_a_real_rendered_preset():
+    try:
+        with _temp_category("badlook", dict(label="t", default_look="cinematic")):
+            pass
+    except ValueError as e:
+        assert "cinematic" in str(e)
+    else:
+        raise AssertionError("a non-existent default_look was accepted")
+
+    try:
+        with _temp_category("narrowlook",
+                            dict(label="t", looks=("asshot",), default_look="studio")):
+            pass
+    except ValueError as e:
+        assert "never renders" in str(e)
+    else:
+        raise AssertionError("a default_look outside the category's own looks was accepted")
+
+
+def test_specialization_must_point_at_a_real_module():
+    """Read-only cross-reference to specializations/ (issue #23's IDENTIFY
+    hook) -- validated so it can never dangle."""
+    try:
+        with _temp_category("ghostspec", dict(label="t", specialization="unicorns")):
+            pass
+    except ValueError as e:
+        assert "unicorns" in str(e)
+    else:
+        raise AssertionError("a specialization with no matching file was accepted")
+
+    # marbles.md is a real file in specializations/ -- this must NOT raise.
+    with _temp_category("realspec", dict(label="t", specialization="marbles")):
+        assert CAT.specialization_for("realspec") == "marbles"
+
+
+def test_category_aspect_and_pad_flow_through_the_cli_and_an_explicit_flag_wins():
+    """Same precedence --subject already has: an explicit flag outranks the
+    category, and the category outranks PREP's own DEFAULT_ASPECT/DEFAULT_PAD."""
+    with _temp_category("hoopring", dict(label="t", subject="auto",
+                                         aspect="4:5", pad=0.05)):
+        with tempfile.TemporaryDirectory() as td:
+            shoot = _shoot(Path(td) / "s", n=1)
+            P.main([str(shoot), "--check", "--category", "hoopring", "--quiet"])
+            settings = P.load_manifest(shoot)["settings"]
+            assert settings["aspect"] == "4:5"
+            assert settings["pad"] == 0.05
+
+            # An explicit --aspect/--pad still wins over the category.
+            P.main([str(shoot), "--check", "--aspect", "1:1", "--pad", "0.3",
+                    "--quiet"])
+            settings = P.load_manifest(shoot)["settings"]
+            assert settings["aspect"] == "1:1"
+            assert settings["pad"] == 0.3
+
+
+def test_category_with_no_aspect_or_pad_still_gets_prep_defaults():
+    """The `printed` category sets neither -- confirming the CLI resolution
+    added for #23 does not disturb the case that carried no opinion."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.main([str(shoot), "--check", "--category", "printed", "--quiet"])
+        settings = P.load_manifest(shoot)["settings"]
+        assert settings["aspect"] == P.DEFAULT_ASPECT
+        assert settings["pad"] == P.DEFAULT_PAD
+
+
+def test_apply_adopts_the_categorys_default_look_and_pick_still_overrides():
+    """A category's default_look replaces the backdrop/warmth heuristic, on
+    exactly the same authority the heuristic already had: a default, not a
+    pick, and --pick still overrides it (see run_apply's comment for #23)."""
+    with _temp_category("asshotfirst",
+                        dict(label="t", subject="auto",
+                             looks=("asshot", "crisp"), default_look="asshot")):
+        with tempfile.TemporaryDirectory() as td:
+            shoot = _shoot(Path(td) / "s", n=1)
+            P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle",
+                      category="asshotfirst", quiet=True)
+            P.run_approve_auto(shoot)
+            m = P.run_apply(shoot, quiet=True)
+
+            assert m["chosen_preset"] == "asshot"
+            assert m["preset_source"] == "default"
+            assert not m["preset_picked_by_operator"]
+
+            # The gate is still a separate yes, and --pick still overrides.
+            m = P.run_pick(shoot, "crisp", quiet=True)
+            assert m["chosen_preset"] == "crisp"
+            assert m["preset_picked_by_operator"]
+
+
+def test_default_look_is_ignored_when_only_never_rendered_it():
+    """A category default that was not actually produced under a narrowed
+    `--only` must not be adopted -- there is no file for `--pick` to find."""
+    with _temp_category("wideonly",
+                        dict(label="t", subject="auto", default_look="studio")):
+        with tempfile.TemporaryDirectory() as td:
+            shoot = _shoot(Path(td) / "s", n=1)
+            P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle",
+                      category="wideonly", quiet=True)
+            P.run_approve_auto(shoot)
+            m = P.run_apply(shoot, quiet=True, only=("asshot",))
+            assert m["chosen_preset"] == "asshot"
+
+
+def test_unskew_replay_does_not_consult_the_category():
+    """#23: `unskew_applies_for` is forward-looking metadata for a stage that
+    was already fully retired (see unskew.py and categories.py's UNSKEW
+    section) -- it must never suppress the replay of a warp a shoot was
+    ALREADY PUBLISHED with. `_unskewed`'s signature does not even take a
+    category, which is the structural half of that guarantee; this pins the
+    behavioural half."""
+    from lib.photo_prep import unskew as U
+    from lib.photo_prep import subject as S
+
+    with _temp_category("roundgoods", dict(label="t", subject="auto", unskew=False)):
+        assert CAT.unskew_applies_for("roundgoods") is False
+
+        img = np.full((100, 100, 3), 200, np.uint8)
+        mask = np.zeros((100, 100), np.uint8)
+        mask[10:90, 10:90] = 255
+        sm = S.describe(mask, "rembg+lab", 1.0, 1.0)
+        sk = U.from_dict({"applied": True, "reason": "legacy",
+                          "quad": [[0, 0], [100, 0], [100, 100], [0, 100]],
+                          "dst": [[0, 0], [60, 0], [60, 60], [0, 60]],
+                          "out_size": [60, 60]})
+
+        out_img, out_sm = P._unskewed(img, sm, sk)
+        assert out_img.shape[:2] == (60, 60), "the legacy warp did not replay"
+        assert out_sm.mask.shape[:2] == (60, 60)
+
+
+def test_changing_category_drops_crop_and_colour_signoff():
+    """Issue #21's guarantee, exercised for the trigger #23 adds fields to:
+    every box below the detector was measured against the OLD category (a
+    different subject mode, a different aspect/pad), so changing it has to
+    drop those sign-offs exactly like changing `--subject` already does."""
+    with _temp_category("switched", dict(label="t", subject="auto", aspect="4:5")):
+        with tempfile.TemporaryDirectory() as td:
+            shoot = _shoot(Path(td) / "s", n=1)
+            P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+            P.run_approve_auto(shoot)
+            m = P.load_manifest(shoot)
+            for st in m["stages"]:
+                m["stages"][st] = {"approved": True, "approved_at": "x"}
+            m["approved"] = True
+            P.save_manifest(shoot, m)
+
+            P.main([str(shoot), "--category", "switched", "--status"])
+
+            m = P.load_manifest(shoot)
+            assert m["stages"]["crop"]["approved"] is False
+            assert m["stages"]["color"]["approved"] is False
+            assert not m["approved"]
+            assert m["settings"]["category"] == "switched"

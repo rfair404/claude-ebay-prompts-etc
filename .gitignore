@@ -31,6 +31,13 @@ listings_ledger.csv
 # it is the single most sensitive file the pipeline produces.
 sales_ledger.csv
 
+# Pick lists — buyer name, street address, phone number from real orders.
+# Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
+# Terminal, local file, and printer only, per GH #32's PII guardrail; never
+# committed. Regenerate with
+#   python -m lib.cli pick-list --poll
+/pick_lists/
+
 # Any dated backup of the above (e.g. listings_ledger.backup-20260815.csv).
 *.backup-*.csv
 *_ledger.backup*.csv
@@ -85,6 +92,11 @@ apify_runs/
 # Local scratch + generated similarity indexes (large/binary, regenerable).
 .scratch/
 /kb/index/
+
+# On-disk read cache — comp runs + eBay reads, keyed query+date (V4_PLAN
+# Phase 4, #30). Every entry is regenerable from a live query; see
+# lib/read_cache.py.
+/.cache/
 
 # Shoot images — heavy binaries, kept on disk only.
 *.jpg
@@ -171,3 +183,13 @@ desktop.ini
 
 # local working backups (ledger/sales/config) — never committed
 backups/
+session_friction.json
+
+# Claude Code agent worktrees — transient checkouts for background subagents
+# launched with worktree isolation; never repo content.
+/.claude/worktrees/
+
+# tests/test_dir_context.py's synthetic trees, created inside REPO on purpose
+# (dir_context.rel()/sweep() need paths relative to the real repo root) and
+# cleaned up by teardown_module — but an interrupted run can leave them behind.
+/dctx_*/

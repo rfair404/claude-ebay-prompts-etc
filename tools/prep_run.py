@@ -96,12 +96,13 @@ def _with_retry(fn, note_fn):
 def _worker(job):
     """One shoot. Imports live at module scope in the worker after first call,
     so the model load is amortised across every shoot this worker handles."""
-    shoot_s, mode, aspect, pad, pop = job
+    shoot_s, mode, aspect, pad, pop, check_rotation, filters = job
     shoot = Path(shoot_s)
     t0 = time.monotonic()
     try:
         sys.path.insert(0, str(ROOT))
         from lib.photo_prep import prep as P
+        from lib.photo_prep import color as colormod
 
         if mode == "check":
             def _ask(m):
@@ -110,10 +111,12 @@ def _worker(job):
                           if r["orientation"]["needs_ask"])
                 return f"{n} frames, {ask} ASK"
             m, note = _with_retry(
-                lambda: P.run_check(shoot, aspect, pad, pop, quiet=True), _ask)
+                lambda: P.run_check(shoot, aspect, pad, pop, quiet=True,
+                                    check_rotation=check_rotation), _ask)
         else:
+            only = tuple(colormod.PRESETS) if filters else ()
             m, note = _with_retry(
-                lambda: P.run_apply(shoot, quiet=True),
+                lambda: P.run_apply(shoot, quiet=True, only=only),
                 lambda m: f"{len(m.get('photos', {}))} frames, "
                           f"preset {m.get('chosen_preset')}")
         return dict(shoot=shoot_s, ok=True, note=note, secs=round(time.monotonic() - t0, 1))
@@ -139,6 +142,12 @@ def main() -> int:
     ap.add_argument("--aspect", default="1:1")
     ap.add_argument("--pad", type=float, default=0.12)
     ap.add_argument("--pop", default="gentle")
+    ap.add_argument("--check-rotation", action="store_true", dest="check_rotation",
+                    help="run the OSD rotation check + ask panel per shoot "
+                         "(default: off — assumes every frame is shot right-side up)")
+    ap.add_argument("--filters", action="store_true",
+                    help="render every colour preset per shoot instead of just "
+                         "`crisp` (default: off)")
     ap.add_argument("--force", action="store_true", help="redo shoots already done")
     args = ap.parse_args()
 
@@ -164,7 +173,8 @@ def main() -> int:
     if not todo:
         return 0
 
-    jobs = [(str(s), mode, args.aspect, args.pad, args.pop) for s in todo]
+    jobs = [(str(s), mode, args.aspect, args.pad, args.pop, args.check_rotation, args.filters)
+            for s in todo]
     done = fail = 0
     t0 = time.monotonic()
     # 'spawn' is the only start method on Windows; maxtasksperchild keeps a

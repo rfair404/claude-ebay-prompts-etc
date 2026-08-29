@@ -9,8 +9,8 @@ conventions, reproduction/fake red flags, where to find real comps, dating
 clues, shipping/handling for fragile classes — plus the curated **resource
 registry** the modules and prompts link out to.
 
-Like the rest of v3 this is prompt-driven: an article is just a Markdown file
-the pipeline reads when it's relevant. No code, no build step.
+Like the rest of the pipeline this is prompt-driven: an article is just a
+Markdown file the pipeline reads when it's relevant. No code, no build step.
 
 - **KB article** → reusable reference knowledge (a digest of one or more
   resources), category-agnostic or spanning categories.
@@ -239,7 +239,7 @@ python lib/seller_intel.py landscape --from <comps.json...> [--check 30]
 - **landscape** — category competitive map: MOST FOR SALE (active inventory),
   HIGHEST-PRICED (top asking), TOP REALIZED — to see how successful sellers
   operate (volume players vs premium specialists).
-- Reads the standard `apify_ebay.py` saved-run JSON (`raw_items`) directly —
+- Reads the standard Stage B saved-run JSON (`raw_items`) directly —
   `sellerName` flows through with no extra step.
 
 ---
@@ -252,8 +252,9 @@ Fenton…) up to the same depth:
 1. **Taxonomy** — author `kb/taxonomies/<category>-types.md` (the named
    collectable types + value tiers + match keywords), mirroring
    [`taxonomies/marble-types-top100.md`](taxonomies/marble-types-top100.md).
-2. **Pull comps** — `python lib/apify_ebay.py "<type queries…>" --save-dir <dir>`
-   (one run, many keywords). The saved JSON carries `sellerName` + images.
+2. **Pull comps** — `python lib/ebay_sold_browse.py "<type query>" --also
+   "<another…>" --save-dir <dir>` (one run, many keywords). The saved JSON
+   carries `sellerName` + images.
 3. **Priced visual library** — `ebay_visual.py add --from <saved.json>` →
    query by photo for similar **sold** listings + prices.
 4. **Seller intelligence** — `seller_intel.py rank|landscape --from <saved.json>`

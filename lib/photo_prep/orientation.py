@@ -18,18 +18,30 @@ half comes from, in order:
                 whole frame; a magazine cover in a 4096px bedspread shot reads
                 as "too few characters"). Objective, and it covers a large share
                 of this inventory: catalogs, magazines, boxes, cartons, labels.
-                Below `OSD_MIN_CONF` it counts as no answer.
+                Below `OSD_MIN_CONF` it counts as no answer. Only run at all
+                when the caller opts in (`--check-rotation`) — see `assumed`.
   2. `vision` — someone looked and said so, either through PREP's own
                 `--rotate` or through the sibling `orient.py` tool's
                 `orientation.json`. A recorded 0 is a real answer — "confirmed
                 upright" — not the absence of one.
-  3. `ask`    — nobody has answered. The frame keeps its camera rotation only,
-                is marked unresolved, and CANNOT pass the gate.
+  3. `ask`    — nobody has answered AND the caller asked for a check. The frame
+                keeps its camera rotation only, is marked unresolved, and
+                CANNOT pass the gate.
+  4. `assumed`— the shoot convention: items are shot right-side up, so a frame
+                with no `vision` answer and no OSD check is left at 0 rather
+                than sent to the operator. This is the DEFAULT now that PREP
+                is no longer asked to run OSD on every frame — it is what
+                `resolve(..., assume_upright=True)` records when there is
+                nothing else to go on. It is a standing assumption about how
+                the shoot was taken, not a measurement, and `--check-rotation`
+                (which drives `assume_upright=False`) turns the OSD/ask path
+                back on for a shoot where that assumption might not hold.
 
-The rule that makes this trustworthy is the last one. Nothing here infers
-"probably upright" from an aspect ratio and ships it. Round items with no
-defined upright are resolved the same way as everything else — by someone
-looking once and confirming 0.
+The rule that makes `ask` trustworthy is that it never guesses. Nothing here
+infers "probably upright" from an aspect ratio and ships it — `assumed` is a
+declared default, recorded and visible in the notes, not an inference. Round
+items with no defined upright, or any shoot where the convention might not
+hold, still go through `ask` by passing `--check-rotation`.
 
 Angle convention throughout: degrees CLOCKWISE to apply to the stored pixels to
 make them upright. 0 / 90 / 180 / 270 only.
@@ -274,13 +286,23 @@ def _osd_once(bgr: np.ndarray, long_side: int) -> tuple[Optional[int], float, st
 def resolve(name: str,
             exif_tag: Optional[int],
             osd: tuple[Optional[int], float, str],
-            vision: Optional[int] = None) -> OrientVerdict:
+            vision: Optional[int] = None,
+            assume_upright: bool = False) -> OrientVerdict:
     """Compose the camera half and the subject half into one applied angle.
 
     `osd` is measured on the subject AFTER the EXIF bake, so it reports the
     subject half directly. `vision` is a recorded look, also expressed as the
     subject half, and it outranks OSD — a person who looked at the frame beats
     an inference from glyph shapes, including when they disagree.
+
+    `assume_upright` governs the ONLY case where there is neither: no recorded
+    look and no OSD answer (because it wasn't run, or was run and found
+    nothing). False (the default for this function) sends the frame to `ask`
+    — the historical, safe-by-default behaviour, and what every direct caller
+    of `resolve` still gets unless it opts in. `prep.run_check` passes True
+    unless the operator asked for `--check-rotation`, because the shoot
+    convention is now "shot right-side up" and running OSD on every frame to
+    confirm that costs real time for an answer that is almost always 0.
     """
     v = OrientVerdict(name=name, exif_tag=exif_tag)
     osd_a, osd_c, osd_n = osd
@@ -308,6 +330,18 @@ def resolve(name: str,
     elif osd_a is not None:
         v.subject_angle = osd_a
         v.source = "exif+osd" if v.exif_angle else "osd"
+    elif assume_upright:
+        # Nothing to read and nobody asked for a check: fall back to the
+        # shoot convention (shot right-side up) rather than spending an OSD
+        # pass — and an ask — to confirm what almost every frame already is.
+        # This is a declared default, not an inference: it is recorded in the
+        # notes and in `source`, and `--rotate` / `--check-rotation` both
+        # override it the moment either says otherwise.
+        v.subject_angle = 0
+        v.source = "exif+assumed" if v.exif_angle else "assumed"
+        v.needs_ask = False
+        v.notes.append("rotation check skipped — assumed upright per shoot "
+                       "convention (pass --check-rotation to verify instead)")
     else:
         # No objective read of the subject and nobody has looked. The camera
         # half is still applied (it is independently true), but the frame is
