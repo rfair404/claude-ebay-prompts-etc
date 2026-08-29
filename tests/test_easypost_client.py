@@ -39,6 +39,7 @@ from easypost_client import (                                          # noqa: E
     get_api_key,
     get_rates,
 )
+import config as CFG                                                   # noqa: E402
 from config import ConfigError                                         # noqa: E402
 
 
@@ -137,12 +138,12 @@ def _buy_response(tracking="TRK123456789", carrier="USPS", service="Priority",
 # ---------------------------------------------------------------------------
 
 def test_get_api_key_missing_everywhere_raises_config_error():
-    # Patch the name as bound inside easypost_client's own namespace (it did
-    # `from config import load_config`), not the config module's attribute —
-    # rebinding the latter would not affect the former.
+    # easypost_client.get_api_key() delegates to config.get_easypost_key();
+    # patch the name as bound inside config's own namespace, not
+    # easypost_client's, so the delegation is actually exercised.
     prev_env = os.environ.pop("EASYPOST_API_KEY", None)
-    real_load = EP.load_config
-    EP.load_config = lambda reload=False: {}
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {}
     try:
         try:
             get_api_key()
@@ -151,7 +152,7 @@ def test_get_api_key_missing_everywhere_raises_config_error():
             assert "EASYPOST_API_KEY" in str(e)
             assert "easypost" in str(e)
     finally:
-        EP.load_config = real_load
+        CFG.load_config = real_load
         if prev_env is not None:
             os.environ["EASYPOST_API_KEY"] = prev_env
 
@@ -159,12 +160,12 @@ def test_get_api_key_missing_everywhere_raises_config_error():
 def test_get_api_key_prefers_env_var_over_config_file():
     prev_env = os.environ.get("EASYPOST_API_KEY")
     os.environ["EASYPOST_API_KEY"] = "from-env"
-    real_load = EP.load_config
-    EP.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
     try:
         assert get_api_key() == "from-env"
     finally:
-        EP.load_config = real_load
+        CFG.load_config = real_load
         if prev_env is None:
             os.environ.pop("EASYPOST_API_KEY", None)
         else:
@@ -173,14 +174,27 @@ def test_get_api_key_prefers_env_var_over_config_file():
 
 def test_get_api_key_falls_back_to_config_file():
     prev_env = os.environ.pop("EASYPOST_API_KEY", None)
-    real_load = EP.load_config
-    EP.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
     try:
         assert get_api_key() == "from-config"
     finally:
-        EP.load_config = real_load
+        CFG.load_config = real_load
         if prev_env is not None:
             os.environ["EASYPOST_API_KEY"] = prev_env
+
+
+def test_get_api_key_delegates_to_config_get_easypost_key():
+    """The Copilot-review fix: easypost_client no longer has its own copy
+    of the precedence/error-message logic — it must call straight through
+    to config.get_easypost_key() (bound in easypost_client's own namespace
+    via `from config import get_easypost_key`)."""
+    real = EP.get_easypost_key
+    EP.get_easypost_key = lambda: "delegated-value"
+    try:
+        assert get_api_key() == "delegated-value"
+    finally:
+        EP.get_easypost_key = real
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +425,61 @@ def test_buy_label_missing_api_key_raises_before_any_call():
             assert fake.requests == []
 
     _patched(fake, go, api_key=None)
+
+
+# ---------------------------------------------------------------------------
+# tools/ship_quote.py CLI — partial-dimension validation (Copilot review fix)
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(ROOT / "tools"))
+import ship_quote                                                     # noqa: E402
+
+_BASE_ARGV = [
+    "ship_quote.py",
+    "--to-name", "Jane Buyer", "--to-street1", "1 Main St",
+    "--to-city", "Springfield", "--to-state", "IL", "--to-zip", "62704",
+    "--from-name", "My Store", "--from-street1", "9 Ship St",
+    "--from-city", "Elgin", "--from-state", "IL", "--from-zip", "60120",
+    "--weight-oz", "24",
+]
+
+
+def _run_ship_quote_cli(extra_argv, fake=None):
+    real_argv = sys.argv
+    real_get_rates = ship_quote.get_rates
+    sys.argv = _BASE_ARGV + extra_argv
+    if fake is not None:
+        ship_quote.get_rates = fake
+    try:
+        return ship_quote.main()
+    finally:
+        sys.argv = real_argv
+        ship_quote.get_rates = real_get_rates
+
+
+def test_ship_quote_rejects_a_partial_dimension_set():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli(["--length-in", "10"], fake=fake)
+    assert rc == 1
+    assert calls == [], "get_rates must not be called — dims would be silently dropped"
+
+
+def test_ship_quote_accepts_all_three_dimensions():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli(
+        ["--length-in", "10", "--width-in", "8", "--height-in", "4"], fake=fake)
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_ship_quote_accepts_no_dimensions():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    assert len(calls) == 1
 
 
 if __name__ == "__main__":

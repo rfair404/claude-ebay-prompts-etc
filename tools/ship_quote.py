@@ -71,6 +71,14 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="print raw rates as JSON")
     args = ap.parse_args()
 
+    dims = (args.length_in, args.width_in, args.height_in)
+    if any(d is not None for d in dims) and not all(d is not None for d in dims):
+        print("[X] --length-in, --width-in, and --height-in must all be given "
+             "together, or all omitted — a partial set is silently dropped by "
+             "the carrier API and would misrepresent what was quoted.",
+             file=sys.stderr)
+        return 1
+
     to_addr = _address_from_args(args, "to")
     from_addr = _address_from_args(args, "from")
     parcel = Parcel(weight_oz=args.weight_oz, length_in=args.length_in,

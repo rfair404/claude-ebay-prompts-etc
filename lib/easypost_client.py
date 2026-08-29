@@ -45,7 +45,6 @@ See tools/ship_quote.py (`ebz ship-quote` — free) and tools/ship_buy.py
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -53,7 +52,7 @@ from base64 import b64encode
 from dataclasses import dataclass
 from typing import Optional
 
-from config import ConfigError, config_path, load_config
+from config import get_easypost_key
 
 API_BASE = "https://api.easypost.com/v2"
 
@@ -81,28 +80,11 @@ class EasyPostAPIError(RuntimeError):
 def get_api_key() -> str:
     """EasyPost API key. Precedence: env var > config file > error.
 
-    Mirrors config.get_apify_token() / config.get_anthropic_key() exactly:
-    EASYPOST_API_KEY env var first, then config.yaml `easypost.api_key`.
+    Thin wrapper around config.get_easypost_key() — the precedence
+    contract lives in exactly one place; this name is kept so callers in
+    this module read naturally alongside get_rates()/buy_label().
     """
-    env = os.environ.get("EASYPOST_API_KEY")
-    if env:
-        return env
-
-    config = load_config()
-    key = (config.get("easypost") or {}).get("api_key")
-    if key:
-        return str(key)
-
-    raise ConfigError(
-        f"EasyPost API key not found.\n"
-        f"  Set the EASYPOST_API_KEY environment variable, OR\n"
-        f"  add this to {config_path()}:\n"
-        f"      easypost:\n"
-        f"        api_key: \"<your-key>\"\n"
-        f"  Get a key (test or production) at https://www.easypost.com/account/api-keys\n"
-        f"  A human still has to create the account and fund its balance before\n"
-        f"  any real purchase can succeed — that step is deliberately not automated."
-    )
+    return get_easypost_key()
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +134,14 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
                 ) from e
             err = EasyPostAPIError(e.code, f"{m} {path} -> HTTP {e.code}", body_text)
             if e.code >= 500 and idempotent and attempt < 2:
-                time.sleep(0.8 * (attempt + 1)); continue
+                time.sleep(0.8 * (attempt + 1))
+                continue
             raise err from e
         except urllib.error.URLError as e:
             err = EasyPostAPIError(0, f"{m} {path} -> network error: {e}", None)
             if attempt < 2:
-                time.sleep(0.8 * (attempt + 1)); continue
+                time.sleep(0.8 * (attempt + 1))
+                continue
             raise err from e
 
 
