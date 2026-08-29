@@ -31,6 +31,7 @@ import argparse
 import base64
 import html
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -133,21 +134,31 @@ def _hero_path(folder: str) -> Path | None:
     return None
 
 
+_LOCATION_OVERRIDE_RE = re.compile(
+    r'describe location as ["“]([^"”]+)["”]', re.IGNORECASE)
+
+
 def _pick_location(folder: str) -> str:
     """Where a person actually goes to pull this — not the full repo path.
 
     Walks up from the item's folder to the nearest ancestor holding a
     context.txt (the estate/lot marker, e.g. inventory/ESTATES/SCJ/context.txt)
-    and returns just that directory's name, e.g. "SCJ". Falls back to the
-    item folder's own name if no ancestor has one."""
+    and returns just that directory's name, e.g. "SCJ" — unless that
+    context.txt itself overrides the display name (e.g. inventory/FREE's
+    says `describe location as "BIN-4" and NOT "FREE"`, because the
+    directory name isn't what's written on the shelf). Falls back to the
+    item folder's own name if no ancestor has a context.txt at all."""
     if not folder:
         return ""
     d = (ROOT / folder).resolve()
     root = ROOT.resolve()
     cur = d
     while root in cur.parents or cur == root:
-        if (cur / "context.txt").exists():
-            return cur.name
+        ctx = cur / "context.txt"
+        if ctx.exists():
+            text = ctx.read_text(encoding="utf-8", errors="ignore")
+            m = _LOCATION_OVERRIDE_RE.search(text)
+            return m.group(1).strip() if m else cur.name
         if cur == root:
             break
         cur = cur.parent
