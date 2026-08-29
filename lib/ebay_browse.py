@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -137,6 +138,27 @@ def seller_active(seller: str, *, q: str | None = None,
     return total, recs
 
 
+def top_sellers_active(q: str | None = None, *, category_ids: str | None = None,
+                       sample: int = 200, top_n: int = 5,
+                       marketplace: str = "EBAY_US", creds=None) -> list[dict]:
+    """Active listings from the top `top_n` sellers in a category/query sample.
+
+    One `search()` pull (up to `sample` active listings) stands in for "the
+    competing stores in this niche" — Browse has no seller-ranking endpoint,
+    so listing count within the sample is the proxy for who's moving volume
+    here. Returns the normalised listings (each carries `seller` +
+    `askingPrice`) belonging to just those top sellers — feed this straight
+    into `price_stats.competitor_charm_pattern` (GH #82) to learn the
+    charm-pricing convention the sellers actually winning this niche use,
+    rather than defaulting to a generic charm price.
+    """
+    listings = search(q=q, category_ids=category_ids, max_items=sample,
+                      marketplace=marketplace, creds=creds)
+    counts = Counter(r["seller"] for r in listings if r.get("seller"))
+    top = {name for name, _ in counts.most_common(top_n)}
+    return [r for r in listings if r.get("seller") in top]
+
+
 def _print(records: list[dict], header: str) -> None:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -169,11 +191,23 @@ def main() -> None:
     p.add_argument("--max", type=int, default=100)
     p.add_argument("--json", default=None)
 
+    p = sub.add_parser("top-sellers", help="active listings from the top N sellers in a "
+                                           "category/query sample (GH #82 — competitor charm pricing)")
+    p.add_argument("query", nargs="?", default=None, help="optional keyword filter")
+    p.add_argument("--category", default=None, help="category_ids (required if no query)")
+    p.add_argument("--sample", type=int, default=200, help="active listings to sample")
+    p.add_argument("--top", type=int, default=5, help="how many top sellers to keep")
+    p.add_argument("--json", default=None)
+
     args = ap.parse_args()
     try:
         if args.cmd == "seller":
             recs = seller_items(args.username, q=args.q, category_ids=args.category, max_items=args.max)
             _print(recs, f"Seller {args.username} (active)")
+        elif args.cmd == "top-sellers":
+            recs = top_sellers_active(q=args.query, category_ids=args.category,
+                                      sample=args.sample, top_n=args.top)
+            _print(recs, f"Top {args.top} sellers")
         else:
             recs = search(q=args.query, seller=args.seller, category_ids=args.category, max_items=args.max)
             _print(recs, f"Search {args.query!r}")
