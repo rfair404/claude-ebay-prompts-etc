@@ -592,13 +592,34 @@ def cost_per_listing(total_cost_usd: float, ledger_rows: list,
     }
 
 
-def parse_economics(path: Path) -> dict:
+def _in_window(ts, window_start, window_end) -> bool:
+    if ts is None:
+        return window_start is None and window_end is None
+    if window_start is not None and ts < window_start:
+        return False
+    if window_end is not None and ts > window_end:
+        return False
+    return True
+
+
+def parse_economics(path: Path, *, window_start=None, window_end=None) -> dict:
     """One session's #61-style run economics: context/turn, tool-call
     batching, Read payload by extension, backgrounding, and gate wall-clock
     by header. A separate pass from parse_session's friction walk on
     purpose — it answers "what did this session cost", not "what went
     wrong", and bolting a second question onto the six-signal walk risks
-    the signals that walk already locks down."""
+    the signals that walk already locks down.
+
+    `window_start`/`window_end` (both None by default = unbounded, matching
+    prior behavior) bound `cost_usd` and the `fg_seconds_by_*` dicts to
+    turns whose OWN timestamp falls in the window — file-mtime selection
+    alone isn't enough for a long-lived/resumed session (#71 §5: sessions
+    spanning hundreds of hours), which would otherwise have turns from
+    outside the requested window counted toward $/published-listing and
+    foreground-hours totals for that window. The structural counters
+    (context/turn, tool-call shape, read payload, bash/backgrounding
+    counts) stay file-level — they describe session shape, not a
+    window-scoped cost, and #71 didn't flag them as skewed."""
     context_per_turn: list[int] = []
     tools_per_turn: list[int] = []
     same_tool_adjacent = 0
@@ -632,7 +653,8 @@ def parse_economics(path: Path) -> dict:
             if kind == "assistant":
                 msg = rec.get("message") or {}
                 model = msg.get("model") or model
-                cost_usd += _turn_cost_usd(msg.get("usage") or {}, model)
+                if _in_window(when, window_start, window_end):
+                    cost_usd += _turn_cost_usd(msg.get("usage") or {}, model)
                 blocks = [b for b in (msg.get("content") or [])
                           if isinstance(b, dict) and b.get("type") == "tool_use"]
                 if blocks:
@@ -675,7 +697,7 @@ def parse_economics(path: Path) -> dict:
                     # Bash/PowerShell call that opted into run_in_background.
                     backgrounded = (name in ("Bash", "PowerShell")
                                     and bool(inp.get("run_in_background")))
-                    if not backgrounded:
+                    if not backgrounded and _in_window(when, window_start, window_end):
                         fg_seconds_by_tool[name] += secs
                         if name in ("Bash", "PowerShell"):
                             fg_seconds_by_command[
@@ -708,9 +730,14 @@ def parse_economics(path: Path) -> dict:
     }
 
 
-def economics_aggregate(paths: list[Path]) -> dict:
+def economics_aggregate(paths: list[Path], *, window_start=None, window_end=None) -> dict:
     """`parse_economics` summed across sessions — the numbers both
-    `economics_report()` and `propose_fixes()` read, computed once."""
+    `economics_report()` and `propose_fixes()` read, computed once.
+
+    `window_start`/`window_end` pass straight through to `parse_economics`
+    (see its docstring) — the cost/foreground-hour totals only reflect
+    turns whose own timestamp falls in the window, not every turn in every
+    file that happened to be selected by mtime."""
     all_ctx: list[int] = []
     all_tools: list[int] = []
     same_tool_adjacent = total_turns = 0
@@ -725,7 +752,7 @@ def economics_aggregate(paths: list[Path]) -> dict:
     prep_calls: Counter = Counter()
 
     for p in paths:
-        e = parse_economics(p)
+        e = parse_economics(p, window_start=window_start, window_end=window_end)
         all_ctx.extend(e["context_per_turn"])
         all_tools.extend(e["tools_per_turn"])
         same_tool_adjacent += e["same_tool_adjacent"]
@@ -764,10 +791,11 @@ def economics_report(paths: list[Path], *, window_start=None, window_end=None) -
     `listings_ledger.csv` on `published_at`), foreground blocking hours by
     tool and by repo command, and `prep` re-runs per item.
 
-    `window_start`/`window_end` bound the ledger join to the same window
-    `paths` was already filtered to (None/None for an unbounded --all run —
-    every published row counts)."""
-    agg = economics_aggregate(paths)
+    `window_start`/`window_end` bound both the cost/foreground-hour turn
+    accumulation (see `parse_economics`) and the ledger join to the same
+    window `paths` was already filtered to (None/None for an unbounded
+    --all run — every turn and every published row counts)."""
+    agg = economics_aggregate(paths, window_start=window_start, window_end=window_end)
     s = agg["context_per_turn"]
     all_tools = agg["tools_per_turn"]
     total_turns = agg["total_turns"]

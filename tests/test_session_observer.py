@@ -699,6 +699,38 @@ def test_parse_economics_tracks_cost_usd_from_model_pricing():
     assert round(e["cost_usd"], 2) == 5.00       # claude-opus-5 (test helper's model)
 
 
+def test_parse_economics_windows_cost_and_foreground_hours_by_turn_timestamp():
+    # Copilot review on #94: a long-lived/resumed session (#71 §5) can have
+    # turns both inside and outside a requested --days window in the SAME
+    # file — file-level mtime selection alone can't scope that, so
+    # parse_economics must bound cost_usd/fg_seconds by each turn's own
+    # timestamp when a window is given.
+    p = _write_economics([
+        # Outside the window (too early) — must not count.
+        _tool_use_msg("2026-01-01T10:00:00Z", [("t1", "Bash", {"command": "ls"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-01-01T10:05:00Z", "t1", "a"),
+        # Inside the window — must count.
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t2", "Bash", {"command": "pwd"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:01:00Z", "t2", "b"),
+    ])
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+
+    unbounded = parse_economics(p)
+    assert round(unbounded["cost_usd"], 2) == 10.00   # both turns count
+    assert unbounded["fg_seconds_by_tool"]["Bash"] == 300.0 + 60.0
+
+    windowed = parse_economics(p, window_start=start, window_end=end)
+    assert round(windowed["cost_usd"], 2) == 5.00      # only the in-window turn
+    assert windowed["fg_seconds_by_tool"]["Bash"] == 60.0
+
+
 def test_parse_economics_foreground_hours_exclude_backgrounded_bash():
     p = _write_economics([
         _tool_use_msg("2026-08-27T10:00:00Z", [
