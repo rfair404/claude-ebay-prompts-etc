@@ -43,12 +43,22 @@ shell.
 ### Status of the stated prerequisite (#30)
 
 Issue #31 says this work is "downstream of #30, not parallel to it."
-`docs/V4_PLAN.md` shows **all five phases of #30 checked off as landed**:
-prompt diet (Phase 1), terse tool output (Phase 2), the `ebz` CLI (Phase
-3), the on-disk comp cache + single-pass mode (Phase 4), and the session
-observer (Phase 5). #30 is done, not aspirational — so the "skinny
-prompts + structured records + one CLI" precondition #31 asks for is
-already in place, and this plan is not blocked on it.
+`docs/V4_PLAN.md` shows Phases 1, 3, 4, and 5 of #30 checked off as
+landed: prompt diet, the `ebz` CLI, the on-disk comp cache + single-pass
+mode, and the session observer. Phase 2 ("terse tool output") is written
+as a convention, not a checklist, and checking the code directly: none of
+its five named targets (`lib/photo_prep/prep.py`, `lib/list_edit.py`,
+`tools/sales_report.py`, `tools/ledger_reconcile.py`,
+`tools/live_audit.py`) print the `OK n/m, k flagged → <file>.json` shape
+the convention describes yet — the one attempt at it
+(`tools/ledger_reconcile.py`) is an open, unmerged PR as of this writing.
+So #30 is landed for three of four phases that matter here, not five of
+five. It still doesn't block this plan: Phase 2 is about making a tool's
+*terse stdout* readable by a human or an LLM reading a transcript: this
+plan's Phase 2 already calls `gather()` and friends as Python functions
+directly (see the module-mapping table below), never by parsing a CLI's
+printed text, so the "skinny prompts + structured records + one CLI"
+precondition #31 actually needs is in place regardless.
 
 ## Phased plan
 
@@ -155,7 +165,7 @@ it runs inside is real.
 | Module | Role in the web app | Ready as-is? |
 |---|---|---|
 | `lib/cli.py` | Command registry — already close to an API surface; each `COMMANDS` entry is a candidate job type | Ready for Phase 2 (shell out per job); the registry pattern (name → module, one-line purpose) maps directly to a job-type table |
-| `lib/status.py` / `tools/shoot_status.py` | Backlog-by-shoot data for the dashboard | Ready as-is — already has a `--json` structured-output mode |
+| `lib/status.py` (`python -m lib.cli status <shoot-dir>`) | Backlog-by-shoot data for the dashboard | Ready as-is — already has a `--json` structured-output mode |
 | `tools/sales_report.py` (`_rows`, `gather`) | Sales/drift dashboard data layer | Ready as-is — `gather()` is already a pure function returning the dict a template needs, separate from the HTML-writing step; no extraction needed, just `from tools.sales_report import gather` (`lib/cli.py` puts the repo root, not `tools/`, on `sys.path` and dispatches to this module as `tools.sales_report`) |
 | `lib/price_stats.py` | PRICE tier math | Ready as-is — stdlib-only, already a pure function (`price_from_runs`), no secrets |
 | `lib/photo_prep/prep.py` | PREP pipeline (orientation/crop/colour) | Ready as-is for background jobs — already stage-gated with flags (`--auto`, `--check`, `--approve-stage`) that map directly to job endpoints; needs a queue wrapper, not a rewrite |
