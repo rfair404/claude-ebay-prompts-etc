@@ -48,7 +48,8 @@ tests so "read only when flagged" can be trusted.
 
 - [x] `tools/ledger_reconcile.py` — the per-field diff loop moved to a pure
       `compute_drift()` (no I/O), unit-tested directly (`tests/test_ledger_reconcile.py`,
-      13 cases covering drift, SOLD protection, blanked fields, orphans). Report
+      25 cases: the SOLD/SHIPPED-vs-SYNCED precedence carve-out plus drift,
+      blanked fields, orphans and the JSON round-trip). Report
       output now one line (`OK` or `N flagged -> ledger_reconcile_report.json`)
       with full detail always written to the JSON file so it's never stale;
       the file is gitignored (same sensitivity class as the ledgers it diffs).
@@ -85,18 +86,61 @@ tests so "read only when flagged" can be trusted.
 
 ## Phase 4 — fewer round-trips
 
-- [ ] On-disk cache for comp runs and eBay reads, keyed query+date, `--fresh`
-      bypass.
-- [ ] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
+- [x] On-disk cache for comp runs and eBay reads, keyed query+date, `--fresh`
+      bypass. `lib/read_cache.py` (generic primitive) wired into
+      `lib/ebay_sold_browse.py`'s comp-ingest path: keyed query+condition+UTC
+      date, so a same-day re-check of a query already ingested (both dual
+      sorts) skips the Chrome round trip entirely; `--fresh` forces it anyway
+      and repopulates. `lib/ebay_client.py`'s reads (policies, live
+      inventory/offers, category/condition metadata) are deliberately left
+      UNCACHED — every one of them feeds a policy or live-state decision
+      where staleness would silently misinform an outcome, the failure class
+      PR #50 fixed for `sync_actuals`; comp prices are a same-day snapshot
+      already, so re-serving one from earlier today changes nothing.
+- [x] Single-pass mode for routine items: PREP→IDENTIFY→PRICE→DRAFT in one
       run, ONE review card at the end, conversation reserved for flagged
       exceptions. Builds on PREP's confidence gate (#36, landed in PR #37).
+      `python -m lib.cli single-pass <shoot-dir>` — a read-only gate check
+      across IDENTIFY/PREP/PRICE/INVESTIGATE/DRAFT's own output files (real
+      dependency order per RUN.md; DRAFT hard-requires `investigate.txt`);
+      clean → the one card REVIEW already builds, else the specific
+      exception a stage's own interactive HARD stop caught, by name.
+      `prompts/single_pass.md` is the protocol; `.single_pass/ask.json` is
+      the sentinel a stage writes instead of pausing the chat.
 
 ## Phase 5 — the observer (#36)
 
-- [ ] `tools/session_observer.py`: parse session transcripts (timestamps +
-      token usage are already in the JSONL), compute per-stage wall time,
-      token attribution, interaction hot spots, repeats.
-- [ ] Friction report → auto-filed `Idea:` issue, deduped against open ones.
+- [x] `tools/session_observer.py` (+ `ebz observe`, `tests/test_session_observer.py`):
+      streams the session JSONLs into per-stage wall time, token attribution,
+      hot spots and six friction signals — `tool_error`, `denied`, `interrupt`,
+      `redo`, `repeat`, `long_loop`. Terse summary to stdout per the Phase 2
+      convention, detail to `session_friction.json`, full report on `--report`.
+      Read-only: it never writes to the tracker and never touches a listing.
+- [x] Friction report → ranked, evidence-cited proposed fixes
+      (`propose_fixes`, `ebz observe --propose`) → filed as a house `Idea:`
+      issue, or a comment on a matching OPEN one, deduped by keyword
+      (`format_idea_issue` / `_match_open_issue` / `file_proposals`). "A
+      counter is evidence, a filed issue is a claim" is kept as a live
+      safety default rather than dropped: `--propose` alone only ever
+      prints what it found and what it WOULD file; nothing reaches GitHub
+      without also passing `--file`, explicitly, every time.
+
+## Phase 6 — background dispatch (#59)
+
+Nothing here needs new infrastructure — the pipeline is already a Claude
+Code session running prompts, so "cloud dispatch" is the `Agent` tool's
+`run_in_background`, not a new service. PRICE, IDENTIFY's non-photo research,
+DRAFT, and REVIEW card-build touch no local state; PREP and the REVIEW
+approval gate do and stay foreground. Convention documented in RUN.md
+"Background dispatch". Priority among the four candidates should come from
+Phase 5's per-stage timing once it exists, not guessed up front.
+
+- [ ] Batch runner: when a shoot batch queues item N+1 while item N is still
+      in PREP, dispatch item N+1's PRICE/DRAFT as background agents instead
+      of waiting.
+- [ ] Verify a dispatched stage that hits a local-state need (e.g. IDENTIFY
+      wants another photo angle) surfaces as a question, not a silent
+      failure.
 
 ## Ground rules
 

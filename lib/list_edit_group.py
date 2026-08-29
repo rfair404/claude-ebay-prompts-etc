@@ -99,6 +99,19 @@ def validate_group(group_path: Path) -> list[str]:
     if not str(draft.get("category_id") or "").strip():
         issues.append("category_id: missing (must be a variations-enabled category)")
 
+    # eBay REJECTS Best Offer on any SKU in an inventory item group (error
+    # 25737) — see the NOTE in _variation_offer. _variation_offer never emits
+    # bestOfferTerms, so a best_offer.enabled left in a group draft is not a
+    # money-path risk (it can't leak into the payload), but it is silently
+    # ignored, which reads as a bug to whoever set it expecting Best Offer to
+    # be live. Flag it here so the draft gets cleaned up instead.
+    if draft.get("best_offer.enabled"):
+        issues.append(
+            "best_offer.enabled is set but eBay does not allow Best Offer on "
+            "variation/grouped listings (API error 25737 on any SKU in an "
+            "inventory item group) — remove best_offer from this draft; it "
+            "will otherwise be silently dropped rather than applied.")
+
     varies_by = str(fm.get("varies_by") or "").strip()
     if not varies_by:
         issues.append("varies_by: missing (the variation aspect name, e.g. MPN)")

@@ -779,8 +779,19 @@ def plan_geometry(shoot: Path, quiet: bool = False,
 def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
               subject: Optional[str] = None,
               category: Optional[str] = None,
-              quiet: bool = False) -> dict:
-    """Analyse every frame; write the manifest, rotation sheet and ask panels."""
+              quiet: bool = False,
+              check_rotation: bool = False) -> dict:
+    """Analyse every frame; write the manifest, rotation sheet and ask panels.
+
+    `check_rotation` is opt-in. The shoot convention is now "shot right-side
+    up", so by default no OSD pass runs at all — the most time-consuming part
+    of `--check` on a multi-frame shoot — and every frame with no recorded
+    look (`--rotate` / `orient.py`) is left at 0 with `source: assumed` (see
+    `orientation.resolve`). Pass `check_rotation=True` (CLI: `--check-rotation`)
+    for a shoot where that assumption might not hold — a mixed box of catalogs
+    shot at whatever angle they landed, say — to get the old OSD + ask-panel
+    behaviour back.
+    """
     from .center_crop import _parse_aspect
 
     images = find_images(shoot)
@@ -798,7 +809,7 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
     prior = m.get("photos", {})
     photos: dict = {}
 
-    osd_on = orientmod.osd_available()
+    osd_on = check_rotation and orientmod.osd_available()
     looks = orientmod.recorded_looks(shoot)
     thumbs = []
     ask_dir = shoot / ".prep" / "ask"
@@ -817,8 +828,12 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         # before reading it (see orient.osd_angle).
         cam = orientmod.rotate_bgr(bgr, orientmod.EXIF_ROT.get(exif_tag or 1, 0))
         sm = mask_for(cam, subject)
-        osd = (orientmod.osd_angle(_subject_region(cam, sm.bbox))
-               if osd_on else (None, 0.0, "tesseract not installed"))
+        if osd_on:
+            osd = orientmod.osd_angle(_subject_region(cam, sm.bbox))
+        else:
+            note = ("tesseract not installed" if check_rotation else
+                    "rotation check off — assumed upright (pass --check-rotation to verify)")
+            osd = (None, 0.0, note)
 
         # A recorded look for this frame survives a re-run. The sibling
         # orient.py tool stores the same quantity (degrees CW on top of the EXIF
@@ -828,7 +843,8 @@ def run_check(shoot: Path, aspect_s: str, pad: float, pop: str,
         vision = prev.get("orientation", {}).get("vision_angle")
         if vision is None:
             vision = looks.get(key) or looks.get(path.name)
-        v = orientmod.resolve(path.name, exif_tag, osd, vision)
+        v = orientmod.resolve(path.name, exif_tag, osd, vision,
+                              assume_upright=not check_rotation)
 
         # Segmentation is rotation-invariant — turn the mask with the image.
         upright = orientmod.rotate_bgr(cam, v.subject_angle)
@@ -940,12 +956,15 @@ def _already_listed(shoot: Path) -> bool:
 def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     """Render listing/ from the manifest's decisions + the review sheet.
 
-    `only` restricts which presets are rendered. Rendering all six exists so the
-    operator can compare looks at the gate; a batch that has already decided —
-    printed media is always `asshot` — spends five sixths of its time producing
-    images nothing will read. At ~64s per frame per preset that is the
-    difference between a 3-hour run and a 17-hour one. The gate is unchanged for
-    anyone who does not pass this: default is still every preset.
+    `only` restricts which presets are rendered. The default category now
+    narrows this to `("crisp",)` — the house default for new items anyway
+    (`color.default_preset_for`) — so a shoot renders and auto-picks ONE look
+    unless something says otherwise: `--only NAME...` for specific looks
+    (`--only asshot` to skip colour correction entirely), or `--filters` to
+    render every preset in `color.PRESETS` for a side-by-side comparison. At
+    ~64s per frame per preset, that comparison is expensive on purpose to skip
+    by default — it is the difference between a 3-hour run and a 17-hour one on
+    a batch that was never going to look at five of the six looks anyway.
     """
     from .center_crop import _parse_aspect
 
@@ -955,6 +974,16 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
 
     aspect = _parse_aspect(m["settings"].get("aspect", DEFAULT_ASPECT))
     pad = float(m["settings"].get("pad", DEFAULT_PAD))
+    # NOT forwarded to colormod.correct below, and that is deliberate rather
+    # than the wart it looks like (#23). Every render here goes through a
+    # PRESET, and every preset in color.PRESETS already bakes in its own `pop`
+    # level -- `correct()`'s standalone `pop` argument is only ever read when
+    # NO preset is given, which run_apply never does. A category re-exposing
+    # this as a second knob would either be silently overridden by the
+    # preset's own `pop` or have to fight it, so categories.py refuses to let
+    # a profile set it at all (see its module docstring). This local stays
+    # only so it keeps showing up in the manifest's `settings` for the
+    # standalone `color.correct(..., preset=None)` path the unit tests use.
     pop = m["settings"].get("pop", "gentle")
     smode = subject_mode(m)
 
@@ -1102,19 +1131,32 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
             print(f"  kept the look already chosen for this shoot: {prior}")
         return m
 
-    default = colormod.default_preset_for(
-        shoot_class, warm_subject=warm, new_item=not _already_listed(shoot))
-    # Nothing else was rendered, so the backdrop's usual default cannot be shown
-    # or picked. Adopting it anyway would point listing/ at files that do not
-    # exist.
-    if only and default not in only:
-        default = only[0]
+    # A category's declared default_look (#23) replaces the backdrop/warmth
+    # heuristic outright rather than competing with it -- "for this kind of
+    # goods, THIS look is the one worth showing first" is the same authority
+    # the heuristic already had (a default, subordinate to --pick and to the
+    # approval gate either way), just stated per category instead of derived
+    # per shoot. Only honoured when it was actually rendered under `only`;
+    # otherwise fall through so a narrowed batch never adopts a look it never
+    # produced.
+    cat_default = catmod.default_look_for(category_of(m))
+    if cat_default and (not only or cat_default in only):
+        default = cat_default
+    else:
+        default = colormod.default_preset_for(
+            shoot_class, warm_subject=warm, new_item=not _already_listed(shoot))
+        # Nothing else was rendered, so the backdrop's usual default cannot be
+        # shown or picked. Adopting it anyway would point listing/ at files
+        # that do not exist.
+        if only and default not in only:
+            default = only[0]
     save_manifest(shoot, m)
     m = run_pick(shoot, default, quiet=True, auto=True)
     if not quiet:
         warm_note = (f", warm-metal subject (median R-B {shoot_rb:.0f})" if warm
                      else f" (median R-B {shoot_rb:.0f})")
-        print(f"  default look for a {shoot_class or 'mixed'} backdrop{warm_note}: "
+        source = "category default" if default == cat_default and cat_default else f"{shoot_class or 'mixed'} backdrop"
+        print(f"  default look for a {source}{warm_note}: "
               f"{default} (--pick {'|'.join(colormod.PRESETS)} to change)")
     return m
 
@@ -1486,7 +1528,7 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
 
 def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
              subject: Optional[str] = None, category: Optional[str] = None,
-             quiet: bool = False) -> dict:
+             quiet: bool = False, check_rotation: bool = False) -> dict:
     """The FIRST PASS: turn every frame and plan every crop, asking nothing.
 
     The staged review is what PREP is for, and it is also a lot of the
@@ -1516,7 +1558,7 @@ def run_auto(shoot: Path, aspect_s: str, pad: float, pop: str,
     only after the gate, and the gate still wants a human.
     """
     m = run_check(shoot, aspect_s, pad, pop, subject=subject,
-                  category=category, quiet=quiet)
+                  category=category, quiet=quiet, check_rotation=check_rotation)
 
     guessed = []
     for key, rec in m["photos"].items():
@@ -1622,7 +1664,14 @@ def _unskewed(img: np.ndarray, sm, sk) -> tuple:
     sheets — is looking at identical pixels.
 
     The unskew stage is gone. This exists so the frames that were published with
-    a warp recorded re-render to the pixels a buyer is already looking at."""
+    a warp recorded re-render to the pixels a buyer is already looking at.
+
+    Deliberately does not consult `categories.unskew_applies_for` (#23). That
+    field says whether a category's goods HAVE a rectangle worth squaring, were
+    the stage ever revived -- it says nothing about a warp a shoot was already
+    PUBLISHED with. A category declaring itself unskew-inapplicable must not be
+    able to retroactively un-publish a real historical decision; only the
+    per-frame recorded `Skew` decides whether this replays anything."""
     if not getattr(sk, "applied", False):
         return img, sm
     return (skewmod.apply(img, sk),
@@ -2176,7 +2225,11 @@ def main(argv=None) -> int:
                     help="actually write draft.md for --repoint-draft")
     ap.add_argument("--approve", action="store_true", help="stamp approval (explicit operator yes only)")
     ap.add_argument("--rotate", action="append", nargs="+", metavar="NAME=DEG", help="record a looked-at orientation answer (DEG is RELATIVE to what the sheet shows)")
-    ap.add_argument("--only", action="append", nargs="+", metavar="PRESET", help="render ONLY these presets (batch use; default renders all for comparison)")
+    ap.add_argument("--only", action="append", nargs="+", metavar="PRESET", help="render ONLY these presets (default: just `crisp` — the house default; --filters for every preset)")
+    ap.add_argument("--filters", action="store_true",
+                    help="render every preset in color.PRESETS for a side-by-side "
+                         "comparison, instead of just `crisp` (default). Overridden "
+                         "by an explicit --only.")
     ap.add_argument("--set-rotate", action="append", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--gc", action="store_true",
                     help="list the regenerable byproducts an APPROVED shoot is still holding "
@@ -2187,8 +2240,17 @@ def main(argv=None) -> int:
     ap.add_argument("--decisions", action="store_true",
                     help="print the decision record and its digest, and report "
                          "any stage whose decisions have changed since sign-off")
-    ap.add_argument("--aspect", default=DEFAULT_ASPECT, help="target aspect W:H (default 1:1; 'orig' to keep)")
-    ap.add_argument("--pad", type=float, default=DEFAULT_PAD, help=f"margin around the subject, as a fraction of its own box (default {DEFAULT_PAD})")
+    # No hardcoded default here any more: None means "nothing explicit", and
+    # main() below resolves that to the CATEGORY's aspect/pad (categories.py
+    # #23) before falling back to DEFAULT_ASPECT/DEFAULT_PAD -- so an explicit
+    # flag still outranks the category, exactly like --subject already does.
+    ap.add_argument("--aspect", default=None,
+                    help=f"target aspect W:H (default {DEFAULT_ASPECT}, or the "
+                         f"category's own if it sets one; 'orig' to keep)")
+    ap.add_argument("--pad", type=float, default=None,
+                    help=f"margin around the subject, as a fraction of its own "
+                         f"box (default {DEFAULT_PAD}, or the category's own "
+                         f"if it sets one)")
     ap.add_argument("--category", default=None, choices=list(catmod.names()),
                     help="what KIND of goods this shoot is: sets the subject "
                          "detector and which looks are rendered, in one flag. "
@@ -2200,6 +2262,11 @@ def main(argv=None) -> int:
                          "item. Persists in the manifest.")
     ap.add_argument("--pop", default="gentle", choices=["off", "gentle", "strong"],
                     help="subject pass: saturation/contrast/unsharp (default gentle)")
+    ap.add_argument("--check-rotation", action="store_true", dest="check_rotation",
+                    help="run the OSD rotation check + ask panel for frames it "
+                         "can't read (default: OFF — items are shot right-side "
+                         "up, so every frame with no recorded --rotate answer "
+                         "is assumed upright and no OSD pass runs at all)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -2224,6 +2291,16 @@ def main(argv=None) -> int:
     category = args.category or stored_cat
     subject = args.subject or (catmod.subject_for(args.category) if args.category
                                else stored_subject)
+
+    # Framing is category-shaped too (#23): a flat catalog and a ring do not
+    # want the same margin. Same precedence as --subject above -- an explicit
+    # flag always outranks the category, which is the one place a category may
+    # feed a MEASUREMENT (plan_crop's aspect/pad inputs), never its result.
+    cat_pad = catmod.pad_for(category)
+    aspect_s = args.aspect if args.aspect is not None else (
+        catmod.aspect_for(category) or DEFAULT_ASPECT)
+    pad = args.pad if args.pad is not None else (
+        cat_pad if cat_pad is not None else DEFAULT_PAD)
 
     # Changing either one re-measures every box downstream, so the sign-offs
     # those boxes earned are dropped HERE rather than silently carried over onto
@@ -2252,8 +2329,9 @@ def main(argv=None) -> int:
         _print_status(shoot, m)
         return 0
     if args.auto:
-        run_auto(shoot, args.aspect, args.pad, args.pop,
-                 subject=subject, category=category, quiet=args.quiet)
+        run_auto(shoot, aspect_s, pad, args.pop,
+                 subject=subject, category=category, quiet=args.quiet,
+                 check_rotation=args.check_rotation)
         return 0
     if args.approve_auto:
         run_approve_auto(shoot)
@@ -2310,14 +2388,21 @@ def main(argv=None) -> int:
 
     if args.check or not args.apply:
         print(f"PREP check — {shoot}")
-        m = run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=args.quiet)
+        m = run_check(shoot, aspect_s, pad, args.pop, subject, category,
+                      quiet=args.quiet, check_rotation=args.check_rotation)
         _print_status(shoot, m)
         print(f"  rotation sheet: {shoot / '.prep' / 'rotation_sheet.jpg'}")
     if args.apply:
         print(f"PREP apply — {shoot}")
         if not load_manifest(shoot).get("photos"):
-            run_check(shoot, args.aspect, args.pad, args.pop, subject, category, quiet=True)
-        m = run_apply(shoot, quiet=args.quiet, only=tuple(_pairs(getattr(args, 'only', None))))
+            run_check(shoot, aspect_s, pad, args.pop, subject, category,
+                      quiet=True, check_rotation=args.check_rotation)
+        # An explicit --only always wins. --filters is the "show me every look"
+        # escape hatch for a shoot whose category would otherwise narrow to one.
+        only = tuple(_pairs(getattr(args, 'only', None)))
+        if not only and args.filters:
+            only = tuple(colormod.PRESETS)
+        m = run_apply(shoot, quiet=args.quiet, only=only)
         _print_status(shoot, m)
     return 0
 

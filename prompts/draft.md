@@ -174,11 +174,36 @@ parcel shipping to buyers. Say so at REVIEW. Decide `fulfillment_mode`:
   local? Message me for a freight quote."* Log the decision (+ trigger) in
   `meta.notes`.
 
-**Carrier: there is no carrier choice.** Every item ships on the one
-fulfillment policy, `296458692014` ("Free USPS Ground + eBay International
-Shipping", free calculated USPS Ground Advantage, 1 day handling). Do not
-propose a carrier switch, do not estimate a rival carrier's cost, and do not
-override the policy at LIST time. Weight and dimensions are still worth
+**US-only gate (automatic — do not hand-route).** Some items are legal to sell
+on eBay.com but ONLY to US buyers, by US export law: firearm magazines and
+parts, body armor, night vision and thermal optics, anything marked ITAR. These
+route to the **US-only fulfillment policy** (`fulfillment_policy_id_us_only`),
+and `lib/us_only.py` decides it automatically from the title and item specifics
+— you do not set it per item. Set `shipping.us_only: true` by hand ONLY when
+you know an item is export-restricted and its wording does not say so.
+
+Understand why it is a separate policy, because the obvious fix does not work:
+`shipping.international: false` is NOT enough. The default policy carries
+`shipToLocations: Worldwide`, and that alone makes a listing eBay-International-
+Shipping eligible, which makes eBay refuse the publish outright — errorId 25019,
+firearms policy plus ITAR Part 121. eIS is an account-level enrollment, so a
+US-only `shipToLocations` is the only lever. Measured on a Ruger Mini-14
+magazine, 2026-08-27.
+
+Two consequences worth stating: the US-only route **outranks an international
+request** (a legal restriction beats reach) and it **outranks Media Mail** (it
+beats the postage saving too). If an item is US-restricted and no US-only policy
+is configured, preflight raises a BLOCKER rather than falling back — the
+fallback would fail at publish anyway, and would mean offering a restricted item
+abroad. Also set `shipping.international: false` on these for tidiness, but do
+not mistake that flag for the protection.
+
+**Carrier: there is no carrier choice.** Every item ships on one of the account's
+policies — normally `296458692014` ("Free USPS Ground + eBay International
+Shipping", free calculated USPS Ground Advantage, 1 day handling), or
+`297194269014` ("US Only - Free USPS Ground") when the gate above fires. Same
+terms either way. Do not propose a carrier switch, do not estimate a rival
+carrier's cost, and do not override the policy at LIST time. Weight and dimensions are still worth
 recording — they drive the calculated rate and a freight quote. If an item
 genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and
 append a NEEDS_REVIEW line rather than selecting a different policy.
@@ -337,6 +362,27 @@ Hard rules: never include a claim absent from INVESTIGATE's listing-safe /
 observable lists; never anything INVESTIGATE marked NOT defensible; never
 IDENTIFY `[BEST-CASE]` language; honor unit-type phrasing.
 
+## Estate context — forbidden claims (`context.txt`, GH #46)
+
+Same rail as in-hand voice above: this governs buyer-visible copy, not
+the internal record. Read via `lib/dir_context.py` (`_shared.md` has the
+full contract).
+
+- **Blocked phrases are HARD.** Anything in `ctx.blocked` — smoke-free,
+  pet-free, climate-controlled and variants — may not appear in title,
+  body, `condition_description`, or item specifics, at any confidence,
+  even if the photos alone would support it. This is the final gate: if
+  INVESTIGATE somehow still carried a blocked phrase through, DRAFT
+  strips it here.
+- **Supply the disclosure, don't dramatize it.** Where a block applies,
+  add ONE neutral in-hand clause to the body — "From a home where
+  someone smoked; may carry a faint odor." — same restraint as ordinary
+  wear disclosure, no location map, no colour adjectives.
+- **`source:` never appears in copy.** Buyer-facing text says "an
+  estate", never a name — `ctx.public_keys` / `brief()` already omit it;
+  reading the raw `context.txt` to work around that is not allowed.
+- **No context.txt in the chain → nothing to enforce.**
+
 ## Constraints — enforce before write (the hardest rule)
 
 Limits come from the template's `_field_constraints` (authoritative; read
@@ -366,9 +412,10 @@ Walk every `_field_constraints` entry against the populated value:
 length ≤ max_len (rephrase if not) · required present (else flag) ·
 numeric parses positive (else flag, empty) · lookup canonical (else
 substitute + log). Also scan every buyer-visible field for camera-frame
-language (the in-hand-voice rule above) and rephrase any hit to the
-finding. Only then write draft.md. Re-read after write and confirm every
-constrained field fits and `_field_constraints` was copied verbatim.
+language (the in-hand-voice rule above) and estate-forbidden phrases (the
+rule above); rephrase or strip any hit. Only then write draft.md. Re-read
+after write and confirm every constrained field fits and
+`_field_constraints` was copied verbatim.
 
 ## meta.notes (DRAFT NOTES)
 

@@ -1,7 +1,8 @@
 """ebaybiz — Stage B: eBay SOLD comps via the user's logged-in Chrome.
 
-**This replaces Apify entirely.** `lib/apify_ebay.py` moved to `deprecated/`
-on 2026-08-15; nothing in the live pipeline calls it.
+**This replaces Apify entirely.** `lib/apify_ebay.py` was retired on
+2026-08-15 and deleted with the v2 material; nothing in the live pipeline
+calls it.
 
 ## Why the actors died, definitively
 
@@ -40,6 +41,13 @@ eBay salts the results with traps:
 Step 3 runs in the page, so it sees exactly what the user sees. The JSON it
 returns carries item URLs and thumbnails, which the text-scraping fallback
 (`--parse`) cannot recover.
+
+Before step 1, the default (no-flag) invocation checks whether TODAY's comps
+for this exact query are already sitting in an earlier `--ingest-json` run
+(`lib/read_cache.py`, keyed query+condition+UTC date) — if both dual sorts are
+already in hand it prints their paths and skips straight past steps 1-4
+entirely. `--ingest-json` always records what it just captured. `--fresh`
+bypasses the check and forces the live instructions regardless.
 
 Walking the query ladder does NOT need one navigate per rung. From any loaded
 eBay page, `--js-multi` fetches every rung's URL same-origin (login cookies
@@ -81,6 +89,7 @@ from comps_core import (  # noqa: E402
     parse_sold_date,
     save_run_json,
 )
+import read_cache  # noqa: E402
 
 EBAY_SEARCH = "https://www.ebay.com/sch/i.html"
 
@@ -95,6 +104,52 @@ DUAL_SORTS = ("best_match", "price_high")
 DEFAULT_IPG = 60             # eBay's max per page without extra requests
 
 _CONDITION_PARAM = {"new": "3", "used": "4"}
+
+
+# ---------------------------------------------------------------------------
+# Same-day comp cache (V4_PLAN Phase 4, #30) — see lib/read_cache.py for the
+# key/staleness rationale. This module is the one caller: before printing the
+# "go browse in Chrome" instructions, check whether today's comps for this
+# exact query are already sitting in a run file from an earlier `--ingest-json`
+# / `--parse` this session or an earlier one, and skip the round trip if so.
+# ---------------------------------------------------------------------------
+_CACHE_NS = "ebay_sold_browse.comp_run"
+
+
+def _cache_parts(query: str, condition: Optional[str]) -> tuple:
+    # Normalized so "Fenton hobnail vase" and " fenton hobnail vase " hit the
+    # same entry; the printed query keeps the user's original casing.
+    return (query.strip().lower(), condition or "any")
+
+
+def _comp_cache_lookup(query: str, condition: Optional[str]) -> dict:
+    """{sort: {n, path}} already captured TODAY for this query+condition.
+
+    Empty dict on a miss (never raises — a corrupt/missing cache file is
+    just "nothing captured yet").
+    """
+    result = read_cache.get(_CACHE_NS, *_cache_parts(query, condition))
+    if not result.hit or not isinstance(result.value, dict):
+        return {}
+    sorts = result.value.get("sorts")
+    return sorts if isinstance(sorts, dict) else {}
+
+
+def _comp_cache_record(query: str, condition: Optional[str], sort: str,
+                       page: int, path: str, n: int) -> None:
+    """Record one ingested sort/page under today's entry for this query.
+
+    Read-modify-write so ingesting `best_match` then `price_high` for the
+    same query accumulates into one entry instead of the second overwriting
+    the first — PRICE's dual-sort distribution needs both to count as
+    "today's comps are in hand".
+    """
+    parts = _cache_parts(query, condition)
+    existing = read_cache.get(_CACHE_NS, *parts)
+    sorts = dict(existing.value.get("sorts", {})) if existing.hit and isinstance(
+        existing.value, dict) else {}
+    sorts[sort] = {"page": page, "n": n, "path": path}
+    read_cache.put(_CACHE_NS, *parts, value={"sorts": sorts})
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +630,11 @@ def _cli() -> None:
     ap.add_argument("--save-dir")
     ap.add_argument("--no-save", action="store_true",
                     help="Print comps as JSON instead of saving.")
+    ap.add_argument("--fresh", action="store_true",
+                    help="Bypass the same-day comp cache: always print live "
+                         "browse instructions even if today's comps for this "
+                         "query are already captured. Ingesting afterward "
+                         "repopulates the cache as usual.")
     args = ap.parse_args()
     query = " ".join(args.query).strip()
 
@@ -650,6 +710,7 @@ def _cli() -> None:
             print(json.dumps([comp_to_dict(c) for c in comps], indent=2))
             return
         path = save_browse_run(comps, query, args.sort, args.save_dir, args.page)
+        _comp_cache_record(query, args.condition, args.sort, args.page, path, s["n"])
         print(f"Ingested {s['n']} comp(s)  [sort={args.sort} page={args.page}]")
         print(f"  urls {s['with_url']}/{s['n']} · delivered {s['with_delivered']}/{s['n']} · "
               f"seller {s['with_seller']}/{s['n']} · Best-Offer-accepted {s['bo_accepted']} · "
@@ -665,12 +726,23 @@ def _cli() -> None:
     if not query:
         ap.error("a query is required")
 
+    cached = {} if args.fresh else _comp_cache_lookup(query, args.condition)
+    missing = [s for s in DUAL_SORTS if s not in cached]
+    if cached and not missing:
+        print(f"OK cache hit — today's comps for {query!r} are already in hand:")
+        for sort, entry in cached.items():
+            print(f"  [{sort}]  n={entry['n']}  {entry['path']}")
+        print("No browse needed. Use --fresh to bypass and re-browse live.")
+        return
+
     urls = build_search_urls(query, condition=args.condition)
     print(f"eBay SOLD comps — {query!r}")
     for sort, url in urls.items():
         label = ("representative body" if sort == "best_match"
                  else "CEILING (price + shipping, highest first)")
-        print(f"  [{sort}]  {label}\n    {url}")
+        note = (f"  [cached: n={cached[sort]['n']}, skip this one]"
+                if sort in cached else "")
+        print(f"  [{sort}]  {label}{note}\n    {url}")
     if args.ladder:
         for label, q in query_ladder(query)[1:]:
             print(f"  {label}: {q!r}\n    {build_search_url(q, 'best_match')}")

@@ -31,7 +31,8 @@ COMMANDS = {
     "live-audit":   ("tools.live_audit",
                      "reconcile local drafts + ledger against live eBay state (--apply)"),
     "pick-list":    ("tools.pick_list",
-                     "orders awaiting shipment -> what to pull, where it goes, by when"),
+                     "orders awaiting shipment -> pick sheet; --poll to print new ones, "
+                     "--record-tracking to write a tracking # back (#32)"),
     "policy-sweep": ("tools.policy_sweep",
                      "survey/repair the return+fulfillment policy on every offer"),
     "price-audit":  ("tools.price_audit",
@@ -40,14 +41,22 @@ COMMANDS = {
                      "comp JSON -> the thumbnail board (_shared.md hard rule)"),
     "sales-report": ("tools.sales_report",
                      "sales / fees / promotion dashboard"),
+    "report":       ("lib.source_report",
+                     "cross-directory bucket ROI — report --by-source [--html] (#56)"),
     "promote":      ("tools.promote",
                      "paid-placement planner — proposes; every write needs --confirm"),
     "voice":        ("lib.voice_check",
                      "in-hand voice linter (draft or --audit tree) — GH #40"),
     "listing":      ("lib.list_edit",
                      "LIST/EDIT: --validate --status --review --sync --publish ..."),
+    "observe":      ("tools.session_observer",
+                     "session transcripts -> friction report (#36, read-only)"),
     "prep":         ("lib.photo_prep.prep",
                      "PREP photo pipeline: --auto --check --apply --approve ..."),
+    "single-pass":  ("lib.single_pass",
+                     "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
+    "status":       ("lib.status",
+                     "one-shot shoot state: phase files, PREP gate, frames, ledger, next action (#61)"),
 }
 
 

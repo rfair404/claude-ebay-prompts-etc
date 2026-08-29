@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(python -m lib.cli:*)",
+      "Bash(python -m lib.photo_prep.prep:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python tools/:*)",
+      "Bash(python lib/:*)",
+      "Bash(python tests/:*)",
+      "Bash(python3 -m lib.cli:*)",
+      "Bash(python3 -m lib.photo_prep.prep:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(python3 tools/:*)",
+      "Bash(python3 lib/:*)",
+      "Bash(python3 tests/:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(echo:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(printf:*)",
+      "Bash(exit:*)",
+      "Bash(git status:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)"
+    ]
+  }
+}

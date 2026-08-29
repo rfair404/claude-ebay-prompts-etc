@@ -19,6 +19,30 @@ Default to terse. A phase that finishes well says so in a few lines.
   reference adds information.
 - When in doubt, cut.
 
+### Execution discipline (#61/#62)
+
+Three rules that hold in every phase, because they're what the session-log
+audit (#61) found costing the most tokens and wall-clock:
+
+1. **Never `Read` a raw photo frame into the main thread.** Read the
+   contact sheet (`tools/prep_card.py`, `tools/prep_sheet_html.py`,
+   `tools/marble_triage.py`) or delegate frame-level looking to a worker
+   subagent that returns text. Measured: 99.4% of all `Read` payload
+   across 114 sessions was photos, at ~0.68 MB a frame, sitting in context
+   for every later turn of that session.
+2. **Batch independent tool calls into one turn.** If two calls don't
+   depend on each other's result, issue them together rather than one
+   call per turn. Measured: 1.00 tool calls per assistant turn on average,
+   and ~55% of tool turns immediately followed a same-tool turn that could
+   have shipped with it.
+3. **Write a scratch `.py` file and run it, rather than an inline
+   `python -c` or a heredoc.** Quoting inside a heredoc is the single
+   largest cause of avoidable Bash failures (46 measured cases — this rule
+   included, on the first attempt at writing it down).
+
+See [RUN.md](../RUN.md) "Concurrency and delegation" for the multi-item
+fan-out pattern these rules feed into.
+
 ### Showing comps to the user — HARD RULE (never optional)
 
 Any time you surface eBay comps / sold listings to the user in chat — in
@@ -50,6 +74,30 @@ present comps as a text-only list, a plain markdown table, or with remote
 not an acceptable way to show a comp. The `price.txt` / `comps.csv` artifacts
 are still written as specified in PRICE; this rule governs the CHAT layer, in
 every phase, on top of them.
+
+## Runtime discipline (every turn re-sends the whole conversation)
+
+A session-log audit (#61) found 89% of run cost going to re-sent context,
+not produced work — driven by one call per turn and ~300K tokens of that
+context being raw photos. Both are avoidable, in every phase:
+
+- **Batch independent tool calls into one turn.** Two `Read`s, a `Read` +
+  a `Grep`, several independent `Bash` calls — if none depends on another's
+  output, issue them together, not as serial single-call turns.
+- **Background anything that won't finish in a few seconds** (a `prep`
+  pass, any renderer) and keep working on the next item or phase while it
+  runs. Foreground only what the very next step actually depends on.
+- **Read the contact sheet, never the raw frames.** `prep_card.py` /
+  `prep_sheet_html.py` / `marble_triage` already build one sheet — read
+  that. Pulling individual `.jpg`/`.png` frames into the main thread is the
+  single largest source of wasted context in this pipeline; when a frame
+  truly needs full-resolution inspection, delegate that one look to a
+  subagent that returns text instead.
+- **A scratch `.py` file beats an inline heredoc or `python -c`.** Quoting
+  breaks it often enough to cost more than it saves.
+- **One command that reports everything beats a chain of `ls`/`cat`/`find`.**
+  Prefer whatever the tooling already exposes as a single status/summary
+  call over rebuilding the picture one thin read at a time.
 
 ## Confidence (commit, don't hedge)
 
@@ -94,6 +142,36 @@ similar-looking items, external attribution databases, or memory of any
 prior identification. Visual similarity is not equivalence; markets
 shift. Re-derive every time. Never write "V1 said X" / "previously
 identified as Y".
+
+## Directory context (`context.txt` cascade)
+
+Items arrive as a batch — an estate, a sale — not one at a time. A parent
+directory under `inventory/` may carry a `context.txt` (household, era,
+storage, cost); every item under it inherits it. `lib/dir_context.py`
+walks from the inventory root down to the item dir and merges every
+`context.txt` on the way, nearest-wins:
+
+    python lib/dir_context.py <item-dir>     # brief() — paste into working notes
+    python lib/dir_context.py --sweep        # drafts asserting a blocked claim
+
+**Background, never a claim upgrade.** It narrows a prior (era, likely
+source) — it never makes a marble German or a book first-edition. Same
+rail the specializations carry: refine, don't override.
+
+**Blocks are hard.** A claim in `ctx.blocked` (smoke-free, pet-free,
+climate-controlled and variants) is forbidden, not flagged, at any
+confidence — even where photos alone would support it. DRAFT is the
+enforcement point (see draft.md); it also applies to IDENTIFY/
+INVESTIGATE/PRICE simply by never asserting it.
+
+**`source:` never leaves this file.** It may name a person for local
+reference; nothing downstream — chat, a stage's own output file, the
+review card, buyer-facing copy — repeats it. `brief()`/`public_keys`
+already omit it; don't read `.keys["source"]` into anything that isn't
+purely local.
+
+**Absent chain = today's behavior.** No `context.txt` anywhere in the
+chain changes nothing.
 
 ## Unit type and quantity
 

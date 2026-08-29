@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -78,6 +79,22 @@ TIGHT_DISPERSION = 0.50     # IQR/median at/below this is "tight"
 OUTLIER_MULT = 2.5
 
 MIN_SELLER_FEEDBACK = 50    # below this feedback count → Tier-C exclusion
+
+# competitor_charm_pattern (GH #82) — the top-competing-sellers' charm-price
+# convention, as distinct from charm_price_share (our own sold comps, used
+# only as a currency-leak guard — see comps_core.charm_share). A majority
+# ending among ENOUGH competitors is preferred over the generic charm default
+# when proposing the recommended/working price; too thin a sample falls back
+# to today's unadjusted behavior unchanged.
+COMPETITOR_CHARM_MAJORITY = 0.60     # issue's own threshold: ≥60% ⇒ decisive
+# The issue frames this as "top 3-5 sellers" — 2 sellers agreeing is
+# coincidence, not a convention, so 3 is the floor.
+COMPETITOR_MIN_SELLERS = 3
+# A majority off a handful of listings (even from enough sellers) is noise;
+# require a real sample before trusting the winning bucket.
+COMPETITOR_MIN_LISTINGS = 5
+
+_CHARM_ENDING_CENTS = {0: ".00", 99: ".99", 97: ".97", 95: ".95"}
 
 # Tokens that mark a listing as multi-item (a "lot"), used by the unit filter.
 _MULTI_ITEM_WORDS = {
@@ -427,6 +444,158 @@ def filter_exclusions(comps: list["Comp"]) -> FilterLog:
 
 
 # ---------------------------------------------------------------------------
+# Competitor charm-price convention (GH #82)
+# ---------------------------------------------------------------------------
+
+def _load_competitor_listings(json_path: Union[str, Path]) -> list[dict]:
+    """Read a saved competing-active-listings JSON — a bare list, or a dict
+    carrying it under `listings` (lib/ebay_browse.py's shape) / `comps` (this
+    module's own dual-run shape) / `items`."""
+    data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        return data
+    return data.get("listings") or data.get("comps") or data.get("items") or []
+
+
+def charm_ending(price: float) -> str:
+    """.00 / .99 / .97 / .95 / other, off a single price's cent value.
+
+    >>> charm_ending(34.99)
+    '.99'
+    >>> charm_ending(20.00)
+    '.00'
+    >>> charm_ending(18.50)
+    'other'
+    """
+    cents = int(round((price - int(price)) * 100)) % 100
+    return _CHARM_ENDING_CENTS.get(cents, "other")
+
+
+def apply_charm_ending(price: float, pattern: str) -> float:
+    """Nudge `price` to the nearest price ending in `pattern`'s cents.
+
+    Tries the ending at the current, prior, and next whole dollar and keeps
+    whichever lands closest to `price` — so the nudge is at most ~$1, never a
+    jump to an unrelated price point. Unknown pattern (e.g. "other"/None) is
+    a no-op.
+
+    >>> apply_charm_ending(34.50, ".99")
+    34.99
+    >>> apply_charm_ending(34.50, ".00")
+    34.0
+    >>> apply_charm_ending(19.60, ".99")
+    19.99
+    >>> apply_charm_ending(0.10, ".95")
+    0.95
+    """
+    cents = {".00": 0, ".99": 99, ".97": 97, ".95": 95}.get(pattern)
+    if cents is None:
+        return round(price, 2)
+    base = int(price)
+    candidates = [base + cents / 100, base - 1 + cents / 100, base + 1 + cents / 100]
+    # The "prior whole dollar" candidate can go negative for a low-dollar
+    # price (e.g. price=0.10 -> base-1+cents/100 = -0.05) and would then win
+    # on raw distance — a charm-price nudge must never produce a negative
+    # tier price. Excluding it still leaves the "current"/"next" candidates,
+    # so there's always a non-negative choice.
+    candidates = [c for c in candidates if c >= 0]
+    return round(min(candidates, key=lambda c: abs(c - price)), 2)
+
+
+def competitor_charm_pattern(
+    listings: list[dict],
+    *,
+    min_sellers: int = COMPETITOR_MIN_SELLERS,
+    min_listings: int = COMPETITOR_MIN_LISTINGS,
+    majority_pct: float = COMPETITOR_CHARM_MAJORITY,
+) -> dict:
+    """Bucket competing ACTIVE listings' price endings; surface the dominant
+    convention among the top competing sellers in the matched category.
+
+    `listings` — active listings from the top sellers in the category (e.g.
+    `lib/ebay_browse.top_sellers_active`, or a saved dump of the same shape).
+    Each record needs a seller id (`seller` / `sellerName` /
+    `seller_username`) and an asking price (`askingPrice` / `price`) — this
+    accepts ebay_browse's normalised records directly, or any dict carrying
+    those keys, so it composes without a hard dependency on ebay_browse (this
+    module stays stdlib-only; see the module docstring).
+
+    Always returns a dict (never None) so callers don't need a null-check
+    before reading `n_competitors`/`buckets`:
+        {"pattern": ".99", "share": 0.71, "n_competitors": 7,
+         "n_listings": 12, "buckets": {".99": 0.71, ".00": 0.17, ...},
+         "reason": None}
+    `pattern` is None — with `reason` explaining why — when the signal isn't
+    trustworthy: too few distinct sellers (< min_sellers), too few priced
+    listings (< min_listings), or no ending clears `majority_pct` (the
+    issue's own ≥60% bar). That is the fall-back-to-current-behavior case;
+    the caller applies no charm-ending nudge in it.
+    """
+    sellers: set = set()
+    prices: list[float] = []
+    for rec in listings:
+        seller = rec.get("seller") or rec.get("sellerName") or rec.get("seller_username")
+        if not seller:
+            # No seller id means this listing can't be attributed to a
+            # "top competing seller" — counting it would skew both the
+            # bucket shares and the min-sellers/min-listings gate away
+            # from what this signal is actually measuring.
+            continue
+        price = rec.get("askingPrice")
+        if price is None:
+            price = rec.get("price")
+        if price is None:
+            continue
+        try:
+            price = float(price)
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        sellers.add(seller)
+        prices.append(price)
+
+    n = len(prices)
+    n_sellers = len(sellers)
+    buckets = Counter(charm_ending(p) for p in prices)
+    bucket_share = {k: round(v / n, 3) for k, v in buckets.items()} if n else {}
+    top_pattern, top_count = buckets.most_common(1)[0] if buckets else (None, 0)
+    top_share = round(top_count / n, 3) if n else 0.0
+
+    if n < min_listings or n_sellers < min_sellers:
+        return {
+            "pattern": None, "share": top_share, "n_competitors": n_sellers,
+            "n_listings": n, "buckets": bucket_share,
+            "reason": (f"too few competitors for a trustworthy signal "
+                       f"(n_sellers={n_sellers}/{min_sellers} min, "
+                       f"n_listings={n}/{min_listings} min)"),
+        }
+    if top_share < majority_pct:
+        return {
+            "pattern": None, "share": top_share, "n_competitors": n_sellers,
+            "n_listings": n, "buckets": bucket_share,
+            "reason": (f"no majority ending — top bucket '{top_pattern}' at "
+                       f"{top_share:.0%} < {majority_pct:.0%} threshold"),
+        }
+    if top_pattern == "other":
+        # A majority landing on a non-charm cents value isn't actionable —
+        # apply_charm_ending() no-ops on "other", so surfacing it as a
+        # decisive pattern would make price_from_runs() claim a "nudged to
+        # competitor-dominant ending" that never actually moved the price.
+        return {
+            "pattern": None, "share": top_share, "n_competitors": n_sellers,
+            "n_listings": n, "buckets": bucket_share,
+            "reason": (f"top ending is 'other' ({top_share:.0%}) — a majority "
+                       f"of competitors don't use a charm price at all, "
+                       f"nothing to nudge toward"),
+        }
+    return {
+        "pattern": top_pattern, "share": top_share, "n_competitors": n_sellers,
+        "n_listings": n, "buckets": bucket_share, "reason": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Statistics
 # ---------------------------------------------------------------------------
 
@@ -525,6 +694,11 @@ def price_from_runs(
     condition: Optional[str] = None,
     price_field: str = "sold",
     pool_used_when_thin: bool = True,
+    competitor_active_json: Optional[Union[str, Path]] = None,
+    competitor_listings: Optional[list[dict]] = None,
+    competitor_min_sellers: int = COMPETITOR_MIN_SELLERS,
+    competitor_min_listings: int = COMPETITOR_MIN_LISTINGS,
+    competitor_majority_pct: float = COMPETITOR_CHARM_MAJORITY,
 ) -> dict:
     """Run the full distribution-based pricing pipeline. Returns a report dict.
 
@@ -534,9 +708,39 @@ def price_from_runs(
     cleaned representative set is thin (n < THIN_N) the report sets
     tiers=None and confidence='thin' — the caller falls back to the
     closest-comp method rather than trust percentiles off too few points.
+
+    `competitor_active_json` (a saved dump, see `_load_competitor_listings`)
+    and/or `competitor_listings` (already-loaded records — the two compose;
+    both are pooled when both are given) feed GH #82's competitor-charm
+    signal: active listings from the top sellers in the matched category
+    (`lib/ebay_browse.top_sellers_active`). The report always carries
+    `competitor_charm_pattern` (see `competitor_charm_pattern()` — never
+    None). When it finds a clear majority ending (>= `competitor_majority_pct`
+    among >= `competitor_min_sellers` sellers / `competitor_min_listings`
+    listings), the `recommended` tier's price is nudged to that ending
+    (`apply_charm_ending`) instead of the generic charm default; the
+    unadjusted median survives alongside it as `pre_charm_price`. With no
+    competitor data, or too thin/no-majority a signal, `recommended` is
+    exactly today's median — unchanged.
     """
     if not best_match_json and not price_high_json:
         raise ValueError("provide at least one of best_match_json / price_high_json")
+
+    # "Requested" means a caller supplied a source at all — an explicit
+    # competitor_listings=[] or a --competitor-active file with zero usable
+    # listings still counts, so render() shows why the signal came up empty
+    # instead of looking identical to never having asked (Copilot review).
+    competitor_requested = competitor_listings is not None or bool(competitor_active_json)
+    competitor_recs: list[dict] = list(competitor_listings or [])
+    if competitor_active_json:
+        competitor_recs += _load_competitor_listings(competitor_active_json)
+    competitor_charm = competitor_charm_pattern(
+        competitor_recs, min_sellers=competitor_min_sellers,
+        min_listings=competitor_min_listings, majority_pct=competitor_majority_pct,
+    ) if competitor_recs else {
+        "pattern": None, "share": None, "n_competitors": 0, "n_listings": 0,
+        "buckets": {}, "reason": "no competitor active-listing data supplied",
+    }
 
     runs: list[dict] = []
     bm: list[Comp] = []
@@ -589,6 +793,8 @@ def price_from_runs(
         "row0_flags": row0_flags,
         "distribution": dist,
         "confidence": conf,
+        "competitor_charm_pattern": competitor_charm,
+        "competitor_active_requested": competitor_requested,
         "kept_comps": [
             {"title": c.title, "price": c.price, "url": c.url,
              "condition": c.condition, "sold_date": c.sold_date,
@@ -629,14 +835,35 @@ def price_from_runs(
         ceiling_basis = f"vetted ceiling comp from price_high: \"{ceiling.title[:55]}\" ({ceiling.url})"
     else:
         ceiling_basis = f"no price_high comp survived filters → {PUSH_HIGH_FALLBACK_PCT}th percentile fallback"
+
+    conservative_price = round(percentile(sorted_kept, CONSERVATIVE_PCT), 2)
+    recommended_median = round(percentile(sorted_kept, RECOMMENDED_PCT), 2)
+    recommended_price = recommended_median
+    recommended_basis = "median of like-condition comparable sold (working price)"
+    # GH #82: a clear competitor-charm majority beats the generic charm
+    # default — nudge the working price to that ending. Never below the
+    # conservative floor, and never more than ~$1 from the median (see
+    # apply_charm_ending) — this composes with the distribution, it doesn't
+    # override it.
+    if competitor_charm.get("pattern"):
+        nudged = apply_charm_ending(recommended_median, competitor_charm["pattern"])
+        recommended_price = max(nudged, conservative_price)
+        recommended_basis = (
+            f"median of like-condition comparable sold (${recommended_median}), "
+            f"nudged to competitor-dominant ending {competitor_charm['pattern']} "
+            f"({competitor_charm['share']:.0%} of {competitor_charm['n_competitors']} "
+            f"competing sellers — >= {competitor_majority_pct:.0%} majority threshold)"
+        )
+
     report["tiers"] = {
         "conservative": {
-            "price": round(percentile(sorted_kept, CONSERVATIVE_PCT), 2),
+            "price": conservative_price,
             "basis": f"{CONSERVATIVE_PCT}th percentile of like-condition sold (no-objection floor)",
         },
         "recommended": {
-            "price": round(percentile(sorted_kept, RECOMMENDED_PCT), 2),
-            "basis": "median of like-condition comparable sold (working price)",
+            "price": recommended_price,
+            "basis": recommended_basis,
+            **({"pre_charm_price": recommended_median} if recommended_price != recommended_median else {}),
         },
         "push_high": {
             "price": round(push_high, 2),
@@ -675,6 +902,18 @@ def render(report: dict) -> str:
     out.append(f"  raw={report['n_raw']} → kept={report['n_kept']}  "
                f"runs: {runs}")
     out.append(f"  Confidence: {report['confidence']}")
+
+    cc = report.get("competitor_charm_pattern") or {}
+    if cc.get("pattern"):
+        out.append(f"  Competitor charm pattern: {cc['pattern']} "
+                   f"({cc['share']:.0%} of {cc['n_competitors']} competing sellers, "
+                   f"n={cc['n_listings']} listings) — preferred over generic charm default")
+    elif report.get("competitor_active_requested"):
+        # Competitor data WAS supplied — show why it produced no signal
+        # (e.g. every record was unparseable or missing a seller id) rather
+        # than rendering nothing, which would be indistinguishable from
+        # never having asked for a competitor signal at all.
+        out.append(f"  Competitor charm pattern: no clear signal — {cc.get('reason')}")
 
     if report["confidence"] == "thin":
         out.append("")
@@ -735,6 +974,10 @@ def _cli() -> None:
                     help="Price the stats run on: item sold price (default) or sold+shipping")
     ap.add_argument("--no-pool-used", action="store_true",
                     help="Do NOT pool Used grades when the strict cohort is thin")
+    ap.add_argument("--competitor-active",
+                    help="Saved active-listings JSON from the top competing sellers in the "
+                         "matched category (lib/ebay_browse.py top-sellers) — GH #82: learn "
+                         "their charm-price convention instead of the generic default")
     ap.add_argument("--json", action="store_true", help="Emit the full report as JSON")
     args = ap.parse_args()
 
@@ -745,6 +988,7 @@ def _cli() -> None:
         report = price_from_runs(
             best_match_json=args.best_match,
             price_high_json=args.price_high,
+            competitor_active_json=args.competitor_active,
             unit_type=args.unit,
             require_tokens=args.require_tokens,
             condition=args.condition,

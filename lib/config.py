@@ -228,25 +228,6 @@ def get_apify_actor() -> str:
     return DEFAULT_APIFY_ACTOR
 
 
-def get_apify_enabled() -> bool:
-    """Is the Apify (Stage B scraping) backend enabled at all?
-
-    DISABLED by default as of 2026-08-15: Stage B now runs through the user's
-    logged-in browser (`lib/ebay_sold_browse.py`), which is not subject to
-    eBay's anti-bot blocks and returns richer data. Re-enable only by setting
-    `apify.enabled: true` in config.yaml (or APIFY_ENABLED=1).
-    """
-    env = os.environ.get("APIFY_ENABLED")
-    if env is not None:
-        return env.strip().lower() in ("1", "true", "yes", "on")
-
-    config = load_config()
-    val = _nested(config, "apify", "enabled")
-    if val is None:
-        return False
-    return bool(val)
-
-
 def get_lens_actor() -> str:
     """Google Lens reverse-image Actor ID. Precedence: env > config > default."""
     env = os.environ.get("APIFY_LENS_ACTOR")

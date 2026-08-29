@@ -8,9 +8,10 @@ better attribution, the named high-value types flagged, the right condition
 vocabulary, the inspection shots a specialist would ask for, and a coarse
 value tier so PRICE and CURATE start from an informed anchor.
 
-This is prompt-driven, like the rest of v3 — a module is just a Markdown file
-the pipeline reads on demand. No code, no build step. Adding the next
-specialization is: drop a new file in here, add one row to the registry below.
+This is prompt-driven, like the rest of the pipeline — a module is just a
+Markdown file the pipeline reads on demand. No code, no build step. Adding the
+next specialization is: drop a new file in here, add one row to the registry
+below.
 
 ---
 

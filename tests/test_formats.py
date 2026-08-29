@@ -63,6 +63,11 @@ DRAFT_SHIPPING = {
     "domestic_shipping_type", "free_shipping", "fulfillment_mode",
     "handling_time_days", "international", "item_location_zip", "local_pickup",
     "package_in", "primary_service", "weight",
+    # Added 2026-08-27, additive and safe: absent means false, so drafts
+    # written before it read identically. Routes US-export-restricted items
+    # (firearm parts, body armor, night vision) to the US-only fulfillment
+    # policy. Normally set by lib/us_only.py, not by hand.
+    "us_only",
 }
 # The limits the eBay form actually enforces. A wrong number here is a publish
 # rejection or a silently truncated listing, so they are pinned by value.
@@ -220,7 +225,7 @@ def test_a_real_manifest_carries_the_fields_readers_depend_on():
 
 LEDGER_COLUMNS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
-                  "updated_at"]
+                  "shipped_at", "updated_at"]
 
 
 def test_ledger_columns_and_their_order():
@@ -237,7 +242,7 @@ def test_ledger_statuses_stay_in_the_known_set():
     p = ROOT / "listings_ledger.csv"
     if not p.exists():
         return
-    known = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "ENDED", "DELETED",
+    known = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "SHIPPED", "ENDED", "DELETED",
              "OUT_OF_STOCK", ""}
     seen = set()
     with p.open(encoding="utf-8", newline="") as fh:
@@ -261,6 +266,7 @@ CARD_SECTIONS = [
     "Preflight",
     "Comps (open to verify):",
     "Condition detail:",
+    "Context (estate background):",
     "Final photos",
     "⚠ Needs review / manual intervention:",
     "→ Approve publishes this LIVE",
