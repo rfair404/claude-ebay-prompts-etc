@@ -43,19 +43,18 @@ shell.
 ### Status of the stated prerequisite (#30)
 
 Issue #31 says this work is "downstream of #30, not parallel to it."
-`docs/V4_PLAN.md` shows Phases 1, 3, 4, and 5 of #30 checked off as
-landed: prompt diet, the `ebz` CLI, the on-disk comp cache + single-pass
-mode, and the session observer. Phase 2 ("terse tool output") is written
-as a convention, not a checklist, and checking the code directly: none of
-its five named targets (`lib/photo_prep/prep.py`, `lib/list_edit.py`,
-`tools/sales_report.py`, `tools/ledger_reconcile.py`,
-`tools/live_audit.py`) print the `OK n/m, k flagged → <file>.json` shape
-the convention describes yet — the one attempt at it
-(`tools/ledger_reconcile.py`) is an open, unmerged PR as of this writing.
-So #30 is landed for three of four phases that matter here, not five of
-five. It still doesn't block this plan: Phase 2 is about making a tool's
-*terse stdout* readable by a human or an LLM reading a transcript: this
-plan's Phase 2 already calls `gather()` and friends as Python functions
+`docs/V4_PLAN.md` checks off four of #30's five phases as landed: prompt
+diet (Phase 1), the `ebz` CLI (Phase 3), the on-disk comp cache +
+single-pass mode (Phase 4), and the session observer (Phase 5). Phase 2
+("terse tool output") is written as a convention, not a checklist item,
+and checking the code directly: none of its five named targets
+(`lib/photo_prep/prep.py`, `lib/list_edit.py`, `tools/sales_report.py`,
+`tools/ledger_reconcile.py`, `tools/live_audit.py`) print the
+`OK n/m, k flagged → <file>.json` shape the convention describes in this
+branch. So #30 is landed for four of its five phases, Phase 2 is not. It
+still doesn't block this plan: Phase 2 is about making a tool's *terse
+stdout* readable by a human or an LLM reading a transcript: this plan's
+Phase 2 already calls `gather()` and friends as Python functions
 directly (see the module-mapping table below), never by parsing a CLI's
 printed text, so the "skinny prompts + structured records + one CLI"
 precondition #31 actually needs is in place regardless.
