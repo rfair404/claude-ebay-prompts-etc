@@ -9,8 +9,8 @@ conventions, reproduction/fake red flags, where to find real comps, dating
 clues, shipping/handling for fragile classes — plus the curated **resource
 registry** the modules and prompts link out to.
 
-Like the rest of v3 this is prompt-driven: an article is just a Markdown file
-the pipeline reads when it's relevant. No code, no build step.
+Like the rest of the pipeline this is prompt-driven: an article is just a
+Markdown file the pipeline reads when it's relevant. No code, no build step.
 
 - **KB article** → reusable reference knowledge (a digest of one or more
   resources), category-agnostic or spanning categories.
