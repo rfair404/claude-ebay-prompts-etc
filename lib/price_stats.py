@@ -726,6 +726,11 @@ def price_from_runs(
     if not best_match_json and not price_high_json:
         raise ValueError("provide at least one of best_match_json / price_high_json")
 
+    # "Requested" means a caller supplied a source at all — an explicit
+    # competitor_listings=[] or a --competitor-active file with zero usable
+    # listings still counts, so render() shows why the signal came up empty
+    # instead of looking identical to never having asked (Copilot review).
+    competitor_requested = competitor_listings is not None or bool(competitor_active_json)
     competitor_recs: list[dict] = list(competitor_listings or [])
     if competitor_active_json:
         competitor_recs += _load_competitor_listings(competitor_active_json)
@@ -789,7 +794,7 @@ def price_from_runs(
         "distribution": dist,
         "confidence": conf,
         "competitor_charm_pattern": competitor_charm,
-        "competitor_active_requested": bool(competitor_recs),
+        "competitor_active_requested": competitor_requested,
         "kept_comps": [
             {"title": c.title, "price": c.price, "url": c.url,
              "condition": c.condition, "sold_date": c.sold_date,

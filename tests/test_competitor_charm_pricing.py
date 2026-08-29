@@ -280,6 +280,18 @@ def test_render_is_silent_when_no_competitor_data_was_requested_at_all():
     assert "Competitor charm pattern" not in out
 
 
+def test_an_explicit_empty_competitor_listings_still_counts_as_requested():
+    # Second Copilot review pass on #93: "requested" has to be about
+    # whether a source was supplied, not whether it produced any usable
+    # records — competitor_listings=[] (or a --competitor-active file with
+    # nothing parseable in it) is still an explicit ask.
+    r = _report(competitor_listings=[])
+    assert r["competitor_active_requested"] is True
+    assert r["competitor_charm_pattern"]["n_listings"] == 0
+    out = price_stats.render(r)
+    assert "Competitor charm pattern: no clear signal" in out
+
+
 def test_competitor_active_json_loader():
     import json
     import tempfile
