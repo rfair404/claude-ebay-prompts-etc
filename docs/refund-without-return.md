@@ -80,15 +80,18 @@ setting.
 
 ## Does this need any particular return-policy setting?
 
-No. `returnMethod`, `returnShippingCostPayer`, `returnsAccepted`, and
-`returnPeriod` on the Account API return-policy object exist to define the
-terms of a *stated* return under that policy (window length, who pays return
-shipping, and the US-only REPLACEMENT option). None of them toggle
-refund-without-return — that field doesn't exist in the schema. Our current
-policy (30-day, seller pays return shipping, required for Top Rated Plus —
-see [`docs/top-rated-plus.md`](top-rated-plus.md)) is irrelevant to whether
-we *can* skip the return; it only shapes what happens if a buyer insists on
-a formal return under that policy.
+No. `returnsAccepted`, `returnPeriod`, `returnMethod`,
+`returnShippingCostPayer`, `refundMethod`, and `internationalOverride`
+(our own return-policy creation code, `lib/ebay_client.py`, sets all six —
+see `create_free_return_policy()`) on the Account API return-policy object exist
+to define the terms of a *stated* return under that policy (window length,
+who pays return shipping, the US-only REPLACEMENT option, and a
+domestic/international split on both the refund and return method). None
+of them toggle refund-without-return — that field doesn't exist in the
+schema. Our current policy (30-day, seller pays return shipping, required
+for Top Rated Plus — see [`docs/top-rated-plus.md`](top-rated-plus.md)) is
+irrelevant to whether we *can* skip the return; it only shapes what
+happens if a buyer insists on a formal return under that policy.
 
 ## Seller protections / downsides to weigh case by case
 
