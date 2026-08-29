@@ -77,22 +77,28 @@ in code:
   `MIN_FRAME_KEPT` 0.55 floor: a crop trims edges and always leaves backdrop.
 
 Apply the pass, then **gate on confidence, not on the operator** (operator's
-call, 2026-08-27):
+call, 2026-08-27) — and this now covers colour too, not just orientation and
+crop:
 
 - **Every frame resolved, nothing guessed, every self-check clean** — the
-  normal case — run `--approve-auto` yourself (signs off orientation AND crop
-  together) and move straight to colour. Show ONE card
-  (`python tools/prep_card.py <shoot>`) of the revised frames as a record of
-  what shipped, not as a question; the run does not stop to wait.
-- **Anything guessed or flagged** — a `guessed: true` frame, a mask the
-  colour stage cannot trust, a crop the pipeline refused — ask about THOSE
-  frames only, by name, and approve the rest. The one question is about the
-  exception, never "may I continue".
+  normal case — run `--approve-auto` (orientation + crop), pick the look "The
+  looks → Defaults" already calls for that shoot (deterministic: `crisp` for
+  a new item, the published look for a relist, backdrop-led `punch`/`studio`
+  otherwise), and `--approve-stage color` it too. Show ONE card
+  (`python tools/prep_card.py <shoot>`) of the revised frames — including the
+  chosen colour look — as a record of what shipped, not as a question; the
+  run does not stop to wait.
+- **Anything guessed or flagged** — a `guessed: true` frame, low mask
+  coverage, a "colour pass touched item pixels" self-check flag, a crop the
+  pipeline refused, or a shoot the Defaults rule genuinely can't call (no
+  clear cloth colour, a look outside the three presets) — ask about THOSE
+  frames or that ONE look-choice only, and approve/apply the rest. The one
+  question is about the exception, never "may I continue".
 
 Auto-approval never buys a lower bar: `--auto` approves nothing by itself,
-`listing/` is still written only after sign-off, and `--approve-auto` stamps
-the same per-stage digest a sheet approval does — any later edit invalidates
-it the same way.
+`listing/` is still written only after sign-off, and `--approve-auto` /
+`--approve-stage color` stamp the same per-stage digest a sheet approval
+does — any later edit invalidates it the same way.
 
 ## The interactive review — the exception path, STAGED
 
