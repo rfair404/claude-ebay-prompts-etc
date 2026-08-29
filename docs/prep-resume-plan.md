@@ -36,10 +36,12 @@ mechanism later for free if it turns out to matter.
 ## Design: the manifest already IS the progress record
 
 `prep.json` already carries a per-frame `presets` dict (which looks were
-rendered, their path + sha256 + colour report) and a `src_sha256` per frame.
-That is most of a progress record already — the fix is not a new file, it's
-(a) writing it incrementally instead of once at the end, and (b) a staleness
-check so a resume can trust what it reads. Concretely:
+rendered, their path + sha256 + colour report) and a `src_sha256` per frame
+(both truncated to the first 16 hex chars, matching `_sha256()`'s and
+`_manifest_fingerprint()`'s existing convention — not a full 64-hex
+digest). That is most of a progress record already — the fix is not a new
+file, it's (a) writing it incrementally instead of once at the end, and
+(b) a staleness check so a resume can trust what it reads. Concretely:
 
 ### 1. Checkpoint after every frame, not after the loop
 
@@ -64,7 +66,7 @@ Add one new top-level manifest field, written at the *start* of `--apply`:
 
 ```json
 "apply_run": {
-  "settings_hash": "sha256 of (aspect, pad, pop, subject, category, sorted(only))",
+  "settings_hash": "sha256 of (aspect, pad, pop, subject, category, sorted(only)), truncated to 16 hex chars — same convention as _sha256()/_manifest_fingerprint(), not a full 64-hex digest",
   "started_at": "...",
   "jobs": 4
 }
