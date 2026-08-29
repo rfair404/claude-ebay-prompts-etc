@@ -49,7 +49,12 @@ listing template + its `_field_constraints`, the unit_type vocabulary, the
 Apify opt-in policy, and the deterministic output-file-per-phase
 convention all carried over. v3 turned the old absolute publish refusal
 into an approval-gated publish (the REVIEW gate); and Apify moved from a
-gated, opt-in fallback to the un-gated default Stage B of the comp
-hunt (Chrome demoted to an optional low-confidence cross-check). These
-invariants are still true in the current (v4) pipeline — see README.md's
-"Core invariants" section for the standalone statement.
+gated, opt-in fallback to the un-gated default Stage B of the comp hunt
+(Chrome demoted to an optional low-confidence cross-check). The firewall,
+template, vocabulary, and file convention are still true in the current
+(v4) pipeline — see README.md's "Core invariants" section for the
+standalone statement. Stage B's *backend* has since moved again: Apify
+was retired 2026-08-15 in favor of the logged-in browser
+([`../pricing-backend-issues.md`](../pricing-backend-issues.md)); the
+"un-gated default Stage B" shape described above is what's current, the
+Apify part of it is not.

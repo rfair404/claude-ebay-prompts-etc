@@ -99,12 +99,15 @@ Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
 
 The no-*automatic*-publish firewall (publishing requires `--confirm` and
 is never triggered by the pipeline or `--sync`), the YAML-frontmatter
-listing template + its `_field_constraints`, the unit_type vocabulary, the
-Apify opt-in policy, and the deterministic output-file-per-phase
-convention all hold. The REVIEW gate is what turns "publish" from an
-absolute refusal into an approval-gated action: nothing goes LIVE without
-one explicit human approval at the decision card. Apify runs as the
-un-gated default Stage B of the comp hunt (Chrome is an optional
-low-confidence cross-check). See
+listing template + its `_field_constraints`, the unit_type vocabulary, and
+the deterministic output-file-per-phase convention all hold. The REVIEW
+gate is what turns "publish" from an absolute refusal into an
+approval-gated action: nothing goes LIVE without one explicit human
+approval at the decision card. eBay sold comps via the logged-in browser
+([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py)) run as the un-gated
+default Stage B of the comp hunt (Chrome is an optional low-confidence
+cross-check); Apify was retired 2026-08-15 and must not be re-enabled —
+see [`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md).
+See
 [`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
 if you want the history of how these settled.
