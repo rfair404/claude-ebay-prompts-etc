@@ -113,6 +113,23 @@ tests so "read only when flagged" can be trusted.
       prints what it found and what it WOULD file; nothing reaches GitHub
       without also passing `--file`, explicitly, every time.
 
+## Phase 6 — background dispatch (#59)
+
+Nothing here needs new infrastructure — the pipeline is already a Claude
+Code session running prompts, so "cloud dispatch" is the `Agent` tool's
+`run_in_background`, not a new service. PRICE, IDENTIFY's non-photo research,
+DRAFT, and REVIEW card-build touch no local state; PREP and the REVIEW
+approval gate do and stay foreground. Convention documented in RUN.md
+"Background dispatch". Priority among the four candidates should come from
+Phase 5's per-stage timing once it exists, not guessed up front.
+
+- [ ] Batch runner: when a shoot batch queues item N+1 while item N is still
+      in PREP, dispatch item N+1's PRICE/DRAFT as background agents instead
+      of waiting.
+- [ ] Verify a dispatched stage that hits a local-state need (e.g. IDENTIFY
+      wants another photo angle) surfaces as a question, not a silent
+      failure.
+
 ## Ground rules
 
 Honesty rules, condition disclosure, approval digests and the review gate on
