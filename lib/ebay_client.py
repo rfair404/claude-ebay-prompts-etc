@@ -80,11 +80,11 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 from config import ConfigError, config_path, load_config
-from ebay_schema import SCHEMAS, get_schema, print_schema
+from ebay_schema import get_schema, print_schema
 
 
 # ---------------------------------------------------------------------------

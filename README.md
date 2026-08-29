@@ -9,7 +9,7 @@ era-peer comp, and reports account-wide performance after the fact. See
 [`docs/V4_PLAN.md`](docs/V4_PLAN.md) for the current refactor plan
 (skinny prompts, one CLI, fewer round-trips, a session observer) and
 [`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
-for the history of how this pipeline got here — v1 and v2 are frozen for
+for the history of how this pipeline got here — the v1 prompts are frozen for
 context only in [`deprecated/`](deprecated/README.md); no active guidance
 lives there.
 
@@ -56,7 +56,7 @@ keystroke, because an ad added by mistake spends before anyone notices.
       templates/
         listing-v1.md             YAML frontmatter + body
       lib/                        eBay Sell API code (sync/publish/end) + SETUP_EBAY_API.md
-      deprecated/                 frozen v1 prompts + v2 reference (context only)
+      deprecated/                 frozen v1 prompts (context only)
 
 **Function 5.5 — REVIEW.** The publish gate. One command —
 `python lib/list_edit.py --review <shoot-dir>` — records the item, runs
@@ -108,7 +108,7 @@ default, through the logged-in browser
 ([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py)); Chrome is an
 optional low-confidence cross-check. Apify was retired 2026-08-15 and
 must not be re-enabled — see
-[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md).
+[`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md).
 See
 [`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
 if you want the history of how these settled.

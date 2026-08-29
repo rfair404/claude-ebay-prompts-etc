@@ -163,7 +163,7 @@ degrades. PRICE's Stage B comp call used to
 be a second HARD gate (when it ran through Apify, a paid per-run API); it
 no longer is — Stage B now runs automatically through the operator's own
 logged-in eBay session (`lib/ebay_sold_browse.py`; Apify was retired
-2026-08-15, see [`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md)),
+2026-08-15, see [`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)),
 which has no per-run cost to confirm. See PRICE for the Stage-A/B/C
 ordering and the currency-leak validator.
 

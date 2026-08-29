@@ -1,7 +1,8 @@
 """ebaybiz — Stage B: eBay SOLD comps via the user's logged-in Chrome.
 
-**This replaces Apify entirely.** `lib/apify_ebay.py` moved to `deprecated/`
-on 2026-08-15; nothing in the live pipeline calls it.
+**This replaces Apify entirely.** `lib/apify_ebay.py` was retired on
+2026-08-15 and deleted with the v2 material; nothing in the live pipeline
+calls it.
 
 ## Why the actors died, definitively
 

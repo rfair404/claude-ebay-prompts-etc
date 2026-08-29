@@ -20,7 +20,7 @@ waits for query approval and no longer gates on its comp source — Stage B
 runs automatically through the user's logged-in browser
 ([`lib/ebay_sold_browse.py`](../../lib/ebay_sold_browse.py); Apify was retired
 2026-08-15 after repeated silent blocking, see
-[`../pricing-backend-issues.md`](../pricing-backend-issues.md)) — and the
+[`./pricing-backend-issues.md`](./pricing-backend-issues.md)) — and the
 working price is auto-adopted (Recommended tier, provisional) so the pipeline
 finishes straight through to the review card.
 
@@ -56,6 +56,6 @@ template, vocabulary, and file convention are still true in the current
 (v4) pipeline — see README.md's "Core invariants" section for the
 standalone statement. Stage B's *backend* has since moved again: Apify
 was retired 2026-08-15 in favor of the logged-in browser
-([`../pricing-backend-issues.md`](../pricing-backend-issues.md)); the
+([`./pricing-backend-issues.md`](./pricing-backend-issues.md)); the
 "un-gated default Stage B" shape described above is what's current, the
 Apify part of it is not.
