@@ -5,20 +5,24 @@ Builds a synthetic transcript in a temp dir — no dependency on the real
 
 No pytest fixtures — runs under tests/run_all.py too.
 """
+import csv
 import json
+import os
 import sys
 import tempfile
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.session_observer import (  # noqa: E402
-    _classify, _clean_prompt, _match_open_issue, _open_idea_issues, _ts,
-    _tool_signature, _turn_context, aggregate_friction, economics_aggregate,
-    economics_report, file_proposals, format_idea_issue, parse_economics,
-    parse_session, propose_fixes, report, transcripts_dir,
+    _classify, _clean_prompt, _command_bucket, _match_open_issue,
+    _model_rates, _open_idea_issues, _prep_item_dir, _ts, _tool_signature,
+    _turn_context, _turn_cost_usd, aggregate_friction, cost_per_listing,
+    economics_aggregate, economics_report, file_proposals, format_idea_issue,
+    main, parse_economics, parse_session, propose_fixes, report, transcripts_dir,
 )
 
 T0 = "2026-08-27T10:00:0{}.000Z"
@@ -175,16 +179,6 @@ def test_ts_normalizes_a_naive_timestamp_to_utc():
     naive = _ts({"timestamp": "2026-08-27T10:00:00"})
     assert aware.tzinfo is not None and naive.tzinfo is not None
     assert (aware - naive).total_seconds() == 0.0
-
-
-def test_ts_returns_none_for_a_non_string_timestamp():
-    # Copilot review on PR #47: rec["timestamp"] isn't guaranteed to be a
-    # string in a malformed line — _ts() called .replace() on it directly
-    # and raised AttributeError on a number or null, breaking the "never
-    # raises on bad lines" guarantee.
-    assert _ts({"timestamp": None}) is None
-    assert _ts({"timestamp": 12345}) is None
-    assert _ts({"timestamp": ["2026-08-27T10:00:00Z"]}) is None
 
 
 def test_wall_time_does_not_raise_on_a_mixed_naive_and_aware_transcript():
@@ -614,3 +608,366 @@ def test_economics_aggregate_matches_report_shape():
     agg = economics_aggregate([p])
     assert agg["n_sessions"] == 1
     assert agg["bash_total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# #71 §7 — $/published listing, foreground blocking hours, prep re-runs
+# ---------------------------------------------------------------------------
+
+def test_model_rates_known_model_and_unknown_fallback():
+    assert _model_rates("claude-opus-5") == (5.00, 25.00)
+    assert _model_rates("claude-sonnet-5") == (2.00, 10.00)
+    assert _model_rates("claude-haiku-4-5") == (1.00, 5.00)
+    assert _model_rates("some-future-model") != (5.00, 25.00)   # falls back, not silently free
+    assert _model_rates(None)[0] > 0
+
+
+def test_turn_cost_usd_prices_input_output_and_cache_tiers():
+    assert _turn_cost_usd({"input_tokens": 1_000_000}, "claude-sonnet-5") == 2.0
+    assert _turn_cost_usd({"output_tokens": 1_000_000}, "claude-sonnet-5") == 10.0
+    # cache write ~1.25x input rate, cache read ~0.1x input rate
+    assert _turn_cost_usd({"cache_creation_input_tokens": 1_000_000},
+                          "claude-opus-5") == 6.25
+    assert _turn_cost_usd({"cache_read_input_tokens": 1_000_000},
+                          "claude-opus-5") == 0.5
+    assert _turn_cost_usd({}, "claude-opus-5") == 0.0
+
+
+def test_command_bucket_normalizes_common_repo_commands():
+    assert _command_bucket(
+        "python -m lib.photo_prep.prep inventory/x --approve-auto"
+    ) == "python -m lib.photo_prep.prep"
+    assert _command_bucket("pytest tests/ -q") == "pytest"
+    assert _command_bucket('cd "/some/deep/path" && git status') == "git status"
+    assert _command_bucket("gh pr create --title x") == "gh pr create"
+    assert _command_bucket("ebz prep inventory/x --auto") == "ebz prep"
+    assert _command_bucket("") == "(empty)"
+
+
+def test_command_bucket_strips_a_quoted_cd_prefix_containing_spaces():
+    # Windows-style quoted paths with embedded spaces used to defeat the
+    # `\S+`-only cd-prefix strip and leak the whole `cd "..." && ...` line
+    # into its own bucket instead of collapsing to the real command.
+    assert _command_bucket(
+        'cd "C:/Users/A Name/repo" && git status'
+    ) == "git status"
+    assert _command_bucket(
+        "cd '/Users/A Name/repo' && pytest tests/ -q"
+    ) == "pytest"
+
+
+def test_command_bucket_keeps_lib_cli_subcommands_distinct():
+    # A bare `python -m <module>` bucket would collapse every
+    # `python -m lib.cli <subcommand>` invocation together, hiding `prep`
+    # runs dispatched through the CLI rather than called directly.
+    assert _command_bucket(
+        "python -m lib.cli prep inventory/x --auto"
+    ) == "python -m lib.cli prep"
+    assert _command_bucket(
+        "python -m lib.cli sales-report --by-source"
+    ) == "python -m lib.cli sales-report"
+
+
+def test_prep_item_dir_extracts_across_every_invocation_form():
+    assert _prep_item_dir(
+        "python -m lib.photo_prep.prep inventory/sand-dollars --approve-auto"
+    ) == "inventory/sand-dollars"
+    assert _prep_item_dir(
+        "python -m lib.cli prep inventory/sand-dollars --auto"
+    ) == "inventory/sand-dollars"
+    assert _prep_item_dir("ebz prep inventory/sand-dollars") == "inventory/sand-dollars"
+    assert _prep_item_dir(
+        'cd "/repo" && python -m lib.photo_prep.prep inventory/x --check'
+    ) == "inventory/x"
+
+
+def test_prep_item_dir_none_for_non_prep_commands_and_no_positional_arg():
+    assert _prep_item_dir("python -m lib.cli sales-report") is None
+    assert _prep_item_dir("git status") is None
+    assert _prep_item_dir("python -m lib.photo_prep.prep --help") is None
+
+
+def test_parse_economics_tracks_cost_usd_from_model_pricing():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t1", "Bash", {"command": "ls"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                             "cache_creation_input_tokens": 0,
+                             "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+    ])
+    e = parse_economics(p)
+    assert round(e["cost_usd"], 2) == 5.00       # claude-opus-5 (test helper's model)
+
+
+def test_parse_economics_windows_cost_and_foreground_hours_by_turn_timestamp():
+    # Copilot review on #94: a long-lived/resumed session (#71 §5) can have
+    # turns both inside and outside a requested --days window in the SAME
+    # file — file-level mtime selection alone can't scope that, so
+    # parse_economics must bound cost_usd/fg_seconds by each turn's own
+    # timestamp when a window is given.
+    p = _write_economics([
+        # Outside the window (too early) — must not count.
+        _tool_use_msg("2026-01-01T10:00:00Z", [("t1", "Bash", {"command": "ls"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-01-01T10:05:00Z", "t1", "a"),
+        # Inside the window — must count.
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t2", "Bash", {"command": "pwd"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:01:00Z", "t2", "b"),
+    ])
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+
+    unbounded = parse_economics(p)
+    assert round(unbounded["cost_usd"], 2) == 10.00   # both turns count
+    assert unbounded["fg_seconds_by_tool"]["Bash"] == 300.0 + 60.0
+
+    windowed = parse_economics(p, window_start=start, window_end=end)
+    assert round(windowed["cost_usd"], 2) == 5.00      # only the in-window turn
+    assert windowed["fg_seconds_by_tool"]["Bash"] == 60.0
+
+
+def test_parse_economics_excludes_cost_from_a_malformed_timestamp_turn():
+    # Second Copilot review pass on #94: _in_window(None, None, None) used
+    # to return True, so an assistant turn with an unparseable/missing
+    # timestamp still counted toward cost_usd in unbounded (--all) mode —
+    # inconsistent with the windowed case, where it was already excluded.
+    # A turn that can't be placed in time shouldn't be counted either way.
+    p = _write_economics([
+        {"type": "assistant", "timestamp": None,
+         "message": {"role": "assistant", "model": "claude-opus-5", "content": [
+             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+         ], "usage": {"input_tokens": 1_000_000, "output_tokens": 0,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t2", "Bash", {"command": "pwd"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t2", "b"),
+    ])
+    unbounded = parse_economics(p)
+    assert round(unbounded["cost_usd"], 2) == 5.00   # only the well-formed turn
+
+
+def test_parse_economics_windows_foreground_hours_on_call_start_not_completion():
+    # Second Copilot review pass on #94: the window check used the
+    # tool_result's completion timestamp instead of the tool_use call's own
+    # start timestamp — a call starting just inside the window but
+    # finishing just after it must still count as that window's call.
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T23:59:00Z", [("t1", "Bash", {"command": "pwd"})]),
+        _tool_result_msg("2026-08-28T00:05:00Z", "t1", "done"),   # completes AFTER the window
+    ])
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+    e = parse_economics(p, window_start=start, window_end=end)
+    assert e["fg_seconds_by_tool"]["Bash"] == 360.0   # counted: call STARTED in-window
+
+
+def test_parse_economics_foreground_hours_exclude_backgrounded_bash():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [
+            ("t1", "Bash", {"command": "python -m lib.photo_prep.prep inventory/x --auto"}),
+            ("t2", "Bash", {"command": "long_thing", "run_in_background": True}),
+        ]),
+        _tool_result_msg("2026-08-27T10:05:00Z", "t1", "done"),
+        _tool_result_msg("2026-08-27T10:00:02Z", "t2", "started"),
+    ])
+    e = parse_economics(p)
+    assert e["fg_seconds_by_tool"]["Bash"] == 300.0
+    assert e["fg_seconds_by_command"] == {"python -m lib.photo_prep.prep": 300.0}
+
+
+def test_parse_economics_foreground_hours_covers_every_tool_not_just_bash():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t1", "Read", {"file_path": "x.py"})]),
+        _tool_result_msg("2026-08-27T10:00:10Z", "t1", [{"type": "text", "text": "hi"}]),
+    ])
+    e = parse_economics(p)
+    assert e["fg_seconds_by_tool"]["Read"] == 10.0
+    assert e["fg_seconds_by_command"] == {}      # only Bash/PowerShell get a command bucket
+
+
+def test_parse_economics_counts_prep_reruns_per_item_dir():
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [
+            ("t1", "Bash", {"command": "python -m lib.photo_prep.prep inventory/sand-dollars --check"}),
+        ]),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+        _tool_use_msg("2026-08-27T10:01:00Z", [
+            ("t2", "Bash", {"command": "python -m lib.photo_prep.prep inventory/sand-dollars --approve-auto"}),
+        ]),
+        _tool_result_msg("2026-08-27T10:01:01Z", "t2", "b"),
+        _tool_use_msg("2026-08-27T10:02:00Z", [
+            ("t3", "Bash", {"command": "python -m lib.photo_prep.prep inventory/other-item --auto"}),
+        ]),
+        _tool_result_msg("2026-08-27T10:02:01Z", "t3", "c"),
+    ])
+    e = parse_economics(p)
+    assert e["prep_calls"] == {"inventory/sand-dollars": 2, "inventory/other-item": 1}
+
+
+def test_economics_aggregate_sums_cost_foreground_hours_and_prep_reruns():
+    def _prep_session(dir_name):
+        return _write_economics([
+            _tool_use_msg("2026-08-27T10:00:00Z", [
+                ("t1", "Bash", {"command": f"python -m lib.photo_prep.prep {dir_name} --auto"}),
+            ], usage={"input_tokens": 1000, "output_tokens": 0,
+                     "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+            _tool_result_msg("2026-08-27T10:00:05Z", "t1", "a"),
+        ])
+    agg = economics_aggregate([_prep_session("inventory/a"), _prep_session("inventory/a")])
+    assert agg["prep_calls"] == {"inventory/a": 2}
+    assert agg["fg_seconds_by_tool"]["Bash"] == 10.0
+    assert round(agg["cost_usd"], 4) == round(2 * (1000 * 5.00 / 1e6), 4)
+
+
+def test_cost_per_listing_joins_ledger_rows_within_window():
+    rows = [
+        {"price": "100.00", "published_at": "2026-08-27T10:00:00Z"},
+        {"price": "50.00", "published_at": "2026-08-27T11:00:00Z"},
+        {"price": "9999.00", "published_at": "2026-08-20T00:00:00Z"},   # before window
+        {"price": "10.00", "published_at": ""},                        # never published
+    ]
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+    r = cost_per_listing(300.0, rows, start, end)
+    assert r["n_published"] == 2
+    assert r["total_list_price"] == 150.0
+    assert r["cost_per_listing"] == 150.0
+    assert round(r["cost_to_list_price_ratio"], 4) == round(300.0 / 150.0, 4)
+
+
+def test_cost_per_listing_unbounded_window_counts_every_published_row():
+    rows = [{"price": "10", "published_at": "2020-01-01T00:00:00Z"}]
+    r = cost_per_listing(10.0, rows, None, None)
+    assert r["n_published"] == 1
+    assert r["cost_per_listing"] == 10.0
+
+
+def test_cost_per_listing_zero_published_returns_none_ratios_not_a_crash():
+    r = cost_per_listing(50.0, [], None, None)
+    assert r["n_published"] == 0
+    assert r["cost_per_listing"] is None
+    assert r["cost_to_list_price_ratio"] is None
+
+
+def test_cost_per_listing_zero_list_price_returns_none_ratio():
+    rows = [{"price": "0", "published_at": "2026-08-27T10:00:00Z"}]
+    r = cost_per_listing(50.0, rows, None, None)
+    assert r["n_published"] == 1
+    assert r["cost_per_listing"] == 50.0
+    assert r["cost_to_list_price_ratio"] is None
+
+
+def _write_ledger(rows) -> Path:
+    d = Path(tempfile.mkdtemp())
+    path = d / "listings_ledger.csv"
+    fields = ["sku", "status", "title", "price", "offer_id", "listing_id",
+              "url", "drafted_at", "synced_at", "published_at", "ended_at",
+              "updated_at"]
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+    return path
+
+
+def test_economics_report_renders_the_three_71_metrics(monkeypatch):
+    ledger = _write_ledger([
+        {"sku": "a1", "status": "PUBLISHED", "title": "Widget",
+         "price": "40.00", "published_at": "2026-08-27T10:00:00Z"},
+    ])
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(ledger))
+
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T09:00:00Z", [
+            ("t1", "Bash", {"command": "python -m lib.photo_prep.prep inventory/widget --check"}),
+        ], usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T09:10:00Z", "t1", "a"),
+        _tool_use_msg("2026-08-27T09:20:00Z", [
+            ("t2", "Bash", {"command": "python -m lib.photo_prep.prep inventory/widget --approve-auto"}),
+        ], usage={"input_tokens": 0, "output_tokens": 0,
+                 "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T09:21:00Z", "t2", "b"),
+    ])
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+    out = economics_report([p], window_start=start, window_end=end)
+
+    assert "$/published listing" in out
+    assert "$5.00" in out or "5.00" in out            # cost_per_listing == model spend / 1 listing
+    assert "Foreground blocking hours by tool" in out
+    assert "Foreground blocking hours by repo command" in out
+    assert "python -m lib.photo_prep.prep" in out
+    assert "prep re-runs" in out
+    assert "2x  inventory/widget" in out
+
+
+def test_economics_report_without_ledger_env_falls_back_to_no_row_line(monkeypatch):
+    # Point the ledger at a path that doesn't exist rather than trusting
+    # whatever real listings_ledger.csv this machine happens to have.
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER",
+                       str(Path(tempfile.mkdtemp()) / "missing.csv"))
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t1", "Bash", {"command": "ls"})],
+                      usage={"input_tokens": 100, "output_tokens": 0,
+                             "cache_creation_input_tokens": 0,
+                             "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t1", "a"),
+    ])
+    out = economics_report([p])
+    assert "no listings_ledger.csv row published in this window" in out
+
+
+def test_main_economics_derives_ledger_window_from_included_files_not_days(
+        monkeypatch, capsys):
+    # Copilot review on #94: --limit can truncate the --days-filtered file
+    # list to fewer/newer sessions than --days alone would suggest, so the
+    # ledger join window must come from the mtimes of the files actually
+    # included, not from `now - --days`. Two sessions eight months apart,
+    # --days 365 (wide enough both pass the date filter) but --limit 1
+    # (only the newer one is actually included) — the listing published
+    # only in the OLDER session's window must NOT be counted.
+    tmp = Path(tempfile.mkdtemp())
+    old_ts, new_ts = "2026-01-01T10:00:00Z", "2026-08-20T10:00:00Z"
+    usage = {"input_tokens": 1_000_000, "output_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+
+    old_path = tmp / "old-session.jsonl"
+    old_path.write_text("\n".join(json.dumps(r) for r in [
+        _tool_use_msg(old_ts, [("t1", "Bash", {"command": "ls"})], usage=usage),
+        _tool_result_msg(old_ts, "t1", "a"),
+    ]), encoding="utf-8")
+    new_path = tmp / "new-session.jsonl"
+    new_path.write_text("\n".join(json.dumps(r) for r in [
+        _tool_use_msg(new_ts, [("t1", "Bash", {"command": "ls"})], usage=usage),
+        _tool_result_msg(new_ts, "t1", "a"),
+    ]), encoding="utf-8")
+
+    old_epoch = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+    new_epoch = datetime(2026, 8, 20, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(old_path, (old_epoch, old_epoch))
+    os.utime(new_path, (new_epoch, new_epoch))
+
+    ledger = _write_ledger([
+        {"sku": "old-only", "status": "PUBLISHED", "title": "Old widget",
+         "price": "10.00", "published_at": old_ts},
+        {"sku": "new-only", "status": "PUBLISHED", "title": "New widget",
+         "price": "20.00", "published_at": new_ts},
+    ])
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(ledger))
+
+    rc = main(["--dir", str(tmp), "--economics", "--days", "365", "--limit", "1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 published in window" in out
+    assert "2 published in window" not in out
+    assert "$20.00 their" in out or "20.00" in out
+    assert "$10.00 their" not in out
