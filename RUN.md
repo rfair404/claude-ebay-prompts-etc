@@ -111,15 +111,16 @@ it lands. The same applies to any other foreground call in that range.
 
 **Always start these backgrounded — by command prefix, not judgment call**
 (measured across 122 sessions, #74; prefixes match the real invocation
-forms used throughout `prompts/`, not bare names): `python -m
-lib.photo_prep.prep`, `python -m pytest`, `python tests/run_all.py`,
-`python tools/ledger_reconcile.py`, `python tools/prep_sheet_html.py`,
-the comp-hunt call (`python lib/ebay_sold_browse.py` — Apify is retired,
-see [`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md);
-don't background the deprecated `apify_ebay.py`), `python
-lib/lens_id.py`, `python tools/reindex_*.py`. Each one routinely runs
-long enough that foregrounding it is a wasted turn waiting on nothing the
-next step needs yet.
+forms used throughout `prompts/`, not bare names):
+`python -m lib.photo_prep.prep`, `python -m pytest`,
+`python tests/run_all.py`, `python tools/ledger_reconcile.py`,
+`python tools/prep_sheet_html.py`, the comp-hunt call
+(`python lib/ebay_sold_browse.py` — Apify is retired, see
+[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md);
+don't background the deprecated `apify_ebay.py`), `python lib/lens_id.py`,
+`python tools/reindex_*.py`. Each one routinely runs long enough that
+foregrounding it is a wasted turn waiting on nothing the next step needs
+yet.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — check a
