@@ -17,6 +17,13 @@ should not burn a color cartridge printing it.
 Buyer name and street address are on this page. Like tools/pick_list.py, the
 output goes to pick_lists/ (gitignored) only — never an artifact, never
 committed, never anywhere that leaves the machine.
+
+No seller financials on this page — deliberately. This sheet can end up seen
+by the buyer during packing (dropped in the box by mistake, photographed,
+whatever), so it shows only the order total, which the buyer already knows
+from their own receipt. tools/pick_list.py's terminal output is seller-only
+and does show buyer-paid-shipping / net payout; do not port those figures
+here. See GH #84.
 """
 from __future__ import annotations
 
@@ -24,6 +31,7 @@ import argparse
 import base64
 import html
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -126,6 +134,37 @@ def _hero_path(folder: str) -> Path | None:
     return None
 
 
+_LOCATION_OVERRIDE_RE = re.compile(
+    r'describe location as ["“]([^"”]+)["”]', re.IGNORECASE)
+
+
+def _pick_location(folder: str) -> str:
+    """Where a person actually goes to pull this — not the full repo path.
+
+    Walks up from the item's folder to the nearest ancestor holding a
+    context.txt (the estate/lot marker, e.g. inventory/ESTATES/SCJ/context.txt)
+    and returns just that directory's name, e.g. "SCJ" — unless that
+    context.txt itself overrides the display name (e.g. inventory/FREE's
+    says `describe location as "BIN-4" and NOT "FREE"`, because the
+    directory name isn't what's written on the shelf). Falls back to the
+    item folder's own name if no ancestor has a context.txt at all."""
+    if not folder:
+        return ""
+    d = (ROOT / folder).resolve()
+    root = ROOT.resolve()
+    cur = d
+    while root in cur.parents or cur == root:
+        ctx = cur / "context.txt"
+        if ctx.exists():
+            text = ctx.read_text(encoding="utf-8", errors="ignore")
+            m = _LOCATION_OVERRIDE_RE.search(text)
+            return m.group(1).strip() if m else cur.name
+        if cur == root:
+            break
+        cur = cur.parent
+    return d.name
+
+
 def _addr_key(o: dict) -> tuple:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
@@ -159,6 +198,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
             order_bit = (f" &middot; order {html.escape(o.get('orderId', ''))}"
                          f" &middot; rec #{html.escape(str(o.get('salesRecordReference', '')))}"
                          f" &middot; {_money(li.get('lineItemCost'))}") if grouped else ""
+            location = (_pick_location(folder) if folder
+                       else "(no local folder — listed by hand)")
             item_blocks.append(f"""
       <div class="item">
         <div class="thumb">{pic}</div>
@@ -166,6 +207,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
           <div class="qty">&times;{li.get('quantity', 1)}</div>
           <div class="title">{html.escape(li.get('title', ''))}</div>
           <div class="meta">item {html.escape(str(li.get('legacyItemId', '')))}{sku_bit}{order_bit}</div>
+          <div class="from">FROM&nbsp; {html.escape(location)}</div>
         </div>
       </div>""")
 
@@ -225,6 +267,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   .title {{ font-size: 1rem; margin: 2px 0; }}
   .meta {{ font-family: 'Courier New', monospace; letter-spacing: .02em;
            color: #333; font-size: .78rem; }}
+  .from {{ font-family: 'Courier New', monospace; letter-spacing: .02em;
+           color: #555; font-size: .74rem; margin-top: 4px; }}
   .shipto {{ border-top: 2px solid #111; margin-top: 8px; padding-top: 10px; }}
   .shipto b {{ display: block; margin-bottom: 4px; font-family: Georgia, serif;
                font-weight: 700; letter-spacing: .26em; text-transform: uppercase;
