@@ -225,7 +225,7 @@ def test_a_real_manifest_carries_the_fields_readers_depend_on():
 
 LEDGER_COLUMNS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
-                  "updated_at"]
+                  "shipped_at", "updated_at"]
 
 
 def test_ledger_columns_and_their_order():
@@ -242,7 +242,7 @@ def test_ledger_statuses_stay_in_the_known_set():
     p = ROOT / "listings_ledger.csv"
     if not p.exists():
         return
-    known = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "ENDED", "DELETED",
+    known = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "SHIPPED", "ENDED", "DELETED",
              "OUT_OF_STOCK", ""}
     seen = set()
     with p.open(encoding="utf-8", newline="") as fh:

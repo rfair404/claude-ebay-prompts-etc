@@ -1,4 +1,4 @@
-# REPORT — v3, Function 7
+# REPORT — Function 7
 
 Obeys [`_shared.md`](_shared.md) (style, confidence, honesty). Read it first.
 

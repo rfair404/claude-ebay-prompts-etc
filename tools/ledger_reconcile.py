@@ -51,7 +51,8 @@ from ebay_client import (load_credentials, iter_inventory_items,        # noqa: 
 LEDGER = REPO / "listings_ledger.csv"
 SALES = REPO / "sales_ledger.csv"
 FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id", "url",
-          "drafted_at", "synced_at", "published_at", "ended_at", "updated_at"]
+          "drafted_at", "synced_at", "published_at", "ended_at", "shipped_at",
+          "updated_at"]
 
 # Which ledger status a live offer implies. The ledger's vocabulary is coarser
 # than eBay's, so this is a mapping and not a copy.
@@ -98,13 +99,18 @@ def _sold_skus() -> set:
 def _protected(row: dict, truth: dict, field: str, sold: set) -> bool:
     """True when the LOCAL value outranks eBay for this field.
 
-    Exactly one case, and it is narrow on purpose: a SOLD row whose sale is
-    corroborated by an order in sales_ledger.csv, where eBay is not showing the
-    listing as live again. See the SOLD note above.
+    Exactly one case, and it is narrow on purpose: a SOLD or SHIPPED row —
+    both post-sale states the Inventory API has no field for — where eBay is
+    not showing the listing as live again. See the SOLD note above. SHIPPED
+    (tools/pick_list.py --record-tracking) is a step past SOLD, not a
+    different track, so it gets the same protection: eBay's own status
+    inference (_status_for above) never returns SOLD or SHIPPED, so without
+    this a routine `--apply` run silently regresses a shipped order's status
+    back to whatever the still-live offer looks like.
     """
     if field != "status":
         return False
-    if (row.get("status") or "").strip() != "SOLD":
+    if (row.get("status") or "").strip() not in ("SOLD", "SHIPPED"):
         return False
     # Protected whether or not an order corroborates it. An uncorroborated SOLD
     # is more likely an offline sale the Fulfillment API never saw — the mall
@@ -112,7 +118,7 @@ def _protected(row: dict, truth: dict, field: str, sold: set) -> bool:
     # not symmetric: wrongly keeping SOLD is a stale row someone notices, wrongly
     # clearing it silently resurrects a sold item as listable stock. 5da73b50, a
     # $245 14K pendant, sits exactly here. Reported under REVIEW instead.
-    return truth["status"] != "PUBLISHED"  # a relist that is ACTIVE does outrank SOLD
+    return truth["status"] != "PUBLISHED"  # a relist that is ACTIVE does outrank SOLD/SHIPPED
 
 
 def _now() -> str:
