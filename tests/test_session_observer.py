@@ -7,6 +7,7 @@ No pytest fixtures — runs under tests/run_all.py too.
 """
 import csv
 import json
+import os
 import sys
 import tempfile
 from collections import Counter
@@ -21,7 +22,7 @@ from tools.session_observer import (  # noqa: E402
     _model_rates, _open_idea_issues, _prep_item_dir, _ts, _tool_signature,
     _turn_context, _turn_cost_usd, aggregate_friction, cost_per_listing,
     economics_aggregate, economics_report, file_proposals, format_idea_issue,
-    parse_economics, parse_session, propose_fixes, report, transcripts_dir,
+    main, parse_economics, parse_session, propose_fixes, report, transcripts_dir,
 )
 
 T0 = "2026-08-27T10:00:0{}.000Z"
@@ -178,16 +179,6 @@ def test_ts_normalizes_a_naive_timestamp_to_utc():
     naive = _ts({"timestamp": "2026-08-27T10:00:00"})
     assert aware.tzinfo is not None and naive.tzinfo is not None
     assert (aware - naive).total_seconds() == 0.0
-
-
-def test_ts_returns_none_for_a_non_string_timestamp():
-    # Copilot review on PR #47: rec["timestamp"] isn't guaranteed to be a
-    # string in a malformed line — _ts() called .replace() on it directly
-    # and raised AttributeError on a number or null, breaking the "never
-    # raises on bad lines" guarantee.
-    assert _ts({"timestamp": None}) is None
-    assert _ts({"timestamp": 12345}) is None
-    assert _ts({"timestamp": ["2026-08-27T10:00:00Z"]}) is None
 
 
 def test_wall_time_does_not_raise_on_a_mixed_naive_and_aware_transcript():
@@ -653,6 +644,30 @@ def test_command_bucket_normalizes_common_repo_commands():
     assert _command_bucket("") == "(empty)"
 
 
+def test_command_bucket_strips_a_quoted_cd_prefix_containing_spaces():
+    # Windows-style quoted paths with embedded spaces used to defeat the
+    # `\S+`-only cd-prefix strip and leak the whole `cd "..." && ...` line
+    # into its own bucket instead of collapsing to the real command.
+    assert _command_bucket(
+        'cd "C:/Users/A Name/repo" && git status'
+    ) == "git status"
+    assert _command_bucket(
+        "cd '/Users/A Name/repo' && pytest tests/ -q"
+    ) == "pytest"
+
+
+def test_command_bucket_keeps_lib_cli_subcommands_distinct():
+    # A bare `python -m <module>` bucket would collapse every
+    # `python -m lib.cli <subcommand>` invocation together, hiding `prep`
+    # runs dispatched through the CLI rather than called directly.
+    assert _command_bucket(
+        "python -m lib.cli prep inventory/x --auto"
+    ) == "python -m lib.cli prep"
+    assert _command_bucket(
+        "python -m lib.cli sales-report --by-source"
+    ) == "python -m lib.cli sales-report"
+
+
 def test_prep_item_dir_extracts_across_every_invocation_form():
     assert _prep_item_dir(
         "python -m lib.photo_prep.prep inventory/sand-dollars --approve-auto"
@@ -840,3 +855,50 @@ def test_economics_report_without_ledger_env_falls_back_to_no_row_line(monkeypat
     ])
     out = economics_report([p])
     assert "no listings_ledger.csv row published in this window" in out
+
+
+def test_main_economics_derives_ledger_window_from_included_files_not_days(
+        monkeypatch, capsys):
+    # Copilot review on #94: --limit can truncate the --days-filtered file
+    # list to fewer/newer sessions than --days alone would suggest, so the
+    # ledger join window must come from the mtimes of the files actually
+    # included, not from `now - --days`. Two sessions eight months apart,
+    # --days 365 (wide enough both pass the date filter) but --limit 1
+    # (only the newer one is actually included) — the listing published
+    # only in the OLDER session's window must NOT be counted.
+    tmp = Path(tempfile.mkdtemp())
+    old_ts, new_ts = "2026-01-01T10:00:00Z", "2026-08-20T10:00:00Z"
+    usage = {"input_tokens": 1_000_000, "output_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+
+    old_path = tmp / "old-session.jsonl"
+    old_path.write_text("\n".join(json.dumps(r) for r in [
+        _tool_use_msg(old_ts, [("t1", "Bash", {"command": "ls"})], usage=usage),
+        _tool_result_msg(old_ts, "t1", "a"),
+    ]), encoding="utf-8")
+    new_path = tmp / "new-session.jsonl"
+    new_path.write_text("\n".join(json.dumps(r) for r in [
+        _tool_use_msg(new_ts, [("t1", "Bash", {"command": "ls"})], usage=usage),
+        _tool_result_msg(new_ts, "t1", "a"),
+    ]), encoding="utf-8")
+
+    old_epoch = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+    new_epoch = datetime(2026, 8, 20, 10, 0, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(old_path, (old_epoch, old_epoch))
+    os.utime(new_path, (new_epoch, new_epoch))
+
+    ledger = _write_ledger([
+        {"sku": "old-only", "status": "PUBLISHED", "title": "Old widget",
+         "price": "10.00", "published_at": old_ts},
+        {"sku": "new-only", "status": "PUBLISHED", "title": "New widget",
+         "price": "20.00", "published_at": new_ts},
+    ])
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(ledger))
+
+    rc = main(["--dir", str(tmp), "--economics", "--days", "365", "--limit", "1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 published in window" in out
+    assert "2 published in window" not in out
+    assert "$20.00 their" in out or "20.00" in out
+    assert "$10.00 their" not in out

@@ -202,13 +202,15 @@ def _tool_signature(name: str, inp: dict) -> str:
     return name
 
 
-_CD_PREFIX = re.compile(r"^cd\s+\S+\s*&&\s*")
+_CD_PREFIX = re.compile(r'^cd\s+(?:"[^"]*"|\'[^\']*\'|\S+)\s*&&\s*')
 
 # A Bash command collapsed to a stable "repo command" bucket — the shape
 # #61/#71's manual command tallies used by hand. Ordered most-specific first
 # so e.g. `python -m lib.cli prep ...` doesn't fall through to a bare
 # `python -m` bucket before its own pattern gets a look.
 _CMD_BUCKETS = [
+    (re.compile(r"^python3?\s+-m\s+lib\.cli\s+(\S+)"),
+     lambda m: f"python -m lib.cli {m.group(1)}"),
     (re.compile(r"^python3?\s+-m\s+(\S+)"), lambda m: f"python -m {m.group(1)}"),
     (re.compile(r"^python3?\s+((?:tools|lib)/\S+\.py)"), lambda m: f"python {m.group(1)}"),
     (re.compile(r"^pytest\b"), lambda m: "pytest"),
@@ -1076,9 +1078,18 @@ def main(argv=None) -> int:
         return 0
 
     if args.economics:
-        now = datetime.now(timezone.utc)
-        window_start = None if args.all else now - timedelta(days=args.days)
-        print(economics_report(files, window_start=window_start, window_end=now))
+        if args.all:
+            window_start = window_end = None
+        else:
+            # Derived from the mtimes of the *actually included* session
+            # files, not from --days alone — --limit can truncate `files`
+            # to fewer/newer sessions than the --days cutoff would suggest,
+            # and the ledger join must match spend against the same window
+            # the spend was measured over.
+            mtimes = [datetime.fromtimestamp(os.path.getmtime(f), timezone.utc)
+                     for f in files]
+            window_start, window_end = min(mtimes), max(mtimes)
+        print(economics_report(files, window_start=window_start, window_end=window_end))
         return 0
 
     if args.propose:
