@@ -41,6 +41,8 @@ COMMANDS = {
                      "comp JSON -> the thumbnail board (_shared.md hard rule)"),
     "sales-report": ("tools.sales_report",
                      "sales / fees / promotion dashboard"),
+    "report":       ("lib.source_report",
+                     "cross-directory bucket ROI — report --by-source [--html] (#56)"),
     "promote":      ("tools.promote",
                      "paid-placement planner — proposes; every write needs --confirm"),
     "voice":        ("lib.voice_check",
