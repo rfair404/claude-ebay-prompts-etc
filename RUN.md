@@ -64,6 +64,58 @@ shoot directory, so phases compose without re-deriving.
 
 ---
 
+## Concurrency and delegation (#61/#62)
+
+**Trigger: a multi-item batch** — "run everything in `<folder>`", a plan-mode
+estate scene with several saleable items, a backlog sweep. A single item, or
+an interactive back-and-forth about one piece, stays in the main thread; fan
+out only earns its overhead across several items. Measured cost of *not*
+doing this: mean 291,787 tokens of accumulated context per turn, 1.00 tool
+calls per assistant turn, one "run all" session that took 725 turns for a
+single folder (#61).
+
+**Main thread = conductor.** It holds only: the batch manifest (which items,
+what phase each is in), the **gates**, and any write that touches shared
+state. It never holds a raw photo, a comp JSON, forum matches, or a worker's
+full reasoning — those are what make the window huge.
+
+**One worker (`Agent` tool) per item**, covering IDENTIFY→PRICE→
+INVESTIGATE→DRAFT, **capped at 4 concurrent** (PRICE hits Apify/eBay Browse;
+more trips rate limits). Each worker starts on a fresh context, reads
+[`prompts/_shared.md`](prompts/_shared.md) plus the phase prompt it needs —
+not optional, the honesty rules and in-hand voice live only in the prompt
+files — writes its outputs to the shoot dir exactly as a normal run would,
+and returns a **compact verdict only**: item name, proposed title, price +
+tier, the ⚠ list, and the path to `draft.md`. The filesystem is the handoff;
+the conductor never needs a worker's reasoning, only its verdict.
+
+**The ledger is the one hard constraint.** `listings_ledger.csv` is a single
+unlocked CSV — `list_edit.py --record` / `--sync` / `--list --confirm` all
+read-modify-write it, and two callers at once lose a row. Every ledger-
+touching call runs in the conductor, serialized, never inside a worker —
+which is also where it already belongs, since it follows the gate.
+
+**Gates become a queue, not a barrier.** A finished item's review card joins
+a queue instead of stopping the run; the user answers gates whenever they're
+next at the machine, and other workers keep going the whole time. The gates
+themselves do not weaken — REVIEW still publishes on one explicit
+per-item approval, never inferred, never batched into "approve all" — they
+just stop being a global stall. (Measured: 229h blocked across 229 asks,
+mean 1h each; colour alone was 81h against a confidence gate `prep.md`
+already specifies — see PREP's `--auto`/`--approve-auto` above.)
+
+**Background anything over ~30s.** `prep --auto` renders images and nothing
+else in the run depends on it finishing — kick it off with
+`run_in_background`, run PRICE Stage A/B while it renders, collect it when
+it lands. The same applies to any other foreground call in that range.
+
+**`ebz status <shoot>`** (`python -m lib.cli status <shoot-dir>`) replaces
+the `ls`/`cat`/`grep` sequence for "where is this item": phase files
+present, PREP's approval state, frame count, ledger row, and the next
+action — one call instead of several.
+
+---
+
 ## The gate contract (the whole point of headless)
 
 Reclassify every "ask the user" moment as HARD or SOFT.
@@ -168,10 +220,31 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
-`listing` (the LIST/EDIT CLI), `prep`, `observe` (session transcripts ->
-friction report; read-only, `--report` to print it). Argv passes through untouched, so
-every flag documented for a tool works identically under `ebz`. The direct
-`python tools/<x>.py` / `python lib/<x>.py` invocations keep working.
+`listing` (the LIST/EDIT CLI), `prep`, `single-pass` (gate-check
+IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
+[prompts/single_pass.md](prompts/single_pass.md)), `observe` (session
+transcripts -> friction report; read-only, `--report` to print it,
+`--economics` for the #61 run-cost table — context/turn, tool-call
+batching, image Read payload, gate wall-clock by name — the standing
+version of the one-off `.scratch/analyze*.py` audit, `--propose` for
+#36's ranked, evidence-cited proposed fixes — add `--file` to actually
+create/comment the house `Idea:` issue via `gh`; without `--file` it's a
+dry run that only prints what it would do), `status` (one-shot shoot
+state: phase files, PREP gate, frames, ledger row, next action —
+#61/#62). Argv passes through untouched, so every flag documented for a
+tool works identically under `ebz`. The direct `python tools/<x>.py` /
+`python lib/<x>.py` invocations keep working.
+
+**Single-pass mode (routine items, V4_PLAN Phase 4, #30).** For an item
+that never needs a mid-pipeline question — a single-item shoot, non-gate
+category, ordinary condition — run the five stages in one sitting instead
+of five conversational turns, and stop for exactly one review card at the
+end. `python -m lib.cli single-pass <shoot-dir>` is the read-only gate check
+across whatever each stage has already written: clean → the same card
+REVIEW would build; anything a stage's own interactive HARD stop caught
+(PREP's confidence gate, IDENTIFY's maker-mark/poll gate, the marble crop
+gate) → the specific exception, by name, never guessed. Full protocol:
+[prompts/single_pass.md](prompts/single_pass.md).
 
 ## Locking a format
 

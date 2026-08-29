@@ -232,13 +232,27 @@ def _cards_color(shoot, m):
 
 BLURB = {
     "orientation": ("Every frame turned the way it will ship. Pick a different turn to "
-                    "override it. Nothing was guessed — a frame with no readable text "
-                    "gets no automatic answer, so it was looked at by hand."),
+                    "override it. Nothing was guessed — a frame flagged here got no "
+                    "automatic answer and needs a look."),
     "crop": ("How each frame will be framed. A frame that refuses a crop says why; "
              "those refusals are deliberate, and a detail macro with no studio behind "
              "it is supposed to refuse. You can force one anyway."),
     "color": ("One look ships for the whole shoot. Compare on any frame; the pick "
               "applies everywhere."),
+}
+# What each stage shows when there is nothing to decide — every frame assumed
+# upright, or `crisp` auto-applied — and no one asked for the picker. See
+# `--interactive-rotation` / `--interactive-color` on this tool's CLI.
+READONLY_BLURB = {
+    "orientation": ("Rotation check is off — every frame below is assumed shot "
+                    "right-side up (the shoot convention), so there is nothing to "
+                    "pick. Run with --interactive-rotation to open this as a picker, "
+                    "or answer a specific frame with --rotate NAME=DEG / "
+                    "--check-rotation if one of these looks wrong."),
+    "color": ("`crisp` applied automatically — camera colour kept, backdrop cleaned, "
+              "item sharpened. Run with --interactive-color (after re-running --apply "
+              "--filters, so the other looks exist to compare) to pick a different "
+              "one, or --only asshot to ship uncorrected."),
 }
 FLAG = {"orientation": "--set-rotate", "crop": "--crop", "color": "--pick"}
 SLUG = {"orientation": "o", "crop": "c", "color": "k"}
@@ -252,7 +266,7 @@ def _esc(v) -> str:
     return html.escape(str(v), quote=True)
 
 
-def _card_html(stage: str, card: dict, idx: int) -> str:
+def _card_html(stage: str, card: dict, idx: int, readonly: bool = False) -> str:
     """One card.
 
     Each picture's bytes appear ONCE, as a CSS custom property on the card, and
@@ -260,8 +274,39 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
     alike. Writing the data URI at each of those three places instead pushed a
     fourteen-frame shoot to 15 MB, against a 16 MB ceiling — the colour stage,
     with three pictures per frame, would not have fit at all.
+
+    `readonly` drops the option chips and the picking radios: there is exactly
+    one picture (the one that will ship) and a note, nothing to choose between.
+    Used when a stage was decided by default (assumed-upright rotation, the
+    auto-applied `crisp` look) rather than by a person, so the page does not
+    dress a settled answer up as an open question. The zoom-to-full-size view
+    still works — it needs no radio, only the checkbox already used for it.
     """
     fid = f"{SLUG[stage]}{idx}"
+
+    if readonly:
+        chosen = next((o for o in card["options"] if o["value"] == card["chosen"]),
+                      card["options"][0] if card["options"] else None)
+        spin = (f"transform:rotate({chosen['spin']}deg);"
+                if chosen and chosen.get("spin") else "")
+        pic = (f'<div class="v ro" style="background-image:url({chosen["img"]});'
+               f'{spin}display:block"></div>' if chosen and chosen.get("img") else
+               '<div class="v ro nopic">No preview.</div>')
+        why = f' · {_esc(card["why"])}' if card["why"] else ""
+        return f'''<div class="card ro" id="card_{fid}">
+  <input type="checkbox" class="zoomin" id="zoom_{fid}" aria-label="Open {_esc(card["name"])} full size">
+  <div class="cap"><span class="nm">{_esc(card["name"])}</span>
+    <span class="tag {card["status"]} t-auto">{card["status"]}</span></div>
+  <label class="stage" for="zoom_{fid}" title="Open full size">{pic}
+    <span class="zoom" aria-hidden="true">&#10530;</span></label>
+  <div class="note">{_esc(card["note"])}{why}</div>
+  <div class="big" id="big_{fid}">
+    <label class="shut" for="zoom_{fid}">Close</label>
+    <div class="bigwrap">{pic}</div>
+    <div class="bigcap">{_esc(card["name"])}</div>
+  </div>
+</div>'''
+
     vars_, pics, opts, radios = [], [], [], []
     for j, o in enumerate(card["options"]):
         on = o["value"] == card["chosen"]
@@ -322,16 +367,34 @@ def _card_html(stage: str, card: dict, idx: int) -> str:
 
 
 def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
-           shoot: str) -> str:
+           shoot: str, card_readonly: list | None = None) -> str:
+    """`card_readonly` is a per-card bool list (default: every card interactive).
+
+    A stage decided by default — assumed-upright rotation, auto-applied
+    `crisp` — has nothing for most cards to pick between, so those cards drop
+    their options. If EVERY card in the panel is readonly there is also
+    nothing to accept: the Accept/Send controls only exist to turn a picked
+    override into a command, and a panel with no pickers has no override to
+    turn into one. A frame that still needs a look (orientation's `needs_ask`)
+    stays interactive regardless, mixed in with the rest — see `build()`.
+    """
     if not ready:
         return (f'<section class="panel" id="panel-{stage}">'
                 f'<p class="lede">{_esc(BLURB[stage])}</p>'
                 f'<div class="locked">{_esc(locked)}</div></section>')
 
+    ro = card_readonly if card_readonly is not None else [False] * len(cards)
+    body = "".join(_card_html(stage, c, i, readonly=ro[i]) for i, c in enumerate(cards))
+
+    if cards and all(ro):
+        return f'''<section class="panel" id="panel-{stage}">
+  <p class="lede">{_esc(READONLY_BLURB.get(stage, BLURB[stage]))}</p>
+  <div class="grid">{body}</div>
+</section>'''
+
     notice = ('<div class="notice"><b>Preview.</b> The stage before this one is not '
               'approved yet, so this is drawn from the current plan and will be redrawn '
               'if that changes. Answer the earlier tab first.</div>') if preview else ""
-    body = "".join(_card_html(stage, c, i) for i, c in enumerate(cards))
     return f'''<section class="panel" id="panel-{stage}">
   <p class="lede">{_esc(BLURB[stage])}</p>
   {notice}
@@ -360,19 +423,33 @@ def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
 </section>'''
 
 
-def build(shoot: Path, out: Path) -> Path:
+def build(shoot: Path, out: Path,
+          interactive_rotation: bool = False, interactive_color: bool = False) -> Path:
+    """`interactive_rotation` / `interactive_color` force the full per-frame
+    picker open for a stage that would otherwise render read-only — see
+    `READONLY_BLURB` and `_card_html`'s `readonly` doc. A frame orientation
+    still needs a human look for (`needs_ask`) stays a picker regardless; the
+    flag only affects frames that already have a settled answer.
+    """
     m = load_manifest(shoot)
     st = stagemod.stage_state(m)
     approved = {s: bool(st[s]["approved"]) for s in stagemod.STAGES}
     sp = shoot.as_posix()
 
+    orient_cards = _cards_orientation(shoot, m)
+    orient_ro = [not interactive_rotation and c["status"] != "held" for c in orient_cards]
+
     color_cards, rendered = _cards_color(shoot, m)
+    color_ro = [not interactive_color for _ in color_cards]
+
+    READONLY_OF = {"orientation": orient_ro, "color": color_ro}
+
     built = {
-        "orientation": (True, _cards_orientation(shoot, m), ""),
+        "orientation": (True, orient_cards, ""),
         "crop": (True, _cards_crop(shoot, m), ""),
         "color": (rendered > 0, color_cards if rendered else [],
                   "The looks are not rendered yet. Approve crop, then run --apply, "
-                  "and this tab fills with as shot / studio / punch side by side."),
+                  "and this tab fills with `crisp` (or --filters for the full set)."),
     }
 
     first = next((s for s in stagemod.STAGES if not approved[s] and built[s][0]),
@@ -394,7 +471,8 @@ def build(shoot: Path, out: Path) -> Path:
             f'<span class="st {kind}">{word}</span></label>')
         prev = stagemod.STAGES[i - 1] if i else None
         panels.append(_panel(s, cards, ready, locked,
-                             bool(prev) and not approved[prev], sp))
+                             bool(prev) and not approved[prev], sp,
+                             card_readonly=READONLY_OF.get(s)))
 
     page = (TEMPLATE
             .replace("__SHOOT__", _esc(sp))
@@ -522,6 +600,13 @@ main{max-width:1500px;margin:0 auto;padding:20px 20px 40px}
   background-position:center}
 .opt .mini.nopic{font-size:16px;padding:0}
 /* chip highlighting is generated per index in __PICKRULES__ */
+
+/* A readonly card: one picture, no chips, no radios — the stage was decided
+   by default and there is nothing here to pick between. `.v.ro` is shown by
+   an inline style, not a generated rule, since there is no radio to drive it. */
+.card.ro{padding-bottom:2px}
+.v.ro{width:100%;height:100%}
+.v.ro.nopic{display:grid;place-items:center;color:var(--muted);font-size:12px}
 
 .note{padding:8px 11px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--rule)}
 .say{display:block;padding:0 11px 11px}
@@ -670,9 +755,20 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("shoot", type=Path)
     ap.add_argument("-o", "--out", type=Path)
+    ap.add_argument("--interactive-rotation", action="store_true",
+                    dest="interactive_rotation",
+                    help="show every frame's rotation as a picker, even the ones "
+                         "with a settled (assumed-upright) answer — default: "
+                         "read-only for those, picker only for frames still asking")
+    ap.add_argument("--interactive-color", action="store_true",
+                    dest="interactive_color",
+                    help="show colour as a compare-and-pick panel instead of the "
+                         "read-only 'crisp applied' summary — needs --apply --filters "
+                         "run first so the other looks exist to compare")
     a = ap.parse_args()
     out = a.out or (a.shoot / ".prep" / "review.html")
-    p = build(a.shoot, out)
+    p = build(a.shoot, out, interactive_rotation=a.interactive_rotation,
+             interactive_color=a.interactive_color)
     print(f"{p}  ({p.stat().st_size / 1e6:.1f} MB)")
 
 
