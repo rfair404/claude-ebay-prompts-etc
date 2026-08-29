@@ -92,7 +92,7 @@ manages any offer/SKU on the account: `--offers` (query all, read-only),
 <id>` and `--delete-item <sku>` (permanent removal). Mutations are dry-run
 unless `--confirm` and are user-initiated — never part of the pipeline.
 
-Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
+Python infrastructure (`config`, `ebay_client`, `ebay_sold_browse`,
 `list_edit`, `draft_io`, `photo_prep`) lives in `lib/`.
 
 ## Core invariants
@@ -103,11 +103,12 @@ listing template + its `_field_constraints`, the unit_type vocabulary, and
 the deterministic output-file-per-phase convention all hold. The REVIEW
 gate is what turns "publish" from an absolute refusal into an
 approval-gated action: nothing goes LIVE without one explicit human
-approval at the decision card. eBay sold comps via the logged-in browser
-([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py)) run as the un-gated
-default Stage B of the comp hunt (Chrome is an optional low-confidence
-cross-check); Apify was retired 2026-08-15 and must not be re-enabled —
-see [`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md).
+approval at the decision card. Stage B of the comp hunt runs, un-gated by
+default, through the logged-in browser
+([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py)); Chrome is an
+optional low-confidence cross-check. Apify was retired 2026-08-15 and
+must not be re-enabled — see
+[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md).
 See
 [`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
 if you want the history of how these settled.

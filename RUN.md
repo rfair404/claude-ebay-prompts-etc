@@ -355,8 +355,8 @@ Cross-cutting depth rules:
 Shared rules (style, confidence, firewall, unit_type, char limits,
 persistence) live in [prompts/_shared.md](prompts/_shared.md).
 
-Python infrastructure (config, eBay client, Apify wrapper, photo prep)
-is shared from `lib/` — no phase duplicates it.
+Python infrastructure (config, eBay client, logged-in-browser comp
+fetch, photo prep) is shared from `lib/` — no phase duplicates it.
 
 ---
 
