@@ -31,7 +31,8 @@ COMMANDS = {
     "live-audit":   ("tools.live_audit",
                      "reconcile local drafts + ledger against live eBay state (--apply)"),
     "pick-list":    ("tools.pick_list",
-                     "orders awaiting shipment -> what to pull, where it goes, by when"),
+                     "orders awaiting shipment -> pick sheet; --poll to print new ones, "
+                     "--record-tracking to write a tracking # back (#32)"),
     "policy-sweep": ("tools.policy_sweep",
                      "survey/repair the return+fulfillment policy on every offer"),
     "price-audit":  ("tools.price_audit",

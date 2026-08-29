@@ -31,6 +31,13 @@ listings_ledger.csv
 # it is the single most sensitive file the pipeline produces.
 sales_ledger.csv
 
+# Pick lists — buyer name, street address, phone number from real orders.
+# Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
+# Terminal, local file, and printer only, per GH #32's PII guardrail; never
+# committed. Regenerate with
+#   python -m lib.cli pick-list --poll
+/pick_lists/
+
 # Any dated backup of the above (e.g. listings_ledger.backup-20260815.csv).
 *.backup-*.csv
 *_ledger.backup*.csv
