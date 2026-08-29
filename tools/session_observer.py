@@ -593,8 +593,11 @@ def cost_per_listing(total_cost_usd: float, ledger_rows: list,
 
 
 def _in_window(ts, window_start, window_end) -> bool:
+    """A malformed/missing timestamp can't be reliably placed in any
+    window — bounded or not — so it's always excluded, never counted as
+    "in an unbounded window" by default."""
     if ts is None:
-        return window_start is None and window_end is None
+        return False
     if window_start is not None and ts < window_start:
         return False
     if window_end is not None and ts > window_end:
@@ -697,7 +700,11 @@ def parse_economics(path: Path, *, window_start=None, window_end=None) -> dict:
                     # Bash/PowerShell call that opted into run_in_background.
                     backgrounded = (name in ("Bash", "PowerShell")
                                     and bool(inp.get("run_in_background")))
-                    if not backgrounded and _in_window(when, window_start, window_end):
+                    # Windowed on the call's OWN (start) timestamp, not its
+                    # completion time — a long call starting just inside the
+                    # window but finishing just after it is still that
+                    # window's call, matching the docstring's contract.
+                    if not backgrounded and _in_window(st, window_start, window_end):
                         fg_seconds_by_tool[name] += secs
                         if name in ("Bash", "PowerShell"):
                             fg_seconds_by_command[

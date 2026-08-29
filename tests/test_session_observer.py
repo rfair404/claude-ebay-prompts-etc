@@ -731,6 +731,43 @@ def test_parse_economics_windows_cost_and_foreground_hours_by_turn_timestamp():
     assert windowed["fg_seconds_by_tool"]["Bash"] == 60.0
 
 
+def test_parse_economics_excludes_cost_from_a_malformed_timestamp_turn():
+    # Second Copilot review pass on #94: _in_window(None, None, None) used
+    # to return True, so an assistant turn with an unparseable/missing
+    # timestamp still counted toward cost_usd in unbounded (--all) mode —
+    # inconsistent with the windowed case, where it was already excluded.
+    # A turn that can't be placed in time shouldn't be counted either way.
+    p = _write_economics([
+        {"type": "assistant", "timestamp": None,
+         "message": {"role": "assistant", "model": "claude-opus-5", "content": [
+             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls"}},
+         ], "usage": {"input_tokens": 1_000_000, "output_tokens": 0,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+        _tool_use_msg("2026-08-27T10:00:00Z", [("t2", "Bash", {"command": "pwd"})],
+                      usage={"input_tokens": 1_000_000, "output_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0}),
+        _tool_result_msg("2026-08-27T10:00:01Z", "t2", "b"),
+    ])
+    unbounded = parse_economics(p)
+    assert round(unbounded["cost_usd"], 2) == 5.00   # only the well-formed turn
+
+
+def test_parse_economics_windows_foreground_hours_on_call_start_not_completion():
+    # Second Copilot review pass on #94: the window check used the
+    # tool_result's completion timestamp instead of the tool_use call's own
+    # start timestamp — a call starting just inside the window but
+    # finishing just after it must still count as that window's call.
+    p = _write_economics([
+        _tool_use_msg("2026-08-27T23:59:00Z", [("t1", "Bash", {"command": "pwd"})]),
+        _tool_result_msg("2026-08-28T00:05:00Z", "t1", "done"),   # completes AFTER the window
+    ])
+    start = datetime(2026, 8, 27, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 28, 0, 0, 0, tzinfo=timezone.utc)
+    e = parse_economics(p, window_start=start, window_end=end)
+    assert e["fg_seconds_by_tool"]["Bash"] == 360.0   # counted: call STARTED in-window
+
+
 def test_parse_economics_foreground_hours_exclude_backgrounded_bash():
     p = _write_economics([
         _tool_use_msg("2026-08-27T10:00:00Z", [
