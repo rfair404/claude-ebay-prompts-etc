@@ -143,8 +143,10 @@ def top_sellers_active(q: str | None = None, *, category_ids: str | None = None,
                        marketplace: str = "EBAY_US", creds=None) -> list[dict]:
     """Active listings from the top `top_n` sellers in a category/query sample.
 
-    One `search()` pull (up to `sample` active listings) stands in for "the
-    competing stores in this niche" — Browse has no seller-ranking endpoint,
+    One `search()` call (paging internally, PAGE_LIMIT=200 items per Browse
+    API request, when `sample` exceeds that) pulls up to `sample` active
+    listings to stand in for "the competing stores in this niche" — Browse
+    has no seller-ranking endpoint,
     so listing count within the sample is the proxy for who's moving volume
     here. Returns the normalised listings (each carries `seller` +
     `askingPrice`) belonging to just those top sellers — feed this straight

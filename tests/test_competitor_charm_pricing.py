@@ -212,6 +212,65 @@ def test_competitor_charm_pattern_surfaced_even_when_thin():
     assert r["competitor_charm_pattern"]["pattern"] == ".00"
 
 
+def test_records_without_a_seller_id_are_not_counted():
+    # Copilot review on #93: an unattributed listing (no seller/sellerName/
+    # seller_username) can't be credited to "a top competing seller" — it
+    # must not count toward n_listings, the bucket shares, or the
+    # min-sellers/min-listings gate.
+    listings = _listings([("alice", 9.99), ("bob", 8.99), ("carol", 7.99)])
+    listings.append({"askingPrice": 0.50})     # no seller key at all
+    listings.append({"seller": "", "askingPrice": 6.99})   # falsy seller
+    r = price_stats.competitor_charm_pattern(listings, min_listings=3, min_sellers=3)
+    assert r["n_listings"] == 3
+    assert r["n_competitors"] == 3
+    assert r["pattern"] == ".99"
+
+
+def test_majority_other_ending_is_not_actionable():
+    # A decisive majority that lands on a non-charm cents value (e.g. most
+    # competitors price at .50) has nothing for apply_charm_ending() to do —
+    # it must fall back like "no majority" rather than surface a "pattern"
+    # that produces a silent no-op nudge downstream.
+    listings = _listings([
+        ("alice", 12.50), ("bob", 22.50), ("carol", 8.50),
+        ("dave", 15.99), ("erin", 30.00),
+    ])
+    r = price_stats.competitor_charm_pattern(listings)
+    assert r["pattern"] is None
+    assert "other" in r["reason"]
+    assert r["n_competitors"] == 5
+
+
+def test_recommended_unchanged_when_majority_is_other():
+    listings = _listings([
+        ("alice", 12.50), ("bob", 22.50), ("carol", 8.50),
+        ("dave", 15.99), ("erin", 30.00),
+    ])
+    r = _report(competitor_listings=listings)
+    assert r["competitor_charm_pattern"]["pattern"] is None
+    assert r["tiers"]["recommended"]["price"] == 35.95
+    assert "pre_charm_price" not in r["tiers"]["recommended"]
+
+
+def test_render_shows_the_no_signal_reason_when_competitor_data_was_requested():
+    # Copilot review on #93: gating the fallback line on n_listings alone
+    # made `--competitor-active <file>` with all-unusable input print
+    # nothing — indistinguishable from never having asked at all.
+    listings = [{"askingPrice": 9.99}, {"askingPrice": 8.99}]   # no seller ids
+    r = _report(competitor_listings=listings)
+    assert r["competitor_charm_pattern"]["n_listings"] == 0
+    assert r["competitor_active_requested"] is True
+    out = price_stats.render(r)
+    assert "Competitor charm pattern: no clear signal" in out
+
+
+def test_render_is_silent_when_no_competitor_data_was_requested_at_all():
+    r = _report()
+    assert r["competitor_active_requested"] is False
+    out = price_stats.render(r)
+    assert "Competitor charm pattern" not in out
+
+
 def test_competitor_active_json_loader():
     import json
     import tempfile

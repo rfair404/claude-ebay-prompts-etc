@@ -527,6 +527,12 @@ def competitor_charm_pattern(
     prices: list[float] = []
     for rec in listings:
         seller = rec.get("seller") or rec.get("sellerName") or rec.get("seller_username")
+        if not seller:
+            # No seller id means this listing can't be attributed to a
+            # "top competing seller" — counting it would skew both the
+            # bucket shares and the min-sellers/min-listings gate away
+            # from what this signal is actually measuring.
+            continue
         price = rec.get("askingPrice")
         if price is None:
             price = rec.get("price")
@@ -538,8 +544,7 @@ def competitor_charm_pattern(
             continue
         if price <= 0:
             continue
-        if seller:
-            sellers.add(seller)
+        sellers.add(seller)
         prices.append(price)
 
     n = len(prices)
@@ -563,6 +568,18 @@ def competitor_charm_pattern(
             "n_listings": n, "buckets": bucket_share,
             "reason": (f"no majority ending — top bucket '{top_pattern}' at "
                        f"{top_share:.0%} < {majority_pct:.0%} threshold"),
+        }
+    if top_pattern == "other":
+        # A majority landing on a non-charm cents value isn't actionable —
+        # apply_charm_ending() no-ops on "other", so surfacing it as a
+        # decisive pattern would make price_from_runs() claim a "nudged to
+        # competitor-dominant ending" that never actually moved the price.
+        return {
+            "pattern": None, "share": top_share, "n_competitors": n_sellers,
+            "n_listings": n, "buckets": bucket_share,
+            "reason": (f"top ending is 'other' ({top_share:.0%}) — a majority "
+                       f"of competitors don't use a charm price at all, "
+                       f"nothing to nudge toward"),
         }
     return {
         "pattern": top_pattern, "share": top_share, "n_competitors": n_sellers,
@@ -764,6 +781,7 @@ def price_from_runs(
         "distribution": dist,
         "confidence": conf,
         "competitor_charm_pattern": competitor_charm,
+        "competitor_active_requested": bool(competitor_recs),
         "kept_comps": [
             {"title": c.title, "price": c.price, "url": c.url,
              "condition": c.condition, "sold_date": c.sold_date,
@@ -877,7 +895,11 @@ def render(report: dict) -> str:
         out.append(f"  Competitor charm pattern: {cc['pattern']} "
                    f"({cc['share']:.0%} of {cc['n_competitors']} competing sellers, "
                    f"n={cc['n_listings']} listings) — preferred over generic charm default")
-    elif cc.get("n_listings"):
+    elif report.get("competitor_active_requested"):
+        # Competitor data WAS supplied — show why it produced no signal
+        # (e.g. every record was unparseable or missing a seller id) rather
+        # than rendering nothing, which would be indistinguishable from
+        # never having asked for a competitor signal at all.
         out.append(f"  Competitor charm pattern: no clear signal — {cc.get('reason')}")
 
     if report["confidence"] == "thin":
