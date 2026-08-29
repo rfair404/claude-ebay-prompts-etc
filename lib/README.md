@@ -325,6 +325,58 @@ Uses only Python stdlib (`urllib.request`, `urllib.parse`, `base64`,
 
 ---
 
+## easypost_client.py — buy shipping labels via EasyPost (GH #80)
+
+eBay's own Logistics API is a confirmed dead end for a small seller
+(Limited Release, invitation-only, USPS-only — #32). This client quotes
+and buys postage from EasyPost instead: pay-as-you-go, free up to 3,000
+labels/month, no contract, rates across USPS/UPS/FedEx/DHL.
+
+Get an API key at <https://www.easypost.com/account/api-keys> — EasyPost
+issues separate **test** and **production** keys from the same dashboard;
+a test key's "purchases" never charge a real carrier or ship anything,
+which is the safe way to exercise the CLI below before trusting it with
+real postage money. Provisioning the account + funding its balance is a
+one-time human step, same spirit as the eBay OAuth setup above — nothing
+here does it for you.
+
+Set the key the same way as every other credential in this repo:
+
+```yaml
+# ~/.ebaybiz/config.yaml
+easypost:
+  api_key: "EZAK..."
+```
+
+or `EASYPOST_API_KEY` (env var wins if both are set).
+
+### CLI usage
+
+```bash
+# Quote — spends nothing, no --confirm needed
+python -m lib.cli ship-quote \
+    --to-name "Jane Buyer" --to-street1 "1 Main St" --to-city Springfield \
+    --to-state IL --to-zip 62704 \
+    --from-name "My Store" --from-street1 "9 Ship St" --from-city Elgin \
+    --from-state IL --from-zip 60120 \
+    --weight-oz 24 --length-in 10 --width-in 8 --height-in 4
+
+# Buy — DRY RUN by default; add --confirm to actually spend money
+python -m lib.cli ship-buy --shipment-id shp_... --rate-id rate_...
+python -m lib.cli ship-buy --shipment-id shp_... --rate-id rate_... --confirm
+```
+
+`ship-buy`'s confirm gate mirrors `list_edit.py --publish/--end` exactly:
+without `--confirm` it makes no call to EasyPost's purchase endpoint and
+only reports what would be bought and its cost. On a confirmed purchase,
+the printed carrier + tracking number are handed off as the exact
+`tools/pick_list.py --record-tracking ORDER_ID --carrier CODE
+--tracking-number NUM --confirm` invocation (#70) needed to advance the
+local ledger to SHIPPED — this module does not write the ledger itself,
+and (as of this writing) `--record-tracking` has not landed on `main` yet.
+
+---
+
 ## comps_csv.py — reviewable comps CSV (all PRICE stages)
 
 Stage B (Apify) saves JSON; stages A (WebSearch) and C (Chrome) are

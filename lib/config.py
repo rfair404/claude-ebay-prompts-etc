@@ -285,6 +285,39 @@ def get_anthropic_key() -> str:
     )
 
 
+def get_easypost_key() -> str:
+    """EasyPost API key. Precedence: env var > config file > error.
+
+    Same precedence contract as get_apify_token() / get_anthropic_key().
+    EasyPost issues test and production keys from the same dashboard; which
+    one is configured decides whether a confirmed buy_label() call hits real
+    carriers or EasyPost's no-charge test mode — that is an account-setup
+    choice made by a human, not something this loader infers (GH #80).
+
+    Raises:
+        ConfigError if no key is available anywhere.
+    """
+    env = os.environ.get("EASYPOST_API_KEY")
+    if env:
+        return env
+
+    config = load_config()
+    key = _nested(config, "easypost", "api_key")
+    if key:
+        return str(key)
+
+    raise ConfigError(
+        f"EasyPost API key not found.\n"
+        f"  Set the EASYPOST_API_KEY environment variable, OR\n"
+        f"  add this to {config_path()}:\n"
+        f"      easypost:\n"
+        f"        api_key: \"<your-key>\"\n"
+        f"  Get a key (test or production) at https://www.easypost.com/account/api-keys\n"
+        f"  A human still has to create the account and fund its balance before\n"
+        f"  any real purchase can succeed — that step is deliberately not automated."
+    )
+
+
 def get_ebay_credentials() -> dict:
     """Return the raw eBay credentials section from config.
 
@@ -421,6 +454,12 @@ def _cli() -> None:
             print(f"anthropic.api_key: {_redact(anth_key)}")
         except ConfigError:
             print("anthropic.api_key: (not set)")
+
+        try:
+            ep_key = get_easypost_key()
+            print(f"easypost.api_key: {_redact(ep_key)}")
+        except ConfigError:
+            print("easypost.api_key: (not set)")
 
         ebay_creds = get_ebay_credentials()
         print()

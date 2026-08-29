@@ -54,6 +54,10 @@ COMMANDS = {
                      "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
     "status":       ("lib.status",
                      "one-shot shoot state: phase files, PREP gate, frames, ledger, next action (#61)"),
+    "ship-quote":   ("tools.ship_quote",
+                     "EasyPost shipping-rate quotes (#80) — free, no confirm needed"),
+    "ship-buy":     ("tools.ship_buy",
+                     "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
 }
 
 
