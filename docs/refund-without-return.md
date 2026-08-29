@@ -13,8 +13,10 @@ a buyer without requiring the item back?
 manual, per-order seller action — it is **not** controlled by the return
 policy object at all. Nothing in the Account API's return-policy schema (the
 fields our `return_policy_id: 296995924014` sets — `returnsAccepted`,
-`returnPeriod`, `returnShippingCostPayer`, `returnMethod`) has an on/off
-switch for "refund without return." That policy only governs the terms of a
+`returnPeriod`, `returnShippingCostPayer`, `refundMethod`, `returnMethod`,
+and `internationalOverride`; see `create_free_return_policy()` in
+`lib/ebay_client.py`) has an on/off switch for "refund without return."
+That policy only governs the terms of a
 *stated, buyer-initiated* return (how long the window is, who pays return
 shipping, and — US-only — whether REPLACEMENT is offered as an alternative to
 money back). Whether to require the item back on any *given* refund is a
