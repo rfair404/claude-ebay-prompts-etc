@@ -89,8 +89,11 @@ own machine (`127.0.0.1`, no bind to `0.0.0.0`), that:
 - Wraps the **secret-free** half of the pipeline as background jobs:
   `lib/photo_prep/prep.py`'s `--auto` pass on upload, `lib/price_stats.py`
   tier math over an already-saved comp JSON, `lib/list_edit.py`'s local-only
-  functions (`record_draft`, `build_review_card`, `validate_draft_for_sync`,
-  `upsert_listing` — all local file/CSV operations, no eBay call).
+  functions (`record_draft`, `validate_draft_for_sync`, `upsert_listing` —
+  all local file/CSV operations, no eBay call). `build_review_card()` is
+  NOT in this set — it calls `preflight_listing()`, which loads credentials
+  and hits eBay's category/policy endpoints; it stays Phase-3 alongside the
+  other eBay-backed functions (see the module-mapping table below).
 - Lets the review queue accept **local writes**: approving a PREP stage
   (writes `.prep/prep.json`), editing a draft field, approving/declining a
   review card *locally* (still nothing published — see Phase 3).
@@ -153,11 +156,11 @@ it runs inside is real.
 |---|---|---|
 | `lib/cli.py` | Command registry — already close to an API surface; each `COMMANDS` entry is a candidate job type | Ready for Phase 2 (shell out per job); the registry pattern (name → module, one-line purpose) maps directly to a job-type table |
 | `lib/status.py` / `tools/shoot_status.py` | Backlog-by-shoot data for the dashboard | Ready as-is — already has a `--json` structured-output mode |
-| `tools/sales_report.py` (`_rows`, `gather`) | Sales/drift dashboard data layer | Ready as-is — `gather()` is already a pure function returning the dict a template needs, separate from the HTML-writing step; no extraction needed, just `from sales_report import gather` |
+| `tools/sales_report.py` (`_rows`, `gather`) | Sales/drift dashboard data layer | Ready as-is — `gather()` is already a pure function returning the dict a template needs, separate from the HTML-writing step; no extraction needed, just `from tools.sales_report import gather` (`lib/cli.py` puts the repo root, not `tools/`, on `sys.path` and dispatches to this module as `tools.sales_report`) |
 | `lib/price_stats.py` | PRICE tier math | Ready as-is — stdlib-only, already a pure function (`price_from_runs`), no secrets |
 | `lib/photo_prep/prep.py` | PREP pipeline (orientation/crop/colour) | Ready as-is for background jobs — already stage-gated with flags (`--auto`, `--check`, `--approve-stage`) that map directly to job endpoints; needs a queue wrapper, not a rewrite |
 | `tools/review_card_html.py`, `tools/prep_sheet_html.py` | Review/prep HTML rendering | These already prototype the front-end — Phase 1/2 can serve their output live instead of publishing one-off files; the rendering logic itself doesn't need to change |
-| `lib/list_edit.py` | Draft build, ledger CSV read/write, eBay publish/withdraw | **Split needed.** Local-only functions (`record_draft`, `build_review_card`, `validate_draft_for_sync`, `upsert_listing`, `preflight_listing`) are secret-free and Phase-2-safe. `create_or_update_listing`, `publish_offer`, `withdraw_offer_by_id`, `delete_offer_by_id` call eBay and stay Phase-3-only |
+| `lib/list_edit.py` | Draft build, ledger CSV read/write, eBay publish/withdraw | **Split needed.** Local-only functions (`record_draft`, `validate_draft_for_sync`, `upsert_listing`) are secret-free and Phase-2-safe. `preflight_listing()` loads credentials and calls eBay category/policy endpoints (allowed-condition metadata, shipping policy lookup) — it is NOT secret-free despite being local-file-triggered. `build_review_card()` calls `preflight_listing()` internally, so it inherits the same eBay dependency. Both stay Phase-3-only alongside `create_or_update_listing`, `publish_offer`, `withdraw_offer_by_id`, `delete_offer_by_id` — a Phase-2 review queue needs either a cached/precomputed preflight result or to defer the review card's preflight section until Phase 3 |
 | `lib/ebay_client.py` | All eBay Sell/Trading API calls | Entirely Phase 3+ — every function needs live credentials; needs an auth-gated internal layer, token never reaches the frontend |
 | `lib/config.py` | Config/secrets loader | The thing that needs the secrets-story rework before Phase 3 — today it assumes a single local operator's env/file; a backend process needs a different trust model (see Risks) |
 | `lib/sync_actuals.py`, `tools/ledger_reconcile.py`, `tools/policy_sweep.py` | Scheduled sync/reconcile | Phase 3+: becomes a real cron/worker job once eBay creds live server-side; logic itself is unchanged |
