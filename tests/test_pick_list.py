@@ -161,11 +161,12 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
     try:
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: []}):
-            new_ids, skipped_ids, state = pick_list.poll_and_print(
+            new_ids, skipped_ids, state, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
                 fetch=lambda: orders)
         assert sorted(new_ids) == ["new-1", "new-2"]
         assert skipped_ids == []
+        assert unconfirmed == []
         assert set(state["printed"]) == {"new-1", "new-2"}
         files = sorted(p.name for p in out_dir.glob("*.txt"))
         assert files == ["pick_new-1.txt", "pick_new-2.txt"]
@@ -177,7 +178,7 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
         # it) — nothing new should render.
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: []}):
-            new_ids2, skipped_ids2, state2 = pick_list.poll_and_print(
+            new_ids2, skipped_ids2, state2, _ = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders)
         assert new_ids2 == []
         assert sorted(skipped_ids2) == ["new-1", "new-2"]
@@ -192,10 +193,11 @@ def test_poll_and_print_reprint_forces_one_order_through():
     try:
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: []}):
-            new_ids, skipped_ids, _ = pick_list.poll_and_print(
+            new_ids, skipped_ids, _, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders, reprint="dup-1")
         assert new_ids == ["dup-1"]
         assert skipped_ids == []
+        assert unconfirmed == []
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
@@ -211,10 +213,11 @@ def test_poll_and_print_do_print_failure_never_raises():
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: [],
                           (pick_list, "_send_to_printer"): boom}):
-            new_ids, _, _ = pick_list.poll_and_print(
+            new_ids, _, _, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
                 fetch=lambda: orders, do_print=True)
         assert new_ids == ["print-1"]  # the file still got written
+        assert unconfirmed == ["print-1"]  # printing failed, but poll didn't raise
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
@@ -311,6 +314,7 @@ def test_advance_ledger_for_order_marks_every_sku_shipped():
         assert rows[0]["sku"] == "ledger-sku-1"
         assert rows[0]["status"] == "SHIPPED"
         assert rows[0]["listing_id"] == "206000000001"
+        assert rows[0]["shipped_at"]  # advance stamped a timestamp, not just status
     finally:
         if old_env is None:
             os.environ.pop("EBAYBIZ_LISTINGS_LEDGER", None)
@@ -390,6 +394,74 @@ def test_cmd_record_tracking_missing_carrier_is_rejected_before_any_call():
             _Args(record_tracking="x", carrier=None, tracking_number="T1", confirm=True))
     assert rc == 2
     assert calls == []
+
+
+def test_cmd_record_tracking_confirm_reuses_record_tracking_not_a_second_post():
+    """cmd_record_tracking must go through record_tracking() for the real write
+    (not re-fetch/re-POST inline) — one call to fetch_order, one POST, no
+    drift between what --record-tracking does and what record_tracking() is
+    tested to do."""
+    o = _order()
+    fetch_calls = []
+    post_calls = []
+
+    def fake_fetch_order(order_id):
+        fetch_calls.append(order_id)
+        return o
+
+    def fake_api_send(method, path, creds=None, marketplace=None, body=None):
+        post_calls.append(path)
+        return {"fulfillmentId": "f1"}
+
+    _, state_file = _scratch_dirs()
+    try:
+        with _Patched({
+            (pick_list, "fetch_order"): fake_fetch_order,
+            (pick_list, "api_send"): fake_api_send,
+            (pick_list, "advance_ledger_for_order"): lambda order: 1,
+            (pick_list, "STATE_FILE"): state_file,
+        }):
+            rc = pick_list.cmd_record_tracking(
+                _Args(record_tracking=o["orderId"], carrier="USPS",
+                     tracking_number="T1", confirm=True))
+        assert rc == 0
+        assert len(fetch_calls) == 1  # not fetched twice (once for the dry-run body, once again for the real write)
+        assert len(post_calls) == 1
+    finally:
+        shutil.rmtree(state_file.parent, ignore_errors=True)
+
+
+def test_cmd_record_tracking_confirm_surfaces_api_error_instead_of_raising():
+    o = _order()
+
+    def raise_400(method, path, creds=None, marketplace=None, body=None):
+        raise EbayAPIError(400, "bad tracking number", '{"errors":[]}')
+
+    with _Patched({
+        (pick_list, "fetch_order"): lambda order_id: o,
+        (pick_list, "api_send"): raise_400,
+    }):
+        rc = pick_list.cmd_record_tracking(
+            _Args(record_tracking=o["orderId"], carrier="USPS",
+                 tracking_number="T1", confirm=True))
+    assert rc == 1  # reported, not a raw traceback
+
+
+# --------------------------------------------------------------------------- #
+# main() — --poll and --record-tracking are separate modes
+# --------------------------------------------------------------------------- #
+def test_main_rejects_poll_and_record_tracking_together():
+    old_argv = sys.argv
+    sys.argv = ["pick_list.py", "--poll", "--record-tracking", "x",
+               "--carrier", "USPS", "--tracking-number", "T1"]
+    try:
+        try:
+            pick_list.main()
+            raise AssertionError("expected argparse to reject the combination")
+        except SystemExit as e:
+            assert e.code == 2
+    finally:
+        sys.argv = old_argv
 
 
 if __name__ == "__main__":

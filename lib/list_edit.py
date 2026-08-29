@@ -263,9 +263,10 @@ def _to_decimal_str(val: object) -> Optional[str]:
 
 _LEDGER_FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
-                  "updated_at"]
+                  "shipped_at", "updated_at"]
 _LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
-                  "PUBLISHED": "published_at", "ENDED": "ended_at"}
+                  "PUBLISHED": "published_at", "ENDED": "ended_at",
+                  "SHIPPED": "shipped_at"}
 
 
 def _ledger_path() -> Path:
@@ -308,7 +309,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
-        else:                       # PUBLISHED / ENDED / DELETED
+        else:                       # PUBLISHED / ENDED / DELETED / SHIPPED
             row["status"] = status
         tsfield = _LEDGER_TS_FOR.get(status)
         if tsfield and not row.get(tsfield):

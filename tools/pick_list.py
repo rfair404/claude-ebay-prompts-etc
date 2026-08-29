@@ -40,12 +40,12 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
+from comps_csv import _now as _now_iso                              # noqa: E402
 from ebay_client import api_send, EbayAPIError                      # noqa: E402
 from sync_actuals import fetch_orders, load_listings_ledger, match_sale, scan_drafts  # noqa: E402
 
@@ -148,19 +148,19 @@ def _safe_filename(order_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", order_id) or "order"
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _send_to_printer(path: Path) -> bool:
     """Best-effort send to the OS default printer. Never raises — a failed
     print still leaves the file on disk for the human to print by hand.
 
-    Unverified on real hardware (this was built/tested headless): Windows uses
-    the shell's own "print" verb via os.startfile; everywhere else it shells
-    out to `lp`, the POSIX/CUPS printer command. If neither is available or
-    there is no default printer configured, this just reports the miss —
-    the rendered file in pick_lists/ is always the fallback.
+    Returns True only when the OS *confirmed* the print command succeeded —
+    on POSIX that's `lp` exiting 0. On Windows there is no such confirmation:
+    os.startfile("print") hands the job to the shell asynchronously and
+    returns immediately whether or not a default printer exists or the
+    spooler accepts it, so this always returns False there (the job was
+    fired, not confirmed) rather than claiming a success it can't verify.
+    Unverified on real hardware either way (this was built/tested headless);
+    the rendered file in pick_lists/ is always the fallback regardless of
+    what this returns.
     """
     import platform
     import subprocess
@@ -169,8 +169,10 @@ def _send_to_printer(path: Path) -> bool:
         if platform.system() == "Windows":
             import os
             os.startfile(str(path), "print")  # type: ignore[attr-defined]
-        else:
-            subprocess.run(["lp", str(path)], check=True, capture_output=True, timeout=15)
+            print(f"  ~ sent {path.name} to the default printer (Windows does not "
+                  f"confirm the job reached it — file is in {path.parent.name}/ either way)")
+            return False
+        subprocess.run(["lp", str(path)], check=True, capture_output=True, timeout=15)
         return True
     except Exception as e:                                          # noqa: BLE001
         print(f"  ! could not print {path.name} automatically ({e}); "
@@ -180,14 +182,20 @@ def _send_to_printer(path: Path) -> bool:
 
 def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                    do_print: bool = False, reprint: str | None = None,
-                   fetch=fetch_open) -> tuple[list[str], list[str], dict]:
+                   fetch=fetch_open) -> tuple[list[str], list[str], dict, list[str]]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
     Idempotent: an orderId already recorded in `state["printed"]` is skipped
-    unless it is `reprint`. Returns (new_order_ids, skipped_order_ids, state)
-    so a caller (tests, or --poll) can inspect what happened without re-parsing
-    stdout. `state` may be passed in (tests); when None it is loaded from disk
-    and NOT saved here — the caller decides when to persist.
+    unless it is `reprint`. Returns (new_order_ids, skipped_order_ids, state,
+    unconfirmed_print_ids) so a caller (tests, or --poll) can inspect what
+    happened without re-parsing stdout. `state` may be passed in (tests); when
+    None it is loaded from disk and NOT saved here — the caller decides when
+    to persist.
+
+    `unconfirmed_print_ids` holds orders where `do_print` was requested but
+    `_send_to_printer` could not confirm the job reached a printer (on
+    Windows this is *every* order, since os.startfile fires the job async and
+    never reports back) — the pick list still rendered to out_dir either way.
     """
     orders = fetch()
     drafts, ledger = scan_drafts(), load_listings_ledger()
@@ -196,6 +204,7 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
 
     new_ids: list[str] = []
     skipped_ids: list[str] = []
+    unconfirmed_print_ids: list[str] = []
     for o in orders:
         oid = o.get("orderId", "")
         if not oid:
@@ -214,16 +223,20 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                               "file": recorded_path.replace("\\", "/")}
         new_ids.append(oid)
         if do_print:
-            # Belt-and-suspenders: _send_to_printer already catches everything
-            # it knows about, but a poll loop must never die over a printer —
-            # the file in out_dir is always the fallback, so nothing here is
-            # allowed to turn "couldn't print" into "didn't render".
+            # _send_to_printer already catches everything it knows about and
+            # is contracted to never raise — this guard is for the case that
+            # contract is ever violated (e.g. by a test double, or a future
+            # bug): a poll loop must never die over a printer, the file in
+            # out_dir is always the fallback.
             try:
-                _send_to_printer(path)
+                confirmed = _send_to_printer(path)
             except Exception as e:                                  # noqa: BLE001
                 print(f"  ! printing {path.name} raised unexpectedly ({e}); "
                       f"file is still ready to print by hand")
-    return new_ids, skipped_ids, st
+                confirmed = False
+            if not confirmed:
+                unconfirmed_print_ids.append(oid)
+    return new_ids, skipped_ids, st, unconfirmed_print_ids
 
 
 # --------------------------------------------------------------------------- #
@@ -263,12 +276,17 @@ def build_shipping_fulfillment_body(order: dict, carrier: str, tracking_number: 
 
 
 def record_tracking(order_id: str, carrier: str, tracking_number: str,
-                    line_item_ids: list[str] | None = None) -> dict:
+                    line_item_ids: list[str] | None = None, order: dict | None = None) -> dict:
     """POST the tracking number to eBay for one order. Real write — no dry-run
-    gate here; the CLI (--record-tracking / --confirm) is what gates it."""
-    order = fetch_order(order_id)
+    gate here; the CLI (--record-tracking / --confirm) is what gates it.
+
+    Pass `order` when the caller already fetched it (e.g. cmd_record_tracking
+    fetches once to build the dry-run preview, then reuses that same order
+    here on --confirm instead of fetching it a second time)."""
     if order is None:
-        raise ValueError(f"no such order: {order_id}")
+        order = fetch_order(order_id)
+        if order is None:
+            raise ValueError(f"no such order: {order_id}")
     body = build_shipping_fulfillment_body(order, carrier, tracking_number, line_item_ids)
     if not body["lineItems"]:
         raise ValueError(f"order {order_id} has no matching line items to mark shipped")
@@ -325,7 +343,8 @@ def cmd_poll(args) -> int:
     """--poll: terse verdict to stdout; the PII detail goes to pick_lists/ only
     (house style — see tools/live_audit.py and friends: one-line verdict,
     detail in a file, never dumped to the terminal wholesale)."""
-    new_ids, skipped_ids, state = poll_and_print(do_print=args.do_print, reprint=args.reprint)
+    new_ids, skipped_ids, state, unconfirmed = poll_and_print(
+        do_print=args.do_print, reprint=args.reprint)
     _save_state(state)
     if not new_ids and not skipped_ids:
         print("[OK] nothing awaiting shipment")
@@ -334,6 +353,9 @@ def cmd_poll(args) -> int:
     print(f"[OK] {len(new_ids)} new pick list(s) written to {rel}/"
           + (f"  ({', '.join(new_ids)})" if new_ids else "")
           + (f"; {len(skipped_ids)} already printed (skipped)" if skipped_ids else ""))
+    if unconfirmed:
+        print(f"  ~ {len(unconfirmed)} sent to the printer but NOT confirmed printed "
+              f"({', '.join(unconfirmed)}) — check the printer, the file in {rel}/ is the fallback")
     return 0
 
 
@@ -343,6 +365,10 @@ def cmd_record_tracking(args) -> int:
         print("[X] --record-tracking needs both --carrier and --tracking-number")
         return 2
 
+    # Dry-run needs the order + body to report line-item count without writing
+    # anything, so it fetches/builds once here; the real write below goes
+    # through record_tracking() (same fetch+build+POST it would do internally)
+    # rather than re-fetching, to keep the single POST call in one place.
     order = fetch_order(order_id)
     if order is None:
         print(f"[X] no such order: {order_id}")
@@ -358,9 +384,13 @@ def cmd_record_tracking(args) -> int:
         print("  re-run with --confirm to write it to eBay and advance the local ledger")
         return 0
 
-    resp = api_send("POST", f"/sell/fulfillment/v1/order/{order_id}/shipping_fulfillment",
-                    body=body, creds=None, marketplace=None)
-    advanced = advance_ledger_for_order(order)
+    try:
+        result = record_tracking(order_id, args.carrier, args.tracking_number, order=order)
+    except (ValueError, EbayAPIError) as e:
+        print(f"[X] could not record tracking for order {order_id}: {e}")
+        return 1
+    resp = result["response"]
+    advanced = advance_ledger_for_order(result["order"])
 
     state = _load_state()
     state["shipped"][order_id] = {"recorded_at": _now_iso(), "carrier": args.carrier}
@@ -403,6 +433,10 @@ def main() -> int:
     ap.add_argument("--order-id", help="render one specific order")
     ap.add_argument("--out", metavar="FILE", help="also write to a local file")
     args = ap.parse_args()
+
+    if args.record_tracking and args.poll:
+        ap.error("--poll and --record-tracking are separate modes; run them separately "
+                 "(--record-tracking would otherwise run and --poll would be silently skipped)")
 
     if args.record_tracking:
         return cmd_record_tracking(args)

@@ -220,7 +220,7 @@ def test_a_real_manifest_carries_the_fields_readers_depend_on():
 
 LEDGER_COLUMNS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
-                  "updated_at"]
+                  "shipped_at", "updated_at"]
 
 
 def test_ledger_columns_and_their_order():
