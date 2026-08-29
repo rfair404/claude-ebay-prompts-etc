@@ -109,6 +109,18 @@ else in the run depends on it finishing — kick it off with
 `run_in_background`, run PRICE Stage A/B while it renders, collect it when
 it lands. The same applies to any other foreground call in that range.
 
+**Always start these backgrounded — by command prefix, not judgment call**
+(measured across 122 sessions, #74): `prep`, `pytest`, `run_all.py`,
+`ledger_reconcile.py`, `prep_sheet_html.py`, the Apify comp-hunt call
+(`apify_ebay.py`), `lens_id.py`, `reindex_*.py`. Each one routinely runs long
+enough that foregrounding it is a wasted turn waiting on nothing the next
+step needs yet.
+
+**Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
+per poll for no signal a proper wait doesn't already give you — use the
+tooling's own wait/monitor primitive (or check back once, when you actually
+need the result) instead of guessing an interval and sleeping through it.
+
 **`ebz status <shoot>`** (`python -m lib.cli status <shoot-dir>`) replaces
 the `ls`/`cat`/`grep` sequence for "where is this item": phase files
 present, PREP's approval state, frame count, ledger row, and the next
