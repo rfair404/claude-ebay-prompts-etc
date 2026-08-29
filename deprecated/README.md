@@ -15,3 +15,8 @@ by the active pipeline.**
 
 The live project is at the repo root: `RUN.md`, `prompts/`, `templates/`,
 `lib/`. Start at [`../RUN.md`](../RUN.md).
+
+**Convention:** v1 and v2 are frozen for context only. No new work should
+extend anything under `deprecated/`, and no doc outside this directory
+should cite v1/v2 as current guidance — cite the live pipeline (currently
+v4, see [`../docs/V4_PLAN.md`](../docs/V4_PLAN.md)) instead.

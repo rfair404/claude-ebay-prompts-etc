@@ -1,9 +1,17 @@
-# v3 — headless prompt suite
+# eBay listing pipeline — v4
 
-A full rewrite of the v2 prompt pipeline with three goals: run as
-headless as possible, output far fewer words with more confidence, and
-dig deeper on condition and exact-match pricing. **v2 is untouched and
-remains the working reference;** v3 is the new path.
+A prompt-driven pipeline that carries a shoot from photos to a
+review-ready (then, on approval, published) eBay listing with as little
+human babysitting as possible. It runs headless end to end, stopping only
+at hard gates (photo approval, then the pre-publish review card), digs
+deep on condition and exact-match pricing before falling back to an
+era-peer comp, and reports account-wide performance after the fact. See
+[`docs/V4_PLAN.md`](docs/V4_PLAN.md) for the current refactor plan
+(skinny prompts, one CLI, fewer round-trips, a session observer) and
+[`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
+for the history of how this pipeline got here — v1 and v2 are frozen for
+context only in [`deprecated/`](deprecated/README.md); no active guidance
+lives there.
 
 ## Start here
 
@@ -33,40 +41,6 @@ listings — and **proposes only**. Every eBay write stays the operator's
 keystroke, because an ad added by mistake spends before anyone notices.
 
     python tools/promote.py --budget 20    # the plan + the exact calls to enact it
-
-## What changed from v2
-
-**1 — Headless.** A single orchestrator ([`RUN.md`](RUN.md)) and an
-explicit **gate contract**: only ONE thing stops a run — the REVIEW gate
-(after DRAFT, present a decision card and publish LIVE only on explicit
-approval). Every other old "ask the user" moment is now a SOFT gate —
-proceed with a documented default, append one line to
-`<shoot-dir>/NEEDS_REVIEW.md`, keep going. The user reviews that queue
-asynchronously instead of being interrupted. Notably: PRICE no longer
-waits for query approval and no longer gates on its comp source — Stage B
-runs automatically through the user's logged-in browser
-([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py); Apify was retired
-2026-08-15 after repeated silent blocking, see
-[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md)) — and the
-working price is auto-adopted (Recommended tier, provisional) so the pipeline
-finishes straight through to the review card.
-
-**2 — Fewer words, more confidence.** Shared rules were extracted to
-[`prompts/_shared.md`](prompts/_shared.md) (unit_type, fresh-investigation,
-firewall, char limits, one house-style block) — the ~40% duplication
-across the five v2 prompts is gone, and the suite dropped from ~2,300 to
-~1,100 lines. Scenario brackets are capped at 3, produced only on
-material value swing, with sub-15% tails and "effectively excluded"
-padding removed. Phases commit to one call instead of laddering best→worst.
-
-**3 — Depth / independence.** New
-[`prompts/condition-rubric.md`](prompts/condition-rubric.md): a
-per-material defect taxonomy + eBay grade mapping with a conservative
-tie-break, used by IDENTIFY and INVESTIGATE. PRICE gained an autonomous
-**exact-match hunt** — Stage A WebSearch → Stage B Apify eBay-sold →
-optional Stage C Chrome (only when confidence is low) — iterating query
-formulations before ever falling back to an era-peer, and reporting how
-hard it looked.
 
 ## Layout
 
@@ -118,16 +92,23 @@ manages any offer/SKU on the account: `--offers` (query all, read-only),
 <id>` and `--delete-item <sku>` (permanent removal). Mutations are dry-run
 unless `--confirm` and are user-initiated — never part of the pipeline.
 
-Python infrastructure (`config`, `ebay_client`, `apify_ebay`,
+Python infrastructure (`config`, `ebay_client`, `ebay_sold_browse`,
 `list_edit`, `draft_io`, `photo_prep`) lives in `lib/`.
 
-## Unchanged from v2
+## Core invariants
 
 The no-*automatic*-publish firewall (publishing requires `--confirm` and
 is never triggered by the pipeline or `--sync`), the YAML-frontmatter
-listing template + its `_field_constraints`, the unit_type vocabulary, the
-Apify opt-in policy, and the deterministic output-file-per-phase
-convention all carry over. New in v3: the REVIEW gate turns the old
-absolute publish refusal into an approval-gated publish; and Apify moved
-from a gated, opt-in fallback to the un-gated default Stage B of the comp
-hunt (Chrome demoted to an optional low-confidence cross-check).
+listing template + its `_field_constraints`, the unit_type vocabulary, and
+the deterministic output-file-per-phase convention all hold. The REVIEW
+gate is what turns "publish" from an absolute refusal into an
+approval-gated action: nothing goes LIVE without one explicit human
+approval at the decision card. Stage B of the comp hunt runs, un-gated by
+default, through the logged-in browser
+([`lib/ebay_sold_browse.py`](lib/ebay_sold_browse.py)); Chrome is an
+optional low-confidence cross-check. Apify was retired 2026-08-15 and
+must not be re-enabled — see
+[`docs/pricing-backend-issues.md`](docs/pricing-backend-issues.md).
+See
+[`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
+if you want the history of how these settled.
