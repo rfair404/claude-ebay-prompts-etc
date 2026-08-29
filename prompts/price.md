@@ -181,10 +181,17 @@ hard you looked. An exact match beats any era-peer; commit to it (per _shared).
   top-level `charm_price_share` / `currency_leak_suspected`.
 
 `python lib/price_stats.py`:
-- `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>]`
+- `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>] [--competitor-active <competitors.json>]`
 - Prints the Distribution line (n/median/IQR/dispersion), vetted ceiling, three
-  tiers, confidence, per-filter drop log. `--price-field total` for free-ship.
-  Fold the block into `price.txt`; n<3 ⇒ `thin` ⇒ era-peer fallback.
+  tiers, confidence, per-filter drop log, and (when `--competitor-active` is
+  given or data supplied) the Competitor charm pattern line. `--price-field
+  total` for free-ship. Fold the block into `price.txt`; n<3 ⇒ `thin` ⇒
+  era-peer fallback (the competitor-charm line still prints even when thin).
+
+`python lib/ebay_browse.py top-sellers [<query>] [--category <id>] [--sample N] [--top N]`:
+- One Browse pull, bucketed to the `--top` sellers (default 5) by listing
+  count in the sample — feeds `--competitor-active` above. `--json <file>`
+  saves the listings.
 
 ## Saved comp artifacts (every stage leaves a reviewable record)
 
@@ -293,8 +300,10 @@ From `price_stats.py` on the cleaned set — adopt its numbers, don't re-derive.
 Free-shipping ⇒ these are delivered prices; always pair with net-to-us.
 
 - **Conservative** — 25th percentile of the like-condition cleaned set.
-- **Recommended (max supported)** — median. In headless flow this is the
-  provisional working price (SOFT gate — logged to NEEDS_REVIEW, not a stop).
+- **Recommended (max supported)** — median, nudged to the competitor charm
+  ending when one is decisive (below); otherwise the plain median. In
+  headless flow this is the provisional working price (SOFT gate — logged to
+  NEEDS_REVIEW, not a stop).
 - **Push-high** — the vetted `price_high` ceiling. If flagged `needs_vetting`
   (>2.5× median) and it doesn't vet as comparable, drop to the
   90th-percentile fallback it prints. State which you used.
@@ -302,6 +311,24 @@ Free-shipping ⇒ these are delivered prices; always pair with net-to-us.
 **Exact-match short-circuit:** ≥1 true exact comp (same item + condition) ⇒
 anchor Recommended on the exact-match median instead; say so; keep the
 distribution as context.
+
+**Competitor charm-price convention (GH #82).** `charm_price_share` (above,
+from our own sold comps) is a currency-leak guard, not a pricing signal — it
+says charm pricing is common in general, not what THIS niche's winning
+sellers actually do. When useful (a category with an obvious cluster of
+competing stores), pull `lib/ebay_browse.py top-sellers "<query>" --category
+<id> --json competitors.json` and pass it to `price_stats.py
+--competitor-active competitors.json`. The report's
+`competitor_charm_pattern` buckets `.00`/`.99`/`.97`/`.95`/`other` across
+those sellers' active listings:
+- **Clear majority** (≥60% of ≥3 competing sellers / ≥5 listings — the
+  `pattern`/`share`/`n_competitors` fields) ⇒ Recommended is nudged to that
+  ending (`tiers.recommended.pre_charm_price` keeps the un-nudged median for
+  the record). State the pattern + share in the Distribution line.
+- **No majority, or too few competitors** (`pattern: null`, see `reason`) ⇒
+  unchanged — Recommended stays the plain median, same as when this step is
+  skipped entirely. This is optional per item; skip it outright on a thin or
+  single-competitor niche rather than force a signal that isn't there.
 
 **Thin market (conf=thin, n<3):** no percentiles — closest-comp/era-peer
 method, widen the bracket, flag rarity. The three tiers still apply, anchored
