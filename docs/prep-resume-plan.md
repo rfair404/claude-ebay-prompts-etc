@@ -50,12 +50,14 @@ Move `save_manifest(shoot, m)` from "after the loop" to "after each frame's
 worker call once `--jobs` lands — see below). `save_manifest` already
 implements compare-and-swap with tmp-and-rename (its own docstring explains
 why: concurrent writers already exist in this codebase). Reuse that exact
-mechanism; do not invent a second write path. Practical detail: re-fetch the
-manifest's read fingerprint after each successful checkpoint (`m` becomes
-whatever `save_manifest` just wrote) so the *next* checkpoint's CAS check is
-against the fingerprint this process itself just wrote, not a stale one —
-otherwise every frame after the first raises `ManifestConflict` against its
-own prior write.
+mechanism; do not invent a second write path. No extra bookkeeping is
+needed for the CAS check across repeated checkpoints in the same process:
+`save_manifest` already re-stamps `m[READ_FINGERPRINT]` on the same dict
+object after a successful write (`lib/photo_prep/prep.py`, the
+`# Re-stamp` comment at the end of the function), so the *next*
+checkpoint's CAS check is automatically against the fingerprint this
+process itself just wrote. A follow-up implementation should rely on that
+existing behavior rather than re-deriving the fingerprint itself.
 
 Cost: N manifest writes instead of 1, on a JSON file that's KB-sized per
 shoot — negligible next to a 25–64s render.

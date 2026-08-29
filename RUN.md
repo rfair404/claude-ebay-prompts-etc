@@ -123,10 +123,11 @@ foregrounding it is a wasted turn waiting on nothing the next step needs
 yet.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
-per poll for no signal a proper wait doesn't already give you — check a
-`run_in_background` Bash call's progress with `BashOutput` (or just proceed
-and let its result arrive with the next tool use, when you actually need
-it) instead of guessing an interval and sleeping through it.
+per poll for no signal a proper wait doesn't already give you — a
+`run_in_background` Bash call's output is available on demand without
+waiting for it to finish, and its result also arrives on its own with the
+next tool use once it's done. Use one of those instead of guessing an
+interval and sleeping through it.
 
 **`ebz status <shoot>`** (`python -m lib.cli status <shoot-dir>`) replaces
 the `ls`/`cat`/`grep` sequence for "where is this item": phase files
