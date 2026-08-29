@@ -36,10 +36,11 @@ padding removed. Phases commit to one call instead of laddering best→worst.
 [`prompts/condition-rubric.md`](../../prompts/condition-rubric.md): a
 per-material defect taxonomy + eBay grade mapping with a conservative
 tie-break, used by IDENTIFY and INVESTIGATE. PRICE gained an autonomous
-**exact-match hunt** — Stage A WebSearch → Stage B Apify eBay-sold →
-optional Stage C Chrome (only when confidence is low) — iterating query
-formulations before ever falling back to an era-peer, and reporting how
-hard it looked.
+**exact-match hunt** — Stage A WebSearch → Stage B Apify eBay-sold (as it
+was at the time; see "Unchanged from v2" below for how Stage B's backend
+has since moved) → optional Stage C Chrome (only when confidence is low)
+— iterating query formulations before ever falling back to an era-peer,
+and reporting how hard it looked.
 
 ## Unchanged from v2
 
