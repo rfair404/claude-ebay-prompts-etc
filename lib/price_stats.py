@@ -485,12 +485,20 @@ def apply_charm_ending(price: float, pattern: str) -> float:
     34.0
     >>> apply_charm_ending(19.60, ".99")
     19.99
+    >>> apply_charm_ending(0.10, ".95")
+    0.95
     """
     cents = {".00": 0, ".99": 99, ".97": 97, ".95": 95}.get(pattern)
     if cents is None:
         return round(price, 2)
     base = int(price)
     candidates = [base + cents / 100, base - 1 + cents / 100, base + 1 + cents / 100]
+    # The "prior whole dollar" candidate can go negative for a low-dollar
+    # price (e.g. price=0.10 -> base-1+cents/100 = -0.05) and would then win
+    # on raw distance — a charm-price nudge must never produce a negative
+    # tier price. Excluding it still leaves the "current"/"next" candidates,
+    # so there's always a non-negative choice.
+    candidates = [c for c in candidates if c >= 0]
     return round(min(candidates, key=lambda c: abs(c - price)), 2)
 
 

@@ -67,6 +67,15 @@ def test_apply_charm_ending_stays_within_a_dollar():
     assert price_stats.apply_charm_ending(34.503, "other") == 34.5
 
 
+def test_apply_charm_ending_never_returns_a_negative_price():
+    # Copilot review on #93: the "prior whole dollar" candidate
+    # (base - 1 + cents/100) goes negative for a low-dollar price and used
+    # to win on raw distance — e.g. price=0.10, pattern='.95' picked -0.05.
+    assert price_stats.apply_charm_ending(0.10, ".95") == 0.95
+    assert price_stats.apply_charm_ending(0.02, ".99") == 0.99
+    assert price_stats.apply_charm_ending(0.50, ".00") >= 0
+
+
 def test_majority_pattern_found_and_returned():
     listings = _listings([
         ("alice", 12.99), ("bob", 22.99), ("carol", 8.99),
