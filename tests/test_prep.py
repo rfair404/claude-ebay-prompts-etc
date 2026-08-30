@@ -37,6 +37,7 @@ from lib.photo_prep import categories as CAT             # noqa: E402
 from lib.photo_prep import color as C                     # noqa: E402
 from lib.photo_prep import orientation as O               # noqa: E402
 from lib.photo_prep import prep as P                      # noqa: E402
+from lib.photo_prep.center_crop import _parse_aspect       # noqa: E402
 
 W, H = 1200, 900
 NO_OSD = (None, 0.0, "no text")
@@ -2125,7 +2126,7 @@ def test_apply_resolves_an_empty_only_to_the_full_preset_list_before_hashing():
 
         m = P.load_manifest(shoot)
         expected = P._apply_settings_hash(
-            P._parse_aspect(m["settings"].get("aspect", P.DEFAULT_ASPECT)),
+            _parse_aspect(m["settings"].get("aspect", P.DEFAULT_ASPECT)),
             float(m["settings"].get("pad", P.DEFAULT_PAD)),
             m["settings"].get("pop", "gentle"), P.subject_mode(m),
             P.category_of(m), tuple(C.PRESETS))
