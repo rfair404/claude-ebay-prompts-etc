@@ -8,6 +8,10 @@ sales_ledger.csv). The first cut of this file got that wrong and would have
 flipped 42 real sales back to SYNCED. These tests lock the carve-out down:
 SOLD/SHIPPED survive eBay's SYNCED, but not a real relist.
 
+The second half of this file covers `compute_drift` (extracted in the V4
+phase-2 refactor): the drift/missing/orphan/never-listed classification and
+the JSON report round-trip, on synthetic data, off the network.
+
 Run:  pytest tests/test_ledger_reconcile.py
 """
 import sys
@@ -16,7 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
+sys.path.insert(0, str(ROOT / "tools"))
 
+import ledger_reconcile as lr                                       # noqa: E402
 from tools.ledger_reconcile import FIELDS, _protected, _sold_skus  # noqa: E402
 
 
@@ -112,3 +118,130 @@ def test_sold_skus_empty_when_no_sales_ledger(tmp_path, monkeypatch):
     import tools.ledger_reconcile as LR
     monkeypatch.setattr(LR, "SALES", tmp_path / "does_not_exist.csv")
     assert LR._sold_skus() == set()
+
+# --------------------------------------------------------------------------
+# compute_drift — the reconciliation decisions, off the network
+# --------------------------------------------------------------------------
+
+def _drow(**kw) -> dict:
+    row = {"sku": "", "status": "", "title": "", "price": "", "offer_id": "",
+           "listing_id": "", "url": ""}
+    row.update(kw)
+    return row
+
+
+def _dtruth(**kw) -> dict:
+    t = {"sku": "", "status": "", "price": "", "offer_id": "",
+         "listing_id": "", "url": ""}
+    t.update(kw)
+    return t
+
+
+def test_no_drift_when_ledger_matches_ebay():
+    by_sku = {"a": _drow(sku="a", status="PUBLISHED", price="10.00")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED", price="10.0")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["drift"] == []
+
+
+def test_price_formatting_difference_is_not_drift():
+    # 99.0 and 99.00 are the same price; only a real numeric difference is drift.
+    by_sku = {"a": _drow(sku="a", status="PUBLISHED", price="99.0")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED", price="99.00")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["drift"] == []
+
+
+def test_real_price_change_is_drift():
+    by_sku = {"a": _drow(sku="a", status="PUBLISHED", price="99.00")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED", price="85.00")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["drift"] == [("a", "price", "99.00", "85.00")]
+
+
+def test_status_drift_reported():
+    by_sku = {"a": _drow(sku="a", status="SYNCED")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert ("a", "status", "SYNCED", "PUBLISHED") in r["drift"]
+
+
+def test_sold_with_order_is_protected_over_synced():
+    # This is the 42-sale regression: a SOLD row backed by a real order must
+    # never flip to SYNCED just because the Inventory API doesn't know about sales.
+    by_sku = {"a": _drow(sku="a", status="SOLD", price="50.00")}
+    truth = {"a": _dtruth(sku="a", status="SYNCED", price="50.00")}
+    r = lr.compute_drift(by_sku, truth, sold={"a"})
+    assert r["drift"] == []
+    assert r["protected"] == 1
+    assert r["unbacked"] == []
+
+
+def test_sold_without_order_is_kept_but_flagged_for_review():
+    by_sku = {"a": _drow(sku="a", status="SOLD", price="50.00")}
+    truth = {"a": _dtruth(sku="a", status="SYNCED", price="50.00")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["drift"] == []          # still not overwritten
+    assert r["protected"] == 0       # not corroborated, so not counted as protected
+    assert r["unbacked"] == ["a"]
+
+
+def test_relist_active_outranks_sold():
+    # A genuine relist beats even a corroborated SOLD.
+    by_sku = {"a": _drow(sku="a", status="SOLD", price="50.00")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED", price="55.00")}
+    r = lr.compute_drift(by_sku, truth, sold={"a"})
+    assert ("a", "status", "SOLD", "PUBLISHED") in r["drift"]
+
+
+def test_ebay_blank_field_keeps_local_value():
+    by_sku = {"a": _drow(sku="a", status="ENDED", price="20.00")}
+    truth = {"a": _dtruth(sku="a", status="ENDED", price="")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["blanked"] == [("a", "price", "20.00")]
+    assert r["drift"] == []
+
+
+def test_live_sku_with_no_ledger_row_is_missing():
+    by_sku = {}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED", price="10.00")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["missing"] == [truth["a"]]
+
+
+def test_ledger_row_ebay_does_not_know_is_orphan():
+    by_sku = {"a": _drow(sku="a", status="DRAFTED")}
+    truth = {}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["orphan"] == ["a"]
+
+
+def test_drafted_never_synced_row_is_not_never_listed():
+    # An inventory item with no offer at all is a legitimate unsynced draft,
+    # not a "no offer" anomaly.
+    by_sku = {"a": _drow(sku="a", status="DRAFTED")}
+    truth = {"a": None}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["never_listed"] == []
+
+
+def test_inventory_item_with_no_offer_and_nondraft_status_is_flagged():
+    by_sku = {"a": _drow(sku="a", status="SYNCED")}
+    truth = {"a": None}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    assert r["never_listed"] == [("a", "SYNCED")]
+
+
+def test_write_report_round_trips_json():
+    by_sku = {"a": _drow(sku="a", status="SYNCED")}
+    truth = {"a": _dtruth(sku="a", status="PUBLISHED")}
+    r = lr.compute_drift(by_sku, truth, sold=set())
+    out = ROOT / "tests" / "_scratch_ledger_reconcile_report.json"
+    try:
+        lr.write_report(out, by_sku, r)
+        import json
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        assert doc["drift"] == [{"sku": "a", "field": "status",
+                                 "ledger": "SYNCED", "ebay": "PUBLISHED"}]
+    finally:
+        out.unlink(missing_ok=True)

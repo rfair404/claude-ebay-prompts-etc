@@ -46,6 +46,18 @@ to the file; detail is read only when flagged. Apply to the noisiest first:
 `tools/ledger_reconcile.py`, `tools/live_audit.py`. Schema-check the JSON in
 tests so "read only when flagged" can be trusted.
 
+- [x] `tools/ledger_reconcile.py` — the per-field diff loop moved to a pure
+      `compute_drift()` (no I/O), unit-tested directly (`tests/test_ledger_reconcile.py`,
+      25 cases: the SOLD/SHIPPED-vs-SYNCED precedence carve-out plus drift,
+      blanked fields, orphans and the JSON round-trip). Report
+      output now one line (`OK` or `N flagged -> ledger_reconcile_report.json`)
+      with full detail always written to the JSON file so it's never stale;
+      the file is gitignored (same sensitivity class as the ledgers it diffs).
+- [ ] `lib/photo_prep/prep.py`
+- [ ] `lib/list_edit.py`
+- [ ] `tools/sales_report.py`
+- [ ] `tools/live_audit.py`
+
 ## Phase 3 — one CLI, shared plumbing (#30)
 
 - [x] Single entry point: `python -m lib.cli <command>` (`lib/cli.py`) — a
