@@ -550,7 +550,15 @@ def test_buy_label_confirmed_network_error_does_not_retry():
 
 
 def test_buy_label_missing_api_key_raises_before_any_call():
+    # api_key=None only clears EASYPOST_API_KEY; without also patching
+    # load_config, a developer's real config.yaml (if it has
+    # easypost.api_key set) would supply a key and this test would stop
+    # exercising the "missing everywhere" branch (Copilot review fix —
+    # same hermeticity pattern as test_get_api_key_missing_everywhere_
+    # raises_config_error above).
     fake = _Fake()
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {}
 
     def go():
         try:
@@ -559,7 +567,10 @@ def test_buy_label_missing_api_key_raises_before_any_call():
         except ConfigError:
             assert fake.requests == []
 
-    _patched(fake, go, api_key=None)
+    try:
+        _patched(fake, go, api_key=None)
+    finally:
+        CFG.load_config = real_load
 
 
 # ---------------------------------------------------------------------------
