@@ -1086,6 +1086,13 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     m["approved"] = False
     m["approved_at"] = None
 
+    # Persist BOTH of the above before rendering a single frame. Otherwise a
+    # process killed during frame 1 (the main failure mode this whole change
+    # targets) leaves the on-disk manifest showing a stale `apply_run` from
+    # the PREVIOUS apply, and possibly `approved: true` -- exactly the state
+    # the checks above exist to rule out, just not yet written down.
+    save_manifest(shoot, m)
+
     out_dir = shoot / "listing"
     out_dir.mkdir(exist_ok=True)
     rows = []
@@ -1110,6 +1117,17 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
             variants = {pname: _load_bgr(shoot / rec["presets"][pname]["path"])
                         for pname in only}
             rows.append((name, before, variants, rec))
+            # A skipped frame's exceptions are exactly as real as a freshly
+            # rendered one's -- reuse the same flag logic below, sourced from
+            # the persisted record instead of a report just computed, so
+            # verdict_emit doesn't read a resumed run as cleaner than it is.
+            c = rec.get("color") or {}
+            if c.get("subject_newly_clipped") or c.get("subject_newly_crushed"):
+                flags.append((name, f"colour pass touched item pixels "
+                                    f"(new-clip={c.get('subject_newly_clipped')}, "
+                                    f"new-crush={c.get('subject_newly_crushed')})"))
+            if rec["orientation"]["needs_ask"]:
+                flags.append((name, "orientation still ASK"))
             continue
 
         before = _load_bgr(src)
