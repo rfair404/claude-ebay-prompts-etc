@@ -188,7 +188,8 @@ class Parcel:
 
     def to_dict(self) -> dict:
         d: dict = {"weight": self.weight_oz}
-        if self.length_in and self.width_in and self.height_in:
+        if (self.length_in is not None and self.width_in is not None
+                and self.height_in is not None):
             d.update({"length": self.length_in, "width": self.width_in,
                       "height": self.height_in})
         return d

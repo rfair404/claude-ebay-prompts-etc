@@ -37,7 +37,7 @@ def main() -> int:
     ap.add_argument("--rate-id", required=True, help="from `ship-quote`'s output")
     ap.add_argument("--carrier", default="", help="carrier, for the printed summary (cosmetic)")
     ap.add_argument("--service", default="", help="service, for the printed summary (cosmetic)")
-    ap.add_argument("--price", type=float, default=0.0,
+    ap.add_argument("--price", type=float, default=None,
                     help="expected price from `ship-quote`, for the DRY RUN summary (cosmetic — "
                          "a confirmed purchase always charges EasyPost's live price for --rate-id, "
                          "not this value)")
@@ -53,8 +53,8 @@ def main() -> int:
     # ship-quote already showed the operator; a confirmed purchase re-quotes
     # nothing and just tells EasyPost which shipment_id/rate_id to buy.
     rate = Rate(id=args.rate_id, carrier=args.carrier, service=args.service,
-               rate=args.price, currency="USD", delivery_days=None,
-               shipment_id=args.shipment_id)
+               rate=args.price if args.price is not None else 0.0, currency="USD",
+               delivery_days=None, shipment_id=args.shipment_id)
 
     try:
         result = buy_label(args.shipment_id, rate, confirm=args.confirm)
@@ -70,7 +70,7 @@ def main() -> int:
         print(f"  shipment       {result.shipment_id}")
         label = f"{result.carrier} {result.service}".strip() or "(pass --carrier/--service to show)"
         print(f"  rate           {result.rate_id}  ({label})")
-        cost = f"${result.price:.2f} {result.currency}" if args.price else \
+        cost = f"${result.price:.2f} {result.currency}" if args.price is not None else \
               "(pass --price from `ship-quote` to preview the cost here)"
         print(f"  cost           {cost}")
         print()

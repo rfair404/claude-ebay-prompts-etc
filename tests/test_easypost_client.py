@@ -20,6 +20,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -315,6 +316,20 @@ def test_get_rates_sends_addresses_and_parcel_in_body():
     _patched(fake, go)
 
 
+def test_parcel_to_dict_keeps_a_zero_value_dimension():
+    # A 0.0 dimension is a *provided* value (flat/thin item), not "missing" —
+    # to_dict() must not silently drop it via truthiness (Copilot review fix).
+    d = Parcel(weight_oz=8, length_in=0.0, width_in=6, height_in=1).to_dict()
+    assert d["length"] == 0.0
+    assert d["width"] == 6
+    assert d["height"] == 1
+
+
+def test_parcel_to_dict_omits_dims_when_truly_absent():
+    d = Parcel(weight_oz=8).to_dict()
+    assert "length" not in d and "width" not in d and "height" not in d
+
+
 def test_get_rates_skips_malformed_rate_entries():
     fake = _Fake(_shipment_response(rates=[
         {"id": "rate_bad", "carrier": "UPS", "service": "Ground", "rate": "not-a-number"},
@@ -480,6 +495,50 @@ def test_ship_quote_accepts_no_dimensions():
     rc = _run_ship_quote_cli([], fake=fake)
     assert rc == 0
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# tools/ship_buy.py CLI — --price 0.0 must count as "provided" (Copilot review fix)
+# ---------------------------------------------------------------------------
+
+import ship_buy                                                        # noqa: E402
+
+_SHIP_BUY_BASE_ARGV = [
+    "ship_buy.py", "--shipment-id", "shp_1", "--rate-id", "rate_1",
+]
+
+
+def _run_ship_buy_cli(extra_argv):
+    # DRY RUN only (no --confirm passed): buy_label() never calls the fake
+    # urlopen, but _patched() still supplies the env var buy_label() needs
+    # to resolve an API key before it can decide that.
+    real_argv = sys.argv
+    sys.argv = _SHIP_BUY_BASE_ARGV + extra_argv
+    fake = _Fake(_shipment_response())
+    buf = io.StringIO()
+
+    def go():
+        with redirect_stdout(buf):
+            return ship_buy.main()
+
+    try:
+        rc = _patched(fake, go)
+        return rc, buf.getvalue()
+    finally:
+        sys.argv = real_argv
+
+
+def test_ship_buy_dry_run_price_zero_shows_a_real_cost_not_the_missing_hint():
+    rc, out = _run_ship_buy_cli(["--price", "0.0"])
+    assert rc == 0
+    assert "$0.00 USD" in out
+    assert "pass --price" not in out
+
+
+def test_ship_buy_dry_run_without_price_shows_the_missing_hint():
+    rc, out = _run_ship_buy_cli([])
+    assert rc == 0
+    assert "pass --price" in out
 
 
 if __name__ == "__main__":
