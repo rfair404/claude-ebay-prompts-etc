@@ -314,8 +314,9 @@ def buy_label(shipment_id: str, rate: Rate, confirm: bool = False,
                     retry_network_errors=False)
     sel = resp.get("selected_rate") or {}
     label = resp.get("postage_label") or {}
+    sel_rate = sel.get("rate")
     try:
-        price = float(sel.get("rate") or rate.rate)
+        price = float(sel_rate if sel_rate is not None else rate.rate)
     except (TypeError, ValueError):
         price = rate.rate
     return BuyResult(dry_run=False, shipment_id=shipment_id,

@@ -501,6 +501,19 @@ def test_buy_label_with_confirm_calls_the_buy_endpoint_and_returns_tracking():
     _patched(fake, go)
 
 
+def test_buy_label_confirmed_keeps_a_legitimate_zero_price():
+    # selected_rate.rate == 0 is a real (if unusual) EasyPost value, not a
+    # missing one — `or rate.rate` would treat it as falsy and silently
+    # substitute the quoted price instead (Copilot review fix).
+    fake = _Fake(_buy_response(price=0.0))
+
+    def go():
+        result = buy_label("shp_1", CHEAP_RATE, confirm=True)
+        assert result.price == 0.0
+
+    _patched(fake, go)
+
+
 def test_buy_label_confirmed_5xx_does_not_retry_and_surfaces_error():
     # A purchase POST must never silently retry — could double-buy a label.
     fake = _Fake(_http_error(500, b'{"error":{"message":"carrier timeout"}}'))
@@ -618,6 +631,23 @@ def test_ship_quote_prints_currency_in_the_ship_buy_follow_up_command():
     assert "--currency GBP" in buf.getvalue()
 
 
+def test_ship_quote_double_quotes_a_service_name_with_spaces():
+    # Python's repr() (single quotes) isn't shell-agnostic — e.g. Windows
+    # cmd.exe treats a single quote as literal, splitting a multi-word
+    # service into separate arguments. The printed follow-up command must
+    # double-quote it instead (Copilot review fix).
+    rate = Rate(id="rate_x", carrier="UPS", service="Priority Mail Express",
+               rate=9.0, currency="USD", delivery_days=1, shipment_id="shp_1")
+    fake = lambda *a, **kw: ("shp_1", [rate])  # noqa: E731
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    out = buf.getvalue()
+    assert '--service "Priority Mail Express"' in out
+    assert "'Priority Mail Express'" not in out
+
+
 # ---------------------------------------------------------------------------
 # tools/ship_buy.py CLI — --price 0.0 must count as "provided" (Copilot review fix)
 # ---------------------------------------------------------------------------
@@ -710,6 +740,30 @@ def test_ship_buy_shipment_mismatch_reported_cleanly_not_a_traceback():
         sys.argv = real_argv
     assert rc == 1
     assert fake.requests == []
+
+
+def test_ship_buy_confirmed_prints_carrier_unquoted_in_pick_list_command():
+    # repr() (single-quoted) isn't shell-agnostic (Windows cmd.exe treats a
+    # single quote as literal) — carrier codes don't need quoting at all,
+    # so the printed follow-up command should print the raw value
+    # (Copilot review fix).
+    fake = _Fake(_buy_response(carrier="USPS"))
+    real_argv = sys.argv
+    sys.argv = ["ship_buy.py", "--shipment-id", "shp_1", "--rate-id", "rate_1", "--confirm"]
+    buf = io.StringIO()
+
+    def go():
+        with redirect_stdout(buf):
+            return ship_buy.main()
+
+    try:
+        rc = _patched(fake, go)
+    finally:
+        sys.argv = real_argv
+    out = buf.getvalue()
+    assert rc == 0
+    assert "--carrier USPS " in out
+    assert "'USPS'" not in out
 
 
 if __name__ == "__main__":

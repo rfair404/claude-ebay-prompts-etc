@@ -90,7 +90,7 @@ def main() -> int:
     print()
     print("  Feed this into the local ledger's SHIPPED transition once #70 lands:")
     print(f"    python -m lib.cli pick-list --record-tracking {order_id} "
-         f"--carrier {result.carrier!r} --tracking-number {result.tracking_code} --confirm")
+         f"--carrier {result.carrier} --tracking-number {result.tracking_code} --confirm")
     return 0
 
 

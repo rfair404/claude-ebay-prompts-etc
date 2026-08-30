@@ -46,6 +46,17 @@ def _add_address_args(ap: argparse.ArgumentParser, prefix: str, label: str) -> N
                     help=f"{label} phone (some carrier services require one)")
 
 
+def _dquote(s: str) -> str:
+    """Double-quoted, backslash-escaped form for a printed CLI argument.
+
+    Python's repr() (single-quoted) isn't shell-agnostic — Windows cmd.exe
+    treats a single quote as a literal character, not quoting, so a repr'd
+    value with spaces (a carrier service name) would be split into several
+    arguments. Double quotes are the more portable common denominator.
+    """
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _address_from_args(args: argparse.Namespace, prefix: str) -> Address:
     return Address(
         name=getattr(args, f"{prefix}_name"),
@@ -113,7 +124,7 @@ def main() -> int:
     print("  one (still a DRY RUN — add --confirm yourself to actually spend money):")
     print(f"    python -m lib.cli ship-buy --shipment-id {shipment_id} "
          f"--rate-id {cheapest.id} --carrier {cheapest.carrier} "
-         f"--service {cheapest.service!r} --price {cheapest.rate:.2f} "
+         f"--service {_dquote(cheapest.service)} --price {cheapest.rate:.2f} "
          f"--currency {cheapest.currency}")
     return 0
 
