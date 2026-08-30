@@ -281,6 +281,25 @@ def test_api_send_network_error_retries_even_for_post():
     _patched(fake, go)
 
 
+def test_api_send_network_error_not_retried_when_disabled():
+    # A lost response after the request reached the server is ambiguous —
+    # for a money-spending call (retry_network_errors=False) a single
+    # network error must surface immediately, never retry (Copilot review
+    # fix: could otherwise double-fire a purchase).
+    fake = _Fake(urllib.error.URLError("reset"), _FakeResponse({"ok": True}))
+
+    def go():
+        try:
+            api_send("POST", "/shipments/shp_1/buy", {"rate": {}},
+                     retry_network_errors=False)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 0
+            assert len(fake.requests) == 1
+
+    _patched(fake, go)
+
+
 # ---------------------------------------------------------------------------
 # get_rates — the free path
 # ---------------------------------------------------------------------------
@@ -350,6 +369,39 @@ def test_get_rates_no_rates_returns_empty_list():
         shipment_id, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
         assert shipment_id == "shp_1"
         assert rates == []
+
+    _patched(fake, go)
+
+
+def test_get_rates_missing_shipment_id_raises_api_error():
+    # A blank shipment_id is useless to every downstream caller (buy_label,
+    # --record-tracking) — surface it as the API error it is instead of
+    # handing back an unusable id (Copilot review fix).
+    fake = _Fake(_shipment_response(shipment_id=""))
+
+    def go():
+        try:
+            get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert "missing an id" in str(e)
+
+    _patched(fake, go)
+
+
+def test_get_rates_skips_rate_entries_missing_identifiers():
+    # A rate missing id/carrier/service parses fine as a price but can't be
+    # bought or printed — it's a dead end for ship-buy, so drop it rather
+    # than hand the operator an entry they can't act on.
+    fake = _Fake(_shipment_response(rates=[
+        {"id": "", "carrier": "UPS", "service": "Ground", "rate": "5.00"},
+        {"id": "rate_x", "carrier": "", "service": "Ground", "rate": "6.00"},
+        {"id": "rate_ok", "carrier": "USPS", "service": "Priority", "rate": "9.00"},
+    ]))
+
+    def go():
+        _, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        assert [r.id for r in rates] == ["rate_ok"]
 
     _patched(fake, go)
 
@@ -424,6 +476,25 @@ def test_buy_label_confirmed_5xx_does_not_retry_and_surfaces_error():
         except EasyPostAPIError as e:
             assert e.status == 500
             assert "carrier timeout" in e.body
+            assert len(fake.requests) == 1
+
+    _patched(fake, go)
+
+
+def test_buy_label_confirmed_network_error_does_not_retry():
+    # Same guardrail as the 5xx case, for the other failure mode: a lost
+    # response after the purchase POST may mean EasyPost already charged
+    # for and issued the label. Retrying could buy (and pay for) a second
+    # one, so a network error on the buy call must surface immediately
+    # (Copilot review fix).
+    fake = _Fake(urllib.error.URLError("reset"), _buy_response())
+
+    def go():
+        try:
+            buy_label("shp_1", CHEAP_RATE, confirm=True)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 0
             assert len(fake.requests) == 1
 
     _patched(fake, go)

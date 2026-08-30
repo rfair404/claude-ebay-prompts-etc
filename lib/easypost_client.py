@@ -92,7 +92,7 @@ def get_api_key() -> str:
 # ---------------------------------------------------------------------------
 
 def api_send(method: str, path: str, body: Optional[dict] = None,
-             api_key: Optional[str] = None) -> dict:
+             api_key: Optional[str] = None, retry_network_errors: bool = True) -> dict:
     """Issue a JSON request against the EasyPost REST API.
 
     Returns the decoded JSON body (or {} for an empty 2xx). Raises
@@ -101,9 +101,14 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
 
     Retry policy is deliberately identical to ebay_client.api_send: transient
     5xx is retried only for idempotent methods (GET/PUT/DELETE) so a POST
-    that creates or spends money can never double-fire from a retry; a
-    network error (the request likely never reached EasyPost) retries
-    regardless of method.
+    that creates or spends money can never double-fire from a retry. A
+    network error is ambiguous — the request may never have reached
+    EasyPost, or it may have reached it and spent money while the response
+    was lost — so by default it still retries regardless of method (the
+    common case for a free/idempotent call like creating a shipment quote).
+    Pass retry_network_errors=False for a call where that ambiguity is
+    unacceptable (the purchase endpoint): a lost response there must never
+    risk a second real charge.
     """
     api_key = api_key or get_api_key()
     if not path.startswith("/"):
@@ -139,7 +144,7 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
             raise err from e
         except urllib.error.URLError as e:
             err = EasyPostAPIError(0, f"{m} {path} -> network error: {e}", None)
-            if attempt < 2:
+            if retry_network_errors and attempt < 2:
                 time.sleep(0.8 * (attempt + 1))
                 continue
             raise err from e
@@ -224,6 +229,13 @@ def get_rates(to_address: Address, from_address: Address, parcel: Parcel,
                          "parcel": parcel.to_dict()}}
     resp = api_send("POST", "/shipments", body=body, api_key=api_key)
     shipment_id = str(resp.get("id") or "")
+    if not shipment_id:
+        # No id means nothing downstream (buy_label, --record-tracking) has
+        # anything usable to act on — treat it as the API error it is,
+        # rather than handing the operator a shipment_id that can't buy.
+        raise EasyPostAPIError(
+            0, "EasyPost /shipments response is missing an id",
+            json.dumps(resp))
 
     rates: list[Rate] = []
     for r in resp.get("rates") or []:
@@ -231,9 +243,14 @@ def get_rates(to_address: Address, from_address: Address, parcel: Parcel,
             price = float(r.get("rate"))
         except (TypeError, ValueError):
             continue
-        rates.append(Rate(id=str(r.get("id") or ""),
-                          carrier=str(r.get("carrier") or ""),
-                          service=str(r.get("service") or ""),
+        rate_id = str(r.get("id") or "")
+        carrier = str(r.get("carrier") or "")
+        service = str(r.get("service") or "")
+        if not (rate_id and carrier and service):
+            # Missing the identifiers ship-buy needs to actually buy/print
+            # this rate — surfacing it would just be a dead end.
+            continue
+        rates.append(Rate(id=rate_id, carrier=carrier, service=service,
                           rate=price,
                           currency=str(r.get("currency") or "USD"),
                           delivery_days=r.get("delivery_days"),
@@ -280,8 +297,12 @@ def buy_label(shipment_id: str, rate: Rate, confirm: bool = False,
                          carrier=rate.carrier, service=rate.service,
                          price=rate.rate, currency=rate.currency)
 
+    # retry_network_errors=False: unlike a quote, a lost response here can't
+    # be safely retried — the purchase may have already gone through, and a
+    # retry risks buying (and charging for) a second label.
     resp = api_send("POST", f"/shipments/{shipment_id}/buy",
-                    body={"rate": {"id": rate.id}}, api_key=api_key)
+                    body={"rate": {"id": rate.id}}, api_key=api_key,
+                    retry_network_errors=False)
     sel = resp.get("selected_rate") or {}
     label = resp.get("postage_label") or {}
     try:
