@@ -1064,6 +1064,17 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     # goes -- six looks at ~25s a frame on 12 MP, five of which a printed
     # shoot will never open. See photo_prep.categories.
     only = tuple(only) or catmod.looks_for(category_of(m))
+    # catmod.looks_for()'s own convention: an empty tuple is a sentinel for
+    # "render every preset in colormod.PRESETS", not "render nothing" --
+    # the same sentinel the per-frame render loop below resolves via
+    # `only or colormod.PRESETS`. Resolve it to the concrete list HERE,
+    # before it feeds settings_hash / _frame_is_resumable, so a hash or a
+    # staleness check can never be computed against an empty preset set
+    # while the render loop actually produces the full one (Copilot review
+    # fix on #96 -- a category with no explicit `looks` would otherwise
+    # hash/resume against zero presets and --resume could wrongly skip a
+    # frame that only has some, or none, of the actually-required presets).
+    only = only or tuple(colormod.PRESETS)
 
     # A fingerprint of the inputs that decide what gets rendered, captured
     # against what was on disk BEFORE this call overwrites it -- so a

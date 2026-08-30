@@ -2107,3 +2107,68 @@ def test_apply_always_stamps_a_fresh_apply_run_settings_hash():
         assert "apply_run" in m
         assert len(m["apply_run"]["settings_hash"]) == 16
         assert m["apply_run"]["started_at"]
+
+
+def test_apply_resolves_an_empty_only_to_the_full_preset_list_before_hashing():
+    """catmod.looks_for() documents empty tuple as "render everything", the
+    same sentinel the render loop resolves via `only or colormod.PRESETS` --
+    but settings_hash/resumability must never be computed against the bare
+    empty tuple, or they'd describe a run that renders nothing while the
+    loop actually renders every preset (Copilot review fix on #96)."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        with patch.object(P.catmod, "looks_for", return_value=()):
+            P.run_apply(shoot, quiet=True)
+
+        m = P.load_manifest(shoot)
+        expected = P._apply_settings_hash(
+            P._parse_aspect(m["settings"].get("aspect", P.DEFAULT_ASPECT)),
+            float(m["settings"].get("pad", P.DEFAULT_PAD)),
+            m["settings"].get("pop", "gentle"), P.subject_mode(m),
+            P.category_of(m), tuple(C.PRESETS))
+        assert m["apply_run"]["settings_hash"] == expected, (
+            "an empty `only` sentinel must hash as the full preset list "
+            "that actually gets rendered, not as an empty one")
+        # And it must have actually rendered every preset, not zero of them.
+        assert set(m["photos"]["IMG_0.jpg"]["presets"]) == set(C.PRESETS)
+
+
+def test_resume_catches_a_changed_source_even_under_the_empty_only_sentinel():
+    """The bug this guards against directly: `_frame_is_resumable`'s
+    `for pname in only:` loop checks nothing when `only` is empty, so it
+    would trivially return True for ANY frame regardless of whether its
+    source changed -- a resume that should re-render would silently skip
+    instead. Both applies here use the empty-`only` "render everything"
+    sentinel (the render loop already resolved it correctly even before
+    this fix; only the hash/resumability path did not) -- reshooting frame
+    0 between them must still force a re-render, not a false-positive skip."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        with patch.object(P.catmod, "looks_for", return_value=()):
+            P.run_apply(shoot, quiet=True)
+
+            # A reshoot / replaced source file for the only frame.
+            img, _ = _scene(seed=99)
+            cv2.imencode(".jpg", img)[1].tofile(str(shoot / "IMG_0.jpg"))
+
+            rendered = []
+            orig_save_bgr = P._save_bgr
+
+            def spy_save_bgr(path, bgr, quality=94):
+                rendered.append(Path(path).stem)
+                return orig_save_bgr(path, bgr, quality=quality)
+
+            with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+                P.run_apply(shoot, quiet=True, resume=True)
+
+        assert "IMG_0" in rendered, (
+            "a changed source must force a re-render under --resume even "
+            "when `only` is the empty 'render everything' sentinel -- a "
+            "resumability check against the bare empty tuple would have "
+            "skipped this frame unconditionally")
