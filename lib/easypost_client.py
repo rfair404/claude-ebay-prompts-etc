@@ -62,7 +62,11 @@ API_BASE = "https://api.easypost.com/v2"
 # ---------------------------------------------------------------------------
 
 class EasyPostAuthError(RuntimeError):
-    """Raised when the EasyPost API key is missing or rejected."""
+    """Raised when EasyPost rejects the API key (HTTP 401).
+
+    A *missing* key never reaches this point — get_api_key() raises
+    ConfigError before any HTTP call is made.
+    """
 
 
 class EasyPostAPIError(RuntimeError):
@@ -95,9 +99,11 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
              api_key: Optional[str] = None, retry_network_errors: bool = True) -> dict:
     """Issue a JSON request against the EasyPost REST API.
 
-    Returns the decoded JSON body (or {} for an empty 2xx). Raises
-    EasyPostAuthError on a 401 (bad/missing key) and EasyPostAPIError on any
-    other non-2xx, carrying EasyPost's error body for diagnosis.
+    Returns the decoded JSON body (or {} for an empty 2xx). A missing key
+    is caught earlier by get_api_key() (ConfigError), before any call is
+    made; this function raises EasyPostAuthError on a 401 (a rejected key)
+    and EasyPostAPIError on any other non-2xx, carrying EasyPost's error
+    body for diagnosis.
 
     Retry policy is deliberately identical to ebay_client.api_send: transient
     5xx is retried only for idempotent methods (GET/PUT/DELETE) so a POST
