@@ -414,6 +414,42 @@ CHEAP_RATE = Rate(id="rate_usps", carrier="USPS", service="Priority", rate=8.45,
                   currency="USD", delivery_days=2, shipment_id="shp_1")
 
 
+def test_buy_label_shipment_mismatch_raises_before_any_call_dry_run():
+    # rate was quoted against a *different* shipment than the one passed in
+    # — buying it would purchase postage for the wrong shipment. Must fail
+    # before even the DRY RUN summary (Copilot review fix).
+    fake = _Fake()
+    mismatched_rate = Rate(id="rate_usps", carrier="USPS", service="Priority",
+                           rate=8.45, currency="USD", delivery_days=2,
+                           shipment_id="shp_OTHER")
+
+    def go():
+        try:
+            buy_label("shp_1", mismatched_rate, confirm=False)
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "shp_1" in str(e) and "shp_OTHER" in str(e)
+            assert fake.requests == []
+
+    _patched(fake, go)
+
+
+def test_buy_label_shipment_mismatch_raises_before_any_call_confirmed():
+    fake = _Fake()
+    mismatched_rate = Rate(id="rate_usps", carrier="USPS", service="Priority",
+                           rate=8.45, currency="USD", delivery_days=2,
+                           shipment_id="shp_OTHER")
+
+    def go():
+        try:
+            buy_label("shp_1", mismatched_rate, confirm=True)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            assert fake.requests == []
+
+    _patched(fake, go)
+
+
 def test_buy_label_without_confirm_is_a_pure_dry_run_no_http_call():
     fake = _Fake()  # scripted with NOTHING — any HTTP call fails the test
 
@@ -568,6 +604,20 @@ def test_ship_quote_accepts_no_dimensions():
     assert len(calls) == 1
 
 
+def test_ship_quote_prints_currency_in_the_ship_buy_follow_up_command():
+    # The printed copy/paste ship-buy command must carry the real quoted
+    # currency so ship-buy's DRY RUN preview doesn't misreport a non-USD
+    # rate as USD (Copilot review fix).
+    gbp_rate = Rate(id="rate_gb", carrier="RoyalMail", service="Tracked48",
+                    rate=6.5, currency="GBP", delivery_days=3, shipment_id="shp_1")
+    fake = lambda *a, **kw: ("shp_1", [gbp_rate])  # noqa: E731
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    assert "--currency GBP" in buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # tools/ship_buy.py CLI — --price 0.0 must count as "provided" (Copilot review fix)
 # ---------------------------------------------------------------------------
@@ -610,6 +660,56 @@ def test_ship_buy_dry_run_without_price_shows_the_missing_hint():
     rc, out = _run_ship_buy_cli([])
     assert rc == 0
     assert "pass --price" in out
+
+
+def test_ship_buy_dry_run_currency_defaults_to_usd():
+    rc, out = _run_ship_buy_cli(["--price", "12.34"])
+    assert rc == 0
+    assert "$12.34 USD" in out
+
+
+def test_ship_buy_dry_run_honours_a_non_usd_currency():
+    # ship-quote's printed follow-up command now passes --currency along
+    # with --price; ship-buy must show it, not hardcode USD (Copilot
+    # review fix).
+    rc, out = _run_ship_buy_cli(["--price", "6.50", "--currency", "GBP"])
+    assert rc == 0
+    assert "$6.50 GBP" in out
+
+
+def test_ship_buy_shipment_mismatch_reported_cleanly_not_a_traceback():
+    fake = _Fake()
+    real_argv = sys.argv
+    sys.argv = ["ship_buy.py", "--shipment-id", "shp_1",
+               "--rate-id", "rate_1"]  # matches base argv's shipment id
+    buf = io.StringIO()
+
+    def go():
+        # ship_buy.py always builds its Rate with shipment_id=args.shipment_id,
+        # so the CLI can't itself trigger a mismatch — this exercises the
+        # ValueError -> clean [X] message path directly via a monkeypatched
+        # buy_label, the same way a future caller passing a stale rate would
+        # surface it.
+        real_buy_label = ship_buy.buy_label
+
+        def mismatched(*a, **kw):
+            raise ValueError("shipment_id mismatch: buy_label() called with "
+                             "'shp_1' but rate 'rate_1' was quoted for "
+                             "shipment 'shp_OTHER'")
+
+        ship_buy.buy_label = mismatched
+        try:
+            with redirect_stdout(buf):
+                return ship_buy.main()
+        finally:
+            ship_buy.buy_label = real_buy_label
+
+    try:
+        rc = _patched(fake, go)
+    finally:
+        sys.argv = real_argv
+    assert rc == 1
+    assert fake.requests == []
 
 
 if __name__ == "__main__":

@@ -113,7 +113,8 @@ def main() -> int:
     print("  one (still a DRY RUN — add --confirm yourself to actually spend money):")
     print(f"    python -m lib.cli ship-buy --shipment-id {shipment_id} "
          f"--rate-id {cheapest.id} --carrier {cheapest.carrier} "
-         f"--service {cheapest.service!r} --price {cheapest.rate:.2f}")
+         f"--service {cheapest.service!r} --price {cheapest.rate:.2f} "
+         f"--currency {cheapest.currency}")
     return 0
 
 

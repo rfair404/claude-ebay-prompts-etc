@@ -292,6 +292,15 @@ def buy_label(shipment_id: str, rate: Rate, confirm: bool = False,
     exact shape `tools/pick_list.py --record-tracking` (#70) expects — feed
     them straight through; this function does not touch the local ledger.
     """
+    if rate.shipment_id != shipment_id:
+        # A rate carries the shipment it was quoted against; if a caller
+        # passes a shipment_id that doesn't match, buying it would purchase
+        # postage for the wrong shipment — fail before either a dry-run
+        # summary or the purchase call, not after.
+        raise ValueError(
+            f"shipment_id mismatch: buy_label() called with {shipment_id!r} but "
+            f"rate {rate.id!r} was quoted for shipment {rate.shipment_id!r}")
+
     if not confirm:
         return BuyResult(dry_run=True, shipment_id=shipment_id, rate_id=rate.id,
                          carrier=rate.carrier, service=rate.service,

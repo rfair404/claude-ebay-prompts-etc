@@ -41,6 +41,10 @@ def main() -> int:
                     help="expected price from `ship-quote`, for the DRY RUN summary (cosmetic — "
                          "a confirmed purchase always charges EasyPost's live price for --rate-id, "
                          "not this value)")
+    ap.add_argument("--currency", default="USD",
+                    help="currency of --price, from `ship-quote`'s output, for the DRY RUN "
+                         "summary (cosmetic — default USD; pass the real currency for a "
+                         "non-US shipment so the preview doesn't misreport it)")
     ap.add_argument("--order-id", default=None,
                     help="eBay order ID this label is for — used only in the printed "
                          "--record-tracking follow-up command, never sent to EasyPost")
@@ -53,7 +57,7 @@ def main() -> int:
     # ship-quote already showed the operator; a confirmed purchase re-quotes
     # nothing and just tells EasyPost which shipment_id/rate_id to buy.
     rate = Rate(id=args.rate_id, carrier=args.carrier, service=args.service,
-               rate=args.price if args.price is not None else 0.0, currency="USD",
+               rate=args.price if args.price is not None else 0.0, currency=args.currency,
                delivery_days=None, shipment_id=args.shipment_id)
 
     try:
@@ -61,7 +65,7 @@ def main() -> int:
     except ConfigError as e:
         print(f"[X] {e}", file=sys.stderr)
         return 1
-    except (EasyPostAuthError, EasyPostAPIError) as e:
+    except (ValueError, EasyPostAuthError, EasyPostAPIError) as e:
         print(f"[X] {type(e).__name__}: {e}", file=sys.stderr)
         return 1
 
