@@ -1,0 +1,790 @@
+#!/usr/bin/env python3
+"""lib/easypost_client.py — quote + buy, tested offline (GH #80).
+
+Buying a label spends real money, so this module's own tests are the first
+line of defense that the confirm gate actually holds: buy_label() must
+never touch the purchase endpoint (POST /shipments/{id}/buy) unless called
+with confirm=True. Every test here asserts on the exact set of HTTP calls
+made, the same way tests/test_ebay_client.py and tests/test_list_edit.py
+verify their money-moving paths.
+
+All HTTP is faked by patching urllib.request.urlopen; no network, no real
+API key needed to run these.
+
+Run:  python tests/test_easypost_client.py
+  or: pytest tests/test_easypost_client.py
+"""
+import io
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from contextlib import redirect_stdout
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "lib"))
+
+import easypost_client as EP                                            # noqa: E402
+from easypost_client import (                                          # noqa: E402
+    Address,
+    BuyResult,
+    EasyPostAPIError,
+    EasyPostAuthError,
+    Parcel,
+    Rate,
+    api_send,
+    buy_label,
+    get_api_key,
+    get_rates,
+)
+import config as CFG                                                   # noqa: E402
+from config import ConfigError                                         # noqa: E402
+
+
+TO_ADDR = Address(name="Jane Buyer", street1="1 Main St", city="Springfield",
+                  state="IL", zip="62704")
+FROM_ADDR = Address(name="My Store", street1="9 Ship St", city="Elgin",
+                    state="IL", zip="60120")
+PARCEL = Parcel(weight_oz=24, length_in=10, width_in=8, height_in=4)
+
+
+# ---------------------------------------------------------------------------
+# Fakes — same shape as tests/test_ebay_client.py's _Fake/_FakeResponse
+# ---------------------------------------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, payload, raw=None):
+        self._raw = raw if raw is not None else json.dumps(payload).encode()
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _http_error(code, body=b'{"error":{"message":"boom"}}'):
+    return urllib.error.HTTPError("https://x", code, f"HTTP {code}", None, io.BytesIO(body))
+
+
+class _Fake:
+    """Scripted stand-in for urllib.request.urlopen. Requests beyond the
+    script repeat the last scripted entry."""
+
+    def __init__(self, *script):
+        self.script = list(script)
+        self.requests = []
+
+    def __call__(self, req, timeout=None):
+        self.requests.append(req)
+        step = self.script[min(len(self.requests), len(self.script)) - 1]
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+def _patched(fake, fn, *, api_key="test-key-123"):
+    """Run fn with urlopen faked, retry sleeps zeroed, and the API key
+    forced via env var so no real config.yaml can leak in or out."""
+    real_open, real_sleep = urllib.request.urlopen, EP.time.sleep
+    prev_env = os.environ.get("EASYPOST_API_KEY")
+    urllib.request.urlopen = fake
+    EP.time.sleep = lambda s: None
+    if api_key is not None:
+        os.environ["EASYPOST_API_KEY"] = api_key
+    else:
+        os.environ.pop("EASYPOST_API_KEY", None)
+    try:
+        return fn()
+    finally:
+        urllib.request.urlopen, EP.time.sleep = real_open, real_sleep
+        if prev_env is None:
+            os.environ.pop("EASYPOST_API_KEY", None)
+        else:
+            os.environ["EASYPOST_API_KEY"] = prev_env
+
+
+def _shipment_response(shipment_id="shp_1", rates=None):
+    return _FakeResponse({
+        "id": shipment_id,
+        "rates": rates if rates is not None else [
+            {"id": "rate_usps", "carrier": "USPS", "service": "Priority",
+             "rate": "8.45", "currency": "USD", "delivery_days": 2},
+            {"id": "rate_ups", "carrier": "UPS", "service": "Ground",
+             "rate": "11.20", "currency": "USD", "delivery_days": 3},
+        ],
+    })
+
+
+def _buy_response(tracking="TRK123456789", carrier="USPS", service="Priority",
+                  rate_id="rate_usps", price="8.45"):
+    return _FakeResponse({
+        "id": "shp_1",
+        "tracking_code": tracking,
+        "selected_rate": {"id": rate_id, "carrier": carrier, "service": service,
+                          "rate": price, "currency": "USD"},
+        "postage_label": {"id": "pl_1",
+                          "label_url": "https://easypost-labels.example/pl_1.png"},
+    })
+
+
+# ---------------------------------------------------------------------------
+# API key resolution
+# ---------------------------------------------------------------------------
+
+def test_get_api_key_missing_everywhere_raises_config_error():
+    # easypost_client.get_api_key() delegates to config.get_easypost_key();
+    # patch the name as bound inside config's own namespace, not
+    # easypost_client's, so the delegation is actually exercised.
+    prev_env = os.environ.pop("EASYPOST_API_KEY", None)
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {}
+    try:
+        try:
+            get_api_key()
+            raise AssertionError("expected ConfigError")
+        except ConfigError as e:
+            assert "EASYPOST_API_KEY" in str(e)
+            assert "easypost" in str(e)
+    finally:
+        CFG.load_config = real_load
+        if prev_env is not None:
+            os.environ["EASYPOST_API_KEY"] = prev_env
+
+
+def test_get_api_key_prefers_env_var_over_config_file():
+    prev_env = os.environ.get("EASYPOST_API_KEY")
+    os.environ["EASYPOST_API_KEY"] = "from-env"
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
+    try:
+        assert get_api_key() == "from-env"
+    finally:
+        CFG.load_config = real_load
+        if prev_env is None:
+            os.environ.pop("EASYPOST_API_KEY", None)
+        else:
+            os.environ["EASYPOST_API_KEY"] = prev_env
+
+
+def test_get_api_key_falls_back_to_config_file():
+    prev_env = os.environ.pop("EASYPOST_API_KEY", None)
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {"easypost": {"api_key": "from-config"}}
+    try:
+        assert get_api_key() == "from-config"
+    finally:
+        CFG.load_config = real_load
+        if prev_env is not None:
+            os.environ["EASYPOST_API_KEY"] = prev_env
+
+
+def test_get_api_key_delegates_to_config_get_easypost_key():
+    """The Copilot-review fix: easypost_client no longer has its own copy
+    of the precedence/error-message logic — it must call straight through
+    to config.get_easypost_key() (bound in easypost_client's own namespace
+    via `from config import get_easypost_key`)."""
+    real = EP.get_easypost_key
+    EP.get_easypost_key = lambda: "delegated-value"
+    try:
+        assert get_api_key() == "delegated-value"
+    finally:
+        EP.get_easypost_key = real
+
+
+# ---------------------------------------------------------------------------
+# api_send — auth header + retry policy (mirrors ebay_client's contract)
+# ---------------------------------------------------------------------------
+
+def test_api_send_sends_basic_auth_with_key_as_username():
+    fake = _Fake(_FakeResponse({"ok": True}))
+
+    def go():
+        out = api_send("GET", "/shipments/shp_1")
+        assert out == {"ok": True}
+        auth = fake.requests[0].get_header("Authorization")
+        import base64
+        assert auth.startswith("Basic ")
+        decoded = base64.b64decode(auth.split(" ", 1)[1]).decode()
+        assert decoded == "test-key-123:"
+
+    _patched(fake, go)
+
+
+def test_api_send_401_raises_easypost_auth_error():
+    fake = _Fake(_http_error(401, b'{"error":{"message":"invalid API key"}}'))
+
+    def go():
+        try:
+            api_send("GET", "/shipments/shp_1")
+            raise AssertionError("expected EasyPostAuthError")
+        except EasyPostAuthError as e:
+            assert "invalid API key" in str(e)
+
+    _patched(fake, go)
+
+
+def test_api_send_400_preserves_status_and_body():
+    fake = _Fake(_http_error(422, b'{"error":{"message":"bad zip"}}'))
+
+    def go():
+        try:
+            api_send("POST", "/shipments", {"shipment": {}})
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 422
+            assert "bad zip" in e.body
+            assert len(fake.requests) == 1  # no retry on 4xx
+
+    _patched(fake, go)
+
+
+def test_api_send_5xx_on_post_does_not_retry():
+    fake = _Fake(_http_error(500))
+
+    def go():
+        try:
+            api_send("POST", "/shipments/shp_1/buy", {"rate": {"id": "r"}})
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 500
+            assert len(fake.requests) == 1  # a purchase call must never double-fire
+
+    _patched(fake, go)
+
+
+def test_api_send_5xx_on_get_retries_then_succeeds():
+    fake = _Fake(_http_error(503), _http_error(503), _FakeResponse({"ok": True}))
+
+    def go():
+        out = api_send("GET", "/shipments/shp_1")
+        assert out == {"ok": True}
+        assert len(fake.requests) == 3
+
+    _patched(fake, go)
+
+
+def test_api_send_network_error_retries_even_for_post():
+    fake = _Fake(urllib.error.URLError("reset"), _FakeResponse({"ok": True}))
+
+    def go():
+        out = api_send("POST", "/shipments", {"shipment": {}})
+        assert out == {"ok": True}
+        assert len(fake.requests) == 2
+
+    _patched(fake, go)
+
+
+def test_api_send_network_error_not_retried_when_disabled():
+    # A lost response after the request reached the server is ambiguous —
+    # for a money-spending call (retry_network_errors=False) a single
+    # network error must surface immediately, never retry (Copilot review
+    # fix: could otherwise double-fire a purchase).
+    fake = _Fake(urllib.error.URLError("reset"), _FakeResponse({"ok": True}))
+
+    def go():
+        try:
+            api_send("POST", "/shipments/shp_1/buy", {"rate": {}},
+                     retry_network_errors=False)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 0
+            assert len(fake.requests) == 1
+
+    _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# get_rates — the free path
+# ---------------------------------------------------------------------------
+
+def test_get_rates_parses_and_sorts_cheapest_first():
+    fake = _Fake(_shipment_response())
+
+    def go():
+        shipment_id, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        assert shipment_id == "shp_1"
+        assert [r.carrier for r in rates] == ["USPS", "UPS"]  # 8.45 < 11.20
+        assert rates[0].rate == 8.45
+        assert rates[0].id == "rate_usps"
+        # exactly one call — quoting never calls the purchase endpoint
+        assert len(fake.requests) == 1
+        assert fake.requests[0].full_url.endswith("/shipments")
+        assert fake.requests[0].get_method() == "POST"
+
+    _patched(fake, go)
+
+
+def test_get_rates_sends_addresses_and_parcel_in_body():
+    fake = _Fake(_shipment_response())
+
+    def go():
+        get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        body = json.loads(fake.requests[0].data.decode())
+        shipment = body["shipment"]
+        assert shipment["to_address"]["zip"] == "62704"
+        assert shipment["from_address"]["city"] == "Elgin"
+        assert shipment["parcel"]["weight"] == 24
+
+    _patched(fake, go)
+
+
+def test_parcel_to_dict_keeps_a_zero_value_dimension():
+    # A 0.0 dimension is a *provided* value (flat/thin item), not "missing" —
+    # to_dict() must not silently drop it via truthiness (Copilot review fix).
+    d = Parcel(weight_oz=8, length_in=0.0, width_in=6, height_in=1).to_dict()
+    assert d["length"] == 0.0
+    assert d["width"] == 6
+    assert d["height"] == 1
+
+
+def test_parcel_to_dict_omits_dims_when_truly_absent():
+    d = Parcel(weight_oz=8).to_dict()
+    assert "length" not in d and "width" not in d and "height" not in d
+
+
+def test_get_rates_skips_malformed_rate_entries():
+    fake = _Fake(_shipment_response(rates=[
+        {"id": "rate_bad", "carrier": "UPS", "service": "Ground", "rate": "not-a-number"},
+        {"id": "rate_ok", "carrier": "USPS", "service": "Priority", "rate": "9.00"},
+    ]))
+
+    def go():
+        _, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        assert [r.id for r in rates] == ["rate_ok"]
+
+    _patched(fake, go)
+
+
+def test_get_rates_no_rates_returns_empty_list():
+    fake = _Fake(_shipment_response(rates=[]))
+
+    def go():
+        shipment_id, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        assert shipment_id == "shp_1"
+        assert rates == []
+
+    _patched(fake, go)
+
+
+def test_get_rates_missing_shipment_id_raises_api_error():
+    # A blank shipment_id is useless to every downstream caller (buy_label,
+    # --record-tracking) — surface it as the API error it is instead of
+    # handing back an unusable id (Copilot review fix).
+    fake = _Fake(_shipment_response(shipment_id=""))
+
+    def go():
+        try:
+            get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert "missing an id" in str(e)
+
+    _patched(fake, go)
+
+
+def test_get_rates_skips_rate_entries_missing_identifiers():
+    # A rate missing id/carrier/service parses fine as a price but can't be
+    # bought or printed — it's a dead end for ship-buy, so drop it rather
+    # than hand the operator an entry they can't act on.
+    fake = _Fake(_shipment_response(rates=[
+        {"id": "", "carrier": "UPS", "service": "Ground", "rate": "5.00"},
+        {"id": "rate_x", "carrier": "", "service": "Ground", "rate": "6.00"},
+        {"id": "rate_ok", "carrier": "USPS", "service": "Priority", "rate": "9.00"},
+    ]))
+
+    def go():
+        _, rates = get_rates(TO_ADDR, FROM_ADDR, PARCEL)
+        assert [r.id for r in rates] == ["rate_ok"]
+
+    _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# buy_label — the ONE money-spending path; the confirm gate is load-bearing
+# ---------------------------------------------------------------------------
+
+CHEAP_RATE = Rate(id="rate_usps", carrier="USPS", service="Priority", rate=8.45,
+                  currency="USD", delivery_days=2, shipment_id="shp_1")
+
+
+def test_buy_label_shipment_mismatch_raises_before_any_call_dry_run():
+    # rate was quoted against a *different* shipment than the one passed in
+    # — buying it would purchase postage for the wrong shipment. Must fail
+    # before even the DRY RUN summary (Copilot review fix).
+    fake = _Fake()
+    mismatched_rate = Rate(id="rate_usps", carrier="USPS", service="Priority",
+                           rate=8.45, currency="USD", delivery_days=2,
+                           shipment_id="shp_OTHER")
+
+    def go():
+        try:
+            buy_label("shp_1", mismatched_rate, confirm=False)
+            raise AssertionError("expected ValueError")
+        except ValueError as e:
+            assert "shp_1" in str(e) and "shp_OTHER" in str(e)
+            assert fake.requests == []
+
+    _patched(fake, go)
+
+
+def test_buy_label_shipment_mismatch_raises_before_any_call_confirmed():
+    fake = _Fake()
+    mismatched_rate = Rate(id="rate_usps", carrier="USPS", service="Priority",
+                           rate=8.45, currency="USD", delivery_days=2,
+                           shipment_id="shp_OTHER")
+
+    def go():
+        try:
+            buy_label("shp_1", mismatched_rate, confirm=True)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            assert fake.requests == []
+
+    _patched(fake, go)
+
+
+def test_buy_label_without_confirm_is_a_pure_dry_run_no_http_call():
+    fake = _Fake()  # scripted with NOTHING — any HTTP call fails the test
+
+    def go():
+        result = buy_label("shp_1", CHEAP_RATE, confirm=False)
+        assert isinstance(result, BuyResult)
+        assert result.dry_run is True
+        assert result.shipment_id == "shp_1"
+        assert result.rate_id == "rate_usps"
+        assert result.carrier == "USPS"
+        assert result.price == 8.45
+        assert result.tracking_code is None
+        assert result.label_url is None
+        assert fake.requests == []  # the load-bearing assertion: no call made
+
+    _patched(fake, go)
+
+
+def test_buy_label_default_confirm_is_false():
+    # Calling positionally/without the kwarg must default to the safe path.
+    fake = _Fake()
+
+    def go():
+        result = buy_label("shp_1", CHEAP_RATE)
+        assert result.dry_run is True
+        assert fake.requests == []
+
+    _patched(fake, go)
+
+
+def test_buy_label_with_confirm_calls_the_buy_endpoint_and_returns_tracking():
+    fake = _Fake(_buy_response())
+
+    def go():
+        result = buy_label("shp_1", CHEAP_RATE, confirm=True)
+        assert result.dry_run is False
+        assert result.tracking_code == "TRK123456789"
+        assert result.carrier == "USPS"
+        assert result.service == "Priority"
+        assert result.label_url == "https://easypost-labels.example/pl_1.png"
+        assert result.price == 8.45
+        assert len(fake.requests) == 1
+        req = fake.requests[0]
+        assert req.full_url.endswith("/shipments/shp_1/buy")
+        assert req.get_method() == "POST"
+        body = json.loads(req.data.decode())
+        assert body == {"rate": {"id": "rate_usps"}}
+
+    _patched(fake, go)
+
+
+def test_buy_label_confirmed_keeps_a_legitimate_zero_price():
+    # selected_rate.rate == 0 is a real (if unusual) EasyPost value, not a
+    # missing one — `or rate.rate` would treat it as falsy and silently
+    # substitute the quoted price instead (Copilot review fix).
+    fake = _Fake(_buy_response(price=0.0))
+
+    def go():
+        result = buy_label("shp_1", CHEAP_RATE, confirm=True)
+        assert result.price == 0.0
+
+    _patched(fake, go)
+
+
+def test_buy_label_confirmed_5xx_does_not_retry_and_surfaces_error():
+    # A purchase POST must never silently retry — could double-buy a label.
+    fake = _Fake(_http_error(500, b'{"error":{"message":"carrier timeout"}}'))
+
+    def go():
+        try:
+            buy_label("shp_1", CHEAP_RATE, confirm=True)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 500
+            assert "carrier timeout" in e.body
+            assert len(fake.requests) == 1
+
+    _patched(fake, go)
+
+
+def test_buy_label_confirmed_network_error_does_not_retry():
+    # Same guardrail as the 5xx case, for the other failure mode: a lost
+    # response after the purchase POST may mean EasyPost already charged
+    # for and issued the label. Retrying could buy (and pay for) a second
+    # one, so a network error on the buy call must surface immediately
+    # (Copilot review fix).
+    fake = _Fake(urllib.error.URLError("reset"), _buy_response())
+
+    def go():
+        try:
+            buy_label("shp_1", CHEAP_RATE, confirm=True)
+            raise AssertionError("expected EasyPostAPIError")
+        except EasyPostAPIError as e:
+            assert e.status == 0
+            assert len(fake.requests) == 1
+
+    _patched(fake, go)
+
+
+def test_buy_label_missing_api_key_raises_before_any_call():
+    # api_key=None only clears EASYPOST_API_KEY; without also patching
+    # load_config, a developer's real config.yaml (if it has
+    # easypost.api_key set) would supply a key and this test would stop
+    # exercising the "missing everywhere" branch (Copilot review fix —
+    # same hermeticity pattern as test_get_api_key_missing_everywhere_
+    # raises_config_error above).
+    fake = _Fake()
+    real_load = CFG.load_config
+    CFG.load_config = lambda reload=False: {}
+
+    def go():
+        try:
+            buy_label("shp_1", CHEAP_RATE, confirm=True)
+            raise AssertionError("expected ConfigError")
+        except ConfigError:
+            assert fake.requests == []
+
+    try:
+        _patched(fake, go, api_key=None)
+    finally:
+        CFG.load_config = real_load
+
+
+# ---------------------------------------------------------------------------
+# tools/ship_quote.py CLI — partial-dimension validation (Copilot review fix)
+# ---------------------------------------------------------------------------
+
+sys.path.insert(0, str(ROOT / "tools"))
+import ship_quote                                                     # noqa: E402
+
+_BASE_ARGV = [
+    "ship_quote.py",
+    "--to-name", "Jane Buyer", "--to-street1", "1 Main St",
+    "--to-city", "Springfield", "--to-state", "IL", "--to-zip", "62704",
+    "--from-name", "My Store", "--from-street1", "9 Ship St",
+    "--from-city", "Elgin", "--from-state", "IL", "--from-zip", "60120",
+    "--weight-oz", "24",
+]
+
+
+def _run_ship_quote_cli(extra_argv, fake=None):
+    real_argv = sys.argv
+    real_get_rates = ship_quote.get_rates
+    sys.argv = _BASE_ARGV + extra_argv
+    if fake is not None:
+        ship_quote.get_rates = fake
+    try:
+        return ship_quote.main()
+    finally:
+        sys.argv = real_argv
+        ship_quote.get_rates = real_get_rates
+
+
+def test_ship_quote_rejects_a_partial_dimension_set():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli(["--length-in", "10"], fake=fake)
+    assert rc == 1
+    assert calls == [], "get_rates must not be called — dims would be silently dropped"
+
+
+def test_ship_quote_accepts_all_three_dimensions():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli(
+        ["--length-in", "10", "--width-in", "8", "--height-in", "4"], fake=fake)
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_ship_quote_accepts_no_dimensions():
+    calls = []
+    fake = lambda *a, **kw: calls.append((a, kw)) or ("shp_1", [])  # noqa: E731
+    rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_ship_quote_prints_currency_in_the_ship_buy_follow_up_command():
+    # The printed copy/paste ship-buy command must carry the real quoted
+    # currency so ship-buy's DRY RUN preview doesn't misreport a non-USD
+    # rate as USD (Copilot review fix).
+    gbp_rate = Rate(id="rate_gb", carrier="RoyalMail", service="Tracked48",
+                    rate=6.5, currency="GBP", delivery_days=3, shipment_id="shp_1")
+    fake = lambda *a, **kw: ("shp_1", [gbp_rate])  # noqa: E731
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    assert "--currency GBP" in buf.getvalue()
+
+
+def test_ship_quote_double_quotes_a_service_name_with_spaces():
+    # Python's repr() (single quotes) isn't shell-agnostic — e.g. Windows
+    # cmd.exe treats a single quote as literal, splitting a multi-word
+    # service into separate arguments. The printed follow-up command must
+    # double-quote it instead (Copilot review fix).
+    rate = Rate(id="rate_x", carrier="UPS", service="Priority Mail Express",
+               rate=9.0, currency="USD", delivery_days=1, shipment_id="shp_1")
+    fake = lambda *a, **kw: ("shp_1", [rate])  # noqa: E731
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = _run_ship_quote_cli([], fake=fake)
+    assert rc == 0
+    out = buf.getvalue()
+    assert '--service "Priority Mail Express"' in out
+    assert "'Priority Mail Express'" not in out
+
+
+# ---------------------------------------------------------------------------
+# tools/ship_buy.py CLI — --price 0.0 must count as "provided" (Copilot review fix)
+# ---------------------------------------------------------------------------
+
+import ship_buy                                                        # noqa: E402
+
+_SHIP_BUY_BASE_ARGV = [
+    "ship_buy.py", "--shipment-id", "shp_1", "--rate-id", "rate_1",
+]
+
+
+def _run_ship_buy_cli(extra_argv):
+    # DRY RUN only (no --confirm passed): buy_label() never calls the fake
+    # urlopen, but _patched() still supplies the env var buy_label() needs
+    # to resolve an API key before it can decide that.
+    real_argv = sys.argv
+    sys.argv = _SHIP_BUY_BASE_ARGV + extra_argv
+    fake = _Fake(_shipment_response())
+    buf = io.StringIO()
+
+    def go():
+        with redirect_stdout(buf):
+            return ship_buy.main()
+
+    try:
+        rc = _patched(fake, go)
+        return rc, buf.getvalue()
+    finally:
+        sys.argv = real_argv
+
+
+def test_ship_buy_dry_run_price_zero_shows_a_real_cost_not_the_missing_hint():
+    rc, out = _run_ship_buy_cli(["--price", "0.0"])
+    assert rc == 0
+    assert "$0.00 USD" in out
+    assert "pass --price" not in out
+
+
+def test_ship_buy_dry_run_without_price_shows_the_missing_hint():
+    rc, out = _run_ship_buy_cli([])
+    assert rc == 0
+    assert "pass --price" in out
+
+
+def test_ship_buy_dry_run_currency_defaults_to_usd():
+    rc, out = _run_ship_buy_cli(["--price", "12.34"])
+    assert rc == 0
+    assert "$12.34 USD" in out
+
+
+def test_ship_buy_dry_run_honours_a_non_usd_currency():
+    # ship-quote's printed follow-up command now passes --currency along
+    # with --price; ship-buy must show it, not hardcode USD (Copilot
+    # review fix).
+    rc, out = _run_ship_buy_cli(["--price", "6.50", "--currency", "GBP"])
+    assert rc == 0
+    assert "$6.50 GBP" in out
+
+
+def test_ship_buy_shipment_mismatch_reported_cleanly_not_a_traceback():
+    fake = _Fake()
+    real_argv = sys.argv
+    sys.argv = ["ship_buy.py", "--shipment-id", "shp_1",
+               "--rate-id", "rate_1"]  # matches base argv's shipment id
+    buf = io.StringIO()
+
+    def go():
+        # ship_buy.py always builds its Rate with shipment_id=args.shipment_id,
+        # so the CLI can't itself trigger a mismatch — this exercises the
+        # ValueError -> clean [X] message path directly via a monkeypatched
+        # buy_label, the same way a future caller passing a stale rate would
+        # surface it.
+        real_buy_label = ship_buy.buy_label
+
+        def mismatched(*a, **kw):
+            raise ValueError("shipment_id mismatch: buy_label() called with "
+                             "'shp_1' but rate 'rate_1' was quoted for "
+                             "shipment 'shp_OTHER'")
+
+        ship_buy.buy_label = mismatched
+        try:
+            with redirect_stdout(buf):
+                return ship_buy.main()
+        finally:
+            ship_buy.buy_label = real_buy_label
+
+    try:
+        rc = _patched(fake, go)
+    finally:
+        sys.argv = real_argv
+    assert rc == 1
+    assert fake.requests == []
+
+
+def test_ship_buy_confirmed_prints_carrier_unquoted_in_pick_list_command():
+    # repr() (single-quoted) isn't shell-agnostic (Windows cmd.exe treats a
+    # single quote as literal) — carrier codes don't need quoting at all,
+    # so the printed follow-up command should print the raw value
+    # (Copilot review fix).
+    fake = _Fake(_buy_response(carrier="USPS"))
+    real_argv = sys.argv
+    sys.argv = ["ship_buy.py", "--shipment-id", "shp_1", "--rate-id", "rate_1", "--confirm"]
+    buf = io.StringIO()
+
+    def go():
+        with redirect_stdout(buf):
+            return ship_buy.main()
+
+    try:
+        rc = _patched(fake, go)
+    finally:
+        sys.argv = real_argv
+    out = buf.getvalue()
+    assert rc == 0
+    assert "--carrier USPS " in out
+    assert "'USPS'" not in out
+
+
+if __name__ == "__main__":
+    fails = 0
+    for name, fn in sorted(globals().items()):
+        if name.startswith("test_") and callable(fn):
+            try:
+                fn()
+                print(f"PASS {name}")
+            except Exception as e:  # noqa: BLE001
+                fails += 1
+                print(f"FAIL {name}: {e}")
+    sys.exit(1 if fails else 0)
