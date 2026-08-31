@@ -226,34 +226,10 @@ def get_lens_actor() -> str:
     return DEFAULT_LENS_ACTOR
 
 
-def get_anthropic_key() -> str:
-    """Anthropic API key. Precedence: env var > config file > error.
-
-    Raises:
-        ConfigError if no key is available anywhere.
-    """
-    env = os.environ.get("ANTHROPIC_API_KEY")
-    if env:
-        return env
-
-    config = load_config()
-    key = _nested(config, "anthropic", "api_key")
-    if key:
-        return str(key)
-
-    raise ConfigError(
-        f"Anthropic API key not found.\n"
-        f"  Set the ANTHROPIC_API_KEY environment variable, OR\n"
-        f"  add this to {config_path()}:\n"
-        f"      anthropic:\n"
-        f"        api_key: \"<your-key>\""
-    )
-
-
 def get_easypost_key() -> str:
     """EasyPost API key. Precedence: env var > config file > error.
 
-    Same precedence contract as get_apify_token() / get_anthropic_key().
+    Same precedence contract as get_apify_token().
     EasyPost issues test and production keys from the same dashboard; which
     one is configured decides whether a confirmed buy_label() call hits real
     carriers or EasyPost's no-charge test mode — that is an account-setup
@@ -387,7 +363,7 @@ def _cli() -> None:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify required secrets (Apify token, Anthropic key) load",
+        help="Verify required secrets (Apify token) load",
     )
     args = parser.parse_args()
 
@@ -415,12 +391,6 @@ def _cli() -> None:
         print(f"apify.lens_actor: {get_lens_actor()}")
 
         try:
-            anth_key = get_anthropic_key()
-            print(f"anthropic.api_key: {_redact(anth_key)}")
-        except ConfigError:
-            print("anthropic.api_key: (not set)")
-
-        try:
             ep_key = get_easypost_key()
             print(f"easypost.api_key: {_redact(ep_key)}")
         except ConfigError:
@@ -445,10 +415,10 @@ def _cli() -> None:
 
     if args.check:
         # Required: the eBay Sell API credentials. Every phase that touches the
-        # account needs them. The other two secrets are optional and are
-        # reported, not enforced -- Apify serves lens_id.py alone (Stage B runs
-        # through ebay_sold_browse.py) and nothing in the repo reads the
-        # Anthropic key. A missing optional secret must not fail the check.
+        # account needs them. Apify is optional and is reported, not enforced
+        # -- it serves lens_id.py alone (Stage B runs through
+        # ebay_sold_browse.py). A missing optional secret must not fail the
+        # check.
         errors = []
         try:
             get_ebay_credentials()
@@ -459,7 +429,6 @@ def _cli() -> None:
 
         for name, getter, note in (
             ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
-            ("ANTHROPIC_API_KEY", get_anthropic_key, "unused today"),
         ):
             try:
                 getter()

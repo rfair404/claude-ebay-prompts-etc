@@ -31,15 +31,6 @@ apify:
   # lens_actor: "borderline/google-lens"
 
 # ---------------------------------------------------------------------------
-# Anthropic — Claude API. Optional: nothing in the repo reads this today (the
-# phases run inside Claude Code rather than calling the API themselves). Kept
-# for a script that needs its own key.
-# ---------------------------------------------------------------------------
-anthropic:
-  # Get a key at: https://console.anthropic.com/settings/keys
-  api_key: "sk-ant-REPLACE_ME"
-
-# ---------------------------------------------------------------------------
 # eBay Sell API — credentials for Function 6 (LIST/EDIT) + schema discovery
 # ---------------------------------------------------------------------------
 # Sandbox and Production are separate worlds with separate keysets. This
