@@ -14,7 +14,16 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # The pipeline is operated from Windows, so Linux-only CI was half a guard:
+    # test_dir_context.py compared a path against a hardcoded "books/context.txt"
+    # and had failed on Windows for its entire life without CI ever seeing it
+    # (found and fixed in #101, #105). fail-fast is off so a break on one OS
+    # still reports the other's result instead of cancelling it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,16 +32,21 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # Verified against a clean venv + clean checkout: this exact set gives
-      # 53 passed, 1 skipped, 0 failed in ~5s. The skip is tests/test_marble_gate.py,
-      # which runs the real CLIP gate and needs sentence-transformers (torch, ~2GB,
-      # plus a model download on first use) — deliberately not a CI dependency.
+      # Deliberately only what the tests import. The one skip is
+      # tests/test_marble_gate.py, which runs the real CLIP gate and needs
+      # sentence-transformers (torch, ~2GB, plus a model download on first
+      # use) — not a CI dependency. No count named here on purpose: the last
+      # one said "53 passed" long after the suite had grown past 600, and a
+      # number that specific and that stale invites someone to trust it.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pytest numpy pillow pyyaml opencv-python
 
+      # bash on both legs: the Windows runner defaults to pwsh, which has no
+      # xargs. Git Bash ships on windows-latest.
       - name: Compile every tracked module
+        shell: bash
         run: git ls-files '*.py' | xargs python -m py_compile
 
       - name: Run the suite
