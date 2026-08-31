@@ -514,7 +514,9 @@ def _bucket_row(key: str, b: dict, *, total: bool = False, is_bucket: bool = Tru
 
 def draw(d: dict) -> str:
     from datetime import datetime
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Built-at stamp in the reporting timezone (Pacific, #122) rather than the
+    # host machine's local zone — one clock across every report page.
+    now = datetime.now(_report.REPORTING_TZ).strftime("%Y-%m-%d %H:%M")
     t = d["total"]
     rows_html = "".join(_bucket_row(b["key"], b) for b in d["buckets"])
     u = d["unattributed"]
@@ -542,7 +544,8 @@ def draw(d: dict) -> str:
         f'<div class="card"><div class="hdr">'
         f'<p class="eyebrow">ebaybiz · source</p>'
         f'<h1>Bucket ROI — realised by acquisition</h1>'
-        f'<div class="ct">built {_e(now)} local · read-only, local files only</div>'
+        f'<div class="ct">built {_e(now)} {_e(_report.REPORTING_TZ_LABEL)} · '
+        f'read-only, local files only</div>'
         f'</div>'
         f'<div class="stats">'
         + _stat(str(t["cost_bucket_n"]), "buckets with a recorded basis",
