@@ -142,6 +142,18 @@ desktop.ini
 /.prep_check.log
 /.prep_apply.log
 
+# ASK combined-sheet output (tools/prep_asksheet.py --out, default docs/ask;
+# a second/third batch is pointed at docs/ask2, docs/ask3, ...) and the PREP
+# batch review table (tools/prep_index.py --md, default docs/prep_batch.md;
+# its --out sheet, docs/prep_batch.jpg, is already caught by the *.jpg rule
+# above) — orientation-answer sheets/index and a per-shoot summary table,
+# both keyed to live shoot paths. The PATHS stay real (V4_PLAN's root-hygiene
+# ruling, #106): the tools mkdir their own output dir on write and
+# prep_answer.py reads the index back from it. The CONTENTS are one
+# operator's run output — never worth versioning.
+/docs/ask*/
+/docs/prep_batch.md
+
 # ------------------------------------------ 2./3. LOCAL WORKING FILES AT ROOT
 # Everything below is written at the repo root by a tool in tools/ and is
 # either regenerable or business data. None of it was ignored before, so a
