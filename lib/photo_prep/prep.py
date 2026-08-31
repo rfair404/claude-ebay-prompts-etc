@@ -128,11 +128,31 @@ def _load_bgr(path: Path) -> np.ndarray:
 
 
 def _save_bgr(path: Path, bgr: np.ndarray, quality: int = 94) -> None:
+    """Encode and write, atomically.
+
+    Same tmp-and-rename shape `save_manifest` already uses, for the same
+    reason: a killed process must never leave a plausible-looking truncated
+    JPEG at the real path. `--resume`'s staleness check (docs/prep-resume-
+    plan.md item 3) trusts "the file exists with the recorded hash" as proof
+    a render finished; a straight write to the target path could instead
+    leave a file that exists, matches nothing, but LOOKS like a finished
+    render until something re-hashes it.
+    """
     import cv2
     ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise RuntimeError(f"could not encode {path}")
-    buf.tofile(str(path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        buf.tofile(str(tmp))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _subject_region(bgr: np.ndarray, bbox: tuple, pad: float = 0.04) -> np.ndarray:
@@ -163,6 +183,29 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()[:16]
+
+
+def _apply_settings_hash(aspect, pad: float, pop: str, subject: str,
+                         category: str, only) -> str:
+    """Fingerprint of the inputs that could decide what `--apply` renders.
+
+    Same truncated-sha256 convention as `_sha256()`/`_manifest_fingerprint()`
+    -- 16 hex chars, not a full digest. Stored as `apply_run.settings_hash`
+    (docs/prep-resume-plan.md item 3) so a later `--resume` can tell "this is
+    an answer to the question I'm asking" from "this answered a different
+    one" -- a changed aspect, pad, subject, category or preset set means the
+    old renders don't answer this invocation's question, exactly like a
+    geometry/category change already invalidates crop/colour sign-off
+    elsewhere in this file. `pop` is included too even though `run_apply`'s
+    render call never forwards it to `colormod.correct` (every preset
+    already bakes in its own pop level, see the comment where `pop` is read
+    above) -- harmless to fingerprint regardless, since a changed `pop` that
+    turns out not to matter only costs an unnecessary re-render, never a
+    stale one.
+    """
+    payload = json.dumps([aspect, pad, pop, subject, category,
+                          sorted(only)], sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _now() -> str:
@@ -953,7 +996,39 @@ def _already_listed(shoot: Path) -> bool:
     return False
 
 
-def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
+def _frame_is_resumable(shoot: Path, name: str, rec: dict, only: tuple) -> bool:
+    """Whether an already-rendered frame can be reused under `--resume`.
+
+    Conservative by construction (docs/prep-resume-plan.md item 3): every
+    condition below must hold, or the frame is treated as not done and
+    re-rendered. Over-rendering wastes time; a stale render shipping wastes
+    a lot more. The settings-hash check (whether THIS invocation is asking
+    the same question the cached render answered) is the caller's job — it
+    is per-run, not per-frame, so it is checked once and passed down as
+    already-satisfied rather than re-checked here.
+    """
+    src = shoot / name
+    if not src.exists() or _sha256(src) != rec.get("src_sha256"):
+        return False
+    presets = rec.get("presets") or {}
+    shoot_resolved = shoot.resolve()
+    for pname in only:
+        entry = presets.get(pname)
+        if not entry or not entry.get("path"):
+            return False
+        p_path = shoot / entry["path"]
+        if not p_path.exists():
+            return False
+        p_resolved = p_path.resolve()
+        if p_resolved != shoot_resolved and shoot_resolved not in p_resolved.parents:
+            return False
+        if _sha256(p_path) != entry.get("sha256"):
+            return False
+    return True
+
+
+def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
+              resume: bool = False) -> dict:
     """Render listing/ from the manifest's decisions + the review sheet.
 
     `only` restricts which presets are rendered. The default category now
@@ -965,6 +1040,14 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     ~64s per frame per preset, that comparison is expensive on purpose to skip
     by default — it is the difference between a 3-hour run and a 17-hour one on
     a batch that was never going to look at five of the six looks anyway.
+
+    `resume` (default off; omitting it reproduces today's behaviour exactly)
+    skips a frame's re-render only when the manifest's own record proves the
+    existing render still answers THIS invocation's question — see
+    docs/prep-resume-plan.md item 3. The manifest is also checkpointed after
+    every frame instead of once at the end (item 2), so a run killed by a
+    timeout leaves a consistent partial manifest a later `--resume` can trust,
+    instead of orphaning every already-rendered JPEG.
     """
     from .center_crop import _parse_aspect
 
@@ -992,6 +1075,45 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
     # goes -- six looks at ~25s a frame on 12 MP, five of which a printed
     # shoot will never open. See photo_prep.categories.
     only = tuple(only) or catmod.looks_for(category_of(m))
+    # catmod.looks_for()'s own convention: an empty tuple is a sentinel for
+    # "render every preset in colormod.PRESETS", not "render nothing" --
+    # the same sentinel the per-frame render loop below resolves via
+    # `only or colormod.PRESETS`. Resolve it to the concrete list HERE,
+    # before it feeds settings_hash / _frame_is_resumable, so a hash or a
+    # staleness check can never be computed against an empty preset set
+    # while the render loop actually produces the full one (Copilot review
+    # fix on #96 -- a category with no explicit `looks` would otherwise
+    # hash/resume against zero presets and --resume could wrongly skip a
+    # frame that only has some, or none, of the actually-required presets).
+    only = only or tuple(colormod.PRESETS)
+
+    # A fingerprint of the inputs that decide what gets rendered, captured
+    # against what was on disk BEFORE this call overwrites it -- so a
+    # resumed run's own checkpoint can never trivially match itself, only a
+    # PRIOR run's, under the same settings, can (docs/prep-resume-plan.md
+    # item 3). `resume=False` (the default) never consults it: `resumable`
+    # stays False and every frame renders exactly as it always has.
+    settings_hash = _apply_settings_hash(aspect, pad, pop, smode,
+                                         category_of(m), only)
+    prior_settings_hash = (m.get("apply_run") or {}).get("settings_hash")
+    resumable = resume and prior_settings_hash == settings_hash
+    m["apply_run"] = {"settings_hash": settings_hash, "started_at": _now()}
+
+    # An apply in flight -- or interrupted mid-flight -- is not an approved
+    # one. Set this BEFORE the loop, not after, so every checkpoint below
+    # already reflects it: a resumed frame's untouched `output`/`out_sha256`
+    # would otherwise still look complete enough to slip past
+    # `assert_approved` on a stale `approved: true` left over from the run
+    # this one is replacing.
+    m["approved"] = False
+    m["approved_at"] = None
+
+    # Persist BOTH of the above before rendering a single frame. Otherwise a
+    # process killed during frame 1 (the main failure mode this whole change
+    # targets) leaves the on-disk manifest showing a stale `apply_run` from
+    # the PREVIOUS apply, and possibly `approved: true` -- exactly the state
+    # the checks above exist to rule out, just not yet written down.
+    save_manifest(shoot, m)
 
     out_dir = shoot / "listing"
     out_dir.mkdir(exist_ok=True)
@@ -1003,6 +1125,31 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         if not src.exists():
             rec["status"] = "MISSING"
             flags.append((name, "source file MISSING"))
+            continue
+
+        # --resume: skip the (expensive) re-render only when the manifest's
+        # own record proves the existing files still answer THIS
+        # invocation's question. Conservative by construction -- any one
+        # check failing means the frame is (re)rendered, never the reverse
+        # (docs/prep-resume-plan.md item 3). The sheet still needs pixels for
+        # this frame, so load the original and the already-rendered presets
+        # back off disk rather than re-deriving them.
+        if resumable and _frame_is_resumable(shoot, name, rec, only):
+            before = _load_bgr(src)
+            variants = {pname: _load_bgr(shoot / rec["presets"][pname]["path"])
+                        for pname in only}
+            rows.append((name, before, variants, rec))
+            # A skipped frame's exceptions are exactly as real as a freshly
+            # rendered one's -- reuse the same flag logic below, sourced from
+            # the persisted record instead of a report just computed, so
+            # verdict_emit doesn't read a resumed run as cleaner than it is.
+            c = rec.get("color") or {}
+            if c.get("subject_newly_clipped") or c.get("subject_newly_crushed"):
+                flags.append((name, f"colour pass touched item pixels "
+                                    f"(new-clip={c.get('subject_newly_clipped')}, "
+                                    f"new-crush={c.get('subject_newly_crushed')})"))
+            if rec["orientation"]["needs_ask"]:
+                flags.append((name, "orientation still ASK"))
             continue
 
         before = _load_bgr(src)
@@ -1085,9 +1232,15 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = ()) -> dict:
         if rec["orientation"]["needs_ask"]:
             flags.append((name, "orientation still ASK"))
 
-    m["approved"] = False
-    m["approved_at"] = None
-    save_manifest(shoot, m)
+        # Checkpoint after every frame, not once at the end -- a killed
+        # process must orphan at most the frame in flight, never the ones
+        # already finished (docs/prep-resume-plan.md item 2). save_manifest
+        # already does compare-and-swap and re-stamps m[READ_FINGERPRINT] on
+        # this same dict after a successful write, so the next checkpoint's
+        # CAS check is automatically against the fingerprint THIS process
+        # just wrote -- nothing extra to track here.
+        save_manifest(shoot, m)
+
     # Renders from an earlier pass that this one no longer names. Nothing can
     # read them again, so they go now rather than accruing until an audit finds
     # 3.5 GB of them. See _sweep_unreferenced_presets.
@@ -2230,6 +2383,15 @@ def main(argv=None) -> int:
                     help="render every preset in color.PRESETS for a side-by-side "
                          "comparison, instead of just `crisp` (default). Overridden "
                          "by an explicit --only.")
+    ap.add_argument("--resume", action="store_true",
+                    help="with --apply: skip a frame's re-render when the manifest "
+                         "proves the existing render still answers this run's "
+                         "settings (same aspect/pad/pop/subject/category/presets, "
+                         "source unchanged, preset files present and unmodified). "
+                         "Any one check failing re-renders the frame. Re-invoke a "
+                         "backgrounded --apply that got killed by a timeout with "
+                         "this flag rather than restarting it plain -- that is the "
+                         "whole point (default: off)")
     ap.add_argument("--set-rotate", action="append", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--gc", action="store_true",
                     help="list the regenerable byproducts an APPROVED shoot is still holding "
@@ -2402,7 +2564,7 @@ def main(argv=None) -> int:
         only = tuple(_pairs(getattr(args, 'only', None)))
         if not only and args.filters:
             only = tuple(colormod.PRESETS)
-        m = run_apply(shoot, quiet=args.quiet, only=only)
+        m = run_apply(shoot, quiet=args.quiet, only=only, resume=args.resume)
         _print_status(shoot, m)
     return 0
 

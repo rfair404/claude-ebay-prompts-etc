@@ -1,10 +1,15 @@
 # PREP `--resume` / `--jobs N` — implementation plan (#74 item 3)
 
-**Status: plan only. `lib/photo_prep/prep.py` is unmodified by this doc.**
-This is deliberately scoped as design, not code — it touches the production
-photo pipeline and #74 asked for a well-scoped follow-up rather than more
-analysis bundled into a friction-fixes PR. The next PR should implement
-against this plan (or an amended version of it), not restart the analysis.
+**Status: steps 1–3 of "Suggested follow-up PR shape" (below) are implemented**
+— atomic `_save_bgr` writes, incremental per-frame checkpointing, and
+`--resume` with the settings-hash/staleness check, all in `run_apply()`.
+**Step 4 (`--jobs N` / `ProcessPoolExecutor`) is still just a plan** —
+deliberately deferred, because it wants a real peak-RSS measurement at
+`--jobs 4` on a representative shoot before a default worker count is picked
+(see that section below), which is future work, not something to guess at
+in the same PR. The rest of this document is left as originally written;
+only this status line and the follow-up section's step numbering reflect
+what has since shipped.
 
 ## The problem, precisely
 
@@ -204,14 +209,17 @@ disjoint from every other frame's.
 
 ## Suggested follow-up PR shape
 
-1. Atomic `_save_bgr` write (small, low-risk, independently useful even
+1. ✅ Atomic `_save_bgr` write (small, low-risk, independently useful even
    without the rest).
-2. Incremental checkpointing in `run_apply` (move `save_manifest` inside the
+2. ✅ Incremental checkpointing in `run_apply` (move `save_manifest` inside the
    loop) — makes a killed `--apply` at least leave a *consistent* partial
    manifest, before `--resume` exists to exploit it.
-3. `--resume` flag + the settings-hash/staleness check.
-4. `--jobs N` + `ProcessPoolExecutor`, gated behind a real memory
-   measurement for the default.
+3. ✅ `--resume` flag + the settings-hash/staleness check.
+4. ⬜ **Still pending.** `--jobs N` + `ProcessPoolExecutor`, gated behind a
+   real memory measurement for the default. Not implemented by the PR that
+   shipped 1–3 (#74 item 3 follow-up) — it explicitly stayed out of scope
+   because a memory measurement is a prerequisite this repo isn't yet in a
+   position to gather, not something to bake a guess for into a PR.
 
 Each step is independently mergeable and independently useful — 1–2 alone
 fix the "partial manifest is inconsistent with partial renders" half of the

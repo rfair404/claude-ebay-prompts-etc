@@ -20,10 +20,12 @@ Run:  python tests/test_prep.py
   or: pytest tests/test_prep.py
 """
 import contextlib
+import copy
 import json
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -35,6 +37,7 @@ from lib.photo_prep import categories as CAT             # noqa: E402
 from lib.photo_prep import color as C                     # noqa: E402
 from lib.photo_prep import orientation as O               # noqa: E402
 from lib.photo_prep import prep as P                      # noqa: E402
+from lib.photo_prep.center_crop import _parse_aspect       # noqa: E402
 
 W, H = 1200, 900
 NO_OSD = (None, 0.0, "no text")
@@ -1860,3 +1863,336 @@ def test_changing_category_drops_crop_and_colour_signoff():
             assert m["stages"]["color"]["approved"] is False
             assert not m["approved"]
             assert m["settings"]["category"] == "switched"
+
+
+# ---------------------------------------------------------------------------
+# --resume / incremental checkpointing (#74 item 3, docs/prep-resume-plan.md)
+#
+# A shoot big enough to exceed the Bash tool's ~600s timeout used to get
+# killed mid-`--apply`: every already-rendered JPEG was orphaned (the
+# manifest never learned about it, since it was only written once, at the
+# very end) and a re-run started over from frame 1. These lock down the fix:
+# an atomic per-file write, a checkpoint after every frame instead of one at
+# the end, and a `--resume` that only ever skips a frame when the manifest's
+# own record proves the old render still answers the CURRENT question.
+# ---------------------------------------------------------------------------
+
+def test_save_bgr_writes_via_tmp_and_rename():
+    """The target must never exist as a partial file -- it appears once,
+    fully written, via os.replace (same shape save_manifest already uses)."""
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / "out.jpg"
+        img = np.full((8, 8, 3), 128, np.uint8)
+        P._save_bgr(target, img)
+        assert target.exists()
+        assert not target.with_name(target.name + ".tmp").exists(), (
+            "the tmp file must not survive a successful write")
+        assert cv2.imread(str(target)) is not None, (
+            "the file must decode as a complete, valid JPEG")
+
+
+def test_save_bgr_leaves_no_trace_when_the_rename_fails():
+    """A killed/failed write must never leave a truncated file at the real
+    path -- that is exactly what --resume's staleness check depends on."""
+    with tempfile.TemporaryDirectory() as td:
+        target = Path(td) / "out.jpg"
+        img = np.full((8, 8, 3), 128, np.uint8)
+        with patch("os.replace", side_effect=OSError("disk full")):
+            try:
+                P._save_bgr(target, img)
+                raise AssertionError("a failed rename must propagate, not be swallowed")
+            except OSError:
+                pass
+        assert not target.exists(), "no file at the real path when the rename never happened"
+        assert not target.with_name(target.name + ".tmp").exists(), (
+            "the tmp file must be cleaned up after a failed rename")
+
+
+def test_apply_settings_hash_is_deterministic_order_independent_and_sensitive():
+    """Same convention as `_sha256`/`_manifest_fingerprint`: 16 hex chars, and
+    a change to ANY of the inputs that decide what gets rendered must change
+    it -- that is the whole mechanism `--resume` trusts to tell "the same
+    question" from "a different one" apart."""
+    base = P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "default", ("crisp",))
+    assert len(base) == 16
+    assert base == P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "default", ("crisp",)), (
+        "must be deterministic for identical inputs")
+    # preset order must not matter -- it is `only`, not a sequence.
+    assert (P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "default", ("crisp", "asshot"))
+            == P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "default", ("asshot", "crisp")))
+    assert base != P._apply_settings_hash(1.33, 0.05, "gentle", "auto", "default", ("crisp",)), "aspect"
+    assert base != P._apply_settings_hash(1.5, 0.10, "gentle", "auto", "default", ("crisp",)), "pad"
+    assert base != P._apply_settings_hash(1.5, 0.05, "strong", "auto", "default", ("crisp",)), "pop"
+    assert base != P._apply_settings_hash(1.5, 0.05, "gentle", "paper", "default", ("crisp",)), "subject"
+    assert base != P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "printed", ("crisp",)), "category"
+    assert base != P._apply_settings_hash(1.5, 0.05, "gentle", "auto", "default", ("crisp", "asshot")), "only"
+
+
+def _fake_rec_and_preset(shoot: Path, name: str = "IMG_0.jpg", preset: str = "crisp"):
+    """A minimal manifest frame + on-disk preset file, hashed for real.
+
+    `_frame_is_resumable` only ever hashes bytes -- it never decodes an
+    image -- so plain bytes stand in for both the source and the render.
+    """
+    src = shoot / name
+    src.write_bytes(b"source-bytes-v1")
+    p_dir = shoot / ".prep" / "presets" / preset
+    p_dir.mkdir(parents=True, exist_ok=True)
+    p_path = p_dir / name
+    p_path.write_bytes(b"preset-bytes-v1")
+    rec = {
+        "src_sha256": P._sha256(src),
+        "presets": {preset: {"path": str(p_path.relative_to(shoot)).replace("\\", "/"),
+                             "sha256": P._sha256(p_path)}},
+    }
+    return rec, src, p_path
+
+
+def test_frame_is_resumable_only_when_every_condition_holds():
+    """docs/prep-resume-plan.md item 2's four checks, minus the settings-hash
+    one (that's the caller's job, gating whether `_frame_is_resumable` is
+    even consulted -- see the run_apply-level tests below). Conservative by
+    construction: any single failure re-renders, never the reverse."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        rec, src, p_path = _fake_rec_and_preset(shoot)
+        only = ("crisp",)
+
+        assert P._frame_is_resumable(shoot, "IMG_0.jpg", rec, only), (
+            "every condition holds -- must be reusable")
+
+        # 1. the source changed underneath (reshoot / replaced file).
+        stale_src = dict(rec, src_sha256="0" * 16)
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", stale_src, only)
+
+        # 2. a preset `only` now asks for was never rendered for this frame.
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", rec, ("crisp", "asshot"))
+
+        # 3. the recorded preset's hash no longer matches the file on disk
+        #    (a partial/truncated write, or the file was edited).
+        tampered = copy.deepcopy(rec)
+        tampered["presets"]["crisp"]["sha256"] = "0" * 16
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", tampered, only)
+
+        # 4. the recorded preset file is simply gone.
+        p_path.unlink()
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", rec, only)
+
+
+def test_frame_is_resumable_rejects_a_preset_path_that_escapes_the_shoot_dir():
+    """A hand-edited or corrupted manifest could point `presets.<name>.path`
+    outside the shoot directory (e.g. `../../../etc/passwd`). `shoot / entry
+    ["path"]` would join it anyway, so `_frame_is_resumable` must resolve and
+    check containment itself before hashing/reading -- resuming must never
+    read (or report as valid) a file outside the shoot it was asked about."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        rec, src, p_path = _fake_rec_and_preset(shoot)
+        only = ("crisp",)
+        assert P._frame_is_resumable(shoot, "IMG_0.jpg", rec, only), "sanity: unescaped path resumes"
+
+        outside = Path(td) / "outside.jpg"
+        outside.write_bytes(b"preset-bytes-v1")
+        escaped = copy.deepcopy(rec)
+        escaped["presets"]["crisp"]["path"] = "../outside.jpg"
+        escaped["presets"]["crisp"]["sha256"] = P._sha256(outside)
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", escaped, only), (
+            "a path.. escaping the shoot dir must never be treated as resumable, "
+            "even when its hash matches")
+
+
+def test_apply_checkpoints_the_manifest_after_each_frame_not_just_at_the_end():
+    """The whole point of #74 item 1: a killed --apply must orphan at most
+    the frame in flight, not every frame already rendered before it. Proven
+    by watching the number of frames with a `presets` entry climb across
+    successive save_manifest calls, rather than jumping from 0 to N once."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=3)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        snapshots = []
+        real_save = P.save_manifest
+
+        def spy(shoot_arg, m, force=False):
+            snapshots.append(copy.deepcopy(
+                {k: v for k, v in m.items() if k != P.READ_FINGERPRINT}))
+            return real_save(shoot_arg, m, force=force)
+
+        with patch.object(P, "save_manifest", side_effect=spy):
+            P.run_apply(shoot, quiet=True)
+
+        assert len(snapshots) >= 3, (
+            f"expected at least one checkpoint per frame, got {len(snapshots)}")
+        rendered_counts = [
+            sum(1 for r in snap["photos"].values() if r.get("presets"))
+            for snap in snapshots
+        ]
+        assert rendered_counts[0] < rendered_counts[-1], rendered_counts
+        assert any(0 < c < 3 for c in rendered_counts), (
+            f"a checkpoint must exist with SOME but not all frames done "
+            f"(saw {rendered_counts}) -- otherwise nothing was incremental")
+
+
+def test_omitting_resume_always_rerenders_every_frame():
+    """resume=False (the default) must reproduce today's behaviour exactly:
+    every frame is re-rendered on every --apply, never skipped, no matter
+    what an earlier --apply already produced for it."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+
+        rendered = []
+        orig_save_bgr = P._save_bgr
+
+        def spy_save_bgr(path, bgr, quality=94):
+            rendered.append(Path(path).stem)
+            return orig_save_bgr(path, bgr, quality=quality)
+
+        with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+            P.run_apply(shoot, quiet=True)          # resume defaults to False
+
+        assert sorted(rendered) == ["IMG_0", "IMG_1"], (
+            f"every frame must re-render without --resume, got {rendered}")
+
+
+def test_resume_skips_only_frames_whose_render_still_answers_the_question():
+    """The end-to-end case: an unchanged frame is skipped under --resume, a
+    frame whose source changed underneath is not -- proving the staleness
+    check is wired all the way through run_apply, not just unit-correct."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+
+        # A reshoot / replaced file for frame 1 only.
+        img, _ = _scene(seed=99)
+        cv2.imencode(".jpg", img)[1].tofile(str(shoot / "IMG_1.jpg"))
+
+        rendered = []
+        orig_save_bgr = P._save_bgr
+
+        def spy_save_bgr(path, bgr, quality=94):
+            rendered.append(Path(path).stem)
+            return orig_save_bgr(path, bgr, quality=quality)
+
+        with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+            P.run_apply(shoot, quiet=True, resume=True)
+
+        assert "IMG_0" not in rendered, (
+            "an unchanged frame must not be re-rendered under --resume")
+        assert "IMG_1" in rendered, (
+            "a changed source must always re-render, even under --resume")
+
+
+def test_resume_ignores_a_stale_checkpoint_from_different_settings():
+    """A settings-hash mismatch (different `only`, in this case) must refuse
+    the WHOLE prior checkpoint, not just the frames that literally differ --
+    a resume that only rendered `crisp` before must not treat a now-wider
+    `only` as satisfied (docs/prep-resume-plan.md item 2)."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True, only=("crisp",))
+
+        rendered = []
+        orig_save_bgr = P._save_bgr
+
+        def spy_save_bgr(path, bgr, quality=94):
+            rendered.append(Path(path).stem)
+            return orig_save_bgr(path, bgr, quality=quality)
+
+        with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+            P.run_apply(shoot, quiet=True, resume=True, only=("asshot",))
+
+        assert "IMG_0" in rendered, (
+            "a settings change (a different `only`) must invalidate the "
+            "prior checkpoint even though nothing on disk for the frame "
+            "itself changed")
+
+
+def test_apply_always_stamps_a_fresh_apply_run_settings_hash():
+    """Written at the START of --apply (docs/prep-resume-plan.md item 2),
+    regardless of --resume -- it is what makes a LATER --resume trustworthy,
+    including the very first plain --apply of a shoot."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+
+        m = P.load_manifest(shoot)
+        assert "apply_run" in m
+        assert len(m["apply_run"]["settings_hash"]) == 16
+        assert m["apply_run"]["started_at"]
+
+
+def test_apply_resolves_an_empty_only_to_the_full_preset_list_before_hashing():
+    """catmod.looks_for() documents empty tuple as "render everything", the
+    same sentinel the render loop resolves via `only or colormod.PRESETS` --
+    but settings_hash/resumability must never be computed against the bare
+    empty tuple, or they'd describe a run that renders nothing while the
+    loop actually renders every preset (Copilot review fix on #96)."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        with patch.object(P.catmod, "looks_for", return_value=()):
+            P.run_apply(shoot, quiet=True)
+
+        m = P.load_manifest(shoot)
+        expected = P._apply_settings_hash(
+            _parse_aspect(m["settings"].get("aspect", P.DEFAULT_ASPECT)),
+            float(m["settings"].get("pad", P.DEFAULT_PAD)),
+            m["settings"].get("pop", "gentle"), P.subject_mode(m),
+            P.category_of(m), tuple(C.PRESETS))
+        assert m["apply_run"]["settings_hash"] == expected, (
+            "an empty `only` sentinel must hash as the full preset list "
+            "that actually gets rendered, not as an empty one")
+        # And it must have actually rendered every preset, not zero of them.
+        assert set(m["photos"]["IMG_0.jpg"]["presets"]) == set(C.PRESETS)
+
+
+def test_resume_catches_a_changed_source_even_under_the_empty_only_sentinel():
+    """The bug this guards against directly: `_frame_is_resumable`'s
+    `for pname in only:` loop checks nothing when `only` is empty, so it
+    would trivially return True for ANY frame regardless of whether its
+    source changed -- a resume that should re-render would silently skip
+    instead. Both applies here use the empty-`only` "render everything"
+    sentinel (the render loop already resolved it correctly even before
+    this fix; only the hash/resumability path did not) -- reshooting frame
+    0 between them must still force a re-render, not a false-positive skip."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        with patch.object(P.catmod, "looks_for", return_value=()):
+            P.run_apply(shoot, quiet=True)
+
+            # A reshoot / replaced source file for the only frame.
+            img, _ = _scene(seed=99)
+            cv2.imencode(".jpg", img)[1].tofile(str(shoot / "IMG_0.jpg"))
+
+            rendered = []
+            orig_save_bgr = P._save_bgr
+
+            def spy_save_bgr(path, bgr, quality=94):
+                rendered.append(Path(path).stem)
+                return orig_save_bgr(path, bgr, quality=quality)
+
+            with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+                P.run_apply(shoot, quiet=True, resume=True)
+
+        assert "IMG_0" in rendered, (
+            "a changed source must force a re-render under --resume even "
+            "when `only` is the empty 'render everything' sentinel -- a "
+            "resumability check against the bare empty tuple would have "
+            "skipped this frame unconditionally")
