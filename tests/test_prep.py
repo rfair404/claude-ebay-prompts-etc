@@ -1980,6 +1980,29 @@ def test_frame_is_resumable_only_when_every_condition_holds():
         assert not P._frame_is_resumable(shoot, "IMG_0.jpg", rec, only)
 
 
+def test_frame_is_resumable_rejects_a_preset_path_that_escapes_the_shoot_dir():
+    """A hand-edited or corrupted manifest could point `presets.<name>.path`
+    outside the shoot directory (e.g. `../../../etc/passwd`). `shoot / entry
+    ["path"]` would join it anyway, so `_frame_is_resumable` must resolve and
+    check containment itself before hashing/reading -- resuming must never
+    read (or report as valid) a file outside the shoot it was asked about."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = Path(td) / "s"
+        shoot.mkdir()
+        rec, src, p_path = _fake_rec_and_preset(shoot)
+        only = ("crisp",)
+        assert P._frame_is_resumable(shoot, "IMG_0.jpg", rec, only), "sanity: unescaped path resumes"
+
+        outside = Path(td) / "outside.jpg"
+        outside.write_bytes(b"preset-bytes-v1")
+        escaped = copy.deepcopy(rec)
+        escaped["presets"]["crisp"]["path"] = "../outside.jpg"
+        escaped["presets"]["crisp"]["sha256"] = P._sha256(outside)
+        assert not P._frame_is_resumable(shoot, "IMG_0.jpg", escaped, only), (
+            "a path.. escaping the shoot dir must never be treated as resumable, "
+            "even when its hash matches")
+
+
 def test_apply_checkpoints_the_manifest_after_each_frame_not_just_at_the_end():
     """The whole point of #74 item 1: a killed --apply must orphan at most
     the frame in flight, not every frame already rendered before it. Proven

@@ -1011,12 +1011,18 @@ def _frame_is_resumable(shoot: Path, name: str, rec: dict, only: tuple) -> bool:
     if not src.exists() or _sha256(src) != rec.get("src_sha256"):
         return False
     presets = rec.get("presets") or {}
+    shoot_resolved = shoot.resolve()
     for pname in only:
         entry = presets.get(pname)
         if not entry or not entry.get("path"):
             return False
         p_path = shoot / entry["path"]
-        if not p_path.exists() or _sha256(p_path) != entry.get("sha256"):
+        if not p_path.exists():
+            return False
+        p_resolved = p_path.resolve()
+        if p_resolved != shoot_resolved and shoot_resolved not in p_resolved.parents:
+            return False
+        if _sha256(p_path) != entry.get("sha256"):
             return False
     return True
 
