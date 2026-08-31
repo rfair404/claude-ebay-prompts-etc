@@ -51,7 +51,6 @@ secrets; a missing optional secret is not a failure:
 ```
 [OK] ebay credentials: ok
 [--] APIFY_API_TOKEN: not set (optional -- lens_id.py only)
-[--] ANTHROPIC_API_KEY: not set (optional -- unused today)
 ```
 
 ---
@@ -81,7 +80,6 @@ This means:
 |---|---|---|
 | `get_apify_token()` | str | `ConfigError` if missing everywhere |
 | `get_lens_actor()` | str | never raises — has a built-in default |
-| `get_anthropic_key()` | str | `ConfigError` if missing everywhere |
 
 `get_apify_token()` / `get_lens_actor()` serve `lens_id.py` only — the Google
 Lens reverse-image lookup. Apify is not a comp source; see the Stage B section
