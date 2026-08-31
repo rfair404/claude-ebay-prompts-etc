@@ -8,12 +8,11 @@
 pip install pyyaml
 ```
 
-`apify_ebay.py` needs **no third-party package** — it calls the Apify REST
-API with the Python standard library only. This is deliberate: it runs in
-sandboxed environments (e.g. a Cowork tab) where `pip install` is blocked.
-It only needs (a) Python, (b) network egress to `api.apify.com`, and (c)
-the Apify token (config file or `APIFY_API_TOKEN` env var). `pyyaml` is for
-`config.py` / the eBay Sell-API code, not for Apify.
+`pyyaml` is for `config.py` and the eBay Sell-API code. The rest of the
+suite's dependencies (pillow, opencv, numpy) are in the repo-root
+[`requirements.txt`](../requirements.txt); the eBay client and `config.py`
+themselves are stdlib-only on purpose, so they run in sandboxed environments
+where `pip install` is blocked.
 
 ### 2. Create the config file
 
@@ -24,16 +23,19 @@ directory:
 # macOS / Linux
 mkdir -p ~/.ebaybiz
 cp config.example.yaml ~/.ebaybiz/config.yaml
-# then edit ~/.ebaybiz/config.yaml — set the Apify token
+# then edit ~/.ebaybiz/config.yaml — set the eBay credentials
 
 # Windows (PowerShell)
 mkdir $env:APPDATA\ebaybiz -Force
 Copy-Item config.example.yaml $env:APPDATA\ebaybiz\config.yaml
-# then edit %APPDATA%\ebaybiz\config.yaml — set the Apify token
+# then edit %APPDATA%\ebaybiz\config.yaml — set the eBay credentials
 ```
 
-Get an Apify API token at:
-<https://console.apify.com/account/integrations>
+The eBay credentials are the only required ones — see
+[SETUP_EBAY_API.md](SETUP_EBAY_API.md). The Apify token is optional and
+serves `lens_id.py` alone; get one at
+<https://console.apify.com/account/integrations> if you want the Google Lens
+lookup.
 
 ### 3. Verify the config
 
@@ -43,11 +45,13 @@ python config.py --show     # show resolved config (secrets redacted)
 python config.py --check    # verify required secrets are loadable
 ```
 
-A successful `--check` looks like:
+`--check` enforces the eBay credentials and merely reports the optional
+secrets; a missing optional secret is not a failure:
 
 ```
-✓ APIFY_API_TOKEN: ok
-✓ ANTHROPIC_API_KEY: ok
+[OK] ebay credentials: ok
+[--] APIFY_API_TOKEN: not set (optional -- lens_id.py only)
+[--] ANTHROPIC_API_KEY: not set (optional -- unused today)
 ```
 
 ---
@@ -76,8 +80,12 @@ This means:
 | Function | Returns | Raises |
 |---|---|---|
 | `get_apify_token()` | str | `ConfigError` if missing everywhere |
-| `get_apify_actor()` | str | never raises — has a built-in default |
+| `get_lens_actor()` | str | never raises — has a built-in default |
 | `get_anthropic_key()` | str | `ConfigError` if missing everywhere |
+
+`get_apify_token()` / `get_lens_actor()` serve `lens_id.py` only — the Google
+Lens reverse-image lookup. Apify is not a comp source; see the Stage B section
+below.
 | `get_profile(name=None)` | dict | `ConfigError` if named profile is missing |
 
 ### Strategy profiles
@@ -98,130 +106,34 @@ definitions.
 
 ---
 
-## apify_ebay.py — Apify eBay sold-listings client
+## ebay_sold_browse.py — PRICE Stage B (sold comps)
 
-PRICE's **default Stage B** comp source (the un-gated direct-eBay sold
-path). The Claude-in-Chrome browse is now the optional Stage C fallback,
-used only when confidence is low or Apify is unavailable. Returns clean
-structured `CompRecord` objects ready for PRICE's classification logic.
+PRICE's default Stage B comp source: eBay's sold-listings search, read
+through the operator's own logged-in browser. Returns the same `CompRecord`
+shape the rest of PRICE consumes, and its ingest path is cached by
+[`read_cache.py`](read_cache.py) keyed query+condition+UTC date, so a
+same-day re-check of a query already ingested costs no round trip
+(`--fresh` forces one anyway).
 
-**Actor:** `automation-lab/ebay-sold-scraper`
-([store](https://apify.com/automation-lab/ebay-sold-scraper)), configurable
-via `apify.ebay_actor`. It **pins a US residential proxy**, so eBay returns
-USD natively — this is the fix for the foreign-currency leak (see below).
-Pricing: pay-per-event, ~$0.10 for a 30-listing call.
+Run both sorts (`best_match` and `price_high`) for a query — that is what
+gives PRICE a ceiling and a middle rather than one arbitrary slice.
 
-**Why not `caffein.dev/ebay-sold-listings`?** It has no proxy/country
-control, so when Apify's proxy exits a non-US country eBay localizes prices
-(e.g. BRL/CZK) and the actor mislabels them `USD`, inflating values ~5×.
-Its `soldCurrency` field lies, so it can't be filtered on. We migrated to a
-US-proxy actor and added a charm-price validator (below) as a backstop.
+> **Apify was retired as a comp backend on 2026-08-15 and must not be
+> re-enabled.** `lib/apify_ebay.py` is gone. The measurements behind that
+> call — the `li.s-item` → `li.s-card` markup migration, the actor
+> silent-zero failures, and the foreign-currency leak — are in
+> [`../docs/archive/pricing-backend-issues.md`](../docs/archive/pricing-backend-issues.md).
+> The only surviving Apify use in the repo is `lens_id.py`'s Google Lens
+> lookup, which is a *visual* search, not a price source.
 
-### Currency-leak validator
+Supporting modules on the same path:
 
-Every run is checked by `_check_currency_leak()`, which does **not** trust
-the actor's currency label. Genuine USD eBay sold prices are overwhelmingly
-charm-priced (.99/.95/.00/.50); an FX leak multiplies all prices by one
-rate and destroys that structure. If the charm-price share collapses below
-30% (with ≥5 priced comps), the run is flagged:
-
-- `on_currency_leak="raise"` (default) → raises `CurrencyLeakError` so the
-  caller can fall back to the Chrome path instead of anchoring on bad data.
-- `"repair"` → finds the FX divisor that restores charm structure (refined
-  search over major currencies), divides all prices by it, tags
-  `sold_currency="USD (repaired from <CUR>)"`.
-- `"ignore"` → returns as-is.
-
-### CLI usage (manual testing)
-
-```bash
-python apify_ebay.py "Polo Ralph Lauren On Safari catalog"
-```
-
-Options:
-- `--max N` — max results per keyword (default: 30)
-- `--pages N` — max search pages per keyword, 60/page (default: 3)
-- `--sort ORDER` — `best_match` / `newly_listed` / `price_low` /
-  `price_high` (default)
-- `--listing-type T` — `all` (default), `auction`, `buy_it_now`
-- `--condition C [C ...]` — condition filter(s), e.g. `used new`
-- `--min-price N` / `--max-price N` — USD price range filter
-- `--actor NAME` — override the Actor ID
-- `--timeout SEC` — max wait for the Apify run (default: 300)
-- `--on-leak MODE` — `raise` (default) / `repair` / `ignore`
-- `--json` — output raw JSON instead of human-readable list
-
-Multiple keywords can be passed as separate positional args — each runs as
-a separate search:
-
-```bash
-python apify_ebay.py "Polo Ralph Lauren On Safari" "Polo Ralph Lauren Fall 1981"
-```
-
-### Programmatic usage
-
-```python
-from apify_ebay import search_ebay_sold, CurrencyLeakError
-
-try:
-    comps = search_ebay_sold(
-        "Polo Ralph Lauren On Safari catalog",
-        max_listings=30,
-        sort="price_high",
-    )
-except CurrencyLeakError:
-    comps = []  # fall back to the Chrome (Stage C) path
-
-for c in comps:
-    print(f"${c.sold_price:.2f} — {c.title}")
-    print(f"  Sold: {c.sold_date}  Condition: {c.condition}  {c.listing_type}")
-    print(f"  Seller: {c.seller_username} ({c.seller_feedback_pct}%)")
-    print(f"  URL: {c.url}")
-```
-
-### CompRecord shape
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | str | Listing title (mandatory) |
-| `sold_price` | float | USD, from numeric `soldPrice` (mandatory) |
-| `url` | str | Direct link to the eBay listing (mandatory) |
-| `sold_date` | Optional[str] | ISO 8601, parsed from `soldDate` ("May 12, 2026") |
-| `condition` | Optional[str] | Localized eBay condition label |
-| `condition_id` | Optional[int] | Not exposed by this actor (None) |
-| `seller_username` | Optional[str] | From `sellerName` |
-| `seller_feedback_score` | Optional[int] | From `sellerFeedbackCount` ("2K" → 2000) |
-| `seller_feedback_pct` | Optional[float] | From `sellerFeedbackPercent` ("100%" → 100.0) |
-| `shipping_cost` | Optional[float] | Parsed from `shippingCost` ("+$108.12 delivery") |
-| `shipping_type` | Optional[str] | `free` when shipping is free, else None |
-| `sold_currency` | Optional[str] | `"USD"` (or `"USD (repaired from <CUR>)"` after repair) |
-| `total_price` | Optional[float] | `sold_price + shipping_cost` |
-| `item_id` | Optional[str] | eBay item ID |
-| `listing_type` | Optional[str] | `Buy It Now` / `Auction` |
-| `bids_count` | Optional[int] | Bid count (for Tier-C single-bid exclusion) |
-| `keyword_tag` | Optional[str] | Input keyword (set on single-keyword runs) |
-| `bo_accepted` | bool | **Always False** — actor doesn't expose this |
-| `raw` | dict | Original Apify item dict (debugging) |
-
-### Known testing landmark
-
-The Polo Ralph Lauren "On Safari" catalog returned a single
-exact-match sold listing in our prior Claude-in-Chrome test:
-
-- Title: "POLO RALPH LAUREN On Safari Illustrated Catalog Fashion Wildlife Zebra Cover"
-- Sold: May 20, 2026, $300, Best Offer accepted
-- URL: <https://www.ebay.com/itm/206286396483>
-- Seller: matwas_7428
-
-Running:
-
-```bash
-python apify_ebay.py "Polo Ralph Lauren On Safari catalog"
-```
-
-…should surface this listing as the first or near-first result.
-That's a clean regression check that Apify is returning what the
-Chrome path was finding.
+| Module | Purpose |
+|---|---|
+| `comps_core.py` | The `CompRecord` shape and the shared parsing/normalizing helpers, extracted from `apify_ebay.py` when Stage B moved. |
+| `price_stats.py` | The deterministic half of PRICE — filtering, distribution statistics, tier placement. See [`../docs/price-strategy-v2.md`](../docs/price-strategy-v2.md). |
+| `read_cache.py` | Generic on-disk read cache, keyed query+date. |
+| `comps_csv.py` | The reviewable `comps.csv` every stage writes to (below). |
 
 ---
 
@@ -247,9 +159,11 @@ machine, the config-file approach is appropriate.
 
 ## ebay_client.py + ebay_schema.py — eBay Sell API client (basic)
 
-Used by DRAFT to (eventually) publish listings, and used today for
-schema introspection — discovering which fields the InventoryItem and
-Offer objects support, plus per-category item-aspects.
+The low-level client: OAuth, Taxonomy reads, and schema introspection —
+which fields the InventoryItem and Offer objects support, plus per-category
+item-aspects. The *writes* (create inventory item, create offer, publish,
+withdraw, delete) live one level up in [`list_edit.py`](list_edit.py), which
+is what DRAFT and REVIEW actually call.
 
 ### What works today (no eBay credentials needed)
 
@@ -261,7 +175,7 @@ python ebay_client.py --schema all
 
 Prints the static field reference from `ebay_schema.py` — type,
 required-or-not, allowed values for enums, max lengths, and a one-line
-purpose note per field. This is the spec DRAFT will render into.
+purpose note per field. This is the spec DRAFT renders into.
 
 ### What works once eBay credentials are configured
 
@@ -306,9 +220,10 @@ credentials). Setup runs once and the resulting refresh_token lasts
 5. `python ebay_client.py --exchange-code <code>` — prints the
    refresh_token to paste into config (`ebay.user_refresh_token`).
 
-User-context token writes (`publish offer`, `create inventory item`, etc.)
-are NOT yet wired into this client — they will be added when DRAFT is
-implemented.
+User-context token writes (`create inventory item`, `create offer`,
+`publish offer`) are live, and go through [`list_edit.py`](list_edit.py) —
+not this module. Publishing requires `--confirm`; nothing in the pipeline
+publishes on its own.
 
 ### Files in this client
 
@@ -327,7 +242,7 @@ Uses only Python stdlib (`urllib.request`, `urllib.parse`, `base64`,
 
 ## comps_csv.py — reviewable comps CSV (all PRICE stages)
 
-Stage B (Apify) saves JSON; stages A (WebSearch) and C (Chrome) are
+Stage B saves its run to JSON; stages A (WebSearch) and C (Chrome) are
 agent-driven, so PRICE logs their comps here. One `<shoot-dir>/comps.csv`
 with a `stage` column lets the user open a single spreadsheet and review
 every comp the hunt looked at. Stdlib only (`csv`).
@@ -352,20 +267,30 @@ header above.
 
 ---
 
-## What's not in this MVP
+## Everything else in lib/
 
-- **PRICE calls this as Stage B** — the prompt invokes `apify_ebay.py` /
-  `search_ebay_sold()` directly as the default comp source; there is no
-  separate orchestration layer (the prompt is the orchestrator).
-- **No write operations on the eBay client yet** — only schema discovery
-  and Taxonomy reads. Inventory-item creation, offer creation, and
-  publishing are added when DRAFT lands.
-- **No caching** — every `search_ebay_sold()` call burns a fresh
-  Apify run. For repeated identical queries within a session, you'd
-  want a short-lived cache. Easy to add later.
-- **No retry logic on transient failures** — Apify's `.call()` has
-  internal retries, but if you hit network flakiness you may see
-  occasional `ApifyError`s. Add tenacity-style retry if needed.
-- **No tests** — defensive parsing makes the wrapper schema-tolerant,
-  but a fixture-based test suite is worth adding once we've seen the
-  default Actor's actual output shape.
+The modules above are the ones with setup steps. The rest, one line each:
+
+| Module | Purpose |
+|---|---|
+| `cli.py` | The `ebz` entry point — `python -m lib.cli <command>`. Start here rather than calling tools directly. |
+| `list_edit.py` | Function 6. Syncs a `draft.md` to an unpublished offer, publishes on `--confirm`, renders the REVIEW card, and manages any offer/SKU on the account. |
+| `list_edit_group.py` | Multi-variation (CHOICE) listings — one listing, MPN-keyed variations. Delegates every shared concern to `list_edit`. |
+| `draft_io.py` | Reads and writes the YAML-frontmatter listing template. |
+| `single_pass.py` | PREP→IDENTIFY→PRICE→DRAFT in one pass, for routine items. |
+| `photo_prep/` | The PREP stages — orientation, unskew, crop, colour — plus `center_crop.py`. |
+| `status.py` | Pipeline state for a shoot, reconciled against eBay rather than local files. |
+| `sync_actuals.py` | Pulls what each item actually sold for from the Fulfillment API. **Always pass a wide `--days`** — `--apply` rewrites the ledger for its window only. |
+| `report.py` | REPORT-phase output: fees, ask-vs-actual, speed, categories. |
+| `source_report.py` | Per-source ROI. |
+| `us_only.py` | Detects export-restricted items and routes them to the US-only fulfillment policy. |
+| `verdict.py` | The decision record a phase leaves behind. |
+| `voice_check.py` | The linter for house voice — catches camera-frame copy before it ships. |
+| `seller_style.py` / `seller_intel.py` | Measuring another seller's live titles and description HTML. |
+| `ebay_browse.py` | Browse API — other sellers' *active* listings (asking prices). Sold-by-seller is not available to us. |
+| `ebay_visual.py`, `lens_id.py` | Visual lookups. `lens_id` fails silently on an empty result — always run a known-indexed control image first. |
+| `vindex.py`, `marble_*.py`, `mcsa_index.py`, `reembed.py`, `forum_replies.py` | The marble specialization's CLIP index, classifier and forum tooling. |
+| `dir_context.py` | Resolves a shoot directory to repo-relative paths. |
+
+Setup for the eBay Sell API — the one thing with real prerequisites — is in
+[SETUP_EBAY_API.md](SETUP_EBAY_API.md).

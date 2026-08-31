@@ -106,7 +106,9 @@ def test_chain_for_walks_root_to_item_outermost_first():
         "books/TEJ/draft.md": "---\ntitle: x\n---\n",
     })
     chain = DC.chain_for(root / "books" / "TEJ", root=root)
-    assert [str(c.path.relative_to(root)) for c in chain] == [
+    # as_posix(), not str(): str() gives backslashes on Windows and this
+    # assertion is about the ORDER of the chain, not the path separator.
+    assert [c.path.relative_to(root).as_posix() for c in chain] == [
         "context.txt", "books/context.txt"]
 
 

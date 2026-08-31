@@ -9,9 +9,8 @@ era-peer comp, and reports account-wide performance after the fact. See
 [`docs/V4_PLAN.md`](docs/V4_PLAN.md) for the current refactor plan
 (skinny prompts, one CLI, fewer round-trips, a session observer) and
 [`docs/archive/v2-to-v3-migration.md`](docs/archive/v2-to-v3-migration.md)
-for the history of how this pipeline got here — the v1 prompts are frozen for
-context only in [`deprecated/`](deprecated/README.md); no active guidance
-lives there.
+for the history of how this pipeline got here. v4 is the only generation in
+the repo; the v1 and v2 trees were deleted in #99 once nothing read them.
 
 ## Start here
 
@@ -47,16 +46,33 @@ keystroke, because an ad added by mistake spends before anyone notices.
     <project root>/
       RUN.md                      headless runbook + gate contract
       README.md                   this file
+      CLAUDE.md                   agent rules for this working directory
       prompts/
         _shared.md                rules every phase obeys
         condition-rubric.md       condition depth (Goal 3)
-        identify.md  price.md  curate.md  investigate.md  draft.md
+        prep.md  identify.md  price.md  curate.md  investigate.md  draft.md
         review.md                 Function 5.5 — the publish gate (decision card)
+        single_pass.md            PREP→DRAFT in one pass, for routine items
+        report.md  promote.md     account-wide, no shoot directory
         list_edit_chrome.md       Function 6 fallback — Chrome stand-in
+        reference/                the long-form notes a phase prompt links out to
       templates/
         listing-v1.md             YAML frontmatter + body
-      lib/                        eBay Sell API code (sync/publish/end) + SETUP_EBAY_API.md
-      deprecated/                 frozen v1 prompts (context only)
+      lib/                        the pipeline's Python: eBay Sell API
+                                  (sync/publish/end), comps, photo_prep/, the
+                                  `ebz` CLI (cli.py) + SETUP_EBAY_API.md
+      tools/                      operator scripts — one job each, run by hand
+                                  (tools/README.md indexes them)
+      tests/                      the suite CI runs on every push and PR
+      specializations/            per-category expert modules IDENTIFY consults
+      styleguides/                measured seller-voice studies + the house guide
+      kb/                         durable reference articles and taxonomies
+      brand/                      print-ready thank-you card artwork
+      docs/                       V4_PLAN.md + topic notes; docs/archive/ is
+                                  history, not current guidance
+
+[`docs/README.md`](docs/README.md) indexes that last one — which docs are
+current, which are archive, and which are generated output.
 
 **Function 5.5 — REVIEW.** The publish gate. One command —
 `python lib/list_edit.py --review <shoot-dir>` — records the item, runs

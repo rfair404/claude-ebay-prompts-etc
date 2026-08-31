@@ -20,10 +20,10 @@ Per-setting precedence (highest wins):
     4. Built-in default
 
 Usage:
-    from config import get_apify_token, get_apify_actor, get_profile
+    from config import get_apify_token, get_lens_actor, get_profile
 
     token = get_apify_token()              # raises ConfigError if missing
-    actor = get_apify_actor()              # default if not configured
+    actor = get_lens_actor()               # default if not configured
     profile = get_profile("estate-sale")   # full profile dict
 
 CLI usage (manual testing / debugging):
@@ -57,8 +57,6 @@ class ConfigError(RuntimeError):
 # ---------------------------------------------------------------------------
 # Built-in defaults (last-resort fallbacks)
 # ---------------------------------------------------------------------------
-
-DEFAULT_APIFY_ACTOR = "cirkit/ebay-product-scraper"
 
 # Google Lens reverse-image actor (IDENTIFY's visual second opinion). Chosen for
 # reliability (high success rate) + AI-mode + visual/exact match buckets.
@@ -212,20 +210,6 @@ def get_apify_token() -> str:
         f"        api_token: \"<your-token>\"\n"
         f"  (Get a token at https://console.apify.com/account/integrations)"
     )
-
-
-def get_apify_actor() -> str:
-    """Apify Actor ID. Precedence: env var > config file > built-in default."""
-    env = os.environ.get("APIFY_EBAY_ACTOR")
-    if env:
-        return env
-
-    config = load_config()
-    actor = _nested(config, "apify", "ebay_actor")
-    if actor:
-        return str(actor)
-
-    return DEFAULT_APIFY_ACTOR
 
 
 def get_lens_actor() -> str:
@@ -395,7 +379,7 @@ def _cli() -> None:
         except ConfigError:
             print("apify.api_token: (not set)")
 
-        print(f"apify.ebay_actor: {get_apify_actor()}")
+        print(f"apify.lens_actor: {get_lens_actor()}")
 
         try:
             anth_key = get_anthropic_key()
@@ -421,24 +405,32 @@ def _cli() -> None:
             print(f"  ERROR: {e}")
 
     if args.check:
+        # Required: the eBay Sell API credentials. Every phase that touches the
+        # account needs them. The other two secrets are optional and are
+        # reported, not enforced -- Apify serves lens_id.py alone (Stage B runs
+        # through ebay_sold_browse.py) and nothing in the repo reads the
+        # Anthropic key. A missing optional secret must not fail the check.
         errors = []
         try:
-            get_apify_token()
-            print("[OK] APIFY_API_TOKEN: ok")
+            get_ebay_credentials()
+            print("[OK] ebay credentials: ok")
         except ConfigError as e:
-            errors.append(("APIFY_API_TOKEN", str(e)))
-            print("[X] APIFY_API_TOKEN: MISSING")
+            errors.append(("ebay", str(e)))
+            print("[X] ebay credentials: MISSING")
 
-        try:
-            get_anthropic_key()
-            print("[OK] ANTHROPIC_API_KEY: ok")
-        except ConfigError as e:
-            errors.append(("ANTHROPIC_API_KEY", str(e)))
-            print("[X] ANTHROPIC_API_KEY: MISSING")
+        for name, getter, note in (
+            ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
+            ("ANTHROPIC_API_KEY", get_anthropic_key, "unused today"),
+        ):
+            try:
+                getter()
+                print(f"[OK] {name}: ok ({note})")
+            except ConfigError:
+                print(f"[--] {name}: not set (optional -- {note})")
 
         if errors:
             print()
-            print("Some required secrets are missing:")
+            print("Required credentials are missing:")
             for name, msg in errors:
                 print(f"  [{name}]")
                 for line in msg.splitlines():

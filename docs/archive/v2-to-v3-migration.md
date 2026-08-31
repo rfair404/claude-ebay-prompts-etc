@@ -2,10 +2,12 @@
 
 Archival context, moved out of `README.md` (#83) so the front door describes
 the current pipeline on its own terms instead of as a diff against a
-generation that's now two versions behind. v2 lives frozen in
-[`../../deprecated/v2/`](../../deprecated/v2/); this is the record of why v3
-looked the way it did when it replaced it. v3 itself was later folded into
-v4 — see [`../V4_PLAN.md`](../V4_PLAN.md) for that step.
+generation that's now two versions behind. The v2 tree itself is gone: its
+spec, prompts and samples were deleted when they proved to have no readers,
+and the `deprecated/` directory that held the rest followed in #99. So this
+document is now the whole record of why v3 looked the way it did when it
+replaced v2. v3 itself was later folded into v4 — see
+[`../V4_PLAN.md`](../V4_PLAN.md) for that step.
 
 ## What changed from v2
 
