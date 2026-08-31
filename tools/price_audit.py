@@ -68,7 +68,7 @@ def days_since(iso: str) -> int | None:
 
 
 def scan(audit_rows: list[dict], days: int) -> list[dict]:
-    led = {r["sku"]: r for r in csv.DictReader(LEDGER.open(encoding="utf-8-sig"))}
+    led = {r["sku"]: r for r in csv.DictReader(LEDGER.open(encoding="utf-8-sig", newline=""))}
     out = []
     for r in audit_rows:
         if r.get("state") != "LIVE" or r.get("group") or not r.get("dir"):

@@ -14,7 +14,11 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -23,8 +27,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # Verified against a clean venv + clean checkout: this exact set gives
-      # 53 passed, 1 skipped, 0 failed in ~5s. The skip is tests/test_marble_gate.py,
+      # Verified against a clean venv + clean checkout: this exact set passes
+      # everything except one skip, whatever the current test count in
+      # tests/ happens to be — trust the summary line the suite itself
+      # prints, not a number pinned here. The skip is tests/test_marble_gate.py,
       # which runs the real CLIP gate and needs sentence-transformers (torch, ~2GB,
       # plus a model download on first use) — deliberately not a CI dependency.
       - name: Install test dependencies
@@ -33,6 +39,9 @@ jobs:
           pip install pytest numpy pillow pyyaml opencv-python
 
       - name: Compile every tracked module
+        # xargs isn't a pwsh builtin (the default shell on windows-latest),
+        # so pin this one to bash — Windows runners ship Git Bash for it.
+        shell: bash
         run: git ls-files '*.py' | xargs python -m py_compile
 
       - name: Run the suite

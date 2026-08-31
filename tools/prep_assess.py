@@ -24,8 +24,8 @@ def main() -> int:
     live_only = "--all" not in sys.argv
     creds = L.load_credentials()
 
-    led = {r["sku"]: r for r in csv.DictReader(open(ROOT / "listings_ledger.csv", encoding="utf-8"))}
-    sold = {r["sku"] for r in csv.DictReader(open(ROOT / "sales_ledger.csv", encoding="utf-8")) if r.get("sku")}
+    led = {r["sku"]: r for r in csv.DictReader(open(ROOT / "listings_ledger.csv", encoding="utf-8", newline=""))}
+    sold = {r["sku"] for r in csv.DictReader(open(ROOT / "sales_ledger.csv", encoding="utf-8", newline="")) if r.get("sku")}
 
     rows = []
     for d in sorted(ROOT.joinpath("inventory").rglob("draft.md")):

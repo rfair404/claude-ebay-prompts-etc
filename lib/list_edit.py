@@ -1283,7 +1283,7 @@ def build_review_card(draft_path: Path,
     comps: list[str] = []
     cpath = shoot / "comps.csv"
     if cpath.exists():
-        for r in list(csv.DictReader(cpath.open(encoding="utf-8")))[:8]:
+        for r in list(csv.DictReader(cpath.open(encoding="utf-8", newline="")))[:8]:
             if r.get("url"):
                 comps.append(f"  • ${r.get('price','')} — {(r.get('title') or '')[:55]} — {r['url']}")
     if not comps and (shoot / "price.txt").exists():
@@ -1371,7 +1371,7 @@ def build_review_card(draft_path: Path,
     status = "?"
     lp = _ledger_path()
     if lp.exists():
-        for r in csv.DictReader(lp.open(encoding="utf-8")):
+        for r in csv.DictReader(lp.open(encoding="utf-8", newline="")):
             if r.get("sku") == sku:
                 status = r.get("status") or "?"
                 break

@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 
 def ledger() -> dict:
     out = {}
-    with open(ROOT / "listings_ledger.csv", encoding="utf-8") as f:
+    with open(ROOT / "listings_ledger.csv", encoding="utf-8", newline="") as f:
         for r in csv.DictReader(f):
             out[r["sku"]] = r
     return out
