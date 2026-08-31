@@ -287,6 +287,28 @@ needs another photo angle), it surfaces the question back to the operator
 instead of failing — same as a foreground run would. Same prompts, same
 `_shared.md` rules, same gates; dispatch only changes where a stage runs.
 
+## Sample photos — when there is no shoot to point at (#97)
+
+`inventory/` is gitignored, and so is every `*.jpg` in the tree. A **cloud
+agent, a fresh clone or a CI run therefore has no photos at all** — which used
+to mean no way to run or verify anything in `lib/photo_prep/` without the
+operator hand-feeding a shoot directory.
+
+`tests/fixtures/photos/` is the tracked carve-out: ten frames of one item
+(a 14k ring, ~1.3 MB for the whole set), chosen so eight crop cleanly and two
+trip a `center_crop` guard. **Point photo tools there by default when no shoot
+was named.**
+
+    python -m lib.photo_prep.center_crop tests/fixtures/photos --check
+    python tests/test_sample_photos.py
+
+Read [`tests/fixtures/photos/README.md`](tests/fixtures/photos/README.md)
+first — it says what each frame is for and what a correct result looks like,
+so a verdict can be checked without asking the operator. Two rules: never run
+`--apply` against the directory (use `--out` into a temp dir), and if a frame
+is ever added or replaced, update the README and `tests/test_sample_photos.py`
+in the same commit — the test asserts the documented numbers.
+
 ## Locking a format
 
 Every artefact passed between phases carries a version stamp — `template_version`
