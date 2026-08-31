@@ -18,10 +18,16 @@ Run it periodically. It does three things, in order:
 
 WHY PROMOTED LISTINGS GET THEIR OWN PANEL
 
-The Fulfillment API reports `totalMarketplaceFee` as a single number — there is
-no per-fee breakdown, so an ad fee cannot be separated from the final value fee
-on the order. Promoted performance therefore has to come from the Marketing API
-side: which listings carry an ad, in which campaign, at what bid, and whether
+`totalMarketplaceFee` is the FINAL VALUE FEE ONLY (#115). Promoted-listing fees
+are billed separately and appear nowhere in the order payload — so there is no
+ad fee in that number to separate out, and every "net" derived from it is
+overstated by the whole ad bill. Measured on one month of live orders: splitting
+clean single-line orders by `lineItems[].properties.soldViaAdCampaign` gives a
+fee rate of 14.67% advertised vs 14.97% not — indistinguishable, where an
+embedded 9-10% ad bid would show as a 9-10 point gap. Seller Hub's Listings
+Sales Report reconciles its monthly final-value-fee total to this field exactly.
+
+Promoted performance therefore has to come from the Marketing API side: which listings carry an ad, in which campaign, at what bid, and whether
 that campaign is actually RUNNING. Joining the ad set to the sold set is what
 turns that into "did promotion sell anything".
 
@@ -456,7 +462,8 @@ def draw(d: dict) -> str:
              f'<div class="stats">'
              + _stat(_money(d["gross"]), "gross realised", f'{d["count"]} sold line items')
              + _stat(_money(d["fee"]), "eBay fees", f'{d["fee_pct"]:.1f}% of gross')
-             + _stat(_money(d["net"]), "net before postage", "what reached the account")
+             + _stat(_money(d["net"]), "net before ads & postage",
+                     "gross minus final value fee only (#115)")
              + _stat(f'{d["avg_pct"]:.0f}%', "average of ask",
                      f'{len(d["below"])} of {d["count"]} sold below ask')
              + _stat(f'{d["median_days"]:.0f}d' if d["median_days"] is not None else "—",
@@ -524,9 +531,11 @@ def draw(d: dict) -> str:
         f'<th class="num">Ads</th></tr>{camp_rows}</table></div>'
         f'<p class="note">Ad states across all campaigns: {_e(mix) or "—"}. '
         'An ad on the listing is not proof the sale came through it — eBay attributes '
-        'that only in its own ad report, and the Fulfillment API returns one lump '
-        '<code>totalMarketplaceFee</code>, so ad spend cannot be split out of the fee '
-        'column here.</p></div></div>')
+        'that only in its own ad report. And <code>totalMarketplaceFee</code> is the '
+        'final value fee <em>only</em>: promoted-listing fees are billed separately and '
+        'are absent from the order payload entirely, so the ad bill is missing from '
+        'every fee and net figure on this page rather than blended into them '
+        '(#115).</p></div></div>')
 
     # pricing band — how the PRICE stage's justified tiers held up
     b = d["bands"]
@@ -628,7 +637,7 @@ def main() -> int:
     out.write_text(draw(d), encoding="utf-8")
 
     print(f"\n{d['count']} sales · {_money(d['gross'])} gross · {_money(d['net'])} net "
-          f"· {d['avg_pct']:.0f}% of ask")
+          f"(before ads & postage) · {d['avg_pct']:.0f}% of ask")
     print(f"promoted: {d['running_campaigns']} running campaign(s), "
           f"{d['live_with_running_ad']}/{d['live_count']} live listings actively promoted")
     print(f"[OK] {out}")

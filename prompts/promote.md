@@ -76,9 +76,11 @@ eBay offers are `autoSelectFutureInventory` (which listings) and
 performance.
 
 Nor can ROAS be computed locally: `ad_report_metadata` answers **403** on this
-account and orders carry one lump `totalMarketplaceFee` with no ad-fee line. A
-ROAS rule would therefore be acting on a number nobody has. Say so rather than
-approximating one.
+account, and `totalMarketplaceFee` is the final value fee only — ad fees are
+billed separately and are absent from the order payload entirely (#115), so
+there is no ad cost anywhere in local data to divide into. A ROAS rule would
+therefore be acting on a number nobody has. Say so rather than approximating
+one.
 
 ## Goal: MAXIMISE REVENUE — and what that means mechanically
 
@@ -150,9 +152,14 @@ Two funding models, and they are not interchangeable:
 
 ## Reading the result honestly
 
-Ad spend cannot be separated out of the fee column. The Fulfillment API returns
-one lump `totalMarketplaceFee` per order, so once a campaign is running, the
-blended fee rate REPORT prints (16.0%) absorbs the ad fees and no local
-computation can split them. If a campaign's real cost matters, it has to come
-from eBay's ad report, and `GET /ad_report_metadata` currently answers 403 on
-this account — an app-authorisation gap to resolve before relying on it.
+Ad spend is not in the fee column at all — and that is worse than it being
+blended in. `totalMarketplaceFee` is the final value fee ONLY; promoted-listing
+fees are billed separately and never appear in the order payload (#115). So the
+fee rate REPORT prints does NOT absorb the ad fees: the ad bill is simply
+missing, and every net is overstated by it. Measured over one month, advertised
+orders showed a 14.67% fee rate against 14.97% unadvertised — indistinguishable,
+where an embedded 9-10% bid would have shown a 9-10 point gap.
+
+A campaign's real cost has to come from eBay: `GET /ad_report_metadata` answers
+403 on this account (an app-authorisation gap), and Seller Hub's Listings Sales
+Report CSV carries the per-listing ad-fee columns today.

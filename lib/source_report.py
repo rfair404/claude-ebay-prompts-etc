@@ -37,9 +37,14 @@ flagged. On a `channel` bucket it's *correct* — no ROI expected, no flag.
 WHAT THIS PAGE DOES NOT CLAIM
 
 `net_before_postage` is exactly that — before postage. `sales_ledger.csv` has
-no actual-postage column, so every "net" and "profit" figure here overstates
-what was actually kept. The page says so plainly rather than printing a number
-that quietly isn't a profit.
+no actual-postage column. It is also before ADVERTISING: the fee it subtracts
+comes from `totalMarketplaceFee`, which is the final value fee only, and
+promoted-listing fees are billed separately and never appear in the order
+payload (#115). So every "net" and "profit" figure here overstates what was
+actually kept, by postage AND by the whole ad bill — on one measured month the
+latter ran ~8% of item sales, about half the size of the final value fee. The
+page says so plainly rather than printing a number that quietly isn't a
+profit.
 """
 from __future__ import annotations
 
@@ -387,8 +392,9 @@ def render_table(d: dict) -> str:
                "a `channel` bucket (an ongoing habit, not a single purchase) has no ROI "
                "by design, not a missing one.")
     out.append("NET is net_before_postage — sales_ledger.csv carries no actual-postage "
-               "column, so every NET/PROFIT figure here is before postage, not a final "
-               "take-home number.")
+               "column, and the fee it subtracts (totalMarketplaceFee) is the final value "
+               "fee only, so ad spend is absent too. Every NET/PROFIT figure here is "
+               "before postage AND before advertising, not a final take-home number.")
     if u["sold_n"]:
         out.append(f"{u['sold_n']} sale(s) have no matching local folder — reported as "
                    f"their own line, not dropped.")
@@ -562,8 +568,10 @@ def draw(d: dict) -> str:
         '<p class="note">A <strong>bucket</strong> is the nearest ancestor directory that '
         'owns a <code>context.txt</code> — not path depth, so a re-org changes this table\'s '
         'contents, never its correctness. <strong>NET is net_before_postage</strong>: '
-        '<code>sales_ledger.csv</code> carries no actual-postage column, so PROFIT here is '
-        'before postage, not a final take-home figure. <strong>ROI</strong> (net / cost) is '
+        '<code>sales_ledger.csv</code> carries no actual-postage column, and the fee it '
+        'subtracts (<code>totalMarketplaceFee</code>) is the final value fee only, so '
+        'promoted-listing spend is absent as well. PROFIT here is before postage and '
+        'before advertising, not a final take-home figure. <strong>ROI</strong> (net / cost) is '
         'shown only for a <code>kind: event</code> bucket with a recorded <code>spend:</code> '
         '— never 0, never infinite, and never computed for a <code>channel</code> bucket '
         '(an ongoing habit has no single payback to measure). A bucket with '
