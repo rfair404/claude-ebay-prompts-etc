@@ -18,12 +18,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from tools.session_observer import (  # noqa: E402
-    _classify, _clean_prompt, _command_bucket, _match_open_issue,
-    _model_rates, _open_idea_issues, _prep_item_dir, _ts, _tool_signature,
-    _turn_context, _turn_cost_usd, aggregate_friction, cost_per_listing,
-    economics_aggregate, economics_report, file_proposals, format_idea_issue,
-    main, parse_economics, parse_session, propose_fixes, report, transcripts_dir,
+    REPO, _classify, _clean_prompt, _command_bucket, _match_open_issue,
+    _model_rates, _near_miss_hint, _open_idea_issues, _prep_item_dir, _slug,
+    _ts, _tool_signature, _turn_context, _turn_cost_usd, aggregate_friction,
+    cost_per_listing, economics_aggregate, economics_report, file_proposals,
+    format_idea_issue, main, parse_economics, parse_session, propose_fixes,
+    report, transcripts_dir,
 )
+
+# _near_miss_hint matches on the repo's own slugified basename, so the fixture
+# directories have to be named after whatever checkout the suite runs from.
+REPO_NAME = _slug(REPO.name)
 
 T0 = "2026-08-27T10:00:0{}.000Z"
 
@@ -63,6 +68,42 @@ def test_transcripts_dir_slugifies_the_repo_path():
     d = transcripts_dir(Path("C:/x/y"))
     assert d.name == "C--x-y"
     assert d.parent.name == "projects"
+
+
+def test_transcripts_dir_slugifies_dots_so_worktrees_resolve():
+    # The '.' in `.claude` is the whole bug: a main checkout has no dot in its
+    # path, so leaving '.' out of the class looks correct until the cwd is a
+    # worktree — which CLAUDE.md requires for any git-state change.
+    cases = [
+        # (cwd, expected directory name)
+        ("C:/p/ebaybiz", "C--p-ebaybiz"),
+        ("C:/p/ebaybiz/.claude/worktrees/wt-1",
+         "C--p-ebaybiz--claude-worktrees-wt-1"),
+        # a worktree whose own name carries a dot
+        ("C:/p/ebaybiz/.claude/worktrees/v1.2-fix",
+         "C--p-ebaybiz--claude-worktrees-v1-2-fix"),
+    ]
+    for cwd, expected in cases:
+        assert transcripts_dir(Path(cwd)).name == expected, cwd
+
+
+def test_missing_transcripts_dir_names_the_near_misses(tmp_path, capsys):
+    # A wrong slug and a quiet week must not print the same thing.
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    (projects / f"C--p-{REPO_NAME}").mkdir()
+    (projects / f"C--p-{REPO_NAME}--claude-worktrees-wt-1").mkdir()
+    (projects / "C--p-unrelated").mkdir()
+
+    hint = _near_miss_hint(projects / "does-not-exist")
+    assert hint, "sibling dirs match the repo — the miss must not be silent"
+    assert any(REPO_NAME in line for line in hint)
+    assert not any("unrelated" in line for line in hint)
+
+    # Genuinely nothing matching -> no hint, so a quiet week stays quiet.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert _near_miss_hint(empty / "does-not-exist") == []
 
 
 def test_clean_prompt_drops_image_placeholders():

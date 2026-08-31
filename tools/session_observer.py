@@ -145,10 +145,44 @@ def _turn_cost_usd(usage: dict, model) -> float:
             + cache_r * in_rate * CACHE_READ_MULT) / 1_000_000
 
 
+def _slug(text: str) -> str:
+    """Claude Code slugifies a path: every ':', '\\', '/' and '.' becomes '-'.
+
+    The '.' matters. A worktree cwd is `<repo>/.claude/worktrees/<name>`, and
+    `.claude` slugifies to `-claude`, giving `...ebaybiz--claude-worktrees-...`
+    with a doubled dash. Leaving '.' out of the class resolves to a directory
+    that does not exist — invisible in the main checkout, which has no dot in
+    its path, and wrong in every worktree, which is where CLAUDE.md requires
+    any session that changes git state to work.
+    """
+    return re.sub(r"[:\\/.]", "-", text)
+
+
 def transcripts_dir(repo: Path) -> Path:
-    """Claude Code slugifies the cwd: every ':', '\\' and '/' becomes '-'."""
-    slug = re.sub(r"[:\\/]", "-", str(repo))
-    return Path.home() / ".claude" / "projects" / slug
+    return Path.home() / ".claude" / "projects" / _slug(str(repo))
+
+
+def _near_miss_hint(missing: Path, limit: int = 5) -> list[str]:
+    """Lines naming real project dirs that match this repo, or [] if none.
+
+    Any future slug quirk — a space, an underscore, an upstream rule change —
+    fails the same silent way this one did, so the check is on the shape of
+    the answer (nothing resolved, yet siblings match) rather than on '.'.
+    """
+    stem = _slug(REPO.name)
+    try:
+        near = sorted(p.name for p in missing.parent.iterdir()
+                      if p.is_dir() and stem in p.name)
+    except OSError:
+        return []
+    if not near:
+        return []
+    out = [f"  {len(near)} directory(ies) there do match {stem!r} — the slug is "
+           f"probably wrong, not the history. Try --dir with one of:"]
+    out += [f"    {missing.parent / n}" for n in near[:limit]]
+    if len(near) > limit:
+        out.append(f"    ... and {len(near) - limit} more")
+    return out
 
 
 def _ts(rec: dict):
@@ -1100,7 +1134,13 @@ def main(argv=None) -> int:
 
     root = Path(args.dir) if args.dir else transcripts_dir(REPO)
     if not root.is_dir():
+        # "no transcripts" reads as "you have not worked much lately", not "I
+        # computed the wrong path" — which is how the missing '.' in the slug
+        # survived. If sibling directories do match this repo, say so: a wrong
+        # slug and a quiet week must not look the same.
         print(f"no transcripts at {root}")
+        for line in _near_miss_hint(root):
+            print(line)
         return 2
     files = sorted(root.glob("*.jsonl"), key=os.path.getmtime, reverse=True)
     if not args.all:
