@@ -1,8 +1,9 @@
 # PRICE Stage B backend — reliability issues & the path to a less-flaky solution
 
 > **RESOLVED 2026-08-15 — Apify removed.** Stage B now runs through the user's
-> logged-in Chrome (`lib/ebay_sold_browse.py`). `lib/apify_ebay.py` moved to
-> `deprecated/`. Everything below is kept as the history that led here.
+> logged-in Chrome (`lib/ebay_sold_browse.py`). `lib/apify_ebay.py` was
+> retired with it and is no longer in the repo. Everything below is kept as
+> the history that led here.
 >
 > **The root cause, finally measured.** eBay migrated search results from the
 > legacy `li.s-item` markup to a new `li.s-card` layout. On a live sold search:
