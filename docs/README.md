@@ -20,8 +20,8 @@ prompt, not the archive.
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
 | [prep-white-backgrounds.md](prep-white-backgrounds.md) | PROPOSAL, not built. Why the punch preset does not transfer from dark cloth to white-background shoots. |
 | [prep-resume-plan.md](prep-resume-plan.md) | PLAN ONLY, no code. `--resume` / `--jobs N` for PREP (#74 item 3). |
-| [prep_batch.md](prep_batch.md) | Generated. The batch-review table written by the PREP batch tooling; re-run the scan to refresh it. |
-| `ask/`, `ask2/` | Generated. Default output paths of `tools/prep_asksheet.py` — the frame index `tools/prep_answer.py` reads back. |
+| `prep_batch.md` | Generated, untracked (#106). The batch-review table written by the PREP batch tooling; re-run the scan to refresh it. |
+| `ask*/` | Generated, untracked (#106). Default output path of `tools/prep_asksheet.py` — the frame index `tools/prep_answer.py` reads back. The tool creates the directory itself, so a fresh clone needs nothing here. |
 
 ## archive/
 

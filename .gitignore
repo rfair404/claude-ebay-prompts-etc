@@ -52,6 +52,16 @@ ledger_reconcile_report.json
 # is what makes the reports themselves disposable.
 /docs/performance-*.md
 
+# Batch-ask output — tools/prep_asksheet.py writes its sheets and index.json
+# under docs/ask*/, and tools/prep_answer.py reads the index back. The PATHS are
+# live defaults (V4_PLAN's root-hygiene item ruled they stay); the PAYLOADS are
+# one past run's frame index, rewritten wholesale on the next run and naming
+# live inventory paths in a public repo. asksheet mkdir -p's its --out, so
+# nothing needs to be tracked for a fresh clone to work. Same for the PREP
+# batch-review table.
+/docs/ask*/
+/docs/prep_batch.md
+
 # Dashboard output — reports/sales_dashboard.html carries gross, fees, net and
 # item-level sale prices; reports/ebay_ads.json carries the account's campaigns;
 # reports/price_vs_actual.csv carries every ask and what it realised. All class 2.
