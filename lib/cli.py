@@ -43,6 +43,9 @@ COMMANDS = {
                      "sales / fees / promotion dashboard"),
     "report":       ("lib.source_report",
                      "cross-directory bucket ROI — report --by-source [--html] (#56)"),
+    "context":      ("lib.context_write",
+                     "write kind:/spend:/spend_unit:/acquired: into a bucket's "
+                     "context.txt, preserving prose (#118)"),
     "promote":      ("tools.promote",
                      "paid-placement planner — proposes; every write needs --confirm"),
     "voice":        ("lib.voice_check",

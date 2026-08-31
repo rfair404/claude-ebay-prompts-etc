@@ -26,13 +26,23 @@ WHY COST BASIS COMES FROM context.txt KEYS, NOT PROSE
 `context.txt` already carries the story of an acquisition in prose ("An estate
 sale in Social Circle Georgia. ... Spend $575"), and that prose stays the
 payload. But recovering the spend by pattern-matching English is exactly the
-kind of number this file exists to stop producing. `spend:` / `kind:` /
-`acquired:` are real, explicit keys a tool can branch on without guessing.
+kind of number this file exists to stop producing. `spend:` / `spend_unit:` /
+`kind:` / `acquired:` are real, explicit keys a tool can branch on without
+guessing — written by `lib/context_write.py` (`ebz context <bucket-dir>
+--spend=... --kind=...`, #118), never by hand-editing prose.
 `kind` matters because the two axes aren't comparable: an `event` bucket (a
 single purchase — SCJ, MAR) has a real ROI; a `channel` bucket (an ongoing
 habit — FREE, THRIFT) does not, and treating it as one manufactures a number
 that means nothing. A missing `spend:` on an `event` bucket is a *data gap* —
-flagged. On a `channel` bucket it's *correct* — no ROI expected, no flag.
+flagged. On a `channel` bucket it's *correct* — no ROI expected, no flag; it
+still surfaces in the separate, broader `needs_spend` validation line if it
+has sold anything, since COST/PROFIT need a real basis regardless of kind.
+`spend_unit` (#118) says what the number in `spend:` MEANS — `lot` (default,
+the whole acquisition) or a per-`item`/per-`pair` rate, resolved against the
+bucket's own sold+live+pending count by `resolve_cost_basis()`. Per-unit
+INHERITANCE across nested buckets (a parent's default rate reaching a child
+that doesn't set its own) is not implemented — real, underspecified design
+work left as a documented follow-up; see `resolve_cost_basis()`'s docstring.
 
 WHAT THIS PAGE DOES NOT CLAIM
 
@@ -129,8 +139,9 @@ def bucket_label(bucket_dir: Path, root: Optional[Path] = None) -> str:
 # context.txt — tolerant of empty / prose-only / keyed-plus-prose
 # --------------------------------------------------------------------------- #
 
-_KEY_RE = re.compile(r"^\s*(kind|spend|acquired)\s*:\s*(.*?)\s*$", re.I)
+_KEY_RE = re.compile(r"^\s*(kind|spend|spend_unit|acquired)\s*:\s*(.*?)\s*$", re.I)
 _KINDS = {"event", "channel"}
+_SPEND_UNITS = {"lot", "item", "pair"}
 
 
 def _to_float(v, default=None):
@@ -141,7 +152,8 @@ def _to_float(v, default=None):
 
 
 def parse_context(text: str) -> dict:
-    """Pull `kind:` / `spend:` / `acquired:` out of a context.txt body.
+    """Pull `kind:` / `spend:` / `spend_unit:` / `acquired:` out of a
+    context.txt body.
 
     Only an explicit `key: value` line counts — prose that happens to contain
     "Spend $575" is deliberately NOT read as the spend field (that is the whole
@@ -149,9 +161,19 @@ def parse_context(text: str) -> dict:
     empty file, a prose-only file, and a file mixing key lines with prose in
     any order — all three shapes already exist on disk under inventory/.
     First occurrence of a key wins; a bare `kind:` value outside {event,
-    channel} is treated as unset rather than trusted verbatim.
+    channel} is treated as unset rather than trusted verbatim, same for a
+    `spend_unit:` value outside {lot, item, pair}.
+
+    `spend_unit` closes the #118 schema gap: `spend: 575` alone can't say
+    whether that number is the whole lot, a per-item rate, or a per-pair
+    rate — real prose on disk uses all three shapes ("total lot cost me
+    $575", "assume item cost of $8 per item", a per-pair figure). It
+    defaults to `"lot"` when absent, which is both the natural reading of a
+    bare `spend:` and exactly the old single-scalar behaviour, so the one
+    real file that already has `acquired:` (and every fixture/test written
+    before #118) keeps working unchanged.
     """
-    kind = spend = acquired = None
+    kind = spend = spend_unit = acquired = None
     for line in (text or "").splitlines():
         m = _KEY_RE.match(line)
         if not m:
@@ -165,19 +187,24 @@ def parse_context(text: str) -> dict:
                 kind = v
         elif key == "spend" and spend is None:
             spend = _to_float(val)
+        elif key == "spend_unit" and spend_unit is None:
+            v = val.lower()
+            if v in _SPEND_UNITS:
+                spend_unit = v
         elif key == "acquired" and acquired is None:
             acquired = val
-    return {"kind": kind, "spend": spend, "acquired": acquired}
+    return {"kind": kind, "spend": spend, "spend_unit": spend_unit or "lot",
+            "acquired": acquired}
 
 
 def load_context(bucket_dir: Path) -> dict:
     f = Path(bucket_dir) / "context.txt"
     if not f.is_file():
-        return {"kind": None, "spend": None, "acquired": None}
+        return {"kind": None, "spend": None, "spend_unit": "lot", "acquired": None}
     try:
         text = f.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return {"kind": None, "spend": None, "acquired": None}
+        return {"kind": None, "spend": None, "spend_unit": "lot", "acquired": None}
     return parse_context(text)
 
 
@@ -205,6 +232,48 @@ def is_basis_gap(kind: Optional[str], spend: Optional[float]) -> bool:
     bucket with no recorded spend. A `channel` bucket (or unspecified kind)
     missing spend is correct, not a gap — no ROI was ever expected there."""
     return kind == "event" and spend is None
+
+
+def resolve_cost_basis(spend: Optional[float], spend_unit: Optional[str],
+                       unit_count: int) -> Optional[float]:
+    """Resolve a bucket's recorded `spend:` into a lot-total dollar figure —
+    the number `roi_for()` / `is_basis_gap()` / the COST column expect (#118).
+
+    `spend_unit` says what `spend` actually means: `lot` (default — the
+    whole acquisition) passes it through unchanged, which is also the old
+    single-scalar behaviour. `item` / `pair` are a RATE — multiplied by
+    `unit_count` (the bucket's own sold + live + pending listing count, the
+    only per-bucket unit count `gather()` already tracks) to get the same
+    lot-total figure.
+
+    This does NOT implement per-item/per-pair INHERITANCE across nested
+    buckets — a parent's "$8/item unless a child says otherwise" default
+    reaching a child that records no spend of its own. That is real,
+    currently-underspecified design work (a child overriding for its own
+    items while the parent's default still applies to *other* siblings) left
+    as a follow-up rather than guessed at here; each bucket resolves only
+    its own recorded `spend:` against its own `unit_count`, nothing more.
+    """
+    if spend is None:
+        return None
+    if (spend_unit or "lot").lower() in ("item", "pair"):
+        return spend * max(unit_count, 0)
+    return spend
+
+
+def missing_spend_with_sales(rows: list[dict]) -> list[str]:
+    """Bucket keys with at least one recorded sale but no resolved cost basis.
+
+    This is the #118 validation check — deliberately broader than (and
+    distinct from) `is_basis_gap()`: `is_basis_gap()` only ever flags
+    `kind: event` (a `channel` bucket missing spend is correct, no ROI was
+    ever expected), but ANY bucket that has already sold something needs a
+    recorded `spend:` to keep the COST/PROFIT columns honest, whatever its
+    `kind`. Not a hard failure — surfaced as one summary line in the report,
+    naming what to run (`ebz context --set ...`), not a per-row failure that
+    makes a `channel` bucket's routine thrift-store sales look broken.
+    """
+    return sorted(b["key"] for b in rows if b.get("sold_n", 0) > 0 and not b.get("cost_known"))
 
 
 def sell_through(sold_n: int, live_n: int) -> Optional[float]:
@@ -245,7 +314,8 @@ def _new_bucket(bucket_dir: Path) -> dict:
     ctx = load_context(bucket_dir)
     return {
         "path": bucket_dir, "key": bucket_label(bucket_dir),
-        "kind": ctx["kind"], "spend": ctx["spend"], "acquired": ctx["acquired"],
+        "kind": ctx["kind"], "spend": ctx["spend"], "spend_unit": ctx["spend_unit"],
+        "acquired": ctx["acquired"],
         "sold_n": 0, "gross": 0.0, "fee": 0.0, "net": 0.0,
         "ask_total": 0.0, "live_n": 0, "pending_n": 0,
     }
@@ -305,10 +375,15 @@ def gather() -> dict:
 
     rows = sorted(buckets.values(), key=lambda b: -b["net"])
     for b in rows:
-        b["cost_known"] = b["spend"] is not None
-        b["profit"] = (b["net"] - b["spend"]) if b["cost_known"] else None
-        b["roi"] = roi_for(b["net"], b["spend"], b["kind"])
-        b["gap"] = is_basis_gap(b["kind"], b["spend"])
+        # unit_count is the bucket's own sold+live+pending listing count —
+        # the only per-bucket unit count already tracked, and what a
+        # `spend_unit: item`/`pair` rate resolves against (#118).
+        b["unit_count"] = b["sold_n"] + b["live_n"] + b["pending_n"]
+        b["cost_basis"] = resolve_cost_basis(b["spend"], b["spend_unit"], b["unit_count"])
+        b["cost_known"] = b["cost_basis"] is not None
+        b["profit"] = (b["net"] - b["cost_basis"]) if b["cost_known"] else None
+        b["roi"] = roi_for(b["net"], b["cost_basis"], b["kind"])
+        b["gap"] = is_basis_gap(b["kind"], b["cost_basis"])
         b["sell_through"] = sell_through(b["sold_n"], b["live_n"])
 
     known = [b for b in rows if b["cost_known"]]
@@ -321,11 +396,12 @@ def gather() -> dict:
         "ask_total": sum(b["ask_total"] for b in rows),
         "live_n": sum(b["live_n"] for b in rows),
         "pending_n": sum(b["pending_n"] for b in rows),
-        "cost": sum(b["spend"] for b in known),
+        "cost": sum(b["cost_basis"] for b in known),
         "cost_bucket_n": len(known),
         "profit": sum(b["profit"] for b in known) if known else None,
     }
-    ev_net, ev_cost = sum(b["net"] for b in event_known), sum(b["spend"] for b in event_known)
+    ev_net = sum(b["net"] for b in event_known)
+    ev_cost = sum(b["cost_basis"] for b in event_known)
     total["roi"] = (ev_net / ev_cost) if ev_cost > 0 else None
     total["sell_through"] = sell_through(total["sold_n"], total["live_n"])
 
@@ -336,6 +412,7 @@ def gather() -> dict:
         "gaps": [b["key"] for b in rows if b["gap"]],
         "missing_basis_channel": [b["key"] for b in rows
                                   if b["cost_known"] is False and not b["gap"]],
+        "needs_spend": missing_spend_with_sales(rows),
     }
 
 
@@ -364,7 +441,7 @@ def render_table(d: dict) -> str:
 
     def row(key, b) -> str:
         gap = " *" if b.get("gap") else "  "
-        cost = _fmt_money(b["spend"]) + gap
+        cost = _fmt_money(b["cost_basis"]) + gap
         vals = [key[:22], str(b["live_n"]), _fmt_money(b["ask_total"]),
                 str(b["sold_n"]), _fmt_money(b["gross"]), _fmt_money(b["fee"]),
                 _fmt_money(b["net"]), cost, _fmt_money(b["profit"]),
@@ -375,16 +452,20 @@ def render_table(d: dict) -> str:
         lines.append(row(b["key"], b))
     u = d["unattributed"]
     if u["sold_n"]:
-        lines.append(row(u["key"], {**u, "spend": None, "profit": None, "roi": None,
+        lines.append(row(u["key"], {**u, "cost_basis": None, "profit": None, "roi": None,
                                     "gap": False, "ask_total": 0.0, "live_n": 0,
                                     "sell_through": None, "pending_n": 0}))
     t = d["total"]
     lines.append("-" * (sum(widths) + 2 * (len(widths) - 1)))
-    lines.append(row("TOTAL", {**t, "spend": t["cost"] or None, "gap": False}))
+    lines.append(row("TOTAL", {**t, "cost_basis": t["cost"] or None, "gap": False}))
 
     out = ["\n".join(lines), ""]
     if d["gaps"]:
         out.append(f"* basis not recorded (event, missing spend:): {', '.join(d['gaps'])}")
+    if d.get("needs_spend"):
+        out.append(f"{len(d['needs_spend'])} bucket(s) need `ebz context <dir> --spend=...` "
+                   f"(sold items, no recorded cost basis regardless of kind): "
+                   f"{', '.join(d['needs_spend'])}")
     out.append(f"cost/profit/ROI totals cover {t['cost_bucket_n']} bucket(s) with a "
                f"recorded spend: — buckets missing a basis are excluded, never counted "
                f"as zero cost or pure profit.")
@@ -488,14 +569,18 @@ def _stat(amt: str, lbl: str, sub: str = "") -> str:
 def _bucket_row(key: str, b: dict, *, total: bool = False, is_bucket: bool = True) -> str:
     kind = b.get("kind") or "unspecified"
     gap_pill = ' <span class="pill warn">GAP</span>' if b.get("gap") else ""
-    cost = f'{_money(b["spend"])}' if b.get("cost_known", b.get("spend") is not None) else \
+    cost = f'{_money(b.get("cost_basis"))}' if b.get("cost_known") else \
         '<span class="dim">basis not recorded</span>'
+    rate_note = ""
+    if is_bucket and not total and b.get("spend") is not None and b.get("spend_unit") not in (None, "lot"):
+        rate_note = f' · {_money(b["spend"])}/{_e(b["spend_unit"])} × {b.get("unit_count", 0)}'
     profit_cls = "warn" if (b.get("profit") is not None and b["profit"] < 0) else ""
     tr_open = '<tr class="total">' if total else '<tr>'
     return (
         f'{tr_open}<td>{_e(key)}'
         + (f'<div class="dim" style="font-size:11.5px">{_e(kind)}'
-           + (f' · acquired {_e(b["acquired"])}' if b.get("acquired") else "") + '</div>'
+           + (f' · acquired {_e(b["acquired"])}' if b.get("acquired") else "")
+           + rate_note + '</div>'
            if is_bucket and not total else "")
         + gap_pill + '</td>'
         f'<td class="num">{b["live_n"]}</td>'
@@ -520,13 +605,14 @@ def draw(d: dict) -> str:
     u = d["unattributed"]
     if u["sold_n"]:
         rows_html += _bucket_row(u["key"], {
-            "kind": None, "spend": None, "cost_known": None, "profit": None, "roi": None,
+            "kind": None, "spend": None, "cost_basis": None, "cost_known": False,
+            "profit": None, "roi": None,
             "gap": False, "sell_through": None, "ask_total": 0.0, "live_n": 0,
             "pending_n": 0, "sold_n": u["sold_n"], "gross": u["gross"], "fee": u["fee"],
             "net": u["net"],
         }, is_bucket=False)
     total_row = _bucket_row("TOTAL", {
-        "kind": None, "spend": t["cost"], "cost_known": t["cost_bucket_n"] > 0,
+        "kind": None, "spend": None, "cost_basis": t["cost"], "cost_known": t["cost_bucket_n"] > 0,
         "profit": t["profit"], "roi": t["roi"], "gap": False,
         "sell_through": sell_through(t["sold_n"], t["live_n"]),
         "ask_total": t["ask_total"], "live_n": t["live_n"], "pending_n": t["pending_n"],
@@ -537,6 +623,10 @@ def draw(d: dict) -> str:
                f'{len(d["gaps"])} bucket(s) flagged GAP — an <code>event</code> '
                f'acquisition with no recorded <code>spend:</code>: '
                f'{_e(", ".join(d["gaps"]))}.</p>' if d["gaps"] else "")
+    needs_spend_note = (f'<p class="note warn" style="border-top:0;padding-top:0">'
+               f'{len(d["needs_spend"])} bucket(s) have sales but no resolved cost basis '
+               f'(any <code>kind</code>) — run <code>ebz context &lt;dir&gt; --spend=...</code>: '
+               f'{_e(", ".join(d["needs_spend"]))}.</p>' if d.get("needs_spend") else "")
 
     body = (
         f'<div class="card"><div class="hdr">'
@@ -553,12 +643,14 @@ def draw(d: dict) -> str:
                 "channel buckets carry no ROI by design")
         + _stat(str(len(d["gaps"])), "GAP: event, no spend recorded",
                 "a real data gap, not free money")
+        + _stat(str(len(d["needs_spend"])), "sold, no cost basis (any kind)",
+                "run ebz context <dir> --spend=...")
         + '</div></div>'
     )
 
     body += (
         '<div class="card"><div class="pad"><h2>By bucket (context.txt ownership)</h2>'
-        f'{gap_note}'
+        f'{gap_note}{needs_spend_note}'
         '<div class="scroll"><table><tr><th>Bucket</th><th class="num">Live</th>'
         '<th class="num">Ask $</th><th class="num">Sold</th><th class="num">Gross $</th>'
         '<th class="num">Fees</th><th class="num">Net $</th><th class="num">Cost</th>'
