@@ -1,0 +1,36 @@
+# Line endings are a repo decision, not a per-clone one. Without this file the
+# behaviour depends on each machine's core.autocrlf, so a CI runner, a cloud
+# agent and a second workstation can each normalize differently (#108).
+#
+# Committed blobs were already LF and consistent; what this fixes is working
+# files going mixed — editing a CRLF file with a tool that writes \n leaves the
+# untouched lines CRLF and the new ones LF, and nothing catches it, because
+# normalization only happens at commit time.
+
+* text=auto eol=lf
+
+*.py    text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+*.html  text eol=lf
+
+# Deliberate: tools/marble_index_next.cmd is run by the Windows scheduled task
+# (MarbleIndexNext), and cmd.exe is happier with CRLF.
+*.cmd   text eol=crlf
+
+# Git's heuristics get these right nearly always, which is not the same as
+# always. Upper-case variants included — inventory frames come off the camera
+# as .JPG, and #97 established that sample photos can be tracked.
+*.pdf   binary
+*.jpg   binary
+*.JPG   binary
+*.jpeg  binary
+*.JPEG  binary
+*.png   binary
+*.gif   binary
+*.webp  binary
+*.tiff  binary
+*.heic  binary
