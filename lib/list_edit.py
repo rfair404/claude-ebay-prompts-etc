@@ -1243,6 +1243,13 @@ def build_review_card(draft_path: Path,
     (2) runs preflight (condition remap + shipping policy),
     and (3) assembles the decision card deterministically from the draft,
     comps, ledger, and preflight — written to <shoot>/review_card.md.
+
+    When every checked section is clean (no flags, PREP approved, photos
+    match the manifest, no intl blockers) the card leads with one "ALL
+    CLEAR" line (GH #100) so a clean approval is a fast read, not a scan.
+    This is a presentation change only — it never approves or publishes
+    anything itself; the explicit human word the Publish firewall requires
+    (prompts/_shared.md) is unchanged.
     """
     import csv
     creds = creds or load_credentials()
@@ -1413,8 +1420,24 @@ def build_review_card(draft_path: Path,
             _bits.append("[!] not in the PREP manifest")
         photo_lines.append(f"  {_tag}  {_rel}" + (f"   [{', '.join(_bits)}]" if _bits else ""))
 
+    # GH #100: "nothing flagged" used to mean scanning the whole card to
+    # confirm it. Reduce that to one line at the top when EVERY section that
+    # can carry an exception — flags, intl, PREP approval, photo fidelity —
+    # is actually clean, so the human's job on the common case is reading one
+    # line and giving the one word the Publish firewall still requires (see
+    # prompts/_shared.md and prompts/review.md — this changes nothing about
+    # what counts as approval, only how fast a clean card is to read).
+    all_clear = (
+        flags == ["  • None"]
+        and not any(("⚠" in ln or "✖" in ln) for ln in intl_lines)
+        and not any("[!]" in ln for ln in photo_lines)
+        and "[!]" not in prep_note
+    )
+
     card = "\n".join([
         f"━━ REVIEW: {shoot.name}  (sku {sku} · ledger {status}) ━━",
+        *(["✓ ALL CLEAR — nothing flagged, PREP approved, photos match, no intl blockers."]
+          if all_clear else []),
         f'Title:     "{title}"  [{len(title)}/80]',
         f"Price:     ${price}  ·  Best Offer: {bo}",
         f"Condition: {cond}",

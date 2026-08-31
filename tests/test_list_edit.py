@@ -45,6 +45,8 @@ Run:  python tests/test_list_edit.py
 """
 import contextlib
 import csv
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -682,6 +684,79 @@ def test_build_review_card_context_section_is_quiet_with_no_context_txt():
     assert "Context (estate background):" in card
     assert "no context.txt in chain" in card
     assert "estate forbids" not in card
+
+
+# ---------------------------------------------------------------------------
+# build_review_card() — ALL CLEAR banner (GH #100)
+# ---------------------------------------------------------------------------
+
+def test_build_review_card_shows_all_clear_when_every_section_is_clean():
+    """GH #100: a fully clean item (no flags, PREP approved with a matching
+    photo hash, no intl blockers, no stale meta) gets one banner line right
+    under the header, so a clean approval is a fast read instead of a scan
+    of every section to confirm there was nothing to see. This only changes
+    what the card SHOWS — the explicit-approval command below is unchanged,
+    and nothing here approves or publishes anything."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        shoot = draft_path.parent
+        photo = shoot / "listing" / "a.jpg"
+        digest = hashlib.sha256(photo.read_bytes()).hexdigest()
+        prep_dir = shoot / ".prep"
+        prep_dir.mkdir(parents=True, exist_ok=True)
+        (prep_dir / "prep.json").write_text(json.dumps({
+            "approved": True,
+            "chosen_preset": "crisp",
+            "photos": {"0": {"output": "listing/a.jpg", "out_sha256": digest}},
+        }), encoding="utf-8")
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    lines = card.splitlines()
+    assert "ALL CLEAR" in lines[1], "banner must be the line right after the header"
+    assert "→ Approve publishes this LIVE" in card, (
+        "the banner must not replace or skip the explicit-approval instruction")
+
+
+def test_build_review_card_withholds_all_clear_when_prep_is_unapproved():
+    """The banner must never claim clean when PREP itself has no manifest at
+    all for these photos -- claiming clarity nothing has actually verified
+    defeats the point of a faster-but-still-honest signal."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    assert "ALL CLEAR" not in card, "no PREP manifest at all must not be reported clean"
+
+
+def test_build_review_card_withholds_all_clear_when_something_is_flagged():
+    """A flagged draft (estate context block, GH #46's fixture) must never
+    show ALL CLEAR even if PREP/photos/intl are otherwise fine -- the banner
+    is an AND of every section, not just the ones that happen to be checked
+    first."""
+    import dir_context as DC
+    DC.INVENTORY.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="dctx_", dir=str(DC.INVENTORY)))
+    try:
+        (tmp / "context.txt").write_text(
+            "source: Frankie, estate, Greensboro NC\n"
+            "storage: attic, unclimatized\n", encoding="utf-8")
+        draft_path = _write_single_draft(tmp)
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(tmp):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+        assert "ALL CLEAR" not in card
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
