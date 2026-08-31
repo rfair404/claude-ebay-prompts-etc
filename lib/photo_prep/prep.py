@@ -187,16 +187,21 @@ def _sha256(path: Path) -> str:
 
 def _apply_settings_hash(aspect, pad: float, pop: str, subject: str,
                          category: str, only) -> str:
-    """Fingerprint of the inputs that decide what `--apply` renders.
+    """Fingerprint of the inputs that could decide what `--apply` renders.
 
     Same truncated-sha256 convention as `_sha256()`/`_manifest_fingerprint()`
     -- 16 hex chars, not a full digest. Stored as `apply_run.settings_hash`
     (docs/prep-resume-plan.md item 2) so a later `--resume` can tell "this is
     an answer to the question I'm asking" from "this answered a different
-    one" -- a changed aspect, pad, pop, subject, category or preset set means
-    the old renders don't answer this invocation's question, exactly like a
+    one" -- a changed aspect, pad, subject, category or preset set means the
+    old renders don't answer this invocation's question, exactly like a
     geometry/category change already invalidates crop/colour sign-off
-    elsewhere in this file.
+    elsewhere in this file. `pop` is included too even though `run_apply`'s
+    render call never forwards it to `colormod.correct` (every preset
+    already bakes in its own pop level, see the comment where `pop` is read
+    above) -- harmless to fingerprint regardless, since a changed `pop` that
+    turns out not to matter only costs an unnecessary re-render, never a
+    stale one.
     """
     payload = json.dumps([aspect, pad, pop, subject, category,
                           sorted(only)], sort_keys=True)
