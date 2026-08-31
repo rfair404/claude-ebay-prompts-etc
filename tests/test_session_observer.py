@@ -516,6 +516,21 @@ def test_propose_fixes_flags_repeat_tool_error_and_long_loop_signals():
     assert "Bash" in err["evidence"]
 
 
+def test_propose_fixes_names_the_worst_repeat_signature():
+    friction = _friction_agg(
+        n_sessions=10,
+        kinds=Counter({"repeat": 3}),
+        samples={"repeat": [
+            ("abc12345", {"kind": "repeat", "detail": "3x", "sample": "Bash:git status"}),
+            ("def67890", {"kind": "repeat", "detail": "6x", "sample": "Read:draft.md"}),
+        ]},
+    )
+    props = propose_fixes(friction, _econ_agg())
+    hit = next(p for p in props if p["key"] == "repeat_calls")
+    assert "Read:draft.md" in hit["evidence"]
+    assert "6x" in hit["evidence"]
+
+
 def test_propose_fixes_ranks_by_impact_hours_descending():
     econ = _econ_agg(bash_total=50, bash_over30=5, bg_bash=1, bash_over30_secs=3600,
                      ask_wait_secs={"Colour": 3600 * 10}, ask_count={"Colour": 2})

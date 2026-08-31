@@ -984,9 +984,22 @@ def propose_fixes(friction_agg: dict, econ_agg: dict) -> list[dict]:
     n_sessions = friction_agg.get("n_sessions") or 0
     if n_sessions:
         if kinds.get("repeat", 0) >= max(2, n_sessions // 5):
+            # Same "which one, concretely" treatment tool_error_rate gives its
+            # worst offender below: samples["repeat"] already carries the exact
+            # signature each repeat repeats (_tool_signature() — tool name plus
+            # its command/file_path/pattern/etc, per the "what a repeat repeats"
+            # docstring), so surface the worst of it instead of a bare count —
+            # #121 finding 5 couldn't be diagnosed further than "27 signals"
+            # without this.
+            worst = max(samples.get("repeat", []),
+                        key=lambda sf: int(sf[1]["detail"].rstrip("x") or 0),
+                        default=None)
+            worst_txt = (f' (worst: {worst[1]["sample"][:80]!r} {worst[1]["detail"]})'
+                        if worst else "")
             add("repeat_calls",
                 "The same tool call is repeating 3+ times within a session",
-                f"{kinds['repeat']} repeat-call signal(s) across {n_sessions} session(s)",
+                f"{kinds['repeat']} repeat-call signal(s) across {n_sessions} session(s)"
+                f"{worst_txt}",
                 "A tool re-run 3+ times with the same input in one session is either "
                 "a silent failure being retried blind or a result that should have "
                 "been cached — check the samples and fix the root cause rather than "
