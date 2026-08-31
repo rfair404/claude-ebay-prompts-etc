@@ -146,8 +146,13 @@ def _turn_cost_usd(usage: dict, model) -> float:
 
 
 def transcripts_dir(repo: Path) -> Path:
-    """Claude Code slugifies the cwd: every ':', '\\' and '/' becomes '-'."""
-    slug = re.sub(r"[:\\/]", "-", str(repo))
+    """Claude Code slugifies the cwd: every ':', '\\', '/' and '.' becomes '-'.
+
+    The '.' matters: a worktree cwd is <repo>/.claude/worktrees/<name>, and
+    '.claude' slugifies to '-claude', giving '…ebaybiz--claude-worktrees-…'.
+    Leaving '.' out silently resolves to a directory that does not exist.
+    """
+    slug = re.sub(r"[:\\/.]", "-", str(repo))
     return Path.home() / ".claude" / "projects" / slug
 
 
@@ -1101,6 +1106,16 @@ def main(argv=None) -> int:
     root = Path(args.dir) if args.dir else transcripts_dir(REPO)
     if not root.is_dir():
         print(f"no transcripts at {root}")
+        projects_dir = Path.home() / ".claude" / "projects"
+        if projects_dir.is_dir():
+            stem = re.sub(r"[:\\/.]", "-", REPO.name)
+            near = sorted(p.name for p in projects_dir.iterdir()
+                          if p.is_dir() and stem in p.name)
+            if near:
+                print(f"  {len(near)} directory(ies) here do match '{stem}' — the slug is "
+                      f"probably wrong, not the history. Try --dir with one of:")
+                for n in near[:5]:
+                    print(f"    ~/.claude/projects/{n}")
         return 2
     files = sorted(root.glob("*.jsonl"), key=os.path.getmtime, reverse=True)
     if not args.all:

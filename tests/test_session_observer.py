@@ -65,6 +65,75 @@ def test_transcripts_dir_slugifies_the_repo_path():
     assert d.parent.name == "projects"
 
 
+# #103: Claude Code slugifies ':', '\\', '/' AND '.' in the cwd. That last
+# one never showed up from the main checkout (no dot in that path), so it
+# was invisible until the cwd became a worktree — this repo's own CLAUDE.md
+# convention for any session that changes git state. Table test over three
+# cwd shapes so the fix (and any future regression) is pinned without
+# needing any real transcripts on disk.
+TRANSCRIPTS_DIR_CASES = [
+    ("main checkout, no dot",
+     "/home/user/ebaybiz",
+     "-home-user-ebaybiz"),
+    ("worktree cwd (the #103 bug: '.claude' has a dot)",
+     "/home/user/ebaybiz/.claude/worktrees/fix-slug",
+     "-home-user-ebaybiz--claude-worktrees-fix-slug"),
+    ("worktree name itself contains a dot",
+     "/home/user/ebaybiz/.claude/worktrees/fr-great-courses.dvd-obs",
+     "-home-user-ebaybiz--claude-worktrees-fr-great-courses-dvd-obs"),
+]
+
+
+def test_transcripts_dir_handles_dots_in_every_cwd_shape():
+    for label, repo, expected_slug in TRANSCRIPTS_DIR_CASES:
+        d = transcripts_dir(Path(repo))
+        assert d.name == expected_slug, label
+        assert d.parent.name == "projects", label
+
+
+def test_main_lists_near_matching_dirs_when_transcripts_dir_is_missing(
+        monkeypatch, capsys):
+    # #103's "make the miss loud" fallback: when the computed transcripts
+    # dir doesn't exist, scan ~/.claude/projects/ for directories whose name
+    # contains the repo's slugified basename and suggest them via --dir,
+    # instead of a dead-end "no transcripts" with nothing else to try.
+    home = Path(tempfile.mkdtemp())
+    projects = home / ".claude" / "projects"
+    match_dir = "-home-user--claude-worktrees-ebaybiz-issue-103"
+    other_dir = "-home-user-some-unrelated-repo"
+    (projects / match_dir).mkdir(parents=True)
+    (projects / other_dir).mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr("tools.session_observer.REPO", Path("/home/user/ebaybiz"))
+
+    missing_dir = home / "nope-does-not-exist"
+    rc = main(["--dir", str(missing_dir)])
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert f"no transcripts at {missing_dir}" in out
+    assert "1 directory(ies) here do match 'ebaybiz'" in out
+    assert f"~/.claude/projects/{match_dir}" in out
+    assert other_dir not in out
+
+
+def test_main_no_transcripts_without_projects_dir_never_raises(monkeypatch, capsys):
+    # Graceful degradation, same as the rest of this module: no
+    # ~/.claude/projects/ at all (fresh machine, wiped cache) must not crash
+    # the fallback scan — just fall back to the plain "no transcripts" line.
+    home = Path(tempfile.mkdtemp())   # no .claude/projects under here
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr("tools.session_observer.REPO", Path("/home/user/ebaybiz"))
+
+    missing_dir = home / "nope-does-not-exist"
+    rc = main(["--dir", str(missing_dir)])
+    out = capsys.readouterr().out
+
+    assert rc == 2
+    assert f"no transcripts at {missing_dir}" in out
+    assert "match" not in out
+
+
 def test_clean_prompt_drops_image_placeholders():
     txt = "[Image: original 4000x3000, displayed at 2000x1500.]\nprice this lot"
     assert _clean_prompt(txt) == "price this lot"
