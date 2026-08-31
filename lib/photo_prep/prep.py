@@ -133,7 +133,7 @@ def _save_bgr(path: Path, bgr: np.ndarray, quality: int = 94) -> None:
     Same tmp-and-rename shape `save_manifest` already uses, for the same
     reason: a killed process must never leave a plausible-looking truncated
     JPEG at the real path. `--resume`'s staleness check (docs/prep-resume-
-    plan.md item 2) trusts "the file exists with the recorded hash" as proof
+    plan.md item 3) trusts "the file exists with the recorded hash" as proof
     a render finished; a straight write to the target path could instead
     leave a file that exists, matches nothing, but LOOKS like a finished
     render until something re-hashes it.
@@ -191,7 +191,7 @@ def _apply_settings_hash(aspect, pad: float, pop: str, subject: str,
 
     Same truncated-sha256 convention as `_sha256()`/`_manifest_fingerprint()`
     -- 16 hex chars, not a full digest. Stored as `apply_run.settings_hash`
-    (docs/prep-resume-plan.md item 2) so a later `--resume` can tell "this is
+    (docs/prep-resume-plan.md item 3) so a later `--resume` can tell "this is
     an answer to the question I'm asking" from "this answered a different
     one" -- a changed aspect, pad, subject, category or preset set means the
     old renders don't answer this invocation's question, exactly like a
@@ -999,7 +999,7 @@ def _already_listed(shoot: Path) -> bool:
 def _frame_is_resumable(shoot: Path, name: str, rec: dict, only: tuple) -> bool:
     """Whether an already-rendered frame can be reused under `--resume`.
 
-    Conservative by construction (docs/prep-resume-plan.md item 2): every
+    Conservative by construction (docs/prep-resume-plan.md item 3): every
     condition below must hold, or the frame is treated as not done and
     re-rendered. Over-rendering wastes time; a stale render shipping wastes
     a lot more. The settings-hash check (whether THIS invocation is asking
@@ -1039,7 +1039,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     skips a frame's re-render only when the manifest's own record proves the
     existing render still answers THIS invocation's question — see
     docs/prep-resume-plan.md item 3. The manifest is also checkpointed after
-    every frame instead of once at the end (item 1), so a run killed by a
+    every frame instead of once at the end (item 2), so a run killed by a
     timeout leaves a consistent partial manifest a later `--resume` can trust,
     instead of orphaning every already-rendered JPEG.
     """
@@ -1085,7 +1085,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     # against what was on disk BEFORE this call overwrites it -- so a
     # resumed run's own checkpoint can never trivially match itself, only a
     # PRIOR run's, under the same settings, can (docs/prep-resume-plan.md
-    # item 2). `resume=False` (the default) never consults it: `resumable`
+    # item 3). `resume=False` (the default) never consults it: `resumable`
     # stays False and every frame renders exactly as it always has.
     settings_hash = _apply_settings_hash(aspect, pad, pop, smode,
                                          category_of(m), only)
@@ -1125,7 +1125,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
         # own record proves the existing files still answer THIS
         # invocation's question. Conservative by construction -- any one
         # check failing means the frame is (re)rendered, never the reverse
-        # (docs/prep-resume-plan.md item 2). The sheet still needs pixels for
+        # (docs/prep-resume-plan.md item 3). The sheet still needs pixels for
         # this frame, so load the original and the already-rendered presets
         # back off disk rather than re-deriving them.
         if resumable and _frame_is_resumable(shoot, name, rec, only):
@@ -1228,7 +1228,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
 
         # Checkpoint after every frame, not once at the end -- a killed
         # process must orphan at most the frame in flight, never the ones
-        # already finished (docs/prep-resume-plan.md item 1). save_manifest
+        # already finished (docs/prep-resume-plan.md item 2). save_manifest
         # already does compare-and-swap and re-stamps m[READ_FINGERPRINT] on
         # this same dict after a successful write, so the next checkpoint's
         # CAS check is automatically against the fingerprint THIS process
