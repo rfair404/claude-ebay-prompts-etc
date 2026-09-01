@@ -180,12 +180,17 @@ def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) ->
         data = api_send("GET", path, creds=None, marketplace=None)
         batch = data.get("transactions") or []
         out.extend(batch)
-        total = data.get("total") or 0
+        total = data.get("total")
         if verbose:
-            print(f"  transactions {min(offset + len(batch), total)}/{total}", end="\r")
-        offset += limit
-        if not batch or offset >= total:
+            shown_total = total if total is not None else len(out)
+            print(f"  transactions {len(out)}/{shown_total}", end="\r")
+        # Advance by the batch actually returned, not the limit requested —
+        # a server-side page cap smaller than `limit` would otherwise skip
+        # transactions. Stop on a short/empty page (the standard end-of-page
+        # signal) rather than trusting `total`, which some responses omit.
+        if not batch or len(batch) < limit:
             break
+        offset += len(batch)
     return out
 
 

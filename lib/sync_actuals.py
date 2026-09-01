@@ -659,8 +659,16 @@ def main() -> int:
                     continue
             total = abs(total)
             basis = [l["item_price"] + l["buyer_shipping"] for l in lines]
-            basis_sum = sum(basis, Decimal(0)) or Decimal(1)
-            shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
+            basis_sum = sum(basis, Decimal(0))
+            if basis_sum > 0:
+                shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
+            else:
+                # Every line is $0 (a free bundle item / giveaway) — there is
+                # no meaningful gross-share basis, so split evenly rather
+                # than let the `or Decimal(1)` fallback this used to have
+                # dump the whole order-level total onto one arbitrary line.
+                even = (total / len(lines)).quantize(Decimal("0.01"))
+                shares = [even] * len(lines)
             shares[-1] += total - sum(shares, Decimal(0))
             for l, s in zip(lines, shares):
                 l[field] = s
