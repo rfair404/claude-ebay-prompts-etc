@@ -106,6 +106,36 @@ def test_clean_order_survives_untouched():
 
 
 # --------------------------------------------------------------------------
+# sold_at is bucketed in Pacific time, not UTC-truncated (#122)
+# --------------------------------------------------------------------------
+def test_sold_at_lands_in_the_previous_pacific_day_for_an_early_utc_order():
+    # 2026-08-01T02:00:00Z is 19:00 Pacific on July 31 (PDT, UTC-7) -- the
+    # exact #122 case: an evening sale that a naive creationDate[:10] slice
+    # would have miscounted into August.
+    o = _order(oid="9-1", sku="pdt-case")
+    o["creationDate"] = "2026-08-01T02:00:00.000Z"
+    rows, _ = SA.flatten_orders([o])
+    assert len(rows) == 1
+    assert rows[0]["sold_at"] == "2026-07-31"
+
+
+def test_sold_at_matches_utc_date_when_well_clear_of_the_pacific_offset():
+    o = _order(oid="9-2", sku="midday-case")
+    o["creationDate"] = "2026-08-01T20:00:00.000Z"   # 13:00 Pacific, same day
+    rows, _ = SA.flatten_orders([o])
+    assert rows[0]["sold_at"] == "2026-08-01"
+
+
+def test_sold_at_falls_back_to_utc_truncation_for_an_unparsable_creation_date():
+    o = _order(oid="9-3", sku="garbage-case")
+    o["creationDate"] = "not-a-real-timestamp"
+    rows, _ = SA.flatten_orders([o])
+    # No crash, no dropped row -- degrades to the old behaviour rather than
+    # losing the sale.
+    assert rows[0]["sold_at"] == "not-a-real-timestamp"[:10]
+
+
+# --------------------------------------------------------------------------
 # shipping basis — must not double-count
 # --------------------------------------------------------------------------
 def test_buyer_paid_shipping_is_counted_exactly_once():
