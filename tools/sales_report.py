@@ -517,7 +517,7 @@ def draw(d: dict) -> str:
     if d["net_after_ads_postage"] is not None:
         net_stat = _stat(_money(d["net_after_ads_postage"]), "net after ads & postage",
                          f'gross minus final value fee, ad fees, and actual postage '
-                         f'({d["fin_covered_n"]}/{d["count"]} orders, #119)')
+                         f'({d["fin_covered_n"]}/{d["count"]} sold line items, #119)')
     else:
         qualifier, _why = d["fin_qualifier"]
         net_stat = _stat(_money(d["net"]), "net before ads & postage",
@@ -585,7 +585,7 @@ def draw(d: dict) -> str:
     # which sale eBay ends up crediting it to).
     ad_fee_stat = (
         _stat(_money(d["fin_ad_fee_total"]), "actual ad-fee spend (#119)",
-              f'{d["fin_covered_n"]}/{d["count"]} orders — Finances API, by order id')
+              f'{d["fin_covered_n"]}/{d["count"]} sold line items — Finances API, by order id')
         if d["fin_ad_fee_total"] is not None else "")
     if d["fin_ad_fee_total"] is not None:
         note_tail = (

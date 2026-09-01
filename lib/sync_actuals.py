@@ -492,19 +492,24 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
     gross = sum((r["gross"] for r in rows), Decimal(0))
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
-    ad_fee_known = [r["ad_fee"] for r in rows if r.get("ad_fee") is not None]
-    postage_known = [r["actual_postage"] for r in rows if r.get("actual_postage") is not None]
+    # ad_fee/actual_postage are per-row SHARES of an order-level total (see
+    # main()'s _allocate), so coverage is counted by unique order id, not by
+    # row — a 3-line order with a known ad fee is 1 covered order, not 3.
+    order_ids = {r["order_id"] for r in rows}
+    ad_fee_orders = {r["order_id"] for r in rows if r.get("ad_fee") is not None}
+    postage_orders = {r["order_id"] for r in rows if r.get("actual_postage") is not None}
+    ad_total = sum((r["ad_fee"] for r in rows if r.get("ad_fee") is not None), Decimal(0))
+    post_total = sum((r["actual_postage"] for r in rows if r.get("actual_postage") is not None),
+                     Decimal(0))
 
     print(f"\n=== ACTUALS — {len(rows)} sold line item(s)")
     print(f"  gross ${_money(gross)}  ·  eBay fees ${_money(fees)} "
           f"({(fees / gross * 100) if gross else 0:.1f}%)  ·  "
           f"net before postage ${_money(net)}")
-    if ad_fee_known or postage_known:
-        ad_total = sum(ad_fee_known, Decimal(0))
-        post_total = sum(postage_known, Decimal(0))
-        print(f"  ad fees (#119) ${_money(ad_total)} on {len(ad_fee_known)} of "
-              f"{len(rows)} order(s)  ·  actual postage ${_money(post_total)} on "
-              f"{len(postage_known)} of {len(rows)} order(s) — the rest have no "
+    if ad_fee_orders or postage_orders:
+        print(f"  ad fees (#119) ${_money(ad_total)} on {len(ad_fee_orders)} of "
+              f"{len(order_ids)} order(s)  ·  actual postage ${_money(post_total)} on "
+              f"{len(postage_orders)} of {len(order_ids)} order(s) — the rest have no "
               f"Finances-API match yet")
     else:
         print("  ad fees / actual postage (#119): none read this run — see "
@@ -628,19 +633,49 @@ def main() -> int:
         fin_status = {"ok": False, "reason": "--skip-finances", "other_fee_labels": {}}
     else:
         ad_fee_by_order, postage_by_order, fin_status = sync_finances(args.days)
+
+    # Both totals are ORDER-level (one ad fee, one shipping label, per order —
+    # not per line item), but flatten_orders() produces one row per line item.
+    # Writing the full order total onto every one of an order's rows would
+    # double- (or N-) count it once rows are summed, so each is split by the
+    # line's share of the order — the same basis flatten_orders() already
+    # uses to allocate the eBay fee — with any rounding remainder folded into
+    # the last line so the shares sum back to the order total exactly.
+    order_lines: dict[str, list[dict]] = {}
     for r in rows:
-        # positive magnitudes, matching ebay_fee/item_price's convention —
-        # see ebay_finances' module docstring "Sign convention".
-        fee = ad_fee_by_order.get(r["order_id"])
-        post = postage_by_order.get(r["order_id"])
-        r["ad_fee"] = abs(fee) if fee is not None else None
-        r["actual_postage"] = abs(post) if post is not None else None
+        order_lines.setdefault(r["order_id"], []).append(r)
+
+    def _allocate(totals_by_order: dict, field: str) -> None:
+        for order_id, lines in order_lines.items():
+            # positive magnitudes, matching ebay_fee/item_price's convention —
+            # see ebay_finances' module docstring "Sign convention".
+            total = totals_by_order.get(order_id)
+            if total is None:
+                for l in lines:
+                    l[field] = None
+                continue
+            total = abs(total)
+            basis = [l["item_price"] + l["buyer_shipping"] for l in lines]
+            basis_sum = sum(basis, Decimal(0)) or Decimal(1)
+            shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
+            shares[-1] += total - sum(shares, Decimal(0))
+            for l, s in zip(lines, shares):
+                l[field] = s
+
+    _allocate(ad_fee_by_order, "ad_fee")
+    _allocate(postage_by_order, "actual_postage")
+
     unwound_losses = ebay_finances.unwound_order_losses(
         excluded["cancelled_order_ids"] + excluded["refunded_order_ids"],
         ad_fee_by_order, postage_by_order)
-    covered = sum(1 for r in rows if r["ad_fee"] is not None or r["actual_postage"] is not None)
+    # Coverage is per ORDER (matching orders_total below), and an order only
+    # counts as covered once BOTH fields are known for it — a "some rows have
+    # ad_fee but not postage" order is partial coverage, not full.
+    covered = sum(1 for oid in order_lines
+                  if ad_fee_by_order.get(oid) is not None
+                  and postage_by_order.get(oid) is not None)
     if args.apply:
-        write_finances_status(fin_status, days=args.days, orders_total=len(rows),
+        write_finances_status(fin_status, days=args.days, orders_total=len(order_lines),
                               orders_covered=covered)
 
     store = None

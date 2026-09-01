@@ -167,8 +167,11 @@ def _skus_for(txn: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) -> list[dict]:
-    date_range = (f"transactionDate:[{start.strftime('%Y-%m-%dT%H:%M:%S.000Z')}.."
-                  f"{end.strftime('%Y-%m-%dT%H:%M:%S.000Z')}]")
+    # %5B/%5D, not raw [/]: matches the known-working pattern in
+    # sync_actuals.fetch_orders (raw brackets in the query string can cause
+    # the request to be rejected or parsed inconsistently).
+    date_range = (f"transactionDate:%5B{start.strftime('%Y-%m-%dT%H:%M:%S.000Z')}.."
+                  f"{end.strftime('%Y-%m-%dT%H:%M:%S.000Z')}%5D")
     out: list[dict] = []
     offset, limit = 0, 200
     while True:
@@ -262,10 +265,19 @@ def parse_transactions(transactions: list[dict]) -> dict:
                 other_labels[_other_fee_label(t)] += 1
             fee_type = "AD" if is_ad else "OTHER"
             skus = _skus_for(t)
-            share = (amt / len(skus)) if skus else amt
-            for sku in skus:
+            # Quantized per-SKU, with the rounding remainder folded into the
+            # last SKU, so the shares sum back to `amt` exactly (a plain
+            # amt / len(skus) can drift for amounts that don't divide evenly,
+            # e.g. $1.00 across 3 SKUs).
+            if len(skus) > 1:
+                share = (amt / len(skus)).quantize(Decimal("0.01"))
+                shares = [share] * len(skus)
+                shares[-1] += amt - sum(shares, Decimal(0))
+            else:
+                shares = [amt]
+            for sku, s in zip(skus, shares):
                 fees.append(FeeLine(order_id=order_id, sku=sku, fee_type=fee_type,
-                                    amount=share, date=date_s))
+                                    amount=s, date=date_s))
         elif ttype == POSTAGE_TRANSACTION_TYPE:
             postage.append(PostageLine(order_id=order_id, amount=_dec(t.get("amount")),
                                        date=date_s))
