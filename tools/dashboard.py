@@ -42,6 +42,7 @@ Read-only, always: nothing here writes to `sales_ledger.csv`,
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -85,14 +86,27 @@ def _looks_like_shoot(d: Path) -> bool:
 def iter_shoot_dirs():
     """Every `inventory/<shoot>/` dir, backup/scratch dirs excluded (the same
     rule `lib.source_report` already uses for the same reason: a `_prepped`
-    or dot-prefixed copy is not a distinct shoot)."""
+    or dot-prefixed copy is not a distinct shoot).
+
+    Walks directories only (`os.walk`, pruning excluded subtrees in place)
+    rather than `rglob("*")`, which would otherwise stat every photo file
+    under `inventory/` just to find directory names — and would still
+    descend into a `_prepped`/dot-prefixed subtree before the exclusion
+    filter got a chance to skip it."""
     root = INVENTORY
     if not root.is_dir():
         return
-    for d in sorted(p for p in root.rglob("*") if p.is_dir()):
-        rel = d.relative_to(root).as_posix()
-        if _is_backup_path(rel):
-            continue
+    found = []
+    for dirpath, dirnames, _filenames in os.walk(root):
+        keep = []
+        for name in dirnames:
+            rel = (Path(dirpath) / name).relative_to(root).as_posix()
+            if _is_backup_path(rel):
+                continue
+            keep.append(name)
+        dirnames[:] = keep
+        found.extend(Path(dirpath) / name for name in keep)
+    for d in sorted(found):
         if _looks_like_shoot(d):
             yield d
 
@@ -156,7 +170,12 @@ def _blocking_issues(row: dict) -> list[str]:
     try:
         issues = _list_edit.validate_draft_for_sync(p)
     except Exception as e:                                   # noqa: BLE001
-        return [f"validation error: {e}"]
+        # A parse/validation exception (e.g. a YAML error) can carry a quoted
+        # excerpt of the draft's own front matter in its message. Keep this
+        # page to structured/aggregated fields only — name the failure type,
+        # not its text — and point at the real command for the details.
+        return [f"validation error ({type(e).__name__}) — run "
+                f"`python -m lib.cli listing --validate {row.get('path')}` for details"]
     return [_redact_voice_snippet(i) for i in issues]
 
 
