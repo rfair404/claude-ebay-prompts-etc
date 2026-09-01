@@ -74,13 +74,15 @@ def _looks_like_shoot(d: Path) -> bool:
     """A shoot dir is one with either a frame in it (the very first thing any
     shoot has) or one of the five stage outputs — the same two facts
     `lib.status.gather()` itself reads, not a new definition of "shoot"."""
+    # Cheap, fixed-count existence checks first — a shoot past IDENTIFY
+    # already has one of these and never needs the iterdir() scan below.
+    if any((d / STAGE_OUTPUT[stage]).exists() for stage in STAGE_ORDER):
+        return True
     try:
-        if any(p.is_file() and p.suffix.lower() in _status._FRAME_EXT
-               for p in d.iterdir()):
-            return True
+        return any(p.is_file() and p.suffix.lower() in _status._FRAME_EXT
+                   for p in d.iterdir())
     except OSError:
         return False
-    return any((d / STAGE_OUTPUT[stage]).exists() for stage in STAGE_ORDER)
 
 
 def iter_shoot_dirs():
