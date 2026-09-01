@@ -301,3 +301,19 @@ def test_fetch_transactions_non_400_error_propagates_immediately(monkeypatch):
     monkeypatch.setattr(EF, "_fetch_transactions_window", boom)
     with pytest.raises(RuntimeError, match="403"):
         EF.fetch_transactions(365, verbose=False)
+
+
+def test_fetch_transactions_does_not_retry_the_same_window_twice(monkeypatch):
+    # days=365 collides with one of the hard-coded fallback candidates — a
+    # naive filter would list 365 twice, retrying an identical rejected
+    # request before actually narrowing to 180.
+    calls = []
+
+    def always_400(start, end, verbose):
+        calls.append(start)
+        raise RuntimeError("GET /sell/finances/v1/transaction → HTTP 400")
+
+    monkeypatch.setattr(EF, "_fetch_transactions_window", always_400)
+    with pytest.raises(RuntimeError, match="rejected every transaction window"):
+        EF.fetch_transactions(365, verbose=False)
+    assert len(calls) == 3  # 365, 180, 90 — not 365, 365, 180, 90

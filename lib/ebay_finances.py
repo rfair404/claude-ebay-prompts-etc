@@ -210,7 +210,11 @@ def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
     degrade, not let this take down a whole sync.
     """
     end = datetime.now(timezone.utc)
-    windows = [d for d in (days, 540, 365, 180, 90) if d <= days] or [days]
+    # dict.fromkeys, not a plain list comp: when `days` itself equals one of
+    # the hard-coded candidates (365, 180, ...), the naive filter would list
+    # that window twice and retry the identical rejected request before
+    # actually narrowing anything.
+    windows = list(dict.fromkeys(d for d in (days, 540, 365, 180, 90) if d <= days)) or [days]
     last_err: Optional[Exception] = None
     for attempt in windows:
         start = end - timedelta(days=attempt)
