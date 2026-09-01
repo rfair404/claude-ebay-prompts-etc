@@ -490,9 +490,17 @@ def aggregate_friction(sessions: list[dict], top: int = 8) -> dict:
     samples = defaultdict(list)
     stages = defaultdict(lambda: {"asks": 0, "turns": 0, "seconds": 0.0, "out_tokens": 0})
     tok: Counter = Counter()
+    # The worst repeat has to be tracked here, over every record, because
+    # `samples` is capped at `top` — picking a max out of it would name the
+    # worst of the first 8 and call it the worst overall.
+    worst_repeat: Optional[tuple[int, str]] = None
     for s in sessions:
         for f in s["friction"]:
             kinds[f["kind"]] += 1
+            if f["kind"] == "repeat":
+                n = int((f.get("detail") or "").rstrip("x") or 0)
+                if worst_repeat is None or n > worst_repeat[0]:
+                    worst_repeat = (n, f.get("sample") or "")
             if len(samples[f["kind"]]) < top:
                 samples[f["kind"]].append((s["session"][:8], f))
         for name, v in s["by_stage"].items():
@@ -507,7 +515,7 @@ def aggregate_friction(sessions: list[dict], top: int = 8) -> dict:
         "turns": sum(s["turns"] for s in sessions),
         "active_seconds": sum(s["active_seconds"] for s in sessions),
         "kinds": kinds, "samples": samples, "stages": dict(stages),
-        "tokens": tok, "hot_spots": hot,
+        "tokens": tok, "hot_spots": hot, "worst_repeat": worst_repeat,
     }
 
 
@@ -984,9 +992,24 @@ def propose_fixes(friction_agg: dict, econ_agg: dict) -> list[dict]:
     n_sessions = friction_agg.get("n_sessions") or 0
     if n_sessions:
         if kinds.get("repeat", 0) >= max(2, n_sessions // 5):
+            # Same "which one, concretely" treatment tool_error_rate gives its
+            # worst offender below: name the exact signature that repeated most
+            # (_tool_signature() — tool name plus its command/file_path/pattern/
+            # etc) instead of a bare count, so a future occurrence is
+            # self-diagnosing — #121 finding 5 couldn't be taken past "27
+            # signals" without it.
+            #
+            # Read from `worst_repeat`, NOT from samples["repeat"]: samples is
+            # capped at aggregate_friction()'s `top` (8), so a max taken over it
+            # names the worst of the first 8 records and labels it the worst of
+            # all of them. With #121's own numbers — 27 repeat signals over 20
+            # sessions — that silently ignored 19 of them.
+            worst = friction_agg.get("worst_repeat")
+            worst_txt = f" (worst: {worst[1][:80]!r} {worst[0]}x)" if worst else ""
             add("repeat_calls",
                 "The same tool call is repeating 3+ times within a session",
-                f"{kinds['repeat']} repeat-call signal(s) across {n_sessions} session(s)",
+                f"{kinds['repeat']} repeat-call signal(s) across {n_sessions} session(s)"
+                f"{worst_txt}",
                 "A tool re-run 3+ times with the same input in one session is either "
                 "a silent failure being retried blind or a result that should have "
                 "been cached — check the samples and fix the root cause rather than "

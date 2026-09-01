@@ -516,6 +516,44 @@ def test_propose_fixes_flags_repeat_tool_error_and_long_loop_signals():
     assert "Bash" in err["evidence"]
 
 
+def test_propose_fixes_names_the_worst_repeat_signature():
+    friction = _friction_agg(
+        n_sessions=10,
+        kinds=Counter({"repeat": 3}),
+        worst_repeat=(6, "Read:draft.md"),
+    )
+    props = propose_fixes(friction, _econ_agg())
+    hit = next(p for p in props if p["key"] == "repeat_calls")
+    assert "Read:draft.md" in hit["evidence"]
+    assert "6x" in hit["evidence"]
+
+
+def test_worst_repeat_is_not_capped_by_the_sample_limit():
+    # aggregate_friction only keeps `top` (8) samples per kind. The worst repeat
+    # must be tracked over every record, not picked out of that capped list —
+    # otherwise the 9th-onward sessions are invisible and the evidence line
+    # labels a small repeat "worst". #121's own shape: 27 signals, 20 sessions.
+    sessions = []
+    for i in range(20):
+        fr = [{"kind": "repeat", "detail": "3x", "sample": f"Bash:git status {i}"}]
+        if i == 15:                       # well past the 8-sample cap
+            fr.append({"kind": "repeat", "detail": "15x",
+                       "sample": "Bash:pytest tests/ -q"})
+        sessions.append({"session": f"sess{i:04d}-x", "friction": fr, "by_stage": {},
+                         "tokens": Counter(), "hot_spots": [], "asks": 1, "turns": 1,
+                         "active_seconds": 1.0})
+
+    agg = aggregate_friction(sessions)
+    assert len(agg["samples"]["repeat"]) == 8, "cap still applies to samples"
+    assert agg["worst_repeat"] == (15, "Bash:pytest tests/ -q")
+
+    hit = next(p for p in propose_fixes(agg, _econ_agg())
+               if p["key"] == "repeat_calls")
+    assert "Bash:pytest tests/ -q" in hit["evidence"]
+    assert "15x" in hit["evidence"]
+    assert "git status" not in hit["evidence"]
+
+
 def test_propose_fixes_ranks_by_impact_hours_descending():
     econ = _econ_agg(bash_total=50, bash_over30=5, bg_bash=1, bash_over30_secs=3600,
                      ask_wait_secs={"Colour": 3600 * 10}, ask_count={"Colour": 2})
