@@ -276,6 +276,28 @@ def test_write_sales_ledger_treats_zero_ad_fee_as_a_real_known_value(tmp_path, m
     assert out["ad_fee"] == "0.00"
 
 
+def test_write_sales_ledger_does_not_erase_known_finances_data_on_rerun(tmp_path, monkeypatch):
+    # A prior --apply recorded real ad_fee/actual_postage for this order...
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    # ...then a rerun re-merges the SAME order but without a fresh Finances
+    # read this time (--skip-finances, or the Finances API call degraded) —
+    # the fetched row has ad_fee/actual_postage back to None. The prior
+    # known values must survive, not be blanked out.
+    rerun_row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    SA.write_sales_ledger([rerun_row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "2.50"
+    assert out["actual_postage"] == "6.85"
+
+
 # --------------------------------------------------------------------------
 # #119 — flatten_orders tracks WHICH orders it excluded, so a caller can
 # check them against the Finances API's fee/postage-by-order maps (the

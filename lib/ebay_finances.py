@@ -225,7 +225,11 @@ def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
         try:
             txns = _fetch_transactions_window(start, end, verbose)
         except Exception as e:                                  # noqa: BLE001
-            if "400" not in str(e):
+            # "HTTP 400", not a bare "400": api_send() formats HTTP failures
+            # as "... -> HTTP <code>", and a plain "400" substring could
+            # coincidentally match unrelated text (an amount, an id) in some
+            # other error.
+            if "HTTP 400" not in str(e):
                 raise
             last_err = e
             if verbose:

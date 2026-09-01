@@ -369,12 +369,18 @@ def write_sales_ledger(rows: list[dict]) -> None:
         out = dict(r)
         for k in _MONEY_FIELDS:
             out[k] = _money(r[k])
+        key = _sale_key(out)
+        existing = merged.get(key)
         for k in _OPTIONAL_MONEY_FIELDS:
-            # None (not yet read from the Finances API) stays "" — see the
-            # SALES_FIELDS comment on why 0.00 would be a false claim.
+            # None (not yet read from the Finances API this run) stays
+            # whatever the ledger already had, not "" — a --skip-finances
+            # run or a degraded Finances call would otherwise silently
+            # erase a real figure a PRIOR run already recorded. Only an
+            # actual fetched value (never blank, per the SALES_FIELDS
+            # comment on why 0.00 would be a false claim) overwrites it.
             v = r.get(k)
-            out[k] = _money(v) if v is not None else ""
-        merged[_sale_key(out)] = out
+            out[k] = _money(v) if v is not None else (existing or {}).get(k, "")
+        merged[key] = out
     with SALES_LEDGER.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SALES_FIELDS, extrasaction="ignore")
         w.writeheader()
