@@ -9,7 +9,9 @@
 # they're listed explicitly for clarity/pinning.
 #
 # The rest of the repo (apify_ebay, ebay_client, price_stats, etc.) remains
-# stdlib-only — these deps are only needed for the visual indexes.
+# stdlib-only — these deps are only needed for the visual indexes, with one
+# exception: tzdata below, needed by every module that reads REPORTING_TZ
+# (lib/report.py) on any platform without an OS-level IANA tzdata source.
 
 sentence-transformers>=5.6.0   # CLIP ViT-B/32 embeddings (vindex core)
 torch>=2.12.1                  # CPU build is sufficient
@@ -19,6 +21,12 @@ numpy>=2.4.6                   # embedding math / storage
 lxml>=6.1.1                    # HTML parsing (crawlers)
 opencv-python-headless>=4.13.0 # marble_crop.py auto-crop (Hough + contour blobs)
 scikit-learn>=1.9.0           # marble_classify.py prototype/kNN heads
+
+# --- Core, not just CLIP: stdlib zoneinfo has no bundled tzdata on Windows ---
+# (Linux/macOS ship it at the OS level; Windows does not). Every module that
+# imports lib/report.py's REPORTING_TZ = ZoneInfo("America/Los_Angeles") needs
+# this, on every platform this pipeline runs on — see .github/workflows/tests.yml.
+tzdata>=2025.1                 # IANA tz database for zoneinfo (required on Windows)
 
 # --- PREP photo stage (lib/photo_prep/prep.py) ---
 # Subject segmentation + the objective half of orientation. Both are optional at
