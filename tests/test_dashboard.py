@@ -332,9 +332,23 @@ def test_gather_drift_flags_live_sku_missing_from_ledger(repo):
         {"sku": "orphan-sku", "title": "No Ledger Row", "listing_id": "222",
          "live": "yes", "price": "9.99"},
     ])
+    _write_ledger(repo / "listings_ledger.csv", [])  # present, just no row for this sku
     d = dash.gather_drift()
     assert d["count"] == 1
     assert "no listings_ledger.csv row" in d["rows"][0]["issues"][0]
+
+
+def test_gather_drift_short_circuits_to_empty_when_either_csv_is_missing(repo):
+    # only the live sheet exists — comparing against a ledger that was never
+    # synced would otherwise flag every live row as "no ledger row", which
+    # is misleading rather than a real drift finding (the have_* flags
+    # already say a file is missing)
+    _write_live_sheet(repo / "inventory_sheet.csv", [
+        {"sku": "some-sku", "title": "X", "listing_id": "1",
+         "live": "yes", "price": "9.99"},
+    ])
+    d = dash.gather_drift()
+    assert d == {"rows": [], "have_live_snapshot": True, "have_ledger": False, "count": 0}
 
 
 def test_gather_drift_flags_ledger_published_but_not_live(repo):
@@ -355,6 +369,7 @@ def test_gather_drift_dedupes_choice_variations_by_listing_id(repo):
         {"sku": "var-2", "title": "Choice Group", "listing_id": "333",
          "live": "yes", "price": "10.00"},
     ])
+    _write_ledger(repo / "listings_ledger.csv", [])
     d = dash.gather_drift()
     assert d["count"] == 1     # only the first variation is evaluated
 
@@ -364,6 +379,7 @@ def test_gather_drift_ignores_non_live_rows(repo):
         {"sku": "ended-sku", "title": "Ended", "listing_id": "444",
          "live": "no", "price": "1.00"},
     ])
+    _write_ledger(repo / "listings_ledger.csv", [])
     d = dash.gather_drift()
     assert d["count"] == 0
 

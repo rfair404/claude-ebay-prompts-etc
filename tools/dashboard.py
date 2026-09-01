@@ -218,6 +218,17 @@ def gather_drift() -> dict:
     `listings_ledger.csv`. Both are local snapshots an earlier sync already
     wrote to disk (`tools/ebay_sheet.py`, `lib.list_edit`) — this makes no
     eBay call of its own, so it is only as fresh as those snapshots are."""
+    have_live_snapshot, have_ledger = LIVE_SHEET.exists(), LEDGER.exists()
+    if not (have_live_snapshot and have_ledger):
+        # _rows() returns [] for a missing file the same as for an empty
+        # one, so comparing against a genuinely missing side would flag
+        # every row on the other side as "missing" from a file that was
+        # simply never synced — not a real drift finding. The "not found"
+        # note the page renders from have_* already says why there's
+        # nothing to compare.
+        return {"rows": [], "have_live_snapshot": have_live_snapshot,
+                "have_ledger": have_ledger, "count": 0}
+
     live = _rows(LIVE_SHEET)
     ledger = _rows(LEDGER)
     ledger_by_sku = {r["sku"]: r for r in ledger if r.get("sku")}
@@ -265,11 +276,8 @@ def gather_drift() -> dict:
 
     return {
         "rows": rows,
-        # File existence, not "has rows" — an empty-but-present CSV (e.g. a
-        # freshly-synced account with nothing live yet) is a real, current
-        # snapshot, not a missing one.
-        "have_live_snapshot": LIVE_SHEET.exists(),
-        "have_ledger": LEDGER.exists(),
+        "have_live_snapshot": have_live_snapshot,
+        "have_ledger": have_ledger,
         "count": len(rows),
     }
 
