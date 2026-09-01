@@ -263,25 +263,30 @@ def gather_drift() -> dict:
         lid = lv.get("listing_id") or ""
         if not lid:
             continue
-        g = groups.setdefault(lid, {"rep": lv, "skus": set()})
+        g = groups.setdefault(lid, {"rep": lv, "by_sku": {}})
         if lv.get("sku"):
-            g["skus"].add(lv["sku"])
+            g["by_sku"][lv["sku"]] = lv
 
     rows = []
     for lid, g in groups.items():
         rep = g["rep"]
-        matched_sku = next((s for s in g["skus"] if s in ledger_by_sku), None)
+        by_sku = g["by_sku"]
+        matched_sku = next((s for s in by_sku if s in ledger_by_sku), None)
         led = ledger_by_sku.get(matched_sku) if matched_sku else None
+        # Compare the ledger's matched row against ITS OWN variation's live
+        # row, not the group's representative — price/title can legitimately
+        # differ between variations of one CHOICE listing.
+        lv_cmp = by_sku[matched_sku] if matched_sku else rep
         issues = []
         if led is None:
             issues.append(
                 "no listings_ledger.csv row for any sku in this listing"
-                if len(g["skus"]) > 1 else "no listings_ledger.csv row for this live sku")
+                if len(by_sku) > 1 else "no listings_ledger.csv row for this live sku")
         else:
-            if _price_drift(rep.get("price"), led.get("price")):
+            if _price_drift(lv_cmp.get("price"), led.get("price")):
                 issues.append(f"price: ledger {_money(_f(led.get('price')))} "
-                              f"vs live {_money(_f(rep.get('price')))}")
-            live_title = (rep.get("title") or "").strip()
+                              f"vs live {_money(_f(lv_cmp.get('price')))}")
+            live_title = (lv_cmp.get("title") or "").strip()
             ledger_title = (led.get("title") or "").strip()
             if live_title and ledger_title and live_title != ledger_title:
                 issues.append("title differs from ledger")
@@ -290,8 +295,8 @@ def gather_drift() -> dict:
         if issues:
             rows.append({
                 "sku": matched_sku or rep.get("sku") or "", "listing_id": lid,
-                "title": rep.get("title", ""),
-                "live_price": rep.get("price", ""),
+                "title": lv_cmp.get("title", ""),
+                "live_price": lv_cmp.get("price", ""),
                 "ledger_price": (led or {}).get("price", ""),
                 "issues": issues,
             })

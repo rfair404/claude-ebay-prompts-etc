@@ -401,6 +401,24 @@ def test_gather_drift_matches_a_choice_group_against_any_of_its_skus(repo):
     assert d["count"] == 0     # matched via var-2; no false "no ledger row"
 
 
+def test_gather_drift_compares_the_ledger_row_against_its_own_matched_variation(repo):
+    # var-1 (the group's first-seen/representative row) is priced
+    # differently from the ledger; var-2 (the one the ledger actually
+    # matches) is priced the same as the ledger. The comparison must use
+    # var-2's own price, not var-1's, or this reads as a false price-drift.
+    _write_live_sheet(repo / "inventory_sheet.csv", [
+        {"sku": "var-1", "title": "Choice Group", "listing_id": "333",
+         "live": "yes", "price": "8.00"},
+        {"sku": "var-2", "title": "Choice Group", "listing_id": "333",
+         "live": "yes", "price": "10.00"},
+    ])
+    _write_ledger(repo / "listings_ledger.csv", [
+        {"sku": "var-2", "title": "Choice Group", "price": "10.00", "status": "PUBLISHED"},
+    ])
+    d = dash.gather_drift()
+    assert d["count"] == 0     # var-2 vs var-2: no drift; var-1 is irrelevant here
+
+
 def test_gather_drift_ignores_non_live_rows(repo):
     _write_live_sheet(repo / "inventory_sheet.csv", [
         {"sku": "ended-sku", "title": "Ended", "listing_id": "444",
