@@ -592,3 +592,36 @@ def test_main_creates_out_s_parent_directory_when_missing(repo, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(out)])
     assert dash.main() == 0
     assert out.exists()
+
+
+def test_main_refuses_to_overwrite_the_ledger_via_out(repo, monkeypatch):
+    ledger = repo / "listings_ledger.csv"
+    _write_ledger(ledger, [{"sku": "abc12345", "status": "PUBLISHED"}])
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(ledger)])
+    assert dash.main() == 1
+    # untouched — still the real ledger content, not overwritten with HTML
+    assert "PUBLISHED" in ledger.read_text()
+    assert "<html" not in ledger.read_text().lower()
+
+
+def test_main_refuses_to_overwrite_the_live_sheet_via_out(repo, monkeypatch):
+    live = repo / "inventory_sheet.csv"
+    _write_live_sheet(live, [{"sku": "abc12345", "live": "yes"}])
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(live)])
+    assert dash.main() == 1
+    assert "<html" not in live.read_text().lower()
+
+
+def test_main_refuses_to_write_inside_inventory_via_out(repo, monkeypatch):
+    inv = repo / "inventory"
+    out = inv / "sneaky.html"
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(out)])
+    assert dash.main() == 1
+    assert not out.exists()
+
+
+def test_main_normal_out_path_is_unaffected_by_the_guard(repo, monkeypatch):
+    out = repo / "reports" / "dashboard.html"
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(out)])
+    assert dash.main() == 0
+    assert out.exists()

@@ -464,13 +464,34 @@ def draw(d: dict) -> str:
             f'<style>{STYLE}</style>\n<div class="wrap">\n{body}\n</div>\n')
 
 
+def _unsafe_out_reason(out: Path) -> str | None:
+    """`--out` is user-supplied and this module's whole premise is
+    read-only — a custom path must not let it clobber one of the tracked
+    data files it reads, or land inside `inventory/` where it could be
+    mistaken for real shoot data. Returns a reason string to refuse on, or
+    None if the path is fine to write."""
+    resolved = out.resolve()
+    for tracked in (LEDGER, LIVE_SHEET):
+        if resolved == tracked.resolve():
+            return f"refusing to overwrite tracked data file {tracked}"
+    inv = INVENTORY.resolve()
+    if resolved == inv or inv in resolved.parents:
+        return f"refusing to write inside {INVENTORY} (real shoot data lives there)"
+    return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default=str(OUT_HTML))
     a = ap.parse_args()
 
-    d = gather()
     out = Path(a.out)
+    reason = _unsafe_out_reason(out)
+    if reason:
+        print(f"[ERROR] {reason}", file=sys.stderr)
+        return 1
+
+    d = gather()
     out.parent.mkdir(parents=True, exist_ok=True)  # still creates reports/ for the default
     out.write_text(draw(d), encoding="utf-8")
 
