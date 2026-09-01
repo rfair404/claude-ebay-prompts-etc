@@ -490,3 +490,12 @@ def test_dashboard_cli_help_does_not_error():
                        cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert r.returncode == 0
     assert "--out" in r.stdout
+
+
+def test_main_creates_out_s_parent_directory_when_missing(repo, monkeypatch):
+    # --out pointing under a directory that doesn't exist yet must not fail —
+    # only the resolved output path's own parent needs creating, not reports/
+    out = repo / "some" / "new" / "nested" / "path.html"
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(out)])
+    assert dash.main() == 0
+    assert out.exists()

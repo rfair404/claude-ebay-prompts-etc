@@ -122,8 +122,12 @@ def gather_backlog() -> dict:
             state["dir"] = shoot.relative_to(REPO).as_posix()
         except ValueError:
             state["dir"] = shoot.as_posix()
-        ready = state["next_action"].startswith("all stages clear")
-        state["blocked_stage"] = None if ready else state["next_action"].split(":", 1)[0]
+        # Read the structured `stages` map directly rather than parsing
+        # `next_action`'s human-readable "stage: reason" text — the same
+        # first-pending-stage rule `lib.status.gather()` itself uses to
+        # build that string, just not tied to its exact display phrasing.
+        state["blocked_stage"] = next(
+            (stage for stage in STAGE_ORDER if state["stages"][stage]["pending"]), None)
         rows.append(state)
 
     def _rank(r: dict) -> int:
@@ -420,9 +424,9 @@ def main() -> int:
     ap.add_argument("--out", default=str(OUT_HTML))
     a = ap.parse_args()
 
-    REPORTS.mkdir(exist_ok=True)
     d = gather()
     out = Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)  # still creates reports/ for the default
     out.write_text(draw(d), encoding="utf-8")
 
     print(f"{d['backlog']['count']} shoot(s) · {d['drafts']['count']} draft(s) awaiting "
