@@ -326,6 +326,25 @@ def test_gather_reports_no_finances_coverage_when_columns_are_blank(fixture_repo
     assert "before postage AND before advertising" in note
 
 
+def test_gather_reports_zero_coverage_with_columns_present_says_so(fixture_repo, monkeypatch):
+    # Post-#119 ledger shape (columns present) but nothing matched yet this
+    # run — must NOT claim the column is absent (that's the pre-#119 case
+    # covered by test_gather_reports_no_finances_coverage_when_columns_are_blank).
+    rows = [
+        {**_sale("1", "inventory/ESTATES/SCJ/item-1", gross=100, fee=13, net=87),
+         "ad_fee": "", "actual_postage": ""},
+    ]
+    sales = _write_sales(fixture_repo, rows)
+    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+
+    d = sr.gather()
+    assert d["fin_covered_n"] == 0
+    assert d["fin_columns_present"] is True
+    note = sr._fin_note(d)
+    assert "carries no actual-postage column" not in note
+    assert "finances_sync_status.json" in note
+
+
 def test_gather_reports_full_finances_coverage(fixture_repo, monkeypatch):
     rows = [
         {**_sale("1", "inventory/ESTATES/SCJ/item-1", gross=100, fee=13, net=87),

@@ -223,6 +223,18 @@ def _sales_rows() -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def _ledger_has_finance_columns() -> bool:
+    """Whether sales_ledger.csv's header carries the #119 ad_fee/actual_postage
+    columns at all — distinct from `fin_covered_n == 0`, which is also true
+    for a ledger that HAS the columns but hasn't been matched for any row
+    yet (see `_fin_note`: those are different situations to explain)."""
+    if not SALES_LEDGER.exists():
+        return False
+    with SALES_LEDGER.open(newline="", encoding="utf-8-sig") as fh:
+        header = next(csv.reader(fh), [])
+    return "ad_fee" in header and "actual_postage" in header
+
+
 def _collect_listings() -> list[dict]:
     """Local drafts + listings_ledger.csv, merged (disk wins) — see lib/report.py.
 
@@ -275,6 +287,7 @@ def gather() -> dict:
     def _known(v) -> bool:
         return bool((v or "").strip())
 
+    fin_columns_present = _ledger_has_finance_columns()
     fin_covered = [r for r in sales
                    if _known(r.get("ad_fee")) and _known(r.get("actual_postage"))]
     fin_ad_fee_total = (sum(_to_float(r.get("ad_fee"), 0.0) for r in fin_covered)
@@ -358,6 +371,7 @@ def gather() -> dict:
         "fin_postage_total": fin_postage_total,
         "fin_covered_n": fin_covered_n,
         "fin_total_n": fin_total_n,
+        "fin_columns_present": fin_columns_present,
     }
 
 
@@ -400,12 +414,20 @@ def _fin_note(d: dict) -> str:
                 f"sold row(s) so far; the rest have none yet (re-consent pending or the "
                 f"Finances API call failed this run) — see "
                 f"reports/finances_sync_status.json.")
-    return ("NET is net_before_postage — sales_ledger.csv carries no actual-postage "
-           "column, and the fee it subtracts (totalMarketplaceFee) is the final value "
-           "fee only, so ad spend is absent too. Every NET/PROFIT figure here is "
-           "before postage AND before advertising, not a final take-home number. A "
-           "real reader for both exists (#119, /sell/finances/v1/transaction) but has "
-           "no data yet this run.")
+    if not d.get("fin_columns_present"):
+        return ("NET is net_before_postage — sales_ledger.csv carries no actual-postage "
+               "column, and the fee it subtracts (totalMarketplaceFee) is the final value "
+               "fee only, so ad spend is absent too. Every NET/PROFIT figure here is "
+               "before postage AND before advertising, not a final take-home number. A "
+               "real reader for both exists (#119, /sell/finances/v1/transaction) but has "
+               "no data yet this run.")
+    # Columns exist (a post-#119 ledger) but nothing matched yet — a different
+    # situation from "column absent" above, so it needs its own wording rather
+    # than falsely claiming the column doesn't exist.
+    return ("NET is net_before_postage — before postage AND before advertising. "
+           "sales_ledger.csv has the ad_fee/actual_postage columns (#119, sell.finances) "
+           "but none of this run's sold rows have a match yet — see "
+           "reports/finances_sync_status.json for why.")
 
 
 def render_table(d: dict) -> str:
