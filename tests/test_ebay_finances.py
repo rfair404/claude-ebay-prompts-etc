@@ -303,6 +303,27 @@ def test_fetch_transactions_non_400_error_propagates_immediately(monkeypatch):
         EF.fetch_transactions(365, verbose=False)
 
 
+def test_fetch_transactions_window_keeps_paging_past_a_server_side_page_cap(monkeypatch):
+    # A server that always caps a page below the requested `limit` (e.g. 100
+    # when limit=200) makes every page look "short" — stopping on that alone
+    # would silently drop every transaction past page one.
+    all_txns = [_ad_fee_txn(order_id=f"o-{i}") for i in range(250)]
+    pages = [all_txns[0:100], all_txns[100:200], all_txns[200:250]]
+    calls = []
+
+    def fake_api_send(method, path, creds=None, marketplace=None):
+        calls.append(path)
+        return {"transactions": pages[len(calls) - 1], "total": 250}
+
+    monkeypatch.setattr(EF, "api_send", fake_api_send)
+    from datetime import datetime, timezone
+    out = EF._fetch_transactions_window(
+        datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 6, 1, tzinfo=timezone.utc),
+        verbose=False)
+    assert len(out) == 250
+    assert len(calls) == 3
+
+
 def test_fetch_transactions_does_not_retry_the_same_window_twice(monkeypatch):
     # days=365 collides with one of the hard-coded fallback candidates — a
     # naive filter would list 365 twice, retrying an identical rejected

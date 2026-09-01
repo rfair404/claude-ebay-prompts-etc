@@ -186,11 +186,15 @@ def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) ->
             print(f"  transactions {len(out)}/{shown_total}", end="\r")
         # Advance by the batch actually returned, not the limit requested —
         # a server-side page cap smaller than `limit` would otherwise skip
-        # transactions. Stop on a short/empty page (the standard end-of-page
-        # signal) rather than trusting `total`, which some responses omit.
-        if not batch or len(batch) < limit:
-            break
+        # transactions. Only stop on a genuinely EMPTY page: a short page
+        # (len(batch) < limit) is NOT a reliable end-of-results signal on
+        # its own — if the server enforces a page cap smaller than `limit`
+        # on every page, every page would look "short" and this would stop
+        # after page one. `total`, when present, still short-circuits the
+        # common case rather than always paying for one trailing empty call.
         offset += len(batch)
+        if not batch or (total is not None and offset >= total):
+            break
     return out
 
 
