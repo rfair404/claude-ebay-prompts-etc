@@ -471,7 +471,7 @@ def _unsafe_out_reason(out: Path) -> str | None:
     mistaken for real shoot data. Returns a reason string to refuse on, or
     None if the path is fine to write."""
     resolved = out.resolve()
-    for tracked in (LEDGER, LIVE_SHEET):
+    for tracked in (LEDGER, LIVE_SHEET, _report.SALES):
         if resolved == tracked.resolve():
             return f"refusing to overwrite tracked data file {tracked}"
     inv = INVENTORY.resolve()

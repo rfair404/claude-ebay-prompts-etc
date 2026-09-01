@@ -604,6 +604,19 @@ def test_main_refuses_to_overwrite_the_ledger_via_out(repo, monkeypatch):
     assert "<html" not in ledger.read_text().lower()
 
 
+def test_main_refuses_to_overwrite_the_sales_ledger_via_out(repo, monkeypatch):
+    # lib.report.SALES — a third tracked data file the module docstring
+    # names, distinct from the two the guard already checked. It's a
+    # module-level constant computed at lib.report's own import time, so
+    # patch it directly rather than relying on the repo fixture's REPO swap.
+    sales = repo / "sales_ledger.csv"
+    sales.write_text("sku,sold_at,price\nabc12345,2026-01-01,19.99\n")
+    monkeypatch.setattr(_report, "SALES", sales)
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(sales)])
+    assert dash.main() == 1
+    assert "<html" not in sales.read_text().lower()
+
+
 def test_main_refuses_to_overwrite_the_live_sheet_via_out(repo, monkeypatch):
     live = repo / "inventory_sheet.csv"
     _write_live_sheet(live, [{"sku": "abc12345", "live": "yes"}])
