@@ -223,3 +223,110 @@ def test_write_sales_ledger_updates_a_row_thats_refetched(tmp_path, monkeypatch)
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     assert rows[0]["item_price"] == "8.00"
+
+
+# --------------------------------------------------------------------------
+# #119 (route B, sell.finances) — ad_fee / actual_postage columns
+#
+# Blank, never 0.00, whenever a row hasn't been matched against the
+# Finances API yet — 0.00 would claim "no ad spend, no postage" (a real,
+# checked fact), which is a different statement from "not read yet".
+# --------------------------------------------------------------------------
+def test_write_sales_ledger_leaves_ad_fee_and_postage_blank_when_absent(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    # _sale_row (existing fixture, predates #119) carries no ad_fee/
+    # actual_postage keys at all — the exact shape sync_actuals produces
+    # before #119's finances merge runs, or when it's skipped.
+    SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")])
+
+    with ledger.open(encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["ad_fee"] == ""
+    assert row["actual_postage"] == ""
+
+
+def test_write_sales_ledger_formats_known_ad_fee_and_postage(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "2.50"
+    assert out["actual_postage"] == "6.85"
+
+
+def test_write_sales_ledger_treats_zero_ad_fee_as_a_real_known_value(tmp_path, monkeypatch):
+    # Decimal("0") is a legitimate READ result (an order with no ad spend at
+    # all) and must be written as "0.00", distinct from None -> "".
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("0"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "0.00"
+
+
+# --------------------------------------------------------------------------
+# #119 — flatten_orders tracks WHICH orders it excluded, so a caller can
+# check them against the Finances API's fee/postage-by-order maps (the
+# "refunds are not zero" trap: an unwound order can still owe a real loss).
+# --------------------------------------------------------------------------
+def test_flatten_orders_reports_refunded_order_ids():
+    _, excluded = SA.flatten_orders(
+        [_order(item=80.0, fee=11.93, refund=68.47, due=-0.40, oid="ref-order-1")])
+    assert excluded["refunded_order_ids"] == ["ref-order-1"]
+    assert excluded["cancelled_order_ids"] == []
+
+
+def test_flatten_orders_reports_cancelled_order_ids():
+    _, excluded = SA.flatten_orders([_order(cancel="CANCELED", oid="cxl-order-1")])
+    assert excluded["cancelled_order_ids"] == ["cxl-order-1"]
+    assert excluded["refunded_order_ids"] == []
+
+
+# --------------------------------------------------------------------------
+# #119 — sync_finances degrades to an empty read + a reason, never raises,
+# so one degraded source (scope not yet re-consented) can't take down a
+# whole --apply run the way it would if this propagated.
+# --------------------------------------------------------------------------
+def test_sync_finances_degrades_on_auth_error(monkeypatch):
+    import ebay_finances
+    from ebay_client import EbayAuthError
+
+    def boom(days, verbose=True):
+        raise EbayAuthError("sell.finances not yet re-consented")
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
+    ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
+    assert ad_by_order == {} and postage_by_order == {}
+    assert status["ok"] is False
+    assert "re-consented" in status["reason"]
+
+
+def test_sync_finances_returns_attribution_on_success(monkeypatch):
+    import ebay_finances
+
+    def fake(days, verbose=True):
+        return [{
+            "transactionType": "NON_SALE_CHARGE",
+            "transactionDate": "2026-06-08T19:00:00.000Z",
+            "amount": {"value": "-2.50", "currency": "USD"},
+            "feeType": "AD_FEE",
+            "orderId": "1-2-3",
+            "orderLineItems": [{"sku": "abc123"}],
+        }]
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", fake)
+    ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
+    assert ad_by_order == {"1-2-3": Decimal("-2.50")}
+    assert status["ok"] is True and status["reason"] is None

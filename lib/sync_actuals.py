@@ -48,20 +48,33 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ebay_client import api_send  # noqa: E402
+from ebay_client import api_send, EbayAPIError, EbayAuthError  # noqa: E402
+import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
 
 REPO = Path(__file__).resolve().parent.parent
 SALES_LEDGER = REPO / "sales_ledger.csv"
 LISTINGS_LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
+REPORTS = REPO / "reports"
+FINANCES_STATUS_JSON = REPORTS / "finances_sync_status.json"
 
 SALES_FIELDS = [
     "order_id", "sold_at", "listing_id", "sku", "title", "quantity",
     "sold_format", "item_price", "buyer_shipping", "refunded", "gross", "ebay_fee",
     "net_before_postage", "listed_price", "pct_of_ask", "shoot_dir", "matched_by",
+    # #119 (route B, sell.finances): real ad fee + actual postage, per order.
+    # Blank — never 0.00 — whenever the Finances API hasn't been read for this
+    # order (scope not yet re-consented, the call failed, or this order simply
+    # had no such transaction): 0.00 would claim "no ad spend, no postage",
+    # which is a different, false, statement from "we don't know yet".
+    "ad_fee", "actual_postage",
 ]
 _MONEY_FIELDS = ("item_price", "buyer_shipping", "refunded", "gross",
                  "ebay_fee", "net_before_postage")
+# Merged in write_sales_ledger like _MONEY_FIELDS, but kept separate: unlike
+# every field above, these two are legitimately ABSENT (None) rather than
+# always present at 0.00 — see the SALES_FIELDS comment.
+_OPTIONAL_MONEY_FIELDS = ("ad_fee", "actual_postage")
 
 STORE_JS = r"""
 /* Paste into claude-in-chrome javascript_tool on the seller's store page.
@@ -186,10 +199,17 @@ def flatten_orders(orders: list[dict]) -> tuple[list[dict], dict]:
       that is surfaced rather than silently absorbed.
     """
     rows: list[dict] = []
-    excluded = {"cancelled": 0, "refunded": 0, "partial_refund": 0, "total_mismatch": 0}
+    excluded = {"cancelled": 0, "refunded": 0, "partial_refund": 0, "total_mismatch": 0,
+                # order ids behind the two drop-from-revenue counts above, so a
+                # caller (the #119 fee/postage merge) can check whether a
+                # dropped order still cost real money — see
+                # ebay_finances.unwound_order_losses. Lists, not sets: order
+                # ids are already unique per order dict here.
+                "cancelled_order_ids": [], "refunded_order_ids": []}
     for o in orders:
         if (o.get("cancelStatus") or {}).get("cancelState") == "CANCELED":
             excluded["cancelled"] += 1
+            excluded["cancelled_order_ids"].append(o.get("orderId", ""))
             continue
 
         items = o.get("lineItems") or []
@@ -207,6 +227,7 @@ def flatten_orders(orders: list[dict]) -> tuple[list[dict], dict]:
         due = _dec(pay, "totalDueSeller")
         if refunds and (due <= 0 if has_due else refunded >= basis * Decimal("0.95")):
             excluded["refunded"] += 1          # unwound sale — not revenue
+            excluded["refunded_order_ids"].append(o.get("orderId", ""))
             continue
 
         for li, gross in zip(items, line_values):
@@ -341,6 +362,11 @@ def write_sales_ledger(rows: list[dict]) -> None:
         out = dict(r)
         for k in _MONEY_FIELDS:
             out[k] = _money(r[k])
+        for k in _OPTIONAL_MONEY_FIELDS:
+            # None (not yet read from the Finances API) stays "" — see the
+            # SALES_FIELDS comment on why 0.00 would be a false claim.
+            v = r.get(k)
+            out[k] = _money(v) if v is not None else ""
         merged[_sale_key(out)] = out
     with SALES_LEDGER.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SALES_FIELDS, extrasaction="ignore")
@@ -387,6 +413,63 @@ def stamp_folder(row: dict) -> bool:
     return True
 
 
+def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
+    """Fetch + parse the Finances API window and attribute it by order id.
+
+    Returns (ad_fee_by_order, postage_by_order, status). `status` is a small
+    PII-free dict — {"ok": bool, "reason": str|None, "other_fee_labels": {...}}
+    — written to `reports/finances_sync_status.json` by the caller so a
+    reader with no direct API access (the sales dashboard) can say WHY the
+    "before ads & postage" qualifier is still up, per one line, rather than
+    silently keeping a caveat with no explanation (#119 acceptance).
+
+    Never raises: sell.finances failing (401/403 before re-consent, a
+    network error, an unexpected response shape) degrades to empty maps and
+    a `status["reason"]` — exactly like `tools/sales_report.py.sync()`
+    already does for the ads pull, so one degraded source doesn't crash the
+    whole `--apply`.
+    """
+    if verbose:
+        print(f"Fetching ad-fee + postage transactions (last {days} days, "
+              f"sell.finances)…")
+    try:
+        txns = ebay_finances.fetch_transactions(days, verbose=verbose)
+    except (EbayAuthError, EbayAPIError) as e:
+        if verbose:
+            print(f"  unavailable: {str(e)[:200]}" + " " * 12)
+        return {}, {}, {"ok": False, "reason": str(e)[:300], "other_fee_labels": {}}
+    except Exception as e:                                       # noqa: BLE001
+        if verbose:
+            print(f"  unavailable: {str(e)[:200]}" + " " * 12)
+        return {}, {}, {"ok": False, "reason": str(e)[:300], "other_fee_labels": {}}
+
+    parsed = ebay_finances.parse_transactions(txns)
+    ad_fee_by_order = ebay_finances.attribute_fees_by_order(parsed["fees"])
+    postage_by_order = ebay_finances.attribute_postage_by_order(parsed["postage"])
+    status = {"ok": True, "reason": None,
+             "other_fee_labels": dict(parsed["other_fee_labels"])}
+    return ad_fee_by_order, postage_by_order, status
+
+
+def write_finances_status(status: dict, *, days: int, orders_total: int,
+                          orders_covered: int) -> None:
+    """Persist `sync_finances`'s outcome so a reader with no API access
+    (the dashboard-building code, tests, `--no-sync` runs) can render the
+    "before ads & postage" qualifier's one-line reason without re-deriving
+    it. PII-free by construction — `status` already is (see `sync_finances`),
+    and the fields added here are counts and a window size only."""
+    from datetime import datetime, timezone
+    REPORTS.mkdir(exist_ok=True)
+    doc = {
+        **status,
+        "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "days": days,
+        "orders_total": orders_total,
+        "orders_covered": orders_covered,
+    }
+    FINANCES_STATUS_JSON.write_text(json.dumps(doc, indent=1), encoding="utf-8")
+
+
 def mark_sold_in_ledger(rows: list[dict]) -> int:
     """Advance the listings ledger to SOLD. The `price` column is deliberately
     left alone: it is the ASK, and sales_ledger.csv holds the actual."""
@@ -404,15 +487,38 @@ def mark_sold_in_ledger(rows: list[dict]) -> int:
 # report
 # --------------------------------------------------------------------------- #
 def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
-           store: Optional[dict], excluded: Optional[dict] = None) -> None:
+           store: Optional[dict], excluded: Optional[dict] = None,
+           unwound_losses: Optional[list[dict]] = None) -> None:
     gross = sum((r["gross"] for r in rows), Decimal(0))
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
+    ad_fee_known = [r["ad_fee"] for r in rows if r.get("ad_fee") is not None]
+    postage_known = [r["actual_postage"] for r in rows if r.get("actual_postage") is not None]
 
     print(f"\n=== ACTUALS — {len(rows)} sold line item(s)")
     print(f"  gross ${_money(gross)}  ·  eBay fees ${_money(fees)} "
           f"({(fees / gross * 100) if gross else 0:.1f}%)  ·  "
           f"net before postage ${_money(net)}")
+    if ad_fee_known or postage_known:
+        ad_total = sum(ad_fee_known, Decimal(0))
+        post_total = sum(postage_known, Decimal(0))
+        print(f"  ad fees (#119) ${_money(ad_total)} on {len(ad_fee_known)} of "
+              f"{len(rows)} order(s)  ·  actual postage ${_money(post_total)} on "
+              f"{len(postage_known)} of {len(rows)} order(s) — the rest have no "
+              f"Finances-API match yet")
+    else:
+        print("  ad fees / actual postage (#119): none read this run — see "
+              f"{FINANCES_STATUS_JSON.relative_to(REPO)} for why")
+
+    if unwound_losses:
+        lost = sum((u["loss"] for u in unwound_losses), Decimal(0))
+        print(f"\n=== ⚠ UNWOUND ORDERS WITH A SUNK AD FEE / POSTAGE COST — "
+              f"{len(unwound_losses)} order(s), ${_money(lost)} lost")
+        print("  (fully refunded — $0 revenue above — but a label was bought and/or "
+              "an ad fee only partly credited; not dropped)")
+        for u in sorted(unwound_losses, key=lambda x: -x["loss"])[:15]:
+            print(f"    order {u['order_id']}  ad fee ${_money(u['ad_fee'])}  "
+                  f"postage ${_money(u['actual_postage'])}  loss ${_money(u['loss'])}")
 
     if excluded and any(excluded.values()):
         print(f"  excluded: {excluded['cancelled']} cancelled, "
@@ -490,6 +596,10 @@ def main() -> int:
                     help="browser dumps of the store's active/sold pages (see --print-js)")
     ap.add_argument("--print-js", action="store_true",
                     help="print the store-page extractor and exit")
+    ap.add_argument("--skip-finances", action="store_true",
+                    help="don't attempt the sell.finances ad-fee/postage read "
+                         "(#119) — useful before the account owner has "
+                         "re-consented, to avoid a call that's known to fail")
     args = ap.parse_args()
 
     if args.print_js:
@@ -511,6 +621,28 @@ def main() -> int:
         r["pct_num"] = pct
         r["pct_of_ask"] = f"{pct:.0f}%" if pct else ""
 
+    # #119 (route B): real ad fee + actual postage, per order — degrades to
+    # "unavailable" rather than failing the whole sync (see sync_finances).
+    if args.skip_finances:
+        ad_fee_by_order, postage_by_order = {}, {}
+        fin_status = {"ok": False, "reason": "--skip-finances", "other_fee_labels": {}}
+    else:
+        ad_fee_by_order, postage_by_order, fin_status = sync_finances(args.days)
+    for r in rows:
+        # positive magnitudes, matching ebay_fee/item_price's convention —
+        # see ebay_finances' module docstring "Sign convention".
+        fee = ad_fee_by_order.get(r["order_id"])
+        post = postage_by_order.get(r["order_id"])
+        r["ad_fee"] = abs(fee) if fee is not None else None
+        r["actual_postage"] = abs(post) if post is not None else None
+    unwound_losses = ebay_finances.unwound_order_losses(
+        excluded["cancelled_order_ids"] + excluded["refunded_order_ids"],
+        ad_fee_by_order, postage_by_order)
+    covered = sum(1 for r in rows if r["ad_fee"] is not None or r["actual_postage"] is not None)
+    if args.apply:
+        write_finances_status(fin_status, days=args.days, orders_total=len(rows),
+                              orders_covered=covered)
+
     store = None
     if args.store_json:
         active, sold = [], []
@@ -520,7 +652,7 @@ def main() -> int:
             (sold if "sold" in Path(p).name.lower() else active).extend(rs)
         store = {"active": active, "sold": sold}
 
-    report(rows, drafts, ledger, store, excluded)
+    report(rows, drafts, ledger, store, excluded, unwound_losses)
 
     if not args.apply:
         print("\n[DRY RUN] Nothing written. Re-run with --apply to record:")

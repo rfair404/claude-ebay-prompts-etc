@@ -43,10 +43,28 @@ import sys
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parent.parent
 LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
+
+# The single reporting timezone (#122). eBay's Seller Hub reports, the seller
+# invoice, and the 1099-K are all built on this zone — an API read bucketed by
+# UTC (or by whatever zone a workstation happens to be set to) can disagree
+# with eBay's own numbers on order count for a day that straddles midnight.
+# An IANA zone, not a fixed offset: Pacific is PST (UTC-8) roughly Nov-Mar and
+# PDT (UTC-7) roughly Mar-Nov, and `ZoneInfo` gets the two changeover days
+# right where a fixed offset would silently misbucket them.
+#
+# NOTE (#119): defined here ahead of #122 landing on main, so the Finances-API
+# fee/postage reader added in #119 has one convention to bucket transaction
+# dates by, rather than inventing a second timezone helper. If #122 merges
+# first, this block (and to_report_date/to_report_month below) is a
+# duplicate — keep #122's copy and drop this one; the call sites are the
+# same names either way.
+REPORTING_TZ = ZoneInfo("America/Los_Angeles")
+REPORTING_TZ_LABEL = "Pacific Time"
 
 
 def _parse_utc(raw: str) -> Optional[datetime]:
@@ -60,6 +78,25 @@ def _parse_utc(raw: str) -> Optional[datetime]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def to_report_date(raw: str) -> Optional[date]:
+    """A stored UTC timestamp -> the calendar date it falls on in Pacific
+    time (#122). THE boundary conversion: call this wherever a raw timestamp
+    becomes a day a report groups by, instead of slicing the ISO string or
+    taking `.date()` on a naive/UTC datetime — either of those puts a sale
+    made in the 00:00-07:00 UTC window (17:00-24:00 Pacific the evening
+    before, when people shop) on the wrong side of a month boundary. Storage
+    stays UTC; only the read side converts. Returns None for empty/unparsable
+    input."""
+    dt = _parse_utc(raw)
+    return dt.astimezone(REPORTING_TZ).date() if dt else None
+
+
+def to_report_month(raw: str) -> Optional[str]:
+    """`to_report_date`, truncated to `YYYY-MM` for month bucketing (#122)."""
+    d = to_report_date(raw)
+    return d.strftime("%Y-%m") if d else None
 
 
 def _local(dt: Optional[datetime]) -> Optional[datetime]:

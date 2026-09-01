@@ -297,3 +297,67 @@ def test_render_table_never_shows_missing_basis_as_a_profit_number(fixture_repo)
     by_key = {b["key"]: b for b in d["buckets"]}
     assert by_key["FREE"]["profit"] is None
     assert "basis not recorded" in out or "—" in out
+
+
+# --------------------------------------------------------------------------
+# #119 (route B, sell.finances) — the "before postage AND before
+# advertising" qualifier comes off only when real ad-fee/postage data is
+# actually available, and says why in one line when it isn't.
+# --------------------------------------------------------------------------
+_SALES_FIELDS_119 = _SALES_FIELDS + ["ad_fee", "actual_postage"]
+
+
+def _write_sales(tmp_path, rows):
+    sales = tmp_path / "sales_ledger.csv"
+    with sales.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=_SALES_FIELDS_119)
+        w.writeheader()
+        w.writerows(rows)
+    return sales
+
+
+def test_gather_reports_no_finances_coverage_when_columns_are_blank(fixture_repo):
+    # fixture_repo's rows predate #119 — no ad_fee/actual_postage columns at
+    # all, the exact shape sales_ledger.csv had before this PR.
+    d = sr.gather()
+    assert d["fin_covered_n"] == 0
+    assert d["fin_ad_fee_total"] is None
+    note = sr._fin_note(d)
+    assert "before postage AND before advertising" in note
+
+
+def test_gather_reports_full_finances_coverage(fixture_repo, monkeypatch):
+    rows = [
+        {**_sale("1", "inventory/ESTATES/SCJ/item-1", gross=100, fee=13, net=87),
+         "ad_fee": "4.00", "actual_postage": "6.50"},
+        {**_sale("2", "inventory/FREE/more-mags-444", gross=20, fee=3, net=17),
+         "ad_fee": "0.00", "actual_postage": "3.00"},
+    ]
+    sales = _write_sales(fixture_repo, rows)
+    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+
+    d = sr.gather()
+    assert d["fin_covered_n"] == 2 == d["fin_total_n"]
+    assert d["fin_ad_fee_total"] == pytest.approx(4.00)
+    assert d["fin_postage_total"] == pytest.approx(9.50)
+    note = sr._fin_note(d)
+    assert "before postage AND before advertising" not in note
+    assert "#119" in note
+
+
+def test_gather_reports_partial_finances_coverage_and_says_why(fixture_repo, monkeypatch):
+    rows = [
+        {**_sale("1", "inventory/ESTATES/SCJ/item-1", gross=100, fee=13, net=87),
+         "ad_fee": "4.00", "actual_postage": "6.50"},
+        {**_sale("2", "inventory/FREE/more-mags-444", gross=20, fee=3, net=17),
+         "ad_fee": "", "actual_postage": ""},   # not read yet
+    ]
+    sales = _write_sales(fixture_repo, rows)
+    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+
+    d = sr.gather()
+    assert d["fin_covered_n"] == 1
+    assert d["fin_total_n"] == 2
+    note = sr._fin_note(d)
+    assert "1 of 2" in note
+    assert "before postage AND before advertising" in note
