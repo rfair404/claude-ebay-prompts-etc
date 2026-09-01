@@ -100,16 +100,21 @@ this finding is warning about.
 
 What *is* available: `tools/session_observer.py` already computes, per
 repeat, the exact signature that repeated (`_tool_signature()` — tool name
-plus its command/file_path/pattern/etc, capped at 160 chars) and keeps it in
-`aggregate_friction()`'s `samples["repeat"]`. That detail already reaches
-the human-readable `report()` output, but `propose_fixes()`'s `repeat_calls`
-proposal — the text that ends up in an auto-filed issue like this one — only
-carried the aggregate count ("27 repeat-call signal(s) across 20
-session(s)"), discarding the one piece of detail that would make a future
-occurrence self-diagnosing without transcript archaeology. `tool_error_rate`
-already does this (names the worst-offending tool); `repeat_calls` now
-mirrors it, naming the worst-repeated signature and its count in the
-evidence line. This is a small, additive change to evidence text only — it
+plus its command/file_path/pattern/etc, capped at 160 chars). But
+`propose_fixes()`'s `repeat_calls` proposal — the text that ends up in an
+auto-filed issue like this one — only carried the aggregate count ("27
+repeat-call signal(s) across 20 session(s)"), discarding the one piece of
+detail that would make a future occurrence self-diagnosing without
+transcript archaeology. `tool_error_rate` already does this (names the
+worst-offending tool); `repeat_calls` now mirrors it, naming the
+worst-repeated signature and its count in the evidence line.
+
+That worst is tracked in `aggregate_friction()` over **every** repeat
+record, deliberately not read out of `samples["repeat"]`. `samples` is
+capped at `top` (8 per kind), so a max taken over it would name the worst of
+the first 8 records and label it the worst of all — with this very report's
+numbers (27 signals across 20 sessions) that would have ignored 19 of them
+and could print a 3x repeat as the worst while a 15x one went unmentioned. This is a small, additive change to evidence text only — it
 does not change what counts as a repeat, when the proposal fires, or add
 any new subsystem.
 
@@ -130,15 +135,20 @@ session logs. Left for a human with those logs to triage.
 
 ## What changed here
 
-Only finding 5: `tools/session_observer.py`'s `propose_fixes()` now names
-the worst-repeated tool+input signature in the `repeat_calls` proposal's
-evidence text, using data (`samples["repeat"]`) it already collected.
+Only finding 5: `aggregate_friction()` now tracks the worst-repeated
+tool+input signature across every repeat record (`worst_repeat`), and
+`propose_fixes()` names it in the `repeat_calls` proposal's evidence text.
 
 ## Test plan
 
 - `tests/test_session_observer.py::test_propose_fixes_names_the_worst_repeat_signature`
   — new test asserting the worst repeat signature and its count appear in
   the `repeat_calls` evidence text.
+- `tests/test_session_observer.py::test_worst_repeat_is_not_capped_by_the_sample_limit`
+  — new test pinning the reason `worst_repeat` is computed in
+  `aggregate_friction()` rather than from the capped `samples`: 20 sessions,
+  27 signals, with the 15x offender in session 15 (well past the 8-sample
+  cap) and asserting it is the one named.
 - `tests/test_session_observer.py::test_propose_fixes_flags_repeat_tool_error_and_long_loop_signals`
   — existing test, unchanged, still passes (repeat_calls still fires at the
   same threshold).
