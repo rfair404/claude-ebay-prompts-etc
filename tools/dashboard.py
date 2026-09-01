@@ -125,9 +125,12 @@ def gather_backlog() -> dict:
     """One row per shoot, via `lib.status.gather()` — untouched per-shoot
     state logic, just assembled across the whole tree and bucketed by which
     stage is currently blocking each one."""
+    # Preloaded once so lib.status.gather() doesn't re-scan
+    # listings_ledger.csv from scratch for every shoot in the tree.
+    ledger_by_sku = {r["sku"]: r for r in _rows(LEDGER) if r.get("sku")}
     rows = []
     for shoot in iter_shoot_dirs():
-        state = _status.gather(shoot)
+        state = _status.gather(shoot, ledger_by_sku=ledger_by_sku)
         try:
             state["dir"] = shoot.relative_to(REPO).as_posix()
         except ValueError:

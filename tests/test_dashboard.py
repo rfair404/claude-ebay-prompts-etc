@@ -187,6 +187,30 @@ def test_gather_backlog_rows_carry_sku_and_ledger_status(repo):
     assert row["ledger_status"] == "SYNCED"
 
 
+def test_gather_backlog_preloads_the_ledger_once_not_once_per_shoot(repo, monkeypatch):
+    # lib.status.gather()'s own _ledger_row() re-scans listings_ledger.csv
+    # on every call unless handed a preloaded {sku: row} map — verify
+    # gather_backlog() always passes one, across multiple shoots, so a
+    # large inventory doesn't re-read the ledger file per shoot.
+    inv = repo / "inventory"
+    for name in ("item-1", "item-2", "item-3"):
+        _frame(_shoot(inv, "lot", name))
+    _write_ledger(repo / "listings_ledger.csv", [{"sku": "abc12345", "status": "SYNCED"}])
+
+    calls = []
+    real_ledger_row = _status._ledger_row
+
+    def _spy(sku, ledger_by_sku=None):
+        calls.append(ledger_by_sku)
+        return real_ledger_row(sku, ledger_by_sku)
+
+    monkeypatch.setattr(_status, "_ledger_row", _spy)
+    d = dash.gather_backlog()
+    assert d["count"] == 3
+    assert len(calls) == 3
+    assert all(c is not None for c in calls)   # every call got the preloaded map
+
+
 # ---------------------------------------------------------------------------
 # gather_drafts
 # ---------------------------------------------------------------------------
