@@ -157,6 +157,19 @@ def _rows(path: Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def _ledger_has_finance_columns(path: Path) -> bool:
+    """Whether sales_ledger.csv's header carries the #119 ad_fee/actual_postage
+    columns at all — a ledger with NO finances_sync_status.json yet is
+    either "sync_actuals.py hasn't been re-run since #119" (columns absent)
+    or "it has, just not applied this window" (columns present); those are
+    different explanations for the reader (see gather()'s fin_qualifier)."""
+    if not path.exists():
+        return False
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        header = next(csv.reader(fh), [])
+    return "ad_fee" in header and "actual_postage" in header
+
+
 def _f(v, default=0.0) -> float:
     try:
         return float(str(v).replace("$", "").replace(",", "").replace("%", "").strip())
@@ -254,7 +267,11 @@ def gather(days: int) -> dict:
         if fin_status and fin_status.get("reason"):
             why = str(fin_status["reason"])[:140]
         elif fin_status is None:
-            why = "sync_actuals.py --apply has not read the Finances API yet"
+            if _ledger_has_finance_columns(REPO / "sales_ledger.csv"):
+                why = "sync_actuals.py --apply has not read the Finances API yet"
+            else:
+                why = ("sales_ledger.csv predates #119 (no ad_fee/actual_postage "
+                       "columns yet) — run sync_actuals.py --apply to add them")
         elif fin_status.get("ok"):
             # The sync succeeded (no reason to report) but coverage is still
             # partial — a genuinely different situation from "not re-consented

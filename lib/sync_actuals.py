@@ -120,6 +120,13 @@ def _norm(s: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", (s or "").lower()).split())
 
 
+def _one_line(s: str, limit: int) -> str:
+    """Collapse embedded newlines/tabs (EbayAuthError and some API error
+    messages carry them) so a stored "one-line reason" — read straight into
+    CLI output and downstream qualifiers — actually is one line."""
+    return " ".join(str(s).split())[:limit]
+
+
 # --------------------------------------------------------------------------- #
 # source 1 — orders (the actuals)
 # --------------------------------------------------------------------------- #
@@ -435,13 +442,15 @@ def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
     try:
         txns = ebay_finances.fetch_transactions(days, verbose=verbose)
     except (EbayAuthError, EbayAPIError) as e:
+        reason = _one_line(e, 300)
         if verbose:
-            print(f"  unavailable: {str(e)[:200]}" + " " * 12)
-        return {}, {}, {"ok": False, "reason": str(e)[:300], "other_fee_labels": {}}
+            print(f"  unavailable: {reason[:200]}" + " " * 12)
+        return {}, {}, {"ok": False, "reason": reason, "other_fee_labels": {}}
     except Exception as e:                                       # noqa: BLE001
+        reason = _one_line(e, 300)
         if verbose:
-            print(f"  unavailable: {str(e)[:200]}" + " " * 12)
-        return {}, {}, {"ok": False, "reason": str(e)[:300], "other_fee_labels": {}}
+            print(f"  unavailable: {reason[:200]}" + " " * 12)
+        return {}, {}, {"ok": False, "reason": reason, "other_fee_labels": {}}
 
     parsed = ebay_finances.parse_transactions(txns)
     ad_fee_by_order = ebay_finances.attribute_fees_by_order(parsed["fees"])

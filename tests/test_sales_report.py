@@ -75,8 +75,22 @@ def test_no_finances_columns_at_all_keeps_the_115_qualifier(fixture_repo):
 
     d = sr.gather(365)
     assert d["net_after_ads_postage"] is None
-    qualifier, _why = d["fin_qualifier"]
+    qualifier, why = d["fin_qualifier"]
     assert qualifier is not None
+    assert "predates #119" in why
+
+
+def test_columns_present_but_status_json_missing_says_not_read_yet(fixture_repo):
+    # Post-#119 ledger shape (columns present, just blank) but
+    # finances_sync_status.json doesn't exist yet — a different situation
+    # from the ledger predating #119 entirely, tested above.
+    _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])
+
+    d = sr.gather(365)
+    qualifier, why = d["fin_qualifier"]
+    assert qualifier is not None
+    assert "predates #119" not in why
+    assert "has not read the Finances API yet" in why
 
 
 def test_full_finances_coverage_drops_the_qualifier(fixture_repo):

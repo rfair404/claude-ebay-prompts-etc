@@ -313,6 +313,19 @@ def test_sync_finances_degrades_on_auth_error(monkeypatch):
     assert "re-consented" in status["reason"]
 
 
+def test_sync_finances_collapses_a_multiline_error_into_one_line(monkeypatch):
+    import ebay_finances
+    from ebay_client import EbayAPIError
+
+    def boom(days, verbose=True):
+        raise EbayAPIError(401, "unauthorized\n  reason: invalid_scope\n  hint: re-consent")
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
+    _, _, status = SA.sync_finances(90, verbose=False)
+    assert "\n" not in status["reason"]
+    assert "invalid_scope" in status["reason"]
+
+
 def test_sync_finances_returns_attribution_on_success(monkeypatch):
     import ebay_finances
 
