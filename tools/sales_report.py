@@ -258,6 +258,13 @@ def gather(days: int) -> dict:
     out["fin_postage_total"] = sum(r["actual_postage"] for r in fin_known) if fin_known else None
     out["fin_covered_n"] = len(fin_known)
     out["fin_status"] = fin_status
+    # The promoted-listings panel is about ad spend specifically and doesn't
+    # need postage to be meaningful — gating it on BOTH known (like the
+    # combined headline above) would hide real, known ad-fee spend whenever
+    # postage just lags behind on the same order.
+    fin_ad_known = [r for r in rows if r["ad_fee"] is not None]
+    out["fin_ad_fee_only_total"] = sum(r["ad_fee"] for r in fin_ad_known) if fin_ad_known else None
+    out["fin_ad_covered_n"] = len(fin_ad_known)
     if not rows:
         out["fin_qualifier"] = ("no sold line items in this window", "")
     elif len(fin_known) == len(rows):
@@ -608,10 +615,10 @@ def draw(d: dict) -> str:
     # joining to soldViaAdCampaign (a cost-per-click ad bills regardless of
     # which sale eBay ends up crediting it to).
     ad_fee_stat = (
-        _stat(_money(d["fin_ad_fee_total"]), "actual ad-fee spend (#119)",
-              f'{d["fin_covered_n"]}/{d["count"]} sold line items — Finances API, by order id')
-        if d["fin_ad_fee_total"] is not None else "")
-    if d["fin_ad_fee_total"] is not None:
+        _stat(_money(d["fin_ad_fee_only_total"]), "actual ad-fee spend (#119)",
+              f'{d["fin_ad_covered_n"]}/{d["count"]} sold line items — Finances API, by order id')
+        if d["fin_ad_fee_only_total"] is not None else "")
+    if ad_fee_stat:
         note_tail = (
             '<code>totalMarketplaceFee</code> is the final value fee <em>only</em> '
             '(#115); the actual ad-fee spend above comes from '

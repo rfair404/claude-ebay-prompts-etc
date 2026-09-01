@@ -141,6 +141,21 @@ def test_zero_ad_fee_is_a_real_known_value_not_missing(fixture_repo):
     assert d["net_after_ads_postage"] == pytest.approx(87 - 0.00 - 6.50)
 
 
+def test_ad_fee_only_coverage_not_gated_on_postage(fixture_repo):
+    # ad_fee known, postage NOT known yet — the promoted-panel ad-spend
+    # figure must still show (the panel is about ads, not postage), even
+    # though the combined "net after ads & postage" headline correctly
+    # stays hidden until both are known.
+    _write_sales(fixture_repo, [
+        _sale("1", gross=100, fee=13, net=87, ad_fee="4.00", actual_postage=""),
+    ])
+    d = sr.gather(365)
+    assert d["fin_covered_n"] == 0             # combined (both-known) unaffected
+    assert d["net_after_ads_postage"] is None
+    assert d["fin_ad_fee_only_total"] == pytest.approx(4.00)
+    assert d["fin_ad_covered_n"] == 1
+
+
 def test_ad_fee_attribution_does_not_look_at_ad_campaign_flag(fixture_repo):
     # gather() must merge ad_fee/actual_postage purely from the CSV columns —
     # nothing here reads or requires an ad-campaign flag on the sale itself
