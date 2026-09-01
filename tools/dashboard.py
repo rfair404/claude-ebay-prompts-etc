@@ -140,21 +140,30 @@ def gather_backlog() -> dict:
 # ---------------------------------------------------------------------------
 
 _VOICE_PREFIX = "voice (block): "
+_PARSE_ERROR_PREFIX = "draft parse error: "
 
 
-def _redact_voice_snippet(issue: str) -> str:
-    """`validate_draft_for_sync()` folds in `check_voice()`, which quotes up
-    to 90 chars of the flagged BUYER-FACING body/field text verbatim (see
-    lib/voice_check.py). That text is meant for eBay's own listing page, not
-    PII or context.txt prose — but this dashboard is still meant to show only
-    structured/aggregated fields (matching lib/source_report.py and
-    tools/sales_report.py), so the quoted snippet is dropped here and only
-    which field tripped the check is kept. The exact phrase is still one
-    `ebz voice <draft>` away."""
-    if not issue.startswith(_VOICE_PREFIX):
-        return issue
-    field = issue[len(_VOICE_PREFIX):].split(":", 1)[0].strip() or "body"
-    return f"{_VOICE_PREFIX}{field} — in-hand voice phrase flagged (run `ebz voice` for the text)"
+def _redact_issue(issue: str, path) -> str:
+    """`validate_draft_for_sync()` can return two kinds of issue string that
+    carry free text from the draft itself, not just a structured field name:
+
+    - `check_voice()`'s voice-block lines quote up to 90 chars of the
+      flagged BUYER-FACING body/field text verbatim (lib/voice_check.py).
+    - A `draft parse error: {e}` line embeds the underlying exception's
+      message directly — for a YAML error, that's often a quoted excerpt of
+      the draft's own front matter or body.
+
+    Neither is PII, but this dashboard's own policy (matching
+    lib/source_report.py / tools/sales_report.py) is structured/aggregated
+    fields only, so both get redacted to "what kind of problem" plus a
+    pointer to the real command for the actual text."""
+    if issue.startswith(_VOICE_PREFIX):
+        field = issue[len(_VOICE_PREFIX):].split(":", 1)[0].strip() or "body"
+        return f"{_VOICE_PREFIX}{field} — in-hand voice phrase flagged (run `ebz voice` for the text)"
+    if issue.startswith(_PARSE_ERROR_PREFIX):
+        return (f"draft parse error — run "
+                f"`python -m lib.cli listing --validate {path}` for details")
+    return issue
 
 
 def _blocking_issues(row: dict) -> list[str]:
@@ -176,7 +185,7 @@ def _blocking_issues(row: dict) -> list[str]:
         # not its text — and point at the real command for the details.
         return [f"validation error ({type(e).__name__}) — run "
                 f"`python -m lib.cli listing --validate {row.get('path')}` for details"]
-    return [_redact_voice_snippet(i) for i in issues]
+    return [_redact_issue(i, row.get("path")) for i in issues]
 
 
 def gather_drafts() -> dict:
@@ -256,8 +265,11 @@ def gather_drift() -> dict:
 
     return {
         "rows": rows,
-        "have_live_snapshot": bool(live),
-        "have_ledger": bool(ledger),
+        # File existence, not "has rows" — an empty-but-present CSV (e.g. a
+        # freshly-synced account with nothing live yet) is a real, current
+        # snapshot, not a missing one.
+        "have_live_snapshot": LIVE_SHEET.exists(),
+        "have_ledger": LEDGER.exists(),
         "count": len(rows),
     }
 

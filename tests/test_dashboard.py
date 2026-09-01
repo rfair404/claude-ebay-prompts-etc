@@ -259,6 +259,21 @@ def test_gather_drafts_redacts_voice_check_snippet_but_names_the_field(repo):
         assert i.startswith("voice (block): body —")
 
 
+def test_gather_drafts_redacts_a_draft_parse_error_instead_of_the_yaml_text(repo):
+    inv = repo / "inventory"
+    s = _shoot(inv, "lot", "bad-yaml")
+    # unterminated quoted scalar -> yaml.safe_load raises, and the raised
+    # DraftParseError's own message embeds a snippet of this exact line
+    (s / "draft.md").write_text(
+        '---\ntitle: "SECRET-CONSIGNOR-NAME-MARKER unterminated\nmeta:\n---\nbody\n')
+    d = dash.gather_drafts()
+    issues = d["drafted"][0]["blocking_issues"]
+    assert any(i.startswith("draft parse error —") for i in issues)
+    for i in issues:
+        assert "SECRET-CONSIGNOR-NAME-MARKER" not in i
+    assert any("listing --validate" in i for i in issues)
+
+
 def test_gather_drafts_skips_validation_for_group_drafts(repo):
     inv = repo / "inventory"
     s = _shoot(inv, "lot", "group-item")
@@ -274,6 +289,15 @@ def test_gather_drafts_skips_validation_for_group_drafts(repo):
 def test_gather_drift_no_files_present(repo):
     d = dash.gather_drift()
     assert d == {"rows": [], "have_live_snapshot": False, "have_ledger": False, "count": 0}
+
+
+def test_gather_drift_treats_an_empty_but_present_csv_as_a_real_snapshot(repo):
+    # header-only CSVs: an account synced with nothing live yet, not a
+    # missing/unsynced snapshot — have_* must key off existence, not row count
+    _write_live_sheet(repo / "inventory_sheet.csv", [])
+    _write_ledger(repo / "listings_ledger.csv", [])
+    d = dash.gather_drift()
+    assert d == {"rows": [], "have_live_snapshot": True, "have_ledger": True, "count": 0}
 
 
 def test_gather_drift_flags_price_and_title_mismatch(repo):
