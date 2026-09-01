@@ -611,7 +611,7 @@ def draw(d: dict) -> str:
             'on this page rather than blended into them (#115). A real per-order reader '
             'exists (#119, <code>/sell/finances/v1/transaction</code>) but has no data '
             'for this window yet'
-            + (f' — {qualifier}' if qualifier else '') + '.')
+            + (f' — {_e(qualifier)}' if qualifier else '') + '.')
     P.append(
         '<div class="card"><div class="pad"><h2>Promoted &amp; targeted listings</h2>'
         '<div class="stats" style="margin:0 -24px 18px;border-top:1px solid var(--rule);'
