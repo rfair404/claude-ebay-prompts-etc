@@ -105,9 +105,9 @@ def gather_backlog() -> dict:
     for shoot in iter_shoot_dirs():
         state = _status.gather(shoot)
         try:
-            state["dir"] = str(shoot.relative_to(REPO))
+            state["dir"] = shoot.relative_to(REPO).as_posix()
         except ValueError:
-            state["dir"] = str(shoot)
+            state["dir"] = shoot.as_posix()
         ready = state["next_action"].startswith("all stages clear")
         state["blocked_stage"] = None if ready else state["next_action"].split(":", 1)[0]
         rows.append(state)
