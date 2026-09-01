@@ -472,6 +472,30 @@ def test_draft_body_text_never_appears_only_structured_fields_do(repo):
     assert "buyer-facing body must never leak" not in out
 
 
+def test_single_pass_ask_json_free_text_never_appears_in_backlog_or_html(repo):
+    # identify/investigate/draft's pending detail can come straight from a
+    # `.single_pass/ask.json` a stage wrote — free text an agent composed
+    # (e.g. a maker-mark reading), not a structured field.
+    import json
+    inv = repo / "inventory"
+    s = _shoot(inv, "lot", "gated-item")
+    _frame(s)
+    (s / "identify.txt").write_text("x\n")
+    (s / ".single_pass").mkdir()
+    (s / ".single_pass" / "ask.json").write_text(json.dumps([
+        {"stage": "identify",
+         "detail": "SECRET-MAKER-MARK-MARKER reads 'J. Doe Estate, ring 3 of 4'"},
+    ]))
+    d = dash.gather_backlog()
+    row = next(r for r in d["rows"] if r["dir"] == "inventory/lot/gated-item")
+    assert row["blocked_stage"] == "identify"
+    assert "SECRET-MAKER-MARK-MARKER" not in row["next_action"]
+    assert "run `python -m lib.cli status" in row["next_action"]
+
+    out = dash.draw(dash.gather())
+    assert "SECRET-MAKER-MARK-MARKER" not in out
+
+
 # ---------------------------------------------------------------------------
 # CLI registration
 # ---------------------------------------------------------------------------

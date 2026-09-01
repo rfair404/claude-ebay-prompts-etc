@@ -111,6 +111,14 @@ def iter_shoot_dirs():
             yield d
 
 
+# identify/investigate/draft's pending detail can come straight from a
+# `.single_pass/ask.json` a stage wrote — free text (e.g. a maker-mark
+# reading, a grouping question), not a structured field. prep's and price's
+# own pending messages are always code-generated (filenames, crop reasons,
+# canned "not written yet" text), never file-sourced free text — safe as-is.
+_ASK_SOURCED_STAGES = frozenset({"identify", "investigate", "draft"})
+
+
 def gather_backlog() -> dict:
     """One row per shoot, via `lib.status.gather()` — untouched per-shoot
     state logic, just assembled across the whole tree and bucketed by which
@@ -128,6 +136,10 @@ def gather_backlog() -> dict:
         # build that string, just not tied to its exact display phrasing.
         state["blocked_stage"] = next(
             (stage for stage in STAGE_ORDER if state["stages"][stage]["pending"]), None)
+        if state["blocked_stage"] in _ASK_SOURCED_STAGES:
+            state["next_action"] = (
+                f"{state['blocked_stage']}: pending — run `python -m lib.cli "
+                f"status {state['dir']}` for the question")
         rows.append(state)
 
     def _rank(r: dict) -> int:
