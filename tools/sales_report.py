@@ -255,6 +255,13 @@ def gather(days: int) -> dict:
             why = str(fin_status["reason"])[:140]
         elif fin_status is None:
             why = "sync_actuals.py --apply has not read the Finances API yet"
+        elif fin_status.get("ok"):
+            # The sync succeeded (no reason to report) but coverage is still
+            # partial — a genuinely different situation from "not re-consented
+            # yet", which would be a false explanation here.
+            why = ("the Finances API was read successfully, but some sold "
+                   "line items have no matching transaction yet (still "
+                   "settling on eBay's side, or genuinely none)")
         else:
             why = ("re-consent with the sell.finances scope has not happened yet "
                    "(#119) — see lib/ebay_client.py USER_SCOPES_SELL")

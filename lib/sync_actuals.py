@@ -645,15 +645,18 @@ def main() -> int:
     for r in rows:
         order_lines.setdefault(r["order_id"], []).append(r)
 
-    def _allocate(totals_by_order: dict, field: str) -> None:
+    def _allocate(totals_by_order: dict, field: str, *, absence_is_zero: bool = False) -> None:
         for order_id, lines in order_lines.items():
             # positive magnitudes, matching ebay_fee/item_price's convention —
             # see ebay_finances' module docstring "Sign convention".
             total = totals_by_order.get(order_id)
             if total is None:
-                for l in lines:
-                    l[field] = None
-                continue
+                if absence_is_zero:
+                    total = Decimal(0)
+                else:
+                    for l in lines:
+                        l[field] = None
+                    continue
             total = abs(total)
             basis = [l["item_price"] + l["buyer_shipping"] for l in lines]
             basis_sum = sum(basis, Decimal(0)) or Decimal(1)
@@ -662,7 +665,15 @@ def main() -> int:
             for l, s in zip(lines, shares):
                 l[field] = s
 
-    _allocate(ad_fee_by_order, "ad_fee")
+    # attribute_fees_by_order() only has a key for orders with at least one
+    # AD-classified fee transaction — an order with NO promoted-listing spend
+    # simply never appears, which is a real, known $0.00, not "unread yet".
+    # Only true once the Finances sync actually succeeded this run, though:
+    # a failed/skipped sync also leaves the dict empty, and there the absence
+    # means "unknown", not "zero" (postage isn't given this treatment — a
+    # missing shipping-label transaction more plausibly means the label
+    # hasn't posted to the Finances feed yet than that postage was $0).
+    _allocate(ad_fee_by_order, "ad_fee", absence_is_zero=fin_status.get("ok", False))
     _allocate(postage_by_order, "actual_postage")
 
     unwound_losses = ebay_finances.unwound_order_losses(
@@ -670,10 +681,12 @@ def main() -> int:
         ad_fee_by_order, postage_by_order)
     # Coverage is per ORDER (matching orders_total below), and an order only
     # counts as covered once BOTH fields are known for it — a "some rows have
-    # ad_fee but not postage" order is partial coverage, not full.
-    covered = sum(1 for oid in order_lines
-                  if ad_fee_by_order.get(oid) is not None
-                  and postage_by_order.get(oid) is not None)
+    # ad_fee but not postage" order is partial coverage, not full. Checked on
+    # the allocated row values, not the raw totals dicts: absence there
+    # doesn't always mean "unknown" (see _allocate's absence_is_zero).
+    covered = sum(1 for lines in order_lines.values()
+                  if lines[0]["ad_fee"] is not None
+                  and lines[0]["actual_postage"] is not None)
     if args.apply:
         write_finances_status(fin_status, days=args.days, orders_total=len(order_lines),
                               orders_covered=covered)
