@@ -274,6 +274,16 @@ def test_gather_drafts_redacts_a_draft_parse_error_instead_of_the_yaml_text(repo
     assert any("listing --validate" in i for i in issues)
 
 
+def test_draft_price_cell_renders_a_dash_not_zero_for_a_missing_price():
+    # A missing/non-numeric price is a validation problem
+    # (validate_draft_for_sync() already flags it) — "$0.00" would read as a
+    # real, confirmed zero price instead of "unknown."
+    assert dash._draft_price_cell(None) == "—"
+    assert dash._draft_price_cell("") == "—"
+    assert dash._draft_price_cell("not-a-number") == "—"
+    assert dash._draft_price_cell("19.99") == "$19.99"
+
+
 def test_gather_drafts_skips_validation_for_group_drafts(repo):
     inv = repo / "inventory"
     s = _shoot(inv, "lot", "group-item")
@@ -371,7 +381,24 @@ def test_gather_drift_dedupes_choice_variations_by_listing_id(repo):
     ])
     _write_ledger(repo / "listings_ledger.csv", [])
     d = dash.gather_drift()
-    assert d["count"] == 1     # only the first variation is evaluated
+    assert d["count"] == 1     # the group is evaluated once, not once per SKU
+
+
+def test_gather_drift_matches_a_choice_group_against_any_of_its_skus(repo):
+    # The ledger recording a *different* variation's SKU than the one this
+    # dashboard happens to see first must not read as "no ledger row" for
+    # the whole listing — it's a match, just not on the first SKU checked.
+    _write_live_sheet(repo / "inventory_sheet.csv", [
+        {"sku": "var-1", "title": "Choice Group", "listing_id": "333",
+         "live": "yes", "price": "10.00"},
+        {"sku": "var-2", "title": "Choice Group", "listing_id": "333",
+         "live": "yes", "price": "10.00"},
+    ])
+    _write_ledger(repo / "listings_ledger.csv", [
+        {"sku": "var-2", "title": "Choice Group", "price": "10.00", "status": "PUBLISHED"},
+    ])
+    d = dash.gather_drift()
+    assert d["count"] == 0     # matched via var-2; no false "no ledger row"
 
 
 def test_gather_drift_ignores_non_live_rows(repo):

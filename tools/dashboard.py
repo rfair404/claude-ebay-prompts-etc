@@ -251,23 +251,37 @@ def gather_drift() -> dict:
     ledger = _rows(LEDGER)
     ledger_by_sku = {r["sku"]: r for r in ledger if r.get("sku")}
 
-    seen_lids: set = set()
-    rows = []
+    # Group live rows by listing_id first (a CHOICE listing has one row per
+    # variation SKU sharing one listing_id) — matching only the first
+    # variation encountered against the ledger, as a single-SKU comparison
+    # would, can false-flag "no ledger row" when the ledger happens to
+    # record a *different* variation's SKU for the same listing.
+    groups: dict[str, dict] = {}
     for lv in live:
+        if (lv.get("live") or "").lower() != "yes":
+            continue
         lid = lv.get("listing_id") or ""
-        if (lv.get("live") or "").lower() != "yes" or not lid or lid in seen_lids:
-            continue                                          # CHOICE variation, already counted
-        seen_lids.add(lid)
-        sku = lv.get("sku") or ""
-        led = ledger_by_sku.get(sku)
+        if not lid:
+            continue
+        g = groups.setdefault(lid, {"rep": lv, "skus": set()})
+        if lv.get("sku"):
+            g["skus"].add(lv["sku"])
+
+    rows = []
+    for lid, g in groups.items():
+        rep = g["rep"]
+        matched_sku = next((s for s in g["skus"] if s in ledger_by_sku), None)
+        led = ledger_by_sku.get(matched_sku) if matched_sku else None
         issues = []
         if led is None:
-            issues.append("no listings_ledger.csv row for this live sku")
+            issues.append(
+                "no listings_ledger.csv row for any sku in this listing"
+                if len(g["skus"]) > 1 else "no listings_ledger.csv row for this live sku")
         else:
-            if _price_drift(lv.get("price"), led.get("price")):
+            if _price_drift(rep.get("price"), led.get("price")):
                 issues.append(f"price: ledger {_money(_f(led.get('price')))} "
-                              f"vs live {_money(_f(lv.get('price')))}")
-            live_title = (lv.get("title") or "").strip()
+                              f"vs live {_money(_f(rep.get('price')))}")
+            live_title = (rep.get("title") or "").strip()
             ledger_title = (led.get("title") or "").strip()
             if live_title and ledger_title and live_title != ledger_title:
                 issues.append("title differs from ledger")
@@ -275,8 +289,9 @@ def gather_drift() -> dict:
                 issues.append(f"ledger status is {led.get('status') or '(blank)'}, not PUBLISHED")
         if issues:
             rows.append({
-                "sku": sku, "listing_id": lid, "title": lv.get("title", ""),
-                "live_price": lv.get("price", ""),
+                "sku": matched_sku or rep.get("sku") or "", "listing_id": lid,
+                "title": rep.get("title", ""),
+                "live_price": rep.get("price", ""),
                 "ledger_price": (led or {}).get("price", ""),
                 "issues": issues,
             })
@@ -340,6 +355,14 @@ def _backlog_section(d: dict) -> str:
         + '</div></div>')
 
 
+def _draft_price_cell(price) -> str:
+    # A missing/non-numeric price is a real validation problem
+    # (validate_draft_for_sync() already flags it in blocking_issues) — show
+    # it as unknown, not as a misleadingly-precise "$0.00".
+    v = _f(price, None)
+    return _money(v) if v is not None else "—"
+
+
 def _draft_rows(rows: list[dict]) -> str:
     return "".join(
         f'<tr><td>{_e(r.get("title") or "(untitled)")}'
@@ -347,7 +370,7 @@ def _draft_rows(rows: list[dict]) -> str:
            if r.get("group") else "")
         + f'<div class="dim" style="font-size:11.5px">{_e(r.get("path") or r.get("sku") or "")}'
           f'</div></td>'
-        f'<td class="num">{_money(_f(r.get("price"), 0.0))}</td>'
+        f'<td class="num">{_draft_price_cell(r.get("price"))}</td>'
         f'<td>{_e(r.get("sku") or "—")}</td>'
         f'<td class="warn">{_e("; ".join(r.get("blocking_issues") or []) or "—")}</td></tr>'
         for r in rows[:100])
