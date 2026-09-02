@@ -223,3 +223,235 @@ def test_write_sales_ledger_updates_a_row_thats_refetched(tmp_path, monkeypatch)
         rows = list(csv.DictReader(f))
     assert len(rows) == 1
     assert rows[0]["item_price"] == "8.00"
+
+
+# --------------------------------------------------------------------------
+# #119 (route B, sell.finances) — ad_fee / actual_postage columns
+#
+# Blank, never 0.00, whenever a row hasn't been matched against the
+# Finances API yet — 0.00 would claim "no ad spend, no postage" (a real,
+# checked fact), which is a different statement from "not read yet".
+# --------------------------------------------------------------------------
+def test_write_sales_ledger_leaves_ad_fee_and_postage_blank_when_absent(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    # _sale_row (existing fixture, predates #119) carries no ad_fee/
+    # actual_postage keys at all — the exact shape sync_actuals produces
+    # before #119's finances merge runs, or when it's skipped.
+    SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")])
+
+    with ledger.open(encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["ad_fee"] == ""
+    assert row["actual_postage"] == ""
+
+
+def test_write_sales_ledger_formats_known_ad_fee_and_postage(tmp_path, monkeypatch):
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "2.50"
+    assert out["actual_postage"] == "6.85"
+
+
+def test_write_sales_ledger_treats_zero_ad_fee_as_a_real_known_value(tmp_path, monkeypatch):
+    # Decimal("0") is a legitimate READ result (an order with no ad spend at
+    # all) and must be written as "0.00", distinct from None -> "".
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("0"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "0.00"
+
+
+def test_write_sales_ledger_does_not_erase_known_finances_data_on_rerun(tmp_path, monkeypatch):
+    # A prior --apply recorded real ad_fee/actual_postage for this order...
+    ledger = tmp_path / "sales_ledger.csv"
+    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+
+    row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
+    SA.write_sales_ledger([row])
+
+    # ...then a rerun re-merges the SAME order but without a fresh Finances
+    # read this time (--skip-finances, or the Finances API call degraded) —
+    # the fetched row has ad_fee/actual_postage back to None. The prior
+    # known values must survive, not be blanked out.
+    rerun_row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
+    SA.write_sales_ledger([rerun_row])
+
+    with ledger.open(encoding="utf-8") as f:
+        out = next(csv.DictReader(f))
+    assert out["ad_fee"] == "2.50"
+    assert out["actual_postage"] == "6.85"
+
+
+# --------------------------------------------------------------------------
+# #119 — flatten_orders tracks WHICH orders it excluded, so a caller can
+# check them against the Finances API's fee/postage-by-order maps (the
+# "refunds are not zero" trap: an unwound order can still owe a real loss).
+# --------------------------------------------------------------------------
+def test_flatten_orders_reports_refunded_order_ids():
+    _, excluded = SA.flatten_orders(
+        [_order(item=80.0, fee=11.93, refund=68.47, due=-0.40, oid="ref-order-1")])
+    assert excluded["refunded_order_ids"] == ["ref-order-1"]
+    assert excluded["cancelled_order_ids"] == []
+
+
+def test_flatten_orders_reports_cancelled_order_ids():
+    _, excluded = SA.flatten_orders([_order(cancel="CANCELED", oid="cxl-order-1")])
+    assert excluded["cancelled_order_ids"] == ["cxl-order-1"]
+    assert excluded["refunded_order_ids"] == []
+
+
+# --------------------------------------------------------------------------
+# #119 — allocate_order_totals: order-level ad_fee/actual_postage totals
+# must land on flatten_orders()'s one-row-per-line-item rows WITHOUT
+# double-counting a multi-line order, and must resolve "no matching
+# transaction" to a known $0.00 (not permanently blank) for ad_fee once a
+# Finances read has actually succeeded this run — but never for postage.
+# --------------------------------------------------------------------------
+def _line(item_price, buyer_shipping="0.00"):
+    return {"item_price": Decimal(item_price), "buyer_shipping": Decimal(buyer_shipping)}
+
+
+def test_allocate_splits_order_total_across_lines_without_double_counting():
+    # A 3-line-item order: the SAME $9.00 ad-fee total must not land whole on
+    # every row — summed back over the rows it must equal $9.00, not $27.00.
+    lines = [_line("30.00"), _line("50.00"), _line("20.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {"o-1": Decimal("-9.00")}, "ad_fee")
+    assert [ln["ad_fee"] for ln in lines] == [
+        Decimal("2.70"), Decimal("4.50"), Decimal("1.80")]
+    assert sum((ln["ad_fee"] for ln in lines), Decimal(0)) == Decimal("9.00"), \
+        "shares must sum back to the order total, not multiply it by row count"
+
+
+def test_allocate_splits_by_item_price_plus_shipping_share():
+    lines = [_line("40.00", "10.00"), _line("50.00", "0.00")]  # bases: 50 / 50
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {"o-1": Decimal("-10.00")}, "actual_postage")
+    assert [ln["actual_postage"] for ln in lines] == [Decimal("5.00"), Decimal("5.00")]
+
+
+def test_allocate_folds_rounding_remainder_into_last_line():
+    # $1.00 across 3 lines of equal basis: 0.33/0.33/0.34, not a drifted total.
+    lines = [_line("10.00"), _line("10.00"), _line("10.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {"o-1": Decimal("-1.00")}, "ad_fee")
+    assert sum((ln["ad_fee"] for ln in lines), Decimal(0)) == Decimal("1.00")
+    assert lines[-1]["ad_fee"] != lines[0]["ad_fee"]  # remainder landed on the last line
+
+
+def test_allocate_splits_evenly_when_every_line_has_a_zero_basis():
+    # A giveaway bundle: item_price + buyer_shipping is 0 on every line, so
+    # there is no meaningful share — must split evenly, not dump the whole
+    # total onto one arbitrary (e.g. the last) line.
+    lines = [_line("0.00"), _line("0.00"), _line("0.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {"o-1": Decimal("-3.00")}, "ad_fee")
+    assert [ln["ad_fee"] for ln in lines] == [Decimal("1.00")] * 3
+
+
+def test_allocate_leaves_field_none_when_order_total_unknown_by_default():
+    lines = [_line("10.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {}, "actual_postage")
+    assert lines[0]["actual_postage"] is None
+
+
+def test_allocate_absence_is_zero_resolves_missing_ad_fee_to_known_zero():
+    # An order with no AD-classified fee transaction at all (no key in
+    # totals_by_order) is a real $0.00 ad spend once absence_is_zero is on
+    # (only safe when the Finances sync succeeded this run) — never left
+    # blank forever, which would keep coverage from ever reaching 100% for
+    # a window containing an unpromoted sale.
+    lines = [_line("10.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {}, "ad_fee", absence_is_zero=True)
+    assert lines[0]["ad_fee"] == Decimal("0.00")
+    assert lines[0]["ad_fee"] is not None
+
+
+def test_allocate_postage_never_treats_absence_as_zero_even_if_called_with_the_flag():
+    # Guard against a future call site accidentally passing absence_is_zero
+    # for postage: the function itself still only zero-fills the field it
+    # was told to, so this pins that ad_fee/actual_postage are independent
+    # calls — sync_actuals.main() must call postage without the flag.
+    lines = [_line("10.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {}, "actual_postage", absence_is_zero=False)
+    assert lines[0]["actual_postage"] is None
+
+
+def test_allocate_known_order_total_overrides_absence_is_zero():
+    # absence_is_zero only fires when the order has NO key at all — an order
+    # that DOES have a (possibly zero) known total still gets that real value.
+    lines = [_line("10.00")]
+    order_lines = {"o-1": lines}
+    SA.allocate_order_totals(order_lines, {"o-1": Decimal("-2.00")}, "ad_fee",
+                             absence_is_zero=True)
+    assert lines[0]["ad_fee"] == Decimal("2.00")
+
+
+# --------------------------------------------------------------------------
+# #119 — sync_finances degrades to an empty read + a reason, never raises,
+# so one degraded source (scope not yet re-consented) can't take down a
+# whole --apply run the way it would if this propagated.
+# --------------------------------------------------------------------------
+def test_sync_finances_degrades_on_auth_error(monkeypatch):
+    import ebay_finances
+    from ebay_client import EbayAuthError
+
+    def boom(days, verbose=True):
+        raise EbayAuthError("sell.finances not yet re-consented")
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
+    ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
+    assert ad_by_order == {} and postage_by_order == {}
+    assert status["ok"] is False
+    assert "re-consented" in status["reason"]
+
+
+def test_sync_finances_collapses_a_multiline_error_into_one_line(monkeypatch):
+    import ebay_finances
+    from ebay_client import EbayAPIError
+
+    def boom(days, verbose=True):
+        raise EbayAPIError(401, "unauthorized\n  reason: invalid_scope\n  hint: re-consent")
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
+    _, _, status = SA.sync_finances(90, verbose=False)
+    assert "\n" not in status["reason"]
+    assert "invalid_scope" in status["reason"]
+
+
+def test_sync_finances_returns_attribution_on_success(monkeypatch):
+    import ebay_finances
+
+    def fake(days, verbose=True):
+        return [{
+            "transactionType": "NON_SALE_CHARGE",
+            "transactionDate": "2026-06-08T19:00:00.000Z",
+            "amount": {"value": "-2.50", "currency": "USD"},
+            "feeType": "AD_FEE",
+            "orderId": "1-2-3",
+            "orderLineItems": [{"sku": "abc123"}],
+        }]
+
+    monkeypatch.setattr(ebay_finances, "fetch_transactions", fake)
+    ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
+    assert ad_by_order == {"1-2-3": Decimal("-2.50")}
+    assert status["ok"] is True and status["reason"] is None

@@ -49,6 +49,7 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -57,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling tools
 
 REPORTS = REPO / "reports"
 ADS_JSON = REPORTS / "ebay_ads.json"
+FINANCES_STATUS_JSON = REPORTS / "finances_sync_status.json"
 OUT_HTML = REPORTS / "sales_dashboard.html"
 
 
@@ -155,11 +157,36 @@ def _rows(path: Path) -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def _ledger_has_finance_columns(path: Path) -> bool:
+    """Whether sales_ledger.csv's header carries the #119 ad_fee/actual_postage
+    columns at all — a ledger with NO finances_sync_status.json yet is
+    either "sync_actuals.py hasn't been re-run since #119" (columns absent)
+    or "it has, just not applied this window" (columns present); those are
+    different explanations for the reader (see gather()'s fin_qualifier)."""
+    if not path.exists():
+        return False
+    with path.open(newline="", encoding="utf-8-sig") as fh:
+        header = next(csv.reader(fh), [])
+    return "ad_fee" in header and "actual_postage" in header
+
+
 def _f(v, default=0.0) -> float:
     try:
         return float(str(v).replace("$", "").replace(",", "").replace("%", "").strip())
     except (TypeError, ValueError):
         return default
+
+
+def _fopt(v) -> Optional[float]:
+    """Like `_f`, but blank/missing stays None (#119) — `ad_fee`/
+    `actual_postage` are legitimately UNKNOWN for an order the Finances API
+    hasn't been read for yet, and 0.0 would falsely claim "no ad spend"."""
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        return float(str(v).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _date(v: str):
@@ -181,6 +208,8 @@ def gather(days: int) -> dict:
     ledger = _rows(REPO / "listings_ledger.csv")
     ads_doc = json.loads(ADS_JSON.read_text(encoding="utf-8")) if ADS_JSON.exists() else \
         {"campaigns": [], "ads": [], "pulled_at": None}
+    fin_status = json.loads(FINANCES_STATUS_JSON.read_text(encoding="utf-8")) \
+        if FINANCES_STATUS_JSON.exists() else None
 
     # listing_id -> when we published it, for days-to-sale
     published = {r["listing_id"]: _date(r.get("published_at") or r.get("created_at") or "")
@@ -209,16 +238,74 @@ def gather(days: int) -> dict:
             "pct": _f(r.get("pct_of_ask")),
             "days": (sold - pub).days if (sold and pub and sold > pub) else None,
             "ad": ad_by_listing.get(r.get("listing_id", "")),
+            # #119 (route B, sell.finances) — real ad fee + actual postage per
+            # order, if lib/sync_actuals.py has read it; None (not 0.0) when
+            # it hasn't, so a missing figure is never rendered as "$0 spent".
+            "ad_fee": _fopt(r.get("ad_fee")),
+            "actual_postage": _fopt(r.get("actual_postage")),
         })
     rows.sort(key=lambda r: r["sold_at"] or datetime.min.replace(tzinfo=timezone.utc),
               reverse=True)
     out["sales"] = rows
+
+    # ---- #119: how much of the window has real ad-fee/postage coverage ----
+    # A row needs BOTH figures known to drop the "before ads & postage"
+    # qualifier for that row's own net; a headline coverage fraction below
+    # decides whether the PAGE-WIDE qualifier can come off, per #119
+    # acceptance ("comes off only when it stops being true").
+    fin_known = [r for r in rows if r["ad_fee"] is not None and r["actual_postage"] is not None]
+    out["fin_ad_fee_total"] = sum(r["ad_fee"] for r in fin_known) if fin_known else None
+    out["fin_postage_total"] = sum(r["actual_postage"] for r in fin_known) if fin_known else None
+    out["fin_covered_n"] = len(fin_known)
+    out["fin_status"] = fin_status
+    # The promoted-listings panel is about ad spend specifically and doesn't
+    # need postage to be meaningful — gating it on BOTH known (like the
+    # combined headline above) would hide real, known ad-fee spend whenever
+    # postage just lags behind on the same order.
+    fin_ad_known = [r for r in rows if r["ad_fee"] is not None]
+    out["fin_ad_fee_only_total"] = sum(r["ad_fee"] for r in fin_ad_known) if fin_ad_known else None
+    out["fin_ad_covered_n"] = len(fin_ad_known)
+    if not rows:
+        out["fin_qualifier"] = ("no sold line items in this window", "")
+    elif len(fin_known) == len(rows):
+        out["fin_qualifier"] = (None, "")  # fully known — qualifier drops
+    else:
+        missing = len(rows) - len(fin_known)
+        if fin_status and fin_status.get("reason"):
+            why = str(fin_status["reason"])[:140]
+        elif fin_status is None:
+            if _ledger_has_finance_columns(REPO / "sales_ledger.csv"):
+                why = "sync_actuals.py --apply has not read the Finances API yet"
+            else:
+                why = ("sales_ledger.csv predates #119 (no ad_fee/actual_postage "
+                       "columns yet) — run sync_actuals.py --apply to add them")
+        elif fin_status.get("ok"):
+            # The sync succeeded (no reason to report) but coverage is still
+            # partial — a genuinely different situation from "not re-consented
+            # yet", which would be a false explanation here.
+            why = ("the Finances API was read successfully, but some sold "
+                   "line items have no matching transaction yet (still "
+                   "settling on eBay's side, or genuinely none)")
+        else:
+            why = ("re-consent with the sell.finances scope has not happened yet "
+                   "(#119) — see lib/ebay_client.py USER_SCOPES_SELL")
+        out["fin_qualifier"] = (
+            f"{missing} of {len(rows)} sold line item(s) have no ad-fee/postage "
+            f"match yet — {why}", why)
 
     # headline
     out["gross"] = sum(r["gross"] for r in rows)
     out["fee"] = sum(r["fee"] for r in rows)
     out["net"] = sum(r["net"] for r in rows)
     out["count"] = len(rows)
+    # #119: the real headline, once every sold row this window has a Finances
+    # match for BOTH ad fee and actual postage — gross minus the final value
+    # fee AND the promoted-listing bill AND what postage actually cost.
+    # `None` (not the #115 partial number) whenever coverage is incomplete,
+    # so the two never get silently conflated on the page.
+    out["net_after_ads_postage"] = (
+        out["net"] - out["fin_ad_fee_total"] - out["fin_postage_total"]
+        if out["fin_covered_n"] == len(rows) and rows else None)
     out["fee_pct"] = (out["fee"] / out["gross"] * 100) if out["gross"] else 0
     withask = [r for r in rows if r["ask"] > 0 and r["pct"]]
     out["avg_pct"] = statistics.mean(r["pct"] for r in withask) if withask else 0
@@ -455,6 +542,19 @@ def draw(d: dict) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     pulled = d["ads"].get("pulled_at") or "never"
 
+    # #119: the headline NET drops the "before ads & postage" qualifier only
+    # once every sold row this window carries a real Finances-API match for
+    # BOTH ad fee and postage — see gather()'s net_after_ads_postage.
+    if d["net_after_ads_postage"] is not None:
+        net_stat = _stat(_money(d["net_after_ads_postage"]), "net after ads & postage",
+                         f'gross minus final value fee, ad fees, and actual postage '
+                         f'({d["fin_covered_n"]}/{d["count"]} sold line items, #119)')
+    else:
+        qualifier, _why = d["fin_qualifier"]
+        net_stat = _stat(_money(d["net"]), "net before ads & postage",
+                         (f'gross minus final value fee only — {qualifier}' if qualifier
+                          else 'gross minus final value fee only (#115)'))
+
     P.append(f'<div class="card"><div class="hdr">'
              f'<p class="eyebrow">ebaybiz · sales</p><h1>Sales &amp; promotion dashboard</h1>'
              f'<div class="ct">built {_e(now)} local · order window {d["days"]} days · '
@@ -462,8 +562,7 @@ def draw(d: dict) -> str:
              f'<div class="stats">'
              + _stat(_money(d["gross"]), "gross realised", f'{d["count"]} sold line items')
              + _stat(_money(d["fee"]), "eBay fees", f'{d["fee_pct"]:.1f}% of gross')
-             + _stat(_money(d["net"]), "net before ads & postage",
-                     "gross minus final value fee only (#115)")
+             + net_stat
              + _stat(f'{d["avg_pct"]:.0f}%', "average of ask",
                      f'{len(d["below"])} of {d["count"]} sold below ask')
              + _stat(f'{d["median_days"]:.0f}d' if d["median_days"] is not None else "—",
@@ -512,6 +611,31 @@ def draw(d: dict) -> str:
     mix = " · ".join(f"{k} {v}" for k, v in sorted(d["ad_status_mix"].items()))
     cover = (f'{d["live_with_running_ad"]} of {d["live_count"]}'
              if d["live_count"] else "—")
+    # #119: real ad-fee spend, once known — attributed by order id, NOT by
+    # joining to soldViaAdCampaign (a cost-per-click ad bills regardless of
+    # which sale eBay ends up crediting it to).
+    ad_fee_stat = (
+        _stat(_money(d["fin_ad_fee_only_total"]), "actual ad-fee spend (#119)",
+              f'{d["fin_ad_covered_n"]}/{d["count"]} sold line items — Finances API, by order id')
+        if d["fin_ad_fee_only_total"] is not None else "")
+    if ad_fee_stat:
+        note_tail = (
+            '<code>totalMarketplaceFee</code> is the final value fee <em>only</em> '
+            '(#115); the actual ad-fee spend above comes from '
+            '<code>/sell/finances/v1/transaction</code> instead (#119), attributed by '
+            'order id — an order\'s ad fee is counted whether or not that sale is '
+            'flagged <code>soldViaAdCampaign</code>, since a cost-per-click ad bills '
+            'either way.')
+    else:
+        qualifier, _why = d["fin_qualifier"]
+        note_tail = (
+            '<code>totalMarketplaceFee</code> is the final value fee <em>only</em>: '
+            'promoted-listing fees are billed separately and are absent from the order '
+            'payload entirely, so the ad bill is missing from every fee and net figure '
+            'on this page rather than blended into them (#115). A real per-order reader '
+            'exists (#119, <code>/sell/finances/v1/transaction</code>) but has no data '
+            'for this window yet'
+            + (f' — {_e(qualifier)}' if qualifier else '') + '.')
     P.append(
         '<div class="card"><div class="pad"><h2>Promoted &amp; targeted listings</h2>'
         '<div class="stats" style="margin:0 -24px 18px;border-top:1px solid var(--rule);'
@@ -525,17 +649,14 @@ def draw(d: dict) -> str:
         + _stat(f'{pr["avg_pct"]:.0f}% / {pr["plain_avg_pct"]:.0f}%',
                 "of ask — promoted / not",
                 f'{pr["plain_n"]} unpromoted sales')
+        + ad_fee_stat
         + '</div>'
         f'<div class="scroll"><table><tr><th>Campaign</th><th>Status</th>'
         f'<th>Targeting</th><th>Channel</th><th class="num">Daily</th>'
         f'<th class="num">Ads</th></tr>{camp_rows}</table></div>'
         f'<p class="note">Ad states across all campaigns: {_e(mix) or "—"}. '
         'An ad on the listing is not proof the sale came through it — eBay attributes '
-        'that only in its own ad report. And <code>totalMarketplaceFee</code> is the '
-        'final value fee <em>only</em>: promoted-listing fees are billed separately and '
-        'are absent from the order payload entirely, so the ad bill is missing from '
-        'every fee and net figure on this page rather than blended into them '
-        '(#115).</p></div></div>')
+        f'that only in its own ad report. {note_tail}</p></div></div>')
 
     # pricing band — how the PRICE stage's justified tiers held up
     b = d["bands"]
@@ -636,8 +757,15 @@ def main() -> int:
     out = Path(a.out)
     out.write_text(draw(d), encoding="utf-8")
 
-    print(f"\n{d['count']} sales · {_money(d['gross'])} gross · {_money(d['net'])} net "
-          f"(before ads & postage) · {d['avg_pct']:.0f}% of ask")
+    if d["net_after_ads_postage"] is not None:
+        print(f"\n{d['count']} sales · {_money(d['gross'])} gross · "
+              f"{_money(d['net_after_ads_postage'])} net (after ads & postage, #119) · "
+              f"{d['avg_pct']:.0f}% of ask")
+    else:
+        qualifier, _why = d["fin_qualifier"]
+        print(f"\n{d['count']} sales · {_money(d['gross'])} gross · {_money(d['net'])} net "
+              f"(before ads & postage{' — ' + qualifier if qualifier else ''}) · "
+              f"{d['avg_pct']:.0f}% of ask")
     print(f"promoted: {d['running_campaigns']} running campaign(s), "
           f"{d['live_with_running_ad']}/{d['live_count']} live listings actively promoted")
     print(f"[OK] {out}")

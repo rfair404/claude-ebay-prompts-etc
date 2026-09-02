@@ -223,6 +223,18 @@ def _sales_rows() -> list[dict]:
         return list(csv.DictReader(fh))
 
 
+def _ledger_has_finance_columns() -> bool:
+    """Whether sales_ledger.csv's header carries the #119 ad_fee/actual_postage
+    columns at all — distinct from `fin_covered_n == 0`, which is also true
+    for a ledger that HAS the columns but hasn't been matched for any row
+    yet (see `_fin_note`: those are different situations to explain)."""
+    if not SALES_LEDGER.exists():
+        return False
+    with SALES_LEDGER.open(newline="", encoding="utf-8-sig") as fh:
+        header = next(csv.reader(fh), [])
+    return "ad_fee" in header and "actual_postage" in header
+
+
 def _collect_listings() -> list[dict]:
     """Local drafts + listings_ledger.csv, merged (disk wins) — see lib/report.py.
 
@@ -265,6 +277,24 @@ def gather() -> dict:
 
     sales = _sales_rows()
     sold_listing_ids = {r.get("listing_id") for r in sales if r.get("listing_id")}
+
+    # #119 (route B, sell.finances): how much of this report's sold rows carry
+    # a real ad-fee + postage figure from lib/sync_actuals.py's Finances-API
+    # read, so the NOTE below can say whether the "before postage AND before
+    # advertising" caveat still holds — never silently, per #119 acceptance.
+    # A blank column (not "0.00") means "not read yet", same convention as
+    # sales_ledger.csv itself (see sync_actuals.SALES_FIELDS).
+    def _known(v) -> bool:
+        return bool((v or "").strip())
+
+    fin_columns_present = _ledger_has_finance_columns()
+    fin_covered = [r for r in sales
+                   if _known(r.get("ad_fee")) and _known(r.get("actual_postage"))]
+    fin_ad_fee_total = (sum(_to_float(r.get("ad_fee"), 0.0) for r in fin_covered)
+                        if fin_covered else None)
+    fin_postage_total = (sum(_to_float(r.get("actual_postage"), 0.0) for r in fin_covered)
+                         if fin_covered else None)
+    fin_covered_n, fin_total_n = len(fin_covered), len(sales)
 
     # ---- sold line items -----------------------------------------------
     for r in sales:
@@ -336,6 +366,12 @@ def gather() -> dict:
         "gaps": [b["key"] for b in rows if b["gap"]],
         "missing_basis_channel": [b["key"] for b in rows
                                   if b["cost_known"] is False and not b["gap"]],
+        # #119
+        "fin_ad_fee_total": fin_ad_fee_total,
+        "fin_postage_total": fin_postage_total,
+        "fin_covered_n": fin_covered_n,
+        "fin_total_n": fin_total_n,
+        "fin_columns_present": fin_columns_present,
     }
 
 
@@ -353,6 +389,45 @@ def _fmt_roi(v) -> str:
 
 def _fmt_pct(v) -> str:
     return f"{v:.0f}%" if v is not None else "—"
+
+
+def _fin_note(d: dict) -> str:
+    """One-line NET/PROFIT caveat, #119-aware: still "before postage AND
+    before advertising" only where that remains true. `sales_ledger.csv`
+    now carries `ad_fee`/`actual_postage` (lib/sync_actuals.py, Finances API
+    — #119, route B) but a column is blank rather than 0.00 until it has
+    actually been read for an order (re-consent pending, or the call
+    failed), so this checks real coverage rather than the columns' mere
+    existence."""
+    total_n = d.get("fin_total_n") or 0
+    covered_n = d.get("fin_covered_n") or 0
+    if total_n and covered_n == total_n:
+        return (f"NET is net_before_postage (unchanged column name). Real ad-fee + "
+                f"postage figures ARE available for all {total_n} sold row(s) this run "
+                f"— {_fmt_money(d['fin_ad_fee_total'])} ad fee, "
+                f"{_fmt_money(d['fin_postage_total'])} postage (#119, sell.finances) — "
+                f"not yet folded into this table's NET/PROFIT columns, but no longer "
+                f"missing data.")
+    if covered_n:
+        return (f"NET is net_before_postage — before postage AND before advertising. "
+                f"#119 (sell.finances) has real figures for {covered_n} of {total_n} "
+                f"sold row(s) so far; the rest have none yet (re-consent pending or the "
+                f"Finances API call failed this run) — see "
+                f"reports/finances_sync_status.json.")
+    if not d.get("fin_columns_present"):
+        return ("NET is net_before_postage — sales_ledger.csv carries no actual-postage "
+               "column, and the fee it subtracts (totalMarketplaceFee) is the final value "
+               "fee only, so ad spend is absent too. Every NET/PROFIT figure here is "
+               "before postage AND before advertising, not a final take-home number. A "
+               "real reader for both exists (#119, /sell/finances/v1/transaction) but has "
+               "no data yet this run.")
+    # Columns exist (a post-#119 ledger) but nothing matched yet — a different
+    # situation from "column absent" above, so it needs its own wording rather
+    # than falsely claiming the column doesn't exist.
+    return ("NET is net_before_postage — before postage AND before advertising. "
+           "sales_ledger.csv has the ad_fee/actual_postage columns (#119, sell.finances) "
+           "but none of this run's sold rows have a match yet — see "
+           "reports/finances_sync_status.json for why.")
 
 
 def render_table(d: dict) -> str:
@@ -391,10 +466,7 @@ def render_table(d: dict) -> str:
     out.append("ROI is shown only for `kind: event` buckets with a recorded spend: — "
                "a `channel` bucket (an ongoing habit, not a single purchase) has no ROI "
                "by design, not a missing one.")
-    out.append("NET is net_before_postage — sales_ledger.csv carries no actual-postage "
-               "column, and the fee it subtracts (totalMarketplaceFee) is the final value "
-               "fee only, so ad spend is absent too. Every NET/PROFIT figure here is "
-               "before postage AND before advertising, not a final take-home number.")
+    out.append(_fin_note(d))
     if u["sold_n"]:
         out.append(f"{u['sold_n']} sale(s) have no matching local folder — reported as "
                    f"their own line, not dropped.")
@@ -567,11 +639,8 @@ def draw(d: dict) -> str:
         f'{rows_html}{total_row}</table></div>'
         '<p class="note">A <strong>bucket</strong> is the nearest ancestor directory that '
         'owns a <code>context.txt</code> — not path depth, so a re-org changes this table\'s '
-        'contents, never its correctness. <strong>NET is net_before_postage</strong>: '
-        '<code>sales_ledger.csv</code> carries no actual-postage column, and the fee it '
-        'subtracts (<code>totalMarketplaceFee</code>) is the final value fee only, so '
-        'promoted-listing spend is absent as well. PROFIT here is before postage and '
-        'before advertising, not a final take-home figure. <strong>ROI</strong> (net / cost) is '
+        'contents, never its correctness. '
+        + _e(_fin_note(d)) + ' <strong>ROI</strong> (net / cost) is '
         'shown only for a <code>kind: event</code> bucket with a recorded <code>spend:</code> '
         '— never 0, never infinite, and never computed for a <code>channel</code> bucket '
         '(an ongoing habit has no single payback to measure). A bucket with '
