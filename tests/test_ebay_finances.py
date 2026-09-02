@@ -324,6 +324,62 @@ def test_fetch_transactions_window_keeps_paging_past_a_server_side_page_cap(monk
     assert len(calls) == 3
 
 
+def test_fetch_transactions_window_url_encodes_the_filter_brackets(monkeypatch):
+    # Raw `[`/`]` in the query string, unlike the known-working Fulfillment
+    # Orders fetch pattern (sync_actuals.fetch_orders), can be rejected or
+    # parsed inconsistently — this must match that pattern's %5B/%5D.
+    calls = []
+
+    def fake_api_send(method, path, creds=None, marketplace=None):
+        calls.append(path)
+        return {"transactions": [], "total": 0}
+
+    monkeypatch.setattr(EF, "api_send", fake_api_send)
+    from datetime import datetime, timezone
+    EF._fetch_transactions_window(
+        datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 6, 1, tzinfo=timezone.utc),
+        verbose=False)
+    assert len(calls) == 1
+    assert "%5B" in calls[0] and "%5D" in calls[0]
+    assert "[" not in calls[0] and "]" not in calls[0]
+
+
+# --------------------------------------------------------------------------
+# window-narrowing retry — must key off a real HTTP 400, not a coincidental
+# substring, and prefer a typed .status attribute when the exception has one.
+# --------------------------------------------------------------------------
+def test_is_http_400_prefers_the_typed_status_attribute():
+    from ebay_client import EbayAPIError
+    assert EF._is_http_400(EbayAPIError(400, "GET /x → HTTP 400")) is True
+    # A message that happens to contain "HTTP 400" text is irrelevant once a
+    # typed status is present and says otherwise — the int is authoritative.
+    assert EF._is_http_400(EbayAPIError(403, "forbidden, was HTTP 400 last time")) is False
+
+
+def test_is_http_400_falls_back_to_the_http_400_substring_when_untyped():
+    assert EF._is_http_400(RuntimeError("GET /x → HTTP 400")) is True
+    assert EF._is_http_400(RuntimeError("HTTP 401 unauthorized")) is False
+    # A bare "400" (e.g. inside an amount or id) must NOT be mistaken for the
+    # "HTTP 400" pattern.
+    assert EF._is_http_400(RuntimeError("order total was $400.00")) is False
+
+
+def test_fetch_transactions_narrows_on_a_typed_ebayapierror_400(monkeypatch):
+    from ebay_client import EbayAPIError
+    calls = []
+
+    def fake(start, end, verbose):
+        calls.append((start, end))
+        if len(calls) < 2:
+            raise EbayAPIError(400, "GET /sell/finances/v1/transaction → HTTP 400")
+        return [_ad_fee_txn()]
+
+    monkeypatch.setattr(EF, "_fetch_transactions_window", fake)
+    txns = EF.fetch_transactions(730, verbose=False)
+    assert txns == [_ad_fee_txn()]
+    assert len(calls) == 2
+
+
 def test_fetch_transactions_does_not_retry_the_same_window_twice(monkeypatch):
     # days=365 collides with one of the hard-coded fallback candidates — a
     # naive filter would list 365 twice, retrying an identical rejected

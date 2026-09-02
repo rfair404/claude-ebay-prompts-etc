@@ -127,6 +127,66 @@ def _one_line(s: str, limit: int) -> str:
     return " ".join(str(s).split())[:limit]
 
 
+def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: dict,
+                          field: str, *, absence_is_zero: bool = False) -> None:
+    """Split each order-level total in `totals_by_order` (eBay-signed — a
+    charge is negative) across that order's line-item rows in `order_lines`,
+    writing a positive-magnitude Decimal share onto `field` on each row (or
+    None/0 when the order's total isn't known — see `absence_is_zero`).
+
+    `ebay_finances.attribute_fees_by_order` / `attribute_postage_by_order`
+    return ONE figure per ORDER (one ad-fee bill, one shipping label — never
+    itemized per line), but `flatten_orders()` produces one row per LINE
+    ITEM. Writing the same order total onto every one of a multi-line
+    order's rows would double- (or N-) count it the moment a caller sums
+    `field` across rows — the #119 Copilot double-counting finding. Each
+    line instead gets the same share of the total as its share of the
+    order's (item_price + buyer_shipping) basis — the same basis
+    `flatten_orders()` already uses to split the eBay fee — with the
+    rounding remainder folded onto the last line so the per-line shares sum
+    back to the order total exactly (Decimal division can drift for amounts
+    that don't split evenly).
+
+    When every line in an order has a $0 basis (a free bundle item /
+    giveaway, so item_price + buyer_shipping is 0 for all of them), there is
+    no meaningful share to compute — split the total evenly across those
+    lines instead of dumping it all onto one arbitrary line.
+
+    `absence_is_zero`: when True, an order with NO key in `totals_by_order`
+    is written as a real, known Decimal("0.00") rather than left None
+    (unknown). Pass True ONLY when the caller has independently confirmed
+    the underlying Finances-API read succeeded this run (`fin_status["ok"]`)
+    — `ebay_finances.attribute_fees_by_order()` only has a dict key for
+    orders with at least one AD-classified fee transaction, so with
+    absence_is_zero=False an order with zero ad spend would stay "unknown"
+    forever and coverage could never reach 100% for a window containing any
+    unpromoted sale. `actual_postage` must always pass False (the default)
+    here: a missing SHIPPING_LABEL transaction more plausibly means the
+    label hasn't posted yet than that postage was free, so "absence means
+    unknown" stays the right read for postage even after a successful sync.
+    """
+    for order_id, lines in order_lines.items():
+        total = totals_by_order.get(order_id)
+        if total is None:
+            known_zero = Decimal("0.00") if absence_is_zero else None
+            for ln in lines:
+                ln[field] = known_zero
+            continue
+        # positive magnitudes, matching ebay_fee/item_price's convention —
+        # see ebay_finances' module docstring "Sign convention".
+        total = abs(total)
+        basis = [ln["item_price"] + ln["buyer_shipping"] for ln in lines]
+        basis_sum = sum(basis, Decimal(0))
+        if basis_sum > 0:
+            shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
+        else:
+            even = (total / len(lines)).quantize(Decimal("0.01"))
+            shares = [even] * len(lines)
+        shares[-1] += total - sum(shares, Decimal(0))
+        for ln, s in zip(lines, shares):
+            ln[field] = s
+
+
 # --------------------------------------------------------------------------- #
 # source 1 — orders (the actuals)
 # --------------------------------------------------------------------------- #
@@ -421,7 +481,7 @@ def stamp_folder(row: dict) -> bool:
         f"matched by {row['matched_by']}\n"
         + (f"- ⚠ Partially refunded: ${_money(row['refunded'])} returned to the buyer; "
            f"gross above is net of it.\n" if row.get("refunded") else "")
-        + f"\nPostage we paid is not in the eBay API — subtract it for true net.\n",
+        + "\nPostage we paid is not in the eBay API — subtract it for true net.\n",
         encoding="utf-8")
     return True
 
@@ -508,7 +568,7 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
     # ad_fee/actual_postage are per-row SHARES of an order-level total (see
-    # main()'s _allocate), so coverage is counted by unique order id, not by
+    # allocate_order_totals()), so coverage is counted by unique order id, not by
     # row — a 3-line order with a known ad fee is 1 covered order, not 3.
     order_ids = {r["order_id"] for r in rows}
     ad_fee_orders = {r["order_id"] for r in rows if r.get("ad_fee") is not None}
@@ -651,51 +711,22 @@ def main() -> int:
 
     # Both totals are ORDER-level (one ad fee, one shipping label, per order —
     # not per line item), but flatten_orders() produces one row per line item.
-    # Writing the full order total onto every one of an order's rows would
-    # double- (or N-) count it once rows are summed, so each is split by the
-    # line's share of the order — the same basis flatten_orders() already
-    # uses to allocate the eBay fee — with any rounding remainder folded into
-    # the last line so the shares sum back to the order total exactly.
+    # allocate_order_totals() splits each order's total across its own rows
+    # (see its docstring) so summing the field over rows never double-counts.
     order_lines: dict[str, list[dict]] = {}
     for r in rows:
         order_lines.setdefault(r["order_id"], []).append(r)
 
-    def _allocate(totals_by_order: dict, field: str) -> None:
-        for order_id, lines in order_lines.items():
-            # positive magnitudes, matching ebay_fee/item_price's convention —
-            # see ebay_finances' module docstring "Sign convention".
-            total = totals_by_order.get(order_id)
-            if total is None:
-                for l in lines:
-                    l[field] = None
-                continue
-            total = abs(total)
-            basis = [l["item_price"] + l["buyer_shipping"] for l in lines]
-            basis_sum = sum(basis, Decimal(0))
-            if basis_sum > 0:
-                shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
-            else:
-                # Every line is $0 (a free bundle item / giveaway) — there is
-                # no meaningful gross-share basis, so split evenly rather
-                # than let the `or Decimal(1)` fallback this used to have
-                # dump the whole order-level total onto one arbitrary line.
-                even = (total / len(lines)).quantize(Decimal("0.01"))
-                shares = [even] * len(lines)
-            shares[-1] += total - sum(shares, Decimal(0))
-            for l, s in zip(lines, shares):
-                l[field] = s
-
-    # attribute_fees_by_order() only has a key for orders with at least one
-    # AD-classified fee transaction — an order with NO promoted-listing spend
-    # would read as a real, known $0.00 if absence were treated as zero. But
-    # that isn't safe to assume: a genuinely-owed ad fee's Finances-API
-    # transaction can lag the sale by some unconfirmed amount (this account
-    # has no live credentials to verify against), the same reason postage's
-    # absence is left as "unknown" rather than "$0" below. Reporting a false
-    # known-zero on money data is worse than an honest "not yet known" — so
-    # both fields treat a missing order id the same way.
-    _allocate(ad_fee_by_order, "ad_fee")
-    _allocate(postage_by_order, "actual_postage")
+    # ad_fee: once this run's Finances read succeeded (fin_status["ok"]), an
+    # order with no AD-classified transaction is a real, known $0.00 — not
+    # "unknown forever" — so the "before ads & postage" qualifier can
+    # actually drop for a window that includes an unpromoted sale (#119
+    # Copilot finding: "known zero" ad-fee handling). postage always stays
+    # "absence means unknown", never zero — see allocate_order_totals'
+    # docstring for why the two fields are asymmetric here.
+    allocate_order_totals(order_lines, ad_fee_by_order, "ad_fee",
+                          absence_is_zero=bool(fin_status.get("ok")))
+    allocate_order_totals(order_lines, postage_by_order, "actual_postage")
 
     unwound_losses = ebay_finances.unwound_order_losses(
         excluded["cancelled_order_ids"] + excluded["refunded_order_ids"],
@@ -725,7 +756,7 @@ def main() -> int:
         print("\n[DRY RUN] Nothing written. Re-run with --apply to record:")
         print(f"  • {SALES_LEDGER.name} — {len(rows)} actuals row(s)")
         print(f"  • SOLD.md in {len({r['shoot_dir'] for r in rows if r['shoot_dir']})} folder(s)")
-        print(f"  • listings_ledger.csv — advance matched SKUs to SOLD")
+        print("  • listings_ledger.csv — advance matched SKUs to SOLD")
         return 0
 
     write_sales_ledger(rows)

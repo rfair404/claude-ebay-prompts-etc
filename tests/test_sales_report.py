@@ -156,6 +156,40 @@ def test_ad_fee_only_coverage_not_gated_on_postage(fixture_repo):
     assert d["fin_ad_covered_n"] == 1
 
 
+# --------------------------------------------------------------------------
+# #119 — the qualifier (sourced from finances_sync_status.json, which this
+# module does not control the contents of) must be HTML-escaped before it
+# reaches the rendered page, the same way _stat() already escapes its own
+# subtitle text.
+# --------------------------------------------------------------------------
+def test_draw_escapes_the_qualifier_reason_in_the_promoted_panel_note(fixture_repo):
+    _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])  # no #119 coverage
+    sr.FINANCES_STATUS_JSON.write_text(json.dumps({
+        "ok": False,
+        "reason": '<script>alert(1)</script> & "quoted"',
+        "other_fee_labels": {},
+    }), encoding="utf-8")
+
+    d = sr.gather(365)
+    html_out = sr.draw(d)
+    assert "<script>alert(1)</script>" not in html_out
+    assert "&lt;script&gt;" in html_out
+
+
+def test_draw_escapes_the_qualifier_in_the_headline_net_stat_too(fixture_repo):
+    _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])
+    sr.FINANCES_STATUS_JSON.write_text(json.dumps({
+        "ok": False,
+        "reason": "<b>unsafe</b>",
+        "other_fee_labels": {},
+    }), encoding="utf-8")
+
+    d = sr.gather(365)
+    html_out = sr.draw(d)
+    assert "<b>unsafe</b>" not in html_out
+    assert "&lt;b&gt;unsafe&lt;/b&gt;" in html_out
+
+
 def test_ad_fee_attribution_does_not_look_at_ad_campaign_flag(fixture_repo):
     # gather() must merge ad_fee/actual_postage purely from the CSV columns —
     # nothing here reads or requires an ad-campaign flag on the sale itself

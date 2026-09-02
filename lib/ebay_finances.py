@@ -198,6 +198,23 @@ def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) ->
     return out
 
 
+def _is_http_400(e: Exception) -> bool:
+    """Whether `e` represents an HTTP 400 from the Finances API call.
+
+    Prefers a typed `.status` attribute (api_send() raises `EbayAPIError`,
+    which carries one as an int) over string-matching — a numeric comparison
+    can't be coincidentally fooled by a "400" (or "HTTP 400") substring
+    landing in an unrelated message (an amount, an id, a body excerpt).
+    Falls back to the "HTTP 400" text pattern only for exception types that
+    don't carry `.status` (a bare RuntimeError, e.g. in tests or from an
+    unexpected code path) — never a bare "400" (see the same reasoning
+    previously applied here directly)."""
+    status = getattr(e, "status", None)
+    if status is not None:
+        return status == 400
+    return "HTTP 400" in str(e)
+
+
 def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
     """Every Finances-API transaction in the last `days`, paged.
 
@@ -225,11 +242,7 @@ def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
         try:
             txns = _fetch_transactions_window(start, end, verbose)
         except Exception as e:                                  # noqa: BLE001
-            # "HTTP 400", not a bare "400": api_send() formats HTTP failures
-            # as "... -> HTTP <code>", and a plain "400" substring could
-            # coincidentally match unrelated text (an amount, an id) in some
-            # other error.
-            if "HTTP 400" not in str(e):
+            if not _is_http_400(e):
                 raise
             last_err = e
             if verbose:
