@@ -100,6 +100,24 @@ Auto-approval never buys a lower bar: `--auto` approves nothing by itself,
 `--approve-stage color` stamp the same per-stage digest a sheet approval
 does — any later edit invalidates it the same way.
 
+## Long shoots — background the run, resume across a kill
+
+A `--check` / `--auto` / `--apply` over a whole shoot directory is
+dispatched with `run_in_background: true` **as the default**, not as an
+occasional call for a shoot that "seems big" — a multi-frame `--apply`
+routinely runs past the Bash tool's 600 s hard timeout, and a foreground
+call that gets killed there loses the entire invocation for nothing.
+
+- **A killed or interrupted `--apply` is re-invoked with `--resume`**, never
+  restarted plain. The manifest is checkpointed after every rendered frame,
+  so `--resume` re-renders only the frame that was in flight when it was
+  killed, not the whole shoot (`docs/prep-resume-plan.md`).
+- **`--jobs N`** renders up to N frames concurrently (default 1 — serial,
+  today's exact behaviour). Frame processing is embarrassingly parallel;
+  use `--jobs` on a machine with cores to spare to finish a long `--apply`
+  well before it would ever near the timeout. Composes with `--resume`: a
+  `--jobs N` run killed mid-batch resumes exactly like a serial one did.
+
 ## The interactive review — the exception path, STAGED
 
 Where an override lands, and where a shoot goes when the auto pass is not
