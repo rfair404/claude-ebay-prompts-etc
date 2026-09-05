@@ -53,6 +53,7 @@ still a separate, explicit yes.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -1027,8 +1028,123 @@ def _frame_is_resumable(shoot: Path, name: str, rec: dict, only: tuple) -> bool:
     return True
 
 
+def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
+                   smode: str, only: tuple) -> tuple:
+    """Render one frame: plan its crop (unless an operator already fixed
+    one) and every preset in `only`. Returns `(new_rec, before, variants)` --
+    `before` is the frame as loaded from disk, unrotated (the sheet's
+    "before" column) and `variants` is `{preset_name: rendered_bgr}`.
+
+    Pure with respect to the manifest: never touches `m` and never calls
+    `save_manifest` — the caller folds the returned rec into
+    `m["photos"][name]` and checkpoints. That split is what lets this one
+    function serve both `--jobs 1` (called serially, in manifest order, from
+    inside `run_apply`'s own loop) and `--jobs N>1` (called once per task
+    inside a `ProcessPoolExecutor` worker — see `_apply_worker` below)
+    without two implementations of "how a frame renders" able to drift apart
+    (docs/prep-resume-plan.md, the `--jobs N` section).
+    """
+    rec = dict(rec)   # never mutate the caller's dict in place -- a --jobs N
+                       # worker is handed a copy across a process boundary
+                       # anyway, and this keeps both call sites' contract
+                       # ("returns the new state") identical.
+    src = shoot / name
+    before = _load_bgr(src)
+    img = orientmod.rotate_bgr(before, rec["orientation"]["applied"])
+
+    # A legacy warp from before the unskew stage was removed is a decision
+    # already published, not a proposal — replay it, never re-derive it.
+    # Everything below is measured on the frame the crop was planned on.
+    sk = skewmod.from_dict(rec.get("unskew"))
+
+    # Re-segment on the upright pixels: the crop box in the manifest was
+    # planned there, and the colour pass needs the same mask.
+    sm = mask_for(img, smode)
+    img, sm = _unskewed(img, sm, sk)
+    # Judged before the crop — a tight crop keeps too little backdrop to
+    # tell a sweep from a textured surface (see color._backdrop_lut).
+    pre_stats = colormod.analyze(img, sm.mask)
+    # The check pass already reconciled this frame's backdrop against the
+    # rest of the shoot; honour that rather than re-deciding it alone.
+    cp = rec.get("color_plan") or {}
+    sweep = bool(cp.get("is_sweep", pre_stats.is_sweep))
+    eff_class = cp.get("bg_class_effective", pre_stats.bg_class)
+    # An operator override is an answer, not a proposal — re-planning here
+    # would silently throw away the call made at the crop stage, which is
+    # the one the sheet was approved on.
+    prior_crop = rec.get("crop") or {}
+    crop = (prior_crop if prior_crop.get("operator")
+            else plan_crop(img, sm, aspect, pad, pre_stats, sweep))
+    rec["crop"] = crop
+    if crop["applied"]:
+        img, sm = _cropped(img, sm, crop["box"])
+
+    # Every preset renders from the SAME mask and crop. Segmentation is the
+    # expensive step by a wide margin, so offering three looks costs barely
+    # more than offering one — and the comparison is only meaningful if the
+    # geometry is identical across them.
+    # How warm the item itself is, off the same mask the colour pass uses.
+    # Cheap (a statistic on a 1000px copy) and it decides which look the
+    # shoot defaults to — see color.WARM_SUBJECT_MIN_RB.
+    rec["subject_warmth"] = colormod.subject_warmth(img, sm.mask)
+
+    rec["presets"] = {}
+    variants = {}
+    for pname in (only or colormod.PRESETS):
+        rendered, creport = colormod.correct(img, sm.mask, sweep=sweep,
+                                             bg_class=eff_class, preset=pname)
+        p_dir = shoot / ".prep" / "presets" / pname
+        p_dir.mkdir(parents=True, exist_ok=True)
+        p_path = p_dir / (Path(name).stem + ".jpg")
+        _save_bgr(p_path, rendered)
+        rec["presets"][pname] = {
+            "path": str(p_path.relative_to(shoot)).replace("\\", "/"),
+            "sha256": _sha256(p_path),
+            "report": creport,
+        }
+        variants[pname] = rendered
+
+    # DEFAULT_PRESET is not necessarily rendered under `only`; fall back to
+    # whatever was, so the manifest still carries a colour report.
+    _rep_key = (colormod.DEFAULT_PRESET if colormod.DEFAULT_PRESET in rec["presets"]
+                else next(iter(rec["presets"])))
+    rec["color"] = rec["presets"][_rep_key]["report"]
+    # `listing/` stays empty until a preset is picked — the whole point is
+    # that the operator chooses the look, so nothing may default into the
+    # directory DRAFT reads.
+    rec["output"] = None
+    rec["out_sha256"] = None
+    rec["status"] = "ASK" if rec["orientation"]["needs_ask"] else "PICK"
+    return rec, before, variants
+
+
+def _apply_worker(shoot: Path, name: str, rec: dict, aspect, pad: float,
+                   smode: str, only: tuple) -> tuple:
+    """`--jobs N` task body: render one frame inside a pool worker process.
+
+    Must take and return only picklable data — no manifest, no shared state,
+    nothing captured by closure — because `ProcessPoolExecutor` pickles the
+    call. `before`/`variants` are deliberately NOT returned: shipping
+    full-resolution images back over the pool's pipe would be the expensive
+    part all over again, so the parent instead reloads a rendered frame's
+    pixels from disk afterwards for the sheet, the same way `--resume`
+    already does for a frame it skips (docs/prep-resume-plan.md, the
+    `--jobs N` section).
+
+    Exceptions are caught and returned rather than raised: one bad source
+    file must not sink every other frame's future already queued in the pool
+    ("per-frame exception isolation" in the same design-doc section).
+    """
+    try:
+        new_rec, _before, _variants = _render_frame(
+            shoot, name, rec, aspect, pad, smode, only)
+        return name, new_rec, None
+    except Exception as exc:                                  # noqa: BLE001 -- see docstring
+        return name, None, f"{type(exc).__name__}: {exc}"
+
+
 def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
-              resume: bool = False) -> dict:
+              resume: bool = False, jobs: int = 1) -> dict:
     """Render listing/ from the manifest's decisions + the review sheet.
 
     `only` restricts which presets are rendered. The default category now
@@ -1048,7 +1164,21 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     every frame instead of once at the end (item 2), so a run killed by a
     timeout leaves a consistent partial manifest a later `--resume` can trust,
     instead of orphaning every already-rendered JPEG.
+
+    `jobs` (default 1: serial, in manifest order, byte-for-byte today's
+    behaviour) renders up to that many frames concurrently in a
+    `ProcessPoolExecutor` — one frame per worker task, never one preset,
+    because segmentation is computed once per frame and shared across every
+    preset rendered for it (see this function's own note above); splitting a
+    single frame's presets across workers would duplicate that expensive
+    shared step and race two workers over the same crop decision. Must be a
+    positive int. The manifest is still checkpointed after every completed
+    frame either way, so `--resume` and `--jobs N` compose: a `--jobs 4` run
+    killed mid-batch resumes exactly like a serial one did
+    (docs/prep-resume-plan.md, the `--jobs N` section).
     """
+    if not isinstance(jobs, int) or isinstance(jobs, bool) or jobs < 1:
+        raise ValueError(f"jobs must be a positive int, got {jobs!r}")
     from .center_crop import _parse_aspect
 
     m = load_manifest(shoot)
@@ -1097,7 +1227,8 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
                                          category_of(m), only)
     prior_settings_hash = (m.get("apply_run") or {}).get("settings_hash")
     resumable = resume and prior_settings_hash == settings_hash
-    m["apply_run"] = {"settings_hash": settings_hash, "started_at": _now()}
+    m["apply_run"] = {"settings_hash": settings_hash, "started_at": _now(),
+                      "jobs": jobs}
 
     # An apply in flight -- or interrupted mid-flight -- is not an approved
     # one. Set this BEFORE the loop, not after, so every checkpoint below
@@ -1120,126 +1251,129 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     rows = []
     flags = []
 
-    for name, rec in m["photos"].items():
+    def _resumed_row(name: str, rec: dict) -> tuple:
+        """(name, before, variants, rec) for a frame this run is NOT
+        rendering -- either --resume proved it up to date, or --jobs N
+        rendered it in a worker that (deliberately) sent no pixels back.
+        Reloaded off disk either way: `--resume` has always done this for a
+        skipped frame, and `--jobs N` reuses the exact same trick for a
+        rendered-elsewhere one rather than shipping full-res images across
+        the process pool (docs/prep-resume-plan.md, the `--jobs N` section).
+        """
         src = shoot / name
-        if not src.exists():
-            rec["status"] = "MISSING"
-            flags.append((name, "source file MISSING"))
-            continue
-
-        # --resume: skip the (expensive) re-render only when the manifest's
-        # own record proves the existing files still answer THIS
-        # invocation's question. Conservative by construction -- any one
-        # check failing means the frame is (re)rendered, never the reverse
-        # (docs/prep-resume-plan.md item 3). The sheet still needs pixels for
-        # this frame, so load the original and the already-rendered presets
-        # back off disk rather than re-deriving them.
-        if resumable and _frame_is_resumable(shoot, name, rec, only):
-            before = _load_bgr(src)
-            variants = {pname: _load_bgr(shoot / rec["presets"][pname]["path"])
-                        for pname in only}
-            rows.append((name, before, variants, rec))
-            # A skipped frame's exceptions are exactly as real as a freshly
-            # rendered one's -- reuse the same flag logic below, sourced from
-            # the persisted record instead of a report just computed, so
-            # verdict_emit doesn't read a resumed run as cleaner than it is.
-            c = rec.get("color") or {}
-            if c.get("subject_newly_clipped") or c.get("subject_newly_crushed"):
-                flags.append((name, f"colour pass touched item pixels "
-                                    f"(new-clip={c.get('subject_newly_clipped')}, "
-                                    f"new-crush={c.get('subject_newly_crushed')})"))
-            if rec["orientation"]["needs_ask"]:
-                flags.append((name, "orientation still ASK"))
-            continue
-
         before = _load_bgr(src)
-        img = orientmod.rotate_bgr(before, rec["orientation"]["applied"])
+        variants = {pname: _load_bgr(shoot / rec["presets"][pname]["path"])
+                    for pname in only}
+        return name, before, variants, rec
 
-        # A legacy warp from before the unskew stage was removed is a decision
-        # already published, not a proposal — replay it, never re-derive it.
-        # Everything below is measured on the frame the crop was planned on.
-        sk = skewmod.from_dict(rec.get("unskew"))
-
-        # Re-segment on the upright pixels: the crop box in the manifest was
-        # planned there, and the colour pass needs the same mask.
-        sm = mask_for(img, smode)
-        img, sm = _unskewed(img, sm, sk)
-        # Judged before the crop — a tight crop keeps too little backdrop to
-        # tell a sweep from a textured surface (see color._backdrop_lut).
-        pre_stats = colormod.analyze(img, sm.mask)
-        # The check pass already reconciled this frame's backdrop against the
-        # rest of the shoot; honour that rather than re-deciding it alone.
-        cp = rec.get("color_plan") or {}
-        sweep = bool(cp.get("is_sweep", pre_stats.is_sweep))
-        eff_class = cp.get("bg_class_effective", pre_stats.bg_class)
-        # An operator override is an answer, not a proposal — re-planning here
-        # would silently throw away the call made at the crop stage, which is
-        # the one the sheet was approved on.
-        prior_crop = rec.get("crop") or {}
-        crop = (prior_crop if prior_crop.get("operator")
-                else plan_crop(img, sm, aspect, pad, pre_stats, sweep))
-        rec["crop"] = crop
-        if crop["applied"]:
-            img, sm = _cropped(img, sm, crop["box"])
-
-        # Every preset renders from the SAME mask and crop. Segmentation is the
-        # expensive step by a wide margin, so offering three looks costs barely
-        # more than offering one — and the comparison is only meaningful if the
-        # geometry is identical across them.
-        # How warm the item itself is, off the same mask the colour pass uses.
-        # Cheap (a statistic on a 1000px copy) and it decides which look the
-        # shoot defaults to — see color.WARM_SUBJECT_MIN_RB.
-        rec["subject_warmth"] = colormod.subject_warmth(img, sm.mask)
-
-        rec["presets"] = {}
-        variants = {}
-        for pname in (only or colormod.PRESETS):
-            rendered, creport = colormod.correct(img, sm.mask, sweep=sweep,
-                                                 bg_class=eff_class, preset=pname)
-            p_dir = shoot / ".prep" / "presets" / pname
-            p_dir.mkdir(parents=True, exist_ok=True)
-            p_path = p_dir / (Path(name).stem + ".jpg")
-            _save_bgr(p_path, rendered)
-            rec["presets"][pname] = {
-                "path": str(p_path.relative_to(shoot)).replace("\\", "/"),
-                "sha256": _sha256(p_path),
-                "report": creport,
-            }
-            variants[pname] = rendered
-
-        # DEFAULT_PRESET is not necessarily rendered under `only`; fall back to
-        # whatever was, so the manifest still carries a colour report.
-        _rep_key = (colormod.DEFAULT_PRESET if colormod.DEFAULT_PRESET in rec["presets"]
-                    else next(iter(rec["presets"])))
-        creport = rec["presets"][_rep_key]["report"]
-        rec["color"] = creport
-        # `listing/` stays empty until a preset is picked — the whole point is
-        # that the operator chooses the look, so nothing may default into the
-        # directory DRAFT reads.
-        rec["output"] = None
-        rec["out_sha256"] = None
-        rec["status"] = "ASK" if rec["orientation"]["needs_ask"] else "PICK"
-
-        rows.append((name, before, variants, rec))
+    def _flag_frame(name: str, rec: dict) -> None:
         # Exceptions only: the colour pass measuring its own output as having
         # damaged item pixels, or an orientation still unresolved. Routine
         # per-frame render stats live in the manifest.
-        c = creport
-        if c["subject_newly_clipped"] or c["subject_newly_crushed"]:
+        c = rec.get("color") or {}
+        if c.get("subject_newly_clipped") or c.get("subject_newly_crushed"):
             flags.append((name, f"colour pass touched item pixels "
-                                f"(new-clip={c['subject_newly_clipped']}, "
-                                f"new-crush={c['subject_newly_crushed']})"))
-        if rec["orientation"]["needs_ask"]:
+                                f"(new-clip={c.get('subject_newly_clipped')}, "
+                                f"new-crush={c.get('subject_newly_crushed')})"))
+        if (rec.get("orientation") or {}).get("needs_ask"):
             flags.append((name, "orientation still ASK"))
 
-        # Checkpoint after every frame, not once at the end -- a killed
-        # process must orphan at most the frame in flight, never the ones
-        # already finished (docs/prep-resume-plan.md item 2). save_manifest
-        # already does compare-and-swap and re-stamps m[READ_FINGERPRINT] on
-        # this same dict after a successful write, so the next checkpoint's
-        # CAS check is automatically against the fingerprint THIS process
-        # just wrote -- nothing extra to track here.
-        save_manifest(shoot, m)
+    if jobs <= 1:
+        # Serial, in manifest order -- byte-for-byte the behaviour before
+        # --jobs existed (this branch is the same code, only pulled out into
+        # `_render_frame` so `--jobs N` below can share it verbatim).
+        for name, rec in m["photos"].items():
+            src = shoot / name
+            if not src.exists():
+                rec["status"] = "MISSING"
+                flags.append((name, "source file MISSING"))
+                continue
+
+            # --resume: skip the (expensive) re-render only when the
+            # manifest's own record proves the existing files still answer
+            # THIS invocation's question. Conservative by construction --
+            # any one check failing means the frame is (re)rendered, never
+            # the reverse (docs/prep-resume-plan.md item 3).
+            if resumable and _frame_is_resumable(shoot, name, rec, only):
+                rows.append(_resumed_row(name, rec))
+                _flag_frame(name, rec)
+                continue
+
+            new_rec, before, variants = _render_frame(
+                shoot, name, rec, aspect, pad, smode, only)
+            m["photos"][name] = new_rec
+            rows.append((name, before, variants, new_rec))
+            _flag_frame(name, new_rec)
+
+            # Checkpoint after every frame, not once at the end -- a killed
+            # process must orphan at most the frame in flight, never the
+            # ones already finished (docs/prep-resume-plan.md item 2).
+            # save_manifest already does compare-and-swap and re-stamps
+            # m[READ_FINGERPRINT] on this same dict after a successful
+            # write, so the next checkpoint's CAS check is automatically
+            # against the fingerprint THIS process just wrote -- nothing
+            # extra to track here.
+            save_manifest(shoot, m)
+    else:
+        # --jobs N: one frame per pool task, never one preset -- segmentation
+        # is computed once per frame and shared across every preset rendered
+        # for it, so splitting a single frame's presets across workers would
+        # duplicate that expensive shared step and race two workers over the
+        # same crop decision (docs/prep-resume-plan.md, the `--jobs N`
+        # section). --resume is honoured first, exactly as in the serial
+        # branch, so a resumed frame never occupies a worker slot at all.
+        pending = []
+        for name, rec in m["photos"].items():
+            src = shoot / name
+            if not src.exists():
+                rec["status"] = "MISSING"
+                flags.append((name, "source file MISSING"))
+                continue
+            if resumable and _frame_is_resumable(shoot, name, rec, only):
+                _flag_frame(name, rec)
+                continue
+            pending.append(name)
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as pool:
+            futures = {
+                pool.submit(_apply_worker, shoot, name, m["photos"][name],
+                           aspect, pad, smode, only): name
+                for name in pending
+            }
+            # Folded and checkpointed in COMPLETION order, not submission
+            # order -- fine for the manifest, since each frame's entry is
+            # independent and the parent is still the sole writer of the
+            # whole document at any one time (save_manifest's
+            # compare-and-swap doesn't care about frame order, only about
+            # nobody else touching prep.json between our read and our
+            # write). Only the SHEET needs manifest order, and `rows` is
+            # reassembled below, after every future has been folded in.
+            for fut in concurrent.futures.as_completed(futures):
+                name = futures[fut]
+                _, new_rec, err = fut.result()
+                if err is not None:
+                    # One bad frame must not sink the batch (design doc:
+                    # "per-frame exception isolation") -- flagged and left
+                    # out of the sheet, everything else keeps going.
+                    m["photos"][name]["status"] = "ERROR"
+                    flags.append((name, f"render failed: {err}"))
+                else:
+                    m["photos"][name] = new_rec
+                    _flag_frame(name, new_rec)
+                # Checkpoint after every completed frame, exactly as the
+                # serial branch does (docs/prep-resume-plan.md item 2) -- a
+                # --jobs N run killed mid-batch leaves the same kind of
+                # consistent partial manifest a serial one would.
+                save_manifest(shoot, m)
+
+        # Reassemble `rows` in MANIFEST order for `_presets_sheet` (a pool
+        # completes out of order) -- reloaded off disk, since a frame
+        # rendered by a worker has no in-memory pixels left in this process
+        # to reuse (see `_apply_worker`'s docstring for why).
+        for name, rec in m["photos"].items():
+            if rec.get("status") in ("MISSING", "ERROR"):
+                continue
+            rows.append(_resumed_row(name, rec))
 
     # Renders from an earlier pass that this one no longer names. Nothing can
     # read them again, so they go now rather than accruing until an audit finds
@@ -2343,6 +2477,22 @@ def _pairs(v) -> list:
     return [x for group in v for x in group]
 
 
+def _positive_int(s: str) -> int:
+    """argparse `type=` for `--jobs`: a real positive int, nothing looser.
+
+    `int("4.0")` and `int("-1")` both raise or silently succeed in ways that
+    make a bad `--jobs` argument fail somewhere confusing instead of at the
+    command line -- refuse both here, with argparse's own usage message.
+    """
+    try:
+        n = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--jobs must be an integer, got {s!r}")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"--jobs must be >= 1, got {n}")
+    return n
+
+
 def main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -2392,6 +2542,15 @@ def main(argv=None) -> int:
                          "backgrounded --apply that got killed by a timeout with "
                          "this flag rather than restarting it plain -- that is the "
                          "whole point (default: off)")
+    ap.add_argument("--jobs", type=_positive_int, default=1, metavar="N",
+                    help="with --apply: render up to N frames concurrently in "
+                         "a process pool (one frame per worker, never one "
+                         "preset per worker -- segmentation is shared across "
+                         "a frame's presets). Must be a positive int. "
+                         "Default 1 -- serial, in manifest order, identical "
+                         "to today's behaviour. Composes with --resume: a "
+                         "--jobs N run killed mid-batch resumes like a "
+                         "serial one did.")
     ap.add_argument("--set-rotate", action="append", nargs="+", metavar="NAME=DEG", dest="set_rotate", help="record the ABSOLUTE subject angle — idempotent, use this in generated commands")
     ap.add_argument("--gc", action="store_true",
                     help="list the regenerable byproducts an APPROVED shoot is still holding "
@@ -2564,7 +2723,8 @@ def main(argv=None) -> int:
         only = tuple(_pairs(getattr(args, 'only', None)))
         if not only and args.filters:
             only = tuple(colormod.PRESETS)
-        m = run_apply(shoot, quiet=args.quiet, only=only, resume=args.resume)
+        m = run_apply(shoot, quiet=args.quiet, only=only, resume=args.resume,
+                      jobs=args.jobs)
         _print_status(shoot, m)
     return 0
 
