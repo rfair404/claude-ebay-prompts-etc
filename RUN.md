@@ -113,15 +113,33 @@ it lands. The same applies to any other foreground call in that range.
 **Always start these backgrounded — by command prefix, not judgment call**
 (measured across 122 sessions, #74; prefixes match the real invocation
 forms used throughout `prompts/`, not bare names):
-`python -m lib.photo_prep.prep`, `python -m pytest`,
+`python -m lib.photo_prep.prep`, `python -m lib.cli prep`,
+`python -m lib.cli single-pass`, `python -m lib.cli observe`,
+`python -m pytest`,
 `python tests/run_all.py`, `python tools/ledger_reconcile.py`,
-`python tools/prep_sheet_html.py`, the comp-hunt call
+`python tools/prep_sheet_html.py`, `python tools/review_card_html.py`,
+the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
 [`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)),
-`python lib/lens_id.py`,
-`python tools/reindex_*.py`. Each one routinely runs long enough that
+`python lib/lens_id.py`, `python lib/list_edit.py` (the EPS photo upload
+alone runs a minute),
+`python tools/reindex_`\*`.py`. Each one routinely runs long enough that
 foregrounding it is a wasted turn waiting on nothing the next step needs
 yet.
+
+**This one is enforced, not advised (#121).** The rule above was
+documentation from #74's audit until a 7-day observer read measured what
+that was worth: **54 shell calls over 30s totalling 9.8h of blocked
+wall-clock, with 2.2% of 947 calls backgrounded.** A `PreToolUse` hook
+([`tools/bg_guard.py`](tools/bg_guard.py), wired up in
+`.claude/settings.json`) now **denies** a foreground call whose command
+runs one of those prefixes — matched per shell segment, so the usual
+`cd "<dir>" && python -m …` form is caught — and the deny message says to
+re-issue the same call with `run_in_background`. The prefix list lives in
+`bg_guard.py`; `tests/test_bg_guard.py` fails if this section stops naming
+one of them. A genuinely instant invocation of a listed tool (`--status`,
+`--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
+the command line, never silent.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — a
