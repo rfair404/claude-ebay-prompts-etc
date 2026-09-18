@@ -94,15 +94,27 @@ from ebay_schema import get_schema, print_schema
 ENVIRONMENTS = {
     "sandbox": {
         "api_base":   "https://api.sandbox.ebay.com",
+        "apiz_base":  "https://apiz.sandbox.ebay.com",
         "auth_base":  "https://auth.sandbox.ebay.com",
         "token_url":  "https://api.sandbox.ebay.com/identity/v1/oauth2/token",
     },
     "production": {
         "api_base":   "https://api.ebay.com",
+        "apiz_base":  "https://apiz.ebay.com",
         "auth_base":  "https://auth.ebay.com",
         "token_url":  "https://api.ebay.com/identity/v1/oauth2/token",
     },
 }
+
+# A few Sell APIs are served from the `apiz` host, not `api`. The Finances API
+# is one: on api.ebay.com /sell/finances/v1/* is a plain 404 (not 401/403), so
+# from #126 until this was fixed the reader recorded "none read this run" with
+# a valid, correctly scoped token. Measured 2026-09-18: api -> 404, apiz -> 200.
+_APIZ_PREFIXES = ("/sell/finances/",)
+
+
+def _base_for(env: dict, path: str) -> str:
+    return env["apiz_base"] if path.startswith(_APIZ_PREFIXES) else env["api_base"]
 
 DEFAULT_ENVIRONMENT = "sandbox"
 DEFAULT_MARKETPLACE = "EBAY_US"
@@ -379,7 +391,7 @@ def api_get(path: str, query: Optional[dict] = None,
 
     if not path.startswith("/"):
         path = "/" + path
-    url = creds.env["api_base"] + path
+    url = _base_for(creds.env, path) + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
 
@@ -508,7 +520,7 @@ def api_send(method: str, path: str, body: Optional[dict] = None,
     token = get_user_access_token(creds)
     if not path.startswith("/"):
         path = "/" + path
-    url = creds.env["api_base"] + path
+    url = _base_for(creds.env, path) + path
 
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {
