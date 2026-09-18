@@ -557,9 +557,13 @@ def draw(d: dict) -> str:
     # once every sold row this window carries a real Finances-API match for
     # BOTH ad fee and postage — see gather()'s net_after_ads_postage.
     if d["net_after_ads_postage"] is not None:
+        orphan = (d.get("fin_status") or {}).get("ad_spend_unattributed_n")
         net_stat = _stat(_money(d["net_after_ads_postage"]), "net after ads & postage",
                          f'gross minus final value fee, ad fees, and actual postage '
-                         f'({d["fin_covered_n"]}/{d["count"]} sold line items, #119)')
+                         f'({d["fin_covered_n"]}/{d["count"]} sold line items, #119)'
+                         + (f'; excludes ${d["fin_status"]["ad_spend_unattributed"]} of '
+                            f'per-click ad spend billed per listing over the last '
+                            f'{d["fin_status"].get("days", "?")} days' if orphan else ''))
     else:
         qualifier, _why = d["fin_qualifier"]
         net_stat = _stat(_money(d["net"]), "net before ads & postage",

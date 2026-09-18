@@ -394,3 +394,44 @@ def test_fetch_transactions_does_not_retry_the_same_window_twice(monkeypatch):
     with pytest.raises(RuntimeError, match="rejected every transaction window"):
         EF.fetch_transactions(365, verbose=False)
     assert len(calls) == 3  # 365, 180, 90 — not 365, 365, 180, 90
+
+
+# --------------------------------------------------------------------------
+# 2026-09-18, live data: NON_SALE_CHARGE carries its order only in
+# `references`, and per-click (Priority) ad fees have no order at all.
+# --------------------------------------------------------------------------
+def _ad_txn(fee_type, memo, amount, refs):
+    return {"transactionType": "NON_SALE_CHARGE", "feeType": fee_type,
+            "transactionMemo": memo, "bookingEntry": "DEBIT",
+            "amount": {"value": str(amount), "currency": "USD"},
+            "transactionDate": "2026-08-10T18:00:00.000Z",
+            "references": [{"referenceId": rid, "referenceType": rtype}
+                           for rtype, rid in refs]}
+
+
+def test_general_ad_fee_is_attributed_via_its_order_id_reference():
+    import ebay_finances as ef
+    txns = [_ad_txn("AD_FEE", "Promoted Listings - General fee", "7.50",
+                    [("ITEM_ID", "206000000001"), ("ORDER_ID", "11-11111-11111")])]
+    parsed = ef.parse_transactions(txns)
+    assert ef.attribute_fees_by_order(parsed["fees"]) == {"11-11111-11111": Decimal("7.50")}
+    assert ef.unattributed_ad_spend(parsed["fees"]) == (Decimal(0), 0)
+
+
+def test_per_click_ad_fee_with_only_an_item_reference_is_reported_not_dropped():
+    import ebay_finances as ef
+    txns = [_ad_txn("PREMIUM_AD_FEES", "Promoted Listings - Priority fee", "0.95",
+                    [("ITEM_ID", "206000000002")]),
+            _ad_txn("PREMIUM_AD_FEES", "Promoted Listings - Priority fee", "1.05",
+                    [("ITEM_ID", "206000000003")])]
+    parsed = ef.parse_transactions(txns)
+    assert ef.attribute_fees_by_order(parsed["fees"]) == {}
+    assert ef.unattributed_ad_spend(parsed["fees"]) == (Decimal("2.00"), 2)
+
+
+def test_top_level_order_id_still_wins():
+    import ebay_finances as ef
+    t = _ad_txn("AD_FEE", "Promoted Listings - General fee", "3.00",
+                [("ORDER_ID", "from-references")])
+    t["orderId"] = "top-level"
+    assert ef._order_id_for(t) == "top-level"

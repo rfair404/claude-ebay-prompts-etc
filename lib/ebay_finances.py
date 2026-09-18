@@ -156,6 +156,21 @@ def _other_fee_label(txn: dict) -> str:
     return (txn.get("feeType") or "").strip() or "(unlabeled NON_SALE_CHARGE)"
 
 
+def _order_id_for(txn: dict) -> str:
+    """The order a transaction belongs to. SALE/SHIPPING_LABEL carry a
+    top-level `orderId`; a NON_SALE_CHARGE does not, and names its order only
+    in `references` (`referenceType: ORDER_ID`). Reading the top-level field
+    alone dropped every ad fee as orderless (2026-09-18: all 11 "Promoted
+    Listings - General fee" charges, $123.37, then written as a KNOWN zero)."""
+    oid = txn.get("orderId") or ""
+    if oid:
+        return oid
+    for ref in txn.get("references") or []:
+        if (ref.get("referenceType") or "").upper() == "ORDER_ID" and ref.get("referenceId"):
+            return str(ref["referenceId"])
+    return ""
+
+
 def _skus_for(txn: dict) -> list[str]:
     items = txn.get("orderLineItems") or []
     skus = [li.get("sku") for li in items if li.get("sku")]
@@ -284,7 +299,7 @@ def parse_transactions(transactions: list[dict]) -> dict:
 
     for t in transactions or []:
         ttype = t.get("transactionType") or ""
-        order_id = t.get("orderId") or ""
+        order_id = _order_id_for(t)
         d = to_report_date(t.get("transactionDate") or "")
         date_s = d.isoformat() if d else ""
 
@@ -335,6 +350,19 @@ def attribute_fees_by_order(fees: list[FeeLine], *, ad_only: bool = True) -> dic
             continue
         out[f.order_id] += f.amount
     return dict(out)
+
+
+def unattributed_ad_spend(fees: list[FeeLine]) -> tuple[Decimal, int]:
+    """(total, count) of AD fees tied to no order. Priority (cost-per-click)
+    ads bill per LISTING -- `PREMIUM_AD_FEES`, references only an ITEM_ID --
+    and so do "Promoted Offsite" fees (`OTHER_FEES`), so neither has an order
+    to land on. Measured 2026-09-18 over 730 days: 529 Priority charges
+    ($503.27) + 37 Offsite ($13.69) = $516.96, against $123.37 of per-order
+    General fees. Real ad cost that no per-order figure contains, so it is
+    reported beside them rather than dropped (which would read as "ads cost
+    $0")."""
+    orphan = [f.amount for f in fees if f.fee_type == "AD" and not f.order_id]
+    return sum(orphan, Decimal(0)), len(orphan)
 
 
 def attribute_fees_by_sku(fees: list[FeeLine], *, ad_only: bool = True) -> dict[str, Decimal]:
