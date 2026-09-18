@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import csv
 import html
+import json
 import re
 import sys
 from pathlib import Path
@@ -468,6 +469,21 @@ def _fmt_pct(v) -> str:
     return f"{v:.0f}%" if v is not None else "—"
 
 
+def _unattributed_ad_note() -> str:
+    """Per-click ad spend sync_actuals could not tie to any order (see
+    ebay_finances.unattributed_ad_spend), from its status file. "" if none."""
+    p = REPORTS / "finances_sync_status.json"
+    try:
+        st = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        return ""
+    if not st.get("ad_spend_unattributed_n"):
+        return ""
+    return (f" The ad fee excludes ${st['ad_spend_unattributed']} of per-click ad "
+            f"spend billed per listing, not per order, over the last "
+            f"{st.get('days', '?')} days.")
+
+
 def _fin_note(d: dict) -> str:
     """One-line NET/PROFIT caveat, #119-aware: still "before postage AND
     before advertising" only where that remains true. `sales_ledger.csv`
@@ -484,7 +500,7 @@ def _fin_note(d: dict) -> str:
                 f"— {_fmt_money(d['fin_ad_fee_total'])} ad fee, "
                 f"{_fmt_money(d['fin_postage_total'])} postage (#119, sell.finances) — "
                 f"not yet folded into this table's NET/PROFIT columns, but no longer "
-                f"missing data.")
+                f"missing data." + _unattributed_ad_note())
     if covered_n:
         return (f"NET is net_before_postage — before postage AND before advertising. "
                 f"#119 (sell.finances) has real figures for {covered_n} of {total_n} "

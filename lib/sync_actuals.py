@@ -568,8 +568,14 @@ def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
     parsed = ebay_finances.parse_transactions(txns)
     ad_fee_by_order = ebay_finances.attribute_fees_by_order(parsed["fees"])
     postage_by_order = ebay_finances.attribute_postage_by_order(parsed["postage"])
+    orphan_total, orphan_n = ebay_finances.unattributed_ad_spend(parsed["fees"])
     status = {"ok": True, "reason": None,
-             "other_fee_labels": dict(parsed["other_fee_labels"])}
+             "other_fee_labels": dict(parsed["other_fee_labels"]),
+             # Per-click ad spend with no order to land on (see
+             # ebay_finances.unattributed_ad_spend). A window total, not
+             # per-order: every "ad fee" figure elsewhere EXCLUDES this.
+             "ad_spend_unattributed": _money(orphan_total),
+             "ad_spend_unattributed_n": orphan_n}
     return ad_fee_by_order, postage_by_order, status
 
 
@@ -610,7 +616,8 @@ def mark_sold_in_ledger(rows: list[dict]) -> int:
 # --------------------------------------------------------------------------- #
 def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
            store: Optional[dict], excluded: Optional[dict] = None,
-           unwound_losses: Optional[list[dict]] = None) -> None:
+           unwound_losses: Optional[list[dict]] = None,
+           fin_status: Optional[dict] = None) -> None:
     gross = sum((r["gross"] for r in rows), Decimal(0))
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
@@ -633,6 +640,10 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
               f"{len(order_ids)} order(s)  ·  actual postage ${_money(post_total)} on "
               f"{len(postage_orders)} of {len(order_ids)} order(s) — the rest have no "
               f"Finances-API match yet")
+        if (fin_status or {}).get("ad_spend_unattributed_n"):
+            print(f"  + per-click ad spend ${fin_status['ad_spend_unattributed']} "
+                  f"({fin_status['ad_spend_unattributed_n']} charges) billed per listing, "
+                  f"not per order — NOT in the ad fees above")
     else:
         print("  ad fees / actual postage (#119): none read this run — see "
               f"{FINANCES_STATUS_JSON.relative_to(REPO)} for why")
@@ -798,7 +809,7 @@ def main() -> int:
             (sold if "sold" in Path(p).name.lower() else active).extend(rs)
         store = {"active": active, "sold": sold}
 
-    report(rows, drafts, ledger, store, excluded, unwound_losses)
+    report(rows, drafts, ledger, store, excluded, unwound_losses, fin_status)
 
     if not args.apply:
         print("\n[DRY RUN] Nothing written. Re-run with --apply to record:")
