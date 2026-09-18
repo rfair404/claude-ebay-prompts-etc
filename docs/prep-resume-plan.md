@@ -93,6 +93,14 @@ Add one new top-level manifest field, written at the *start* of `--apply`:
 - **every** preset name in `only` is present in that frame's `presets` dict
   (a resume that only rendered `crisp` before must not treat a now-wider
   `only` as satisfied);
+- the frame's recorded `render_hash` still matches a fresh hash of the
+  per-frame DECISIONS the render was made from — rotation, unskew, crop box,
+  and `color_plan.is_sweep`/`bg_class_effective`, i.e. whatever `--rotate`,
+  `--crop` and `--detail` last wrote. None of those touch the source file or
+  the rendered preset, so without this check every other condition here
+  passes while the render answers a superseded question. Shipped after
+  more-mags-444 ANMP0008 resumed as "OK" over a frame whose backdrop pass had
+  been explicitly switched off (see `_frame_render_hash`);
 - the recorded preset's `path` exists on disk and its `sha256` matches a
   fresh hash of that file (catches a partial/truncated write from the kill
   itself — see the atomic-write note below, which should make this
