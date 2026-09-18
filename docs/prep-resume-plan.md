@@ -1,15 +1,16 @@
 # PREP `--resume` / `--jobs N` — implementation plan (#74 item 3)
 
-**Status: steps 1–3 of "Suggested follow-up PR shape" (below) are implemented**
-— atomic `_save_bgr` writes, incremental per-frame checkpointing, and
-`--resume` with the settings-hash/staleness check, all in `run_apply()`.
-**Step 4 (`--jobs N` / `ProcessPoolExecutor`) is still just a plan** —
-deliberately deferred, because it wants a real peak-RSS measurement at
-`--jobs 4` on a representative shoot before a default worker count is picked
-(see that section below), which is future work, not something to guess at
-in the same PR. The rest of this document is left as originally written;
-only this status line and the follow-up section's step numbering reflect
-what has since shipped.
+**Status: all four steps of "Suggested follow-up PR shape" (below) are
+implemented.** Steps 1–3 — atomic `_save_bgr` writes, incremental per-frame
+checkpointing, and `--resume` with the settings-hash/staleness check — landed
+first, all in `run_apply()`. Step 4 (`--jobs N`) landed in a follow-up PR: a
+`ProcessPoolExecutor`, one frame per worker task, sharing the exact same
+per-frame render function (`_render_frame`) the serial path calls, default
+`jobs=1` (unchanged behaviour). It deliberately does NOT set a non-1 default
+— the real peak-RSS measurement this doc calls for below was never gathered,
+so `--jobs` stays a pure opt-in: pick a number for your own machine. The rest
+of this document is left as originally written; only this status line and
+the follow-up section's step numbering reflect what has since shipped.
 
 ## The problem, precisely
 
@@ -215,12 +216,27 @@ disjoint from every other frame's.
    loop) — makes a killed `--apply` at least leave a *consistent* partial
    manifest, before `--resume` exists to exploit it.
 3. ✅ `--resume` flag + the settings-hash/staleness check.
-4. ⬜ **Still pending.** `--jobs N` + `ProcessPoolExecutor`, gated behind a
-   real memory measurement for the default. Not implemented by the PR that
-   shipped 1–3 (#74 item 3 follow-up) — it explicitly stayed out of scope
-   because a memory measurement is a prerequisite this repo isn't yet in a
-   position to gather, not something to bake a guess for into a PR.
+4. ✅ `--jobs N` + `ProcessPoolExecutor`. The frame-render body was pulled out
+   of `run_apply`'s loop into a standalone `_render_frame(shoot, name, rec,
+   aspect, pad, smode, only)` — pure with respect to the manifest, returns the
+   new `rec` plus the in-memory pixels the sheet wants — so the serial
+   (`--jobs 1`) path and the pool path call *the same function*, never two
+   implementations that could drift. A pool worker (`_apply_worker`) discards
+   the returned pixels and sends back only the small `rec` dict, to keep the
+   pool's IPC cheap; the parent reloads a pool-rendered frame's pixels off
+   disk for the sheet afterwards, the same trick `--resume` already used for
+   a skipped frame. `--resume` is checked before a frame is ever queued as a
+   pool task, so a resumed frame never occupies a worker slot. Each
+   completed future is folded into the manifest and checkpointed
+   individually (item 2's guarantee, extended to the pool path), and a
+   worker's exception is caught and turned into a per-frame `ERROR` status +
+   flag rather than sinking every other frame's future already in flight.
+   Default stays `jobs=1` — the memory measurement this doc originally asked
+   for to justify a higher default was never gathered, so `--jobs` ships as a
+   pure opt-in with no baked-in guess; see the follow-up PR's "Judgment
+   calls" for the reasoning.
 
 Each step is independently mergeable and independently useful — 1–2 alone
 fix the "partial manifest is inconsistent with partial renders" half of the
-bug even before `--resume` exists to take advantage of it.
+bug even before `--resume` exists to take advantage of it, and 1–3 already
+shipped as their own PR before 4 landed.
