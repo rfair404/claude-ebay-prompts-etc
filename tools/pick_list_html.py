@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Print-friendly pick list for one order, or several combined — open it, hit
-print, done.
+"""Print-friendly pick list — and packing slip — for one shipment. Open it,
+hit print, done.
 
-    python tools/pick_list_html.py <order-id> [order-id ...]
-        -> pick_lists/pick_<id>.html, or pick_lists/pick_group_<buyer>.html
-           for more than one order (e.g. orders eBay will merge into a single
-           shipping label — pack them as one box, so the pick list reads as
-           one page, not N separate printouts)
+    python tools/pick_list_html.py <order-id> --pdf
+        -> pick_lists/pick_<id>.html + pick_lists/pick_<id>.pdf
+
+One page == one box. Several ids may share a page only when the buyer AND the
+full ship-to address are identical (the one case eBay merges under a single
+shipping label); assert_one_shipment() hard-stops anything else, because a
+combined sheet for two destinations is a mis-ship — the picker packs both
+items into one box and one buyer never gets their order. Run the tool once
+per shipment.
 
 Same data as `python -m lib.cli pick-list`, rendered as a page instead of
 terminal text, with a small grayscale thumbnail of the item's hero photo so
@@ -32,7 +36,10 @@ import base64
 import html
 import io
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,7 +50,8 @@ import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
 from pick_list import _money, ship_to                              # noqa: E402
-from sync_actuals import fetch_orders, load_listings_ledger, match_sale, scan_drafts  # noqa: E402
+from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
+                          match_sale, scan_drafts)
 
 THUMB_PX = 110      # small on purpose — a pick sheet, not a photo proof; also
                     # what keeps a 4-item grouped list on one printed page
@@ -165,6 +173,9 @@ def _pick_location(folder: str) -> str:
     return d.name
 
 
+_HAND_LOC = load_hand_locations()
+
+
 def _addr_key(o: dict) -> tuple:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
@@ -198,16 +209,23 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
             order_bit = (f" &middot; order {html.escape(o.get('orderId', ''))}"
                          f" &middot; rec #{html.escape(str(o.get('salesRecordReference', '')))}"
                          f" &middot; {_money(li.get('lineItemCost'))}") if grouped else ""
+            # FROM is a pick location — where a person walks to pull the item.
+            # A hand-listed item has no local folder; its shelf, if anyone
+            # recorded one, is in hand_listed_locations.csv. Otherwise drop
+            # the line rather than print a placeholder explaining our own
+            # internals on a sheet that gets packed with the box.
             location = (_pick_location(folder) if folder
-                       else "(no local folder — listed by hand)")
+                        else (_HAND_LOC.get(row["listing_id"])
+                              or _HAND_LOC.get(row["sku"]) or ""))
+            from_line = ("\n          <div class=\"from\">FROM&nbsp; "
+                         f"{html.escape(location)}</div>") if location else ""
             item_blocks.append(f"""
       <div class="item">
         <div class="thumb">{pic}</div>
         <div class="details">
           <div class="qty">&times;{li.get('quantity', 1)}</div>
           <div class="title">{html.escape(li.get('title', ''))}</div>
-          <div class="meta">item {html.escape(str(li.get('legacyItemId', '')))}{sku_bit}{order_bit}</div>
-          <div class="from">FROM&nbsp; {html.escape(location)}</div>
+          <div class="meta">item {html.escape(str(li.get('legacyItemId', '')))}{sku_bit}{order_bit}</div>{from_line}
         </div>
       </div>""")
 
@@ -323,6 +341,82 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 </body></html>"""
 
 
+_BROWSERS = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+]
+
+
+def to_pdf(html_path: Path) -> Path:
+    """Print the sheet to PDF with headless Chrome/Edge — the same engine that
+    renders the HTML, so the PDF is what the page actually looks like. No
+    background graphics flag: the 50%-screened thumbnail is an <img>, and the
+    letterhead is type, so both come through without printing a page of ink."""
+    exe = next((b for b in _BROWSERS if Path(b).exists()), None)
+    if not exe:
+        raise SystemExit("[FAIL] no Chrome or Edge found to render the PDF; "
+                         "open the HTML and print it from the browser instead")
+    pdf_path = html_path.with_suffix(".pdf")
+    profile = tempfile.mkdtemp(prefix="picklist-")
+    try:
+        r = subprocess.run(
+            [exe, "--headless=new", "--disable-gpu", "--no-first-run",
+             f"--user-data-dir={profile}", "--no-pdf-header-footer",
+             f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()],
+            capture_output=True, text=True, timeout=120)
+    finally:
+        shutil.rmtree(profile, ignore_errors=True)
+    if not pdf_path.exists():
+        raise SystemExit(f"[FAIL] PDF render failed ({exe}):\n{r.stderr.strip()[:400]}")
+    return pdf_path
+
+
+def _shipment_key(o: dict) -> tuple:
+    """What has to match before two orders may share one page: the buyer and
+    the exact place the box is going. Normalised (case/whitespace) but not
+    fuzzy — a near-match is a different shipment."""
+    to = ship_to(o)
+    a = to.get("contactAddress") or {}
+    parts = [(o.get("buyer") or {}).get("username") or "",
+             to.get("fullName") or "",
+             a.get("addressLine1") or "", a.get("addressLine2") or "",
+             a.get("city") or "", a.get("stateOrProvince") or "",
+             a.get("postalCode") or "", a.get("countryCode") or ""]
+    return tuple(re.sub(r"\s+", " ", x).strip().casefold() for x in parts)
+
+
+def _describe(o: dict) -> str:
+    to = ship_to(o)
+    a = to.get("contactAddress") or {}
+    who = to.get("fullName") or (o.get("buyer") or {}).get("username") or "?"
+    return (f"{o.get('orderId','?')}  {who}, {a.get('addressLine1','?')}, "
+            f"{a.get('city','?')} {a.get('stateOrProvince','')} {a.get('postalCode','')}")
+
+
+def assert_one_shipment(orders: list[dict]) -> None:
+    """One page == one box. Orders may only be combined onto a single pick
+    sheet when the buyer AND the full ship-to address are identical, which is
+    the only case where eBay merges them under one shipping label.
+
+    This is a hard stop, not a warning. A combined sheet for two destinations
+    is a mis-ship: the picker packs both items into one box and one of the two
+    buyers never gets their order. If the addresses differ by so much as an
+    apartment number, these are separate shipments and get separate sheets."""
+    if len(orders) < 2:
+        return
+    keys = {_shipment_key(o) for o in orders}
+    if len(keys) == 1:
+        return
+    lines = "\n".join("    " + _describe(o) for o in orders)
+    raise SystemExit(
+        "[REFUSED] these orders are not one shipment - buyer and/or ship-to "
+        "address differ:\n" + lines +
+        "\n\n  One page == one box. Run the tool once per order id so each "
+        "shipment gets its own sheet.")
+
+
 def _default_out_name(orders: list[dict]) -> str:
     if len(orders) == 1:
         return f"pick_{orders[0].get('orderId', 'order')}.html".replace("/", "_")
@@ -335,10 +429,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("order_id", nargs="+", metavar="ORDER_ID",
-                    help="one order id, or several to combine onto one page — e.g. orders "
-                         "eBay will merge into a single shipping label for the same buyer")
+                    help="one order id. Several ids are combined onto ONE page only if they are the same buyer AND the same ship-to address (one box, one eBay label); anything else is refused - run the tool once per shipment.")
     ap.add_argument("--days", type=int, default=30, help="lookback window to find the order(s) (default 30)")
     ap.add_argument("--out", metavar="FILE", help="output path (default pick_lists/pick_<id>.html)")
+    ap.add_argument("--pdf", action="store_true",
+                    help="also render a PDF beside the HTML (headless Chrome/Edge)")
     args = ap.parse_args()
 
     candidates = fetch_orders(args.days, verbose=False)
@@ -350,6 +445,8 @@ def main() -> int:
         print(f"no order(s) {', '.join(missing)} in the last {args.days} days")
         return 1
 
+    assert_one_shipment(matches)
+
     drafts, ledger = scan_drafts(), load_listings_ledger()
     out_html = render_html(matches, drafts, ledger)
 
@@ -357,6 +454,9 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(out_html, encoding="utf-8")
     print(f"[OK] wrote {out_path}")
+    if args.pdf:
+        pdf_path = to_pdf(out_path)
+        print(f"[OK] wrote {pdf_path}")
     return 0
 
 

@@ -485,3 +485,23 @@ def test_sync_finances_returns_attribution_on_success(monkeypatch):
     ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
     assert ad_by_order == {"1-2-3": Decimal("-2.50")}
     assert status["ok"] is True and status["reason"] is None
+
+
+# load_hand_locations — the shelf for an item listed by hand (no shoot folder)
+# --------------------------------------------------------------------------
+def test_load_hand_locations_maps_listing_id_or_sku_to_shelf(tmp_path, monkeypatch):
+    import sync_actuals as sa
+    f = tmp_path / "hand_listed_locations.csv"
+    f.write_text("listing_id,location,note\n"
+                 "206301883472,cats-mens-4,Brooks Brothers 1981\n"
+                 "some-sku,bin-2,\n"
+                 "206300000000,,no shelf recorded\n", encoding="utf-8")
+    monkeypatch.setattr(sa, "HAND_LOCATIONS", f)
+    assert sa.load_hand_locations() == {"206301883472": "cats-mens-4",
+                                        "some-sku": "bin-2"}
+
+
+def test_load_hand_locations_missing_file_means_no_overrides(tmp_path, monkeypatch):
+    import sync_actuals as sa
+    monkeypatch.setattr(sa, "HAND_LOCATIONS", tmp_path / "nope.csv")
+    assert sa.load_hand_locations() == {}

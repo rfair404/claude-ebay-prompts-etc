@@ -47,7 +47,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from comps_csv import _now as _now_iso                              # noqa: E402
 from ebay_client import api_send, EbayAPIError                      # noqa: E402
-from sync_actuals import fetch_orders, load_listings_ledger, match_sale, scan_drafts  # noqa: E402
+from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
+                          match_sale, scan_drafts)
 
 OPEN_FILTER = "orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D"
 
@@ -84,6 +85,9 @@ def ship_to(o: dict) -> dict:
     return {}
 
 
+_HAND_LOC = load_hand_locations()
+
+
 def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
@@ -102,6 +106,10 @@ def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
         row = {"sku": li.get("sku") or "", "listing_id": li.get("legacyItemId", ""),
                "title": li.get("title", "")}
         folder, ask, how = match_sale(row, drafts, ledger)
+        if not folder:
+            bin_ = _HAND_LOC.get(row["listing_id"]) or _HAND_LOC.get(row["sku"])
+            if bin_:
+                folder, how = bin_, "bin"
         L.append(f"  [{n}] x{li.get('quantity',1)}  {li.get('title','')}")
         L.append(f"       item {li.get('legacyItemId','')}"
                  + (f"   sku {row['sku']}" if row["sku"] else "   sku —")
