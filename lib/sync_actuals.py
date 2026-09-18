@@ -58,6 +58,7 @@ LISTINGS_LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
 REPORTS = REPO / "reports"
 FINANCES_STATUS_JSON = REPORTS / "finances_sync_status.json"
+HAND_LOCATIONS = REPO / "hand_listed_locations.csv"
 
 SALES_FIELDS = [
     "order_id", "sold_at", "listing_id", "sku", "title", "quantity",
@@ -381,6 +382,30 @@ def scan_drafts() -> list[dict]:
             "sku": grab(r'ebay_inventory_sku:\s*"?([0-9a-zA-Z\-]{6,})"?'),
             "listing_id": grab(r'ebay_listing_id:\s*"?(\d+)"?'),
         })
+    return out
+
+
+def load_hand_locations() -> dict[str, str]:
+    """listing id (or SKU) -> where the thing physically sits.
+
+    Items listed by hand on eBay never got a shoot folder, so `match_sale`
+    finds nothing and the pick sheet used to say "listed by hand" — true, but
+    useless to someone holding a box and looking for the shelf. This file is
+    the shelf. It is NOT a draft: writing one just to carry a bin name would
+    put a hand-listed item back in front of the publish tooling.
+
+    Two columns, `listing_id,location`; a SKU in the first column also works.
+    Missing file is normal and means no overrides.
+    """
+    out: dict[str, str] = {}
+    if not HAND_LOCATIONS.exists():
+        return out
+    with HAND_LOCATIONS.open(newline="", encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            key = (row.get("listing_id") or "").strip()
+            loc = (row.get("location") or "").strip()
+            if key and loc:
+                out[key] = loc
     return out
 
 

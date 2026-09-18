@@ -209,6 +209,54 @@ def _apply_settings_hash(aspect, pad: float, pop: str, subject: str,
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _frame_render_hash(rec: dict) -> str:
+    """Fingerprint of the PER-FRAME decisions that change what `--apply` renders.
+
+    `_apply_settings_hash` covers the question the whole run is asking --
+    aspect, pad, subject mode, category, preset set. It cannot cover the
+    answers recorded against ONE frame, and those move pixels just as hard:
+    the rotation `--rotate` wrote, a `--crop NAME=off|on` override, and
+    `color_plan.is_sweep` -- the `--detail NAME=on|off` switch deciding
+    whether the colour pass may re-tone, neutralise and blur everything
+    outside the subject mask.
+
+    Without this, `--resume` read "source unchanged, preset files present and
+    unmodified" as "still valid" and skipped a frame whose decision had just
+    been corrected. Measured on more-mags-444 ANMP0008: the backdrop pass had
+    smeared the printed DESTINATION title off the cover, `--detail
+    ANMP0008=on` correctly recorded `is_sweep: false`, and the resumed apply
+    reported "OK 5/5" while leaving the damaged render in `listing/`. That is
+    worse than a plain stale render -- the operator had explicitly acted to
+    fix the frame and been told it worked.
+
+    Stamped onto the record as `render_hash` when the frame is rendered and
+    re-derived from the record on resume. A record written before this existed
+    carries none, so it re-renders once; over-rendering is the cheap side of
+    this trade, exactly as everywhere else in the resume path. Same truncated
+    16-hex sha256 convention as `_sha256()`/`_apply_settings_hash()`.
+    """
+    # The geometric half is exactly #21's decision record -- rotate, unskew,
+    # crop -- so it is read from there rather than re-derived here. That is not
+    # only reuse: `decisions` already rounds the fitted angle and ints the crop
+    # box, so a manifest reserialised on another machine cannot produce a
+    # different hash for one decision, and the noise around a decision (a
+    # reason string, a re-measured luma) cannot spuriously invalidate a render.
+    #
+    # The colour half is NOT in that record and is deliberately not added to
+    # it: `frame_decisions` feeds the stage-approval digests, and widening it
+    # would read every already-approved shoot in inventory/ as changed.
+    # `is_sweep` and the effective backdrop class are the two colour values
+    # the render loop actually reads off the record (everything else it
+    # re-measures from pixels), so they are hashed here alongside.
+    cp = rec.get("color_plan") or {}
+    payload = json.dumps({
+        "geometry": decmod.frame_decisions(rec),
+        "color": {"is_sweep": cp.get("is_sweep"),
+                  "bg_class_effective": cp.get("bg_class_effective")},
+    }, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -1008,6 +1056,14 @@ def _frame_is_resumable(shoot: Path, name: str, rec: dict, only: tuple) -> bool:
     is per-run, not per-frame, so it is checked once and passed down as
     already-satisfied rather than re-checked here.
     """
+    # The cheapest check, and the one no file hash can make: has a DECISION
+    # about this frame changed since it was rendered? `--rotate`, `--crop`
+    # and `--detail` all rewrite the record without touching the source or
+    # the rendered presets, so every file check below can still pass while
+    # the render on disk answers a question nobody is asking any more. See
+    # _frame_render_hash for the frame this was measured on.
+    if rec.get("render_hash") != _frame_render_hash(rec):
+        return False
     src = shoot / name
     if not src.exists() or _sha256(src) != rec.get("src_sha256"):
         return False
@@ -1061,9 +1117,20 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     # planned there, and the colour pass needs the same mask.
     sm = mask_for(img, smode)
     img, sm = _unskewed(img, sm, sk)
+    # What the colour pass must NOT touch. For flat printed goods that is
+    # the whole sheet, not the ink the detector found on it — see
+    # subject.sheet_mask for the frames this shipped damaged. Geometry is
+    # unaffected: the crop box was planned from sm.bbox either way.
+    #
+    # Derived from whichever `sm` is current, never cached across the crop:
+    # `_cropped` re-describes the mask in cropped coordinates, and a sheet
+    # mask built before the crop is the wrong SHAPE after it (the first cut
+    # of this raised IndexError deep in color._at_rails).
+    def _color_mask(s):
+        return subjectmod.sheet_mask(s) if smode == "paper" else s.mask
     # Judged before the crop — a tight crop keeps too little backdrop to
     # tell a sweep from a textured surface (see color._backdrop_lut).
-    pre_stats = colormod.analyze(img, sm.mask)
+    pre_stats = colormod.analyze(img, _color_mask(sm))
     # The check pass already reconciled this frame's backdrop against the
     # rest of the shoot; honour that rather than re-deciding it alone.
     cp = rec.get("color_plan") or {}
@@ -1078,6 +1145,7 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     rec["crop"] = crop
     if crop["applied"]:
         img, sm = _cropped(img, sm, crop["box"])
+    color_mask = _color_mask(sm)
 
     # Every preset renders from the SAME mask and crop. Segmentation is the
     # expensive step by a wide margin, so offering three looks costs barely
@@ -1086,12 +1154,12 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     # How warm the item itself is, off the same mask the colour pass uses.
     # Cheap (a statistic on a 1000px copy) and it decides which look the
     # shoot defaults to — see color.WARM_SUBJECT_MIN_RB.
-    rec["subject_warmth"] = colormod.subject_warmth(img, sm.mask)
+    rec["subject_warmth"] = colormod.subject_warmth(img, color_mask)
 
     rec["presets"] = {}
     variants = {}
     for pname in (only or colormod.PRESETS):
-        rendered, creport = colormod.correct(img, sm.mask, sweep=sweep,
+        rendered, creport = colormod.correct(img, color_mask, sweep=sweep,
                                              bg_class=eff_class, preset=pname)
         p_dir = shoot / ".prep" / "presets" / pname
         p_dir.mkdir(parents=True, exist_ok=True)
@@ -1115,6 +1183,11 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     rec["output"] = None
     rec["out_sha256"] = None
     rec["status"] = "ASK" if rec["orientation"]["needs_ask"] else "PICK"
+    # Stamped LAST, after `crop` has been written back above, so it records
+    # the decisions these pixels were actually rendered from -- that is what
+    # a later `--resume` re-derives and compares against. Here rather than
+    # in run_apply so `--jobs N` workers stamp it too.
+    rec["render_hash"] = _frame_render_hash(rec)
     return rec, before, variants
 
 
@@ -2537,7 +2610,9 @@ def main(argv=None) -> int:
                     help="with --apply: skip a frame's re-render when the manifest "
                          "proves the existing render still answers this run's "
                          "settings (same aspect/pad/pop/subject/category/presets, "
-                         "source unchanged, preset files present and unmodified). "
+                         "source unchanged, preset files present and unmodified, "
+                         "and no per-frame decision -- rotation, crop, --detail "
+                         "backdrop switch -- changed since it was rendered). "
                          "Any one check failing re-renders the frame. Re-invoke a "
                          "backgrounded --apply that got killed by a timeout with "
                          "this flag rather than restarting it plain -- that is the "

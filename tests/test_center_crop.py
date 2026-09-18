@@ -41,6 +41,11 @@ def _write(bgr):
     return p
 
 
+def _mask_of(bgr):
+    """The tool's own segmentation of a synthetic frame, as _pick_blob wants it."""
+    return CC._subject_mask(bgr).astype("uint8") * 255
+
+
 def _plan(path, aspect=1.0, pad=0.12):
     fp = CC.focal_point(path)
     return fp, CC.crop_warning(fp, CC._crop_box(fp, aspect, pad))
@@ -207,6 +212,50 @@ def test_second_apply_does_not_clobber_the_backup():
     CC.main([str(d), "--apply"])          # the file on disk is now the CROP
     assert (d / ".orig" / p.name).read_bytes() == original, (
         "a second --apply must not copy the cropped file over the real backup")
+
+
+# --- failure mode 4: backdrop clutter along the frame edge ------------------
+
+def test_bottom_edge_strip_is_not_part_of_the_subject():
+    """The more-mags-444 shape: the sweep runs out and the table shows.
+
+    A wide, thin strip along the bottom border joined the subject union, which
+    dragged the box into the corner and inflated `subject_frac`. Both failures
+    are silent — the crop still renders, it is just centered on the clutter.
+    """
+    img = _felt()
+    cv2.rectangle(img, (400, 200), (800, 640), (150, 150, 155), -1)    # the item
+    cv2.rectangle(img, (300, H - 70), (W - 1, H - 1), (120, 120, 124), -1)  # table edge
+
+    x, y, ww, hh, cx, cy = CC._pick_blob(_mask_of(img))
+    assert y + hh < H - 70, (
+        f"subject box must stop above the edge strip, got y+h={y + hh} of {H}")
+    assert cy < H * 0.6, f"centroid must stay on the item, got cy={cy}"
+
+    fp, why = _plan(_write(img))
+    assert why is None, f"a clean off-center subject must still crop, got: {why}"
+
+
+def test_a_pair_of_items_is_still_kept_whole():
+    """Guard on the guard: two real pieces are compact, not slivers.
+
+    The drop rule must never shed the second half of a pair — that is the
+    failure `_pick_blob` exists to prevent, and it outranks tidying an edge.
+    """
+    img = _felt()
+    cv2.rectangle(img, (200, 250), (470, 560), (150, 150, 155), -1)
+    cv2.rectangle(img, (760, 300), (1010, 610), (150, 150, 155), -1)   # touches nothing
+    x, y, ww, hh, _cx, _cy = CC._pick_blob(_mask_of(img))
+    assert x <= 205 and x + ww >= 1005, (
+        f"both pieces must stay in the union, got x={x} w={ww}")
+
+
+def test_an_item_that_is_itself_a_strip_survives():
+    """A long thin item IS the largest piece, so the rank test spares it."""
+    img = _felt()
+    cv2.rectangle(img, (120, 400), (1080, 520), (150, 150, 155), -1)   # a ruler/chain
+    x, y, ww, hh, _cx, _cy = CC._pick_blob(_mask_of(img))
+    assert ww > 800, f"the strip is the subject here and must survive, got w={ww}"
 
 
 if __name__ == "__main__":

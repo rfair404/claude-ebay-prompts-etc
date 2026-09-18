@@ -245,3 +245,74 @@ def test_write_report_round_trips_json():
                                  "ledger": "SYNCED", "ebay": "PUBLISHED"}]
     finally:
         out.unlink(missing_ok=True)
+
+
+# --------------------------------------------------------------------------
+# The sold-on listing id outranks a relist's id (2026-09-18, J.Crew 1995
+# catalogs). A relist keeps the offerId and gets a new listingId. The
+# Inventory API reports the new id; sync_actuals writes back the id the order
+# was placed on. Before this rule the two tools overwrote each other every run.
+# --------------------------------------------------------------------------
+SOLD_ID, RELIST_ID = "206446994281", "206497144786"
+
+
+def _sold_row(**kw):
+    return _drow(sku="a", status="SOLD", price="65.00", offer_id="217983086011",
+                 listing_id=SOLD_ID, url=f"https://www.ebay.com/itm/{SOLD_ID}", **kw)
+
+
+def _relist_truth(status="ENDED", listing_status="ENDED"):
+    return _dtruth(sku="a", status=status, price="65.0", offer_id="217983086011",
+                   listing_id=RELIST_ID, url=f"https://www.ebay.com/itm/{RELIST_ID}",
+                   listing_status=listing_status)
+
+
+def test_sold_on_listing_id_outranks_an_ended_relist():
+    r = lr.compute_drift({"a": _sold_row()}, {"a": _relist_truth()},
+                         sold={"a"}, sold_on={("a", SOLD_ID)})
+    assert r["drift"] == []
+
+
+def test_listing_id_not_protected_without_a_matching_order():
+    # An order on some OTHER listing does not make the ledger's id sacred:
+    # eBay's current id wins, and sync_actuals then writes the sold-on one.
+    r = lr.compute_drift({"a": _sold_row()}, {"a": _relist_truth()},
+                         sold={"a"}, sold_on={("a", "999")})
+    assert ("a", "listing_id", SOLD_ID, RELIST_ID) in r["drift"]
+
+
+def test_a_live_relist_outranks_the_sold_on_listing_id():
+    r = lr.compute_drift({"a": _sold_row()},
+                         {"a": _relist_truth("PUBLISHED", "ACTIVE")},
+                         sold={"a"}, sold_on={("a", SOLD_ID)})
+    assert ("a", "listing_id", SOLD_ID, RELIST_ID) in r["drift"]
+    assert ("a", "status", "SOLD", "PUBLISHED") in r["drift"]
+
+
+def test_offer_id_and_price_still_defer_to_ebay_on_a_sold_row():
+    truth = _relist_truth()
+    truth["price"] = "70.0"
+    r = lr.compute_drift({"a": _sold_row()}, {"a": truth},
+                         sold={"a"}, sold_on={("a", SOLD_ID)})
+    assert r["drift"] == [("a", "price", "65.00", "70.0")]
+
+
+def test_out_of_stock_published_offer_does_not_outrank_sold():
+    # ge-tube-6sn7gtb: a CHOICE variation that sold its only unit reads offer
+    # PUBLISHED / listing OUT_OF_STOCK. Not buyable, so not a relist.
+    row = _drow(sku="a", status="SOLD", price="18.49", listing_id="206488496795")
+    truth = _dtruth(sku="a", status="PUBLISHED", price="18.49",
+                    listing_id="206488496795", listing_status="OUT_OF_STOCK")
+    r = lr.compute_drift({"a": row}, {"a": truth}, sold={"a"},
+                         sold_on={("a", "206488496795")})
+    assert r["drift"] == []
+    assert r["protected"] == 1
+
+
+def test_sold_on_reads_sku_and_listing_id_pairs(tmp_path, monkeypatch):
+    import tools.ledger_reconcile as LR
+    sales = tmp_path / "sales_ledger.csv"
+    sales.write_text("order_id,listing_id,sku\n1-000,111,sku-a\n2-000,,sku-b\n",
+                     encoding="utf-8")
+    monkeypatch.setattr(LR, "SALES", sales)
+    assert LR._sold_on() == {("sku-a", "111")}

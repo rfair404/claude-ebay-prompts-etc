@@ -1943,9 +1943,15 @@ def _fake_rec_and_preset(shoot: Path, name: str = "IMG_0.jpg", preset: str = "cr
     p_path.write_bytes(b"preset-bytes-v1")
     rec = {
         "src_sha256": P._sha256(src),
+        "orientation": {"applied": 0, "needs_ask": False},
+        "crop": {"applied": False, "box": None},
+        "color_plan": {"is_sweep": True, "bg_class_effective": "dark"},
         "presets": {preset: {"path": str(p_path.relative_to(shoot)).replace("\\", "/"),
                              "sha256": P._sha256(p_path)}},
     }
+    # Stamped by run_apply on every frame it renders; a record without it is
+    # one from before that existed, and re-renders by design.
+    rec["render_hash"] = P._frame_render_hash(rec)
     return rec, src, p_path
 
 

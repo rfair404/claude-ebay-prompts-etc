@@ -88,6 +88,20 @@ def _status_for(offer: dict) -> str:
 # So SOLD is protected when an order corroborates it. The one thing that beats it
 # is the listing being ACTIVE again: that is a genuine relist, and PUBLISHED is
 # then the current truth.
+#
+# The same goes for WHICH listing sold. When a sold SKU is relisted, the offer
+# keeps its offerId but gets a new listingId, and the Inventory API reports only
+# the newest one. lib/sync_actuals.py writes back the listing the order was
+# placed on. Before this rule the two tools overwrote each other on every run,
+# and this file reported "drift" forever (the J.Crew 1995 catalogs, 2026-09-18).
+# A SOLD row whose listing_id is the one an order was placed on keeps that id
+# and its url, under the same condition as status: unless the relist is live.
+# The sold-on listing is where the sale, its fees, and its feedback are recorded.
+#
+# "Live" means ACTIVE, not just an offer in PUBLISHED status. A multi-variation
+# CHOICE listing whose sold variation is down to quantity 0 reads offer
+# PUBLISHED / listing OUT_OF_STOCK (ge-tube-6sn7gtb). Nobody can buy it, so it
+# is not a relist and does not outrank SOLD.
 
 
 def _sold_skus() -> set:
@@ -97,10 +111,27 @@ def _sold_skus() -> set:
         return {r["sku"] for r in csv.DictReader(f) if r.get("sku")}
 
 
-def _protected(row: dict, truth: dict, field: str, sold: set) -> bool:
+def _sold_on() -> set:
+    """(sku, listing_id) pairs an order was actually placed on."""
+    if not SALES.exists():
+        return set()
+    with SALES.open(encoding="utf-8-sig", newline="") as f:
+        return {(r["sku"], (r.get("listing_id") or "").strip())
+                for r in csv.DictReader(f)
+                if r.get("sku") and (r.get("listing_id") or "").strip()}
+
+
+def _live(truth: dict) -> bool:
+    """eBay shows the SKU as buyable right now: the one thing that outranks SOLD."""
+    return (truth["status"] == "PUBLISHED"
+            and (truth.get("listing_status") or "").upper() != "OUT_OF_STOCK")
+
+
+def _protected(row: dict, truth: dict, field: str, sold: set,
+               sold_on: set = frozenset()) -> bool:
     """True when the LOCAL value outranks eBay for this field.
 
-    Exactly one case, and it is narrow on purpose: a SOLD or SHIPPED row —
+    Two cases, both narrow on purpose. First, status on a SOLD or SHIPPED row:
     both post-sale states the Inventory API has no field for — where eBay is
     not showing the listing as live again. See the SOLD note above. SHIPPED
     (tools/pick_list.py --record-tracking) is a step past SOLD, not a
@@ -108,18 +139,30 @@ def _protected(row: dict, truth: dict, field: str, sold: set) -> bool:
     inference (_status_for above) never returns SOLD or SHIPPED, so without
     this a routine `--apply` run silently regresses a shipped order's status
     back to whatever the still-live offer looks like.
+
+    Second, listing_id and url on the same kind of row, when the ledger's
+    listing_id is the one an order in sales_ledger.csv was placed on
+    (`sold_on`). A relist gives the offer a new listingId, and the sold-on
+    listing is still the record of that sale. See the SOLD note above.
+
+    Both cases give way when the SKU is live on eBay again (_live).
     """
-    if field != "status":
+    if field not in ("status", "listing_id", "url"):
         return False
     if (row.get("status") or "").strip() not in ("SOLD", "SHIPPED"):
         return False
+    if _live(truth):
+        return False
+    if field != "status":
+        lid = (row.get("listing_id") or "").strip()
+        return (row["sku"], lid) in sold_on
     # Protected whether or not an order corroborates it. An uncorroborated SOLD
     # is more likely an offline sale the Fulfillment API never saw — the mall
     # case, a direct buyer — than a mistake, and the cost of the two errors is
     # not symmetric: wrongly keeping SOLD is a stale row someone notices, wrongly
     # clearing it silently resurrects a sold item as listable stock. 5da73b50, a
     # $245 14K pendant, sits exactly here. Reported under REVIEW instead.
-    return truth["status"] != "PUBLISHED"  # a relist that is ACTIVE does outrank SOLD/SHIPPED
+    return True
 
 
 def _now() -> str:
@@ -159,11 +202,13 @@ def ebay_truth(verbose: bool = True) -> dict:
             "offer_id": str(off.get("offerId") or ""),
             "listing_id": lid,
             "url": f"https://www.ebay.com/itm/{lid}" if lid else "",
+            "listing_status": (listing.get("listingStatus") or "").upper(),
         }
     return truth
 
 
-def compute_drift(by_sku: dict, truth: dict, sold: set) -> dict:
+def compute_drift(by_sku: dict, truth: dict, sold: set,
+                  sold_on: set = frozenset()) -> dict:
     """Diff the ledger against eBay's truth. No I/O, no printing — a pure function
     so the reconciliation logic can be tested without hitting the API.
 
@@ -183,7 +228,7 @@ def compute_drift(by_sku: dict, truth: dict, sold: set) -> dict:
             continue
         for k in ("status", "price", "offer_id", "listing_id", "url"):
             was, now = (row.get(k) or "").strip(), (t[k] or "").strip()
-            if _protected(row, t, k, sold):
+            if _protected(row, t, k, sold, sold_on):
                 continue
             if was and not now:
                 blanked.append((sku, k, was))     # eBay omits it; keep ours
@@ -200,11 +245,11 @@ def compute_drift(by_sku: dict, truth: dict, sold: set) -> dict:
 
     protected = sum(1 for s, r in by_sku.items()
                     if (r.get("status") or "") == "SOLD" and s in sold
-                    and truth.get(s) and truth[s]["status"] != "PUBLISHED")
+                    and truth.get(s) and not _live(truth[s]))
     orphan = [sku for sku in by_sku if sku not in truth]
     unbacked = sorted(s for s, r in by_sku.items()
                       if (r.get("status") or "") == "SOLD" and s not in sold
-                      and truth.get(s) and truth[s]["status"] != "PUBLISHED")
+                      and truth.get(s) and not _live(truth[s]))
 
     return {"drift": drift, "missing": missing, "orphan": orphan,
             "never_listed": never_listed, "blanked": blanked,
@@ -256,8 +301,8 @@ def main() -> int:
     truth = ebay_truth()
     print()
 
-    sold = _sold_skus()
-    result = compute_drift(by_sku, truth, sold)
+    sold, sold_on = _sold_skus(), _sold_on()
+    result = compute_drift(by_sku, truth, sold, sold_on)
     drift, missing, orphan = result["drift"], result["missing"], result["orphan"]
     never_listed, blanked, unbacked = (result["never_listed"], result["blanked"],
                                        result["unbacked"])
@@ -308,7 +353,7 @@ def main() -> int:
             rows.append(row)
         changed = False
         for k in ("status", "price", "offer_id", "listing_id", "url"):
-            if _protected(row, t, k, sold) or ((row.get(k) or "").strip()
+            if _protected(row, t, k, sold, sold_on) or ((row.get(k) or "").strip()
                                                and not (t[k] or "").strip()):
                 continue
             if (row.get(k) or "").strip() != (t[k] or "").strip():
