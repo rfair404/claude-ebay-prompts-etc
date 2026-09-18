@@ -87,7 +87,8 @@ def test_bucket_label_is_relative_to_root(tmp_path):
 # --------------------------------------------------------------------------
 
 def test_empty_file_parses_to_all_none():
-    assert sr.parse_context("") == {"kind": None, "spend": None, "acquired": None}
+    assert sr.parse_context("") == {"kind": None, "spend": None, "spend_unit": "lot",
+                                     "acquired": None}
 
 
 def test_prose_only_file_does_not_recover_spend_by_pattern_matching():
@@ -96,7 +97,7 @@ def test_prose_only_file_does_not_recover_spend_by_pattern_matching():
     text = ("An estate sale in Social Circle Georgia. Loaded truck twice. "
             "Spend $575 all told, worth every penny.")
     got = sr.parse_context(text)
-    assert got == {"kind": None, "spend": None, "acquired": None}
+    assert got == {"kind": None, "spend": None, "spend_unit": "lot", "acquired": None}
 
 
 def test_keyed_lines_plus_prose_parses_the_keys_and_keeps_the_prose_intact():
@@ -109,7 +110,7 @@ def test_keyed_lines_plus_prose_parses_the_keys_and_keeps_the_prose_intact():
         "Spend $575 all told, worth every penny.\n"
     )
     got = sr.parse_context(text)
-    assert got == {"kind": "event", "spend": 575.0, "acquired": "2026-07"}
+    assert got == {"kind": "event", "spend": 575.0, "spend_unit": "lot", "acquired": "2026-07"}
 
 
 def test_dollar_sign_and_commas_in_spend_are_tolerated():
@@ -120,8 +121,33 @@ def test_unrecognised_kind_value_is_treated_as_unset():
     assert sr.parse_context("kind: garage-sale\n")["kind"] is None
 
 
+# --------------------------------------------------------------------------
+# spend_unit — the #118 schema gap: lot (default) vs item vs pair
+# --------------------------------------------------------------------------
+
+def test_spend_unit_defaults_to_lot_when_absent():
+    # Backward compatible with every real file and every fixture written
+    # before #118 — a bare `spend:` means "the whole lot", same as always.
+    assert sr.parse_context("spend: 575\n")["spend_unit"] == "lot"
+
+
+def test_spend_unit_item_is_read_explicitly():
+    got = sr.parse_context("spend: 8\nspend_unit: item\n")
+    assert got["spend"] == 8.0
+    assert got["spend_unit"] == "item"
+
+
+def test_spend_unit_pair_is_read_explicitly():
+    assert sr.parse_context("spend_unit: pair\n")["spend_unit"] == "pair"
+
+
+def test_unrecognised_spend_unit_value_falls_back_to_lot():
+    assert sr.parse_context("spend_unit: box\n")["spend_unit"] == "lot"
+
+
 def test_load_context_missing_file_is_all_none(tmp_path):
-    assert sr.load_context(tmp_path) == {"kind": None, "spend": None, "acquired": None}
+    assert sr.load_context(tmp_path) == {"kind": None, "spend": None, "spend_unit": "lot",
+                                          "acquired": None}
 
 
 def test_load_context_reads_the_real_file(tmp_path):
@@ -176,6 +202,77 @@ def test_recorded_spend_on_an_event_bucket_is_not_a_gap():
 def test_sell_through_percentage():
     assert sr.sell_through(sold_n=3, live_n=1) == 75.0
     assert sr.sell_through(sold_n=0, live_n=0) is None
+
+
+# --------------------------------------------------------------------------
+# resolve_cost_basis — the #118 spend_unit division: lot / item / pair
+# --------------------------------------------------------------------------
+
+def test_resolve_cost_basis_lot_passes_spend_through_unchanged():
+    # Old single-scalar behaviour, unit_count is irrelevant for a lot.
+    assert sr.resolve_cost_basis(575.0, "lot", unit_count=0) == 575.0
+    assert sr.resolve_cost_basis(575.0, None, unit_count=7) == 575.0
+
+
+def test_resolve_cost_basis_item_multiplies_by_unit_count():
+    assert sr.resolve_cost_basis(8.0, "item", unit_count=12) == pytest.approx(96.0)
+
+
+def test_resolve_cost_basis_pair_multiplies_by_unit_count():
+    assert sr.resolve_cost_basis(15.0, "pair", unit_count=4) == pytest.approx(60.0)
+
+
+def test_resolve_cost_basis_item_with_zero_units_is_zero_not_none():
+    # No items counted yet is zero dollars of resolved basis so far, not an
+    # unknown one — a real, if provisional, number, distinct from "no spend:
+    # key recorded at all" (which stays None).
+    assert sr.resolve_cost_basis(8.0, "item", unit_count=0) == 0.0
+
+
+def test_resolve_cost_basis_missing_spend_is_none_regardless_of_unit():
+    assert sr.resolve_cost_basis(None, "item", unit_count=12) is None
+    assert sr.resolve_cost_basis(None, "lot", unit_count=0) is None
+
+
+def test_resolve_cost_basis_never_goes_negative_on_a_bad_unit_count():
+    assert sr.resolve_cost_basis(8.0, "item", unit_count=-3) == 0.0
+
+
+# --------------------------------------------------------------------------
+# missing_spend_with_sales — the #118 validation check
+# --------------------------------------------------------------------------
+
+def test_missing_spend_with_sales_flags_a_sold_bucket_with_no_cost_basis():
+    rows = [{"key": "FREE", "sold_n": 2, "cost_known": False}]
+    assert sr.missing_spend_with_sales(rows) == ["FREE"]
+
+
+def test_missing_spend_with_sales_does_not_flag_one_that_has_it():
+    rows = [{"key": "ESTATES/SCJ", "sold_n": 1, "cost_known": True}]
+    assert sr.missing_spend_with_sales(rows) == []
+
+
+def test_missing_spend_with_sales_ignores_a_bucket_with_no_sales_yet():
+    # No sales = nothing actionable yet, regardless of cost_known.
+    rows = [{"key": "ESTATES/NEW", "sold_n": 0, "cost_known": False}]
+    assert sr.missing_spend_with_sales(rows) == []
+
+
+def test_missing_spend_with_sales_is_not_limited_to_event_kind():
+    # Unlike is_basis_gap(), this check does not care about `kind` — a
+    # channel bucket that has already sold something still needs a
+    # recorded spend: to keep COST/PROFIT honest, even with no ROI shown.
+    rows = [{"key": "THRIFT", "sold_n": 3, "cost_known": False, "kind": "channel"}]
+    assert sr.missing_spend_with_sales(rows) == ["THRIFT"]
+
+
+def test_missing_spend_with_sales_sorts_and_names_every_flagged_bucket():
+    rows = [
+        {"key": "ZZZ", "sold_n": 1, "cost_known": False},
+        {"key": "AAA", "sold_n": 1, "cost_known": False},
+        {"key": "MMM", "sold_n": 1, "cost_known": True},
+    ]
+    assert sr.missing_spend_with_sales(rows) == ["AAA", "ZZZ"]
 
 
 # --------------------------------------------------------------------------
@@ -297,3 +394,132 @@ def test_render_table_never_shows_missing_basis_as_a_profit_number(fixture_repo)
     by_key = {b["key"]: b for b in d["buckets"]}
     assert by_key["FREE"]["profit"] is None
     assert "basis not recorded" in out or "—" in out
+
+
+def test_gather_needs_spend_flags_the_channel_bucket_that_sold_with_no_basis(fixture_repo):
+    # FREE (channel, no spend:) has a real sale in the fixture — the #118
+    # validation check must name it, unlike the strict event-only `gaps` list.
+    d = sr.gather()
+    assert d["needs_spend"] == ["FREE"]
+    assert "ESTATES/SCJ" not in d["needs_spend"]         # has a recorded spend
+
+
+def test_render_table_surfaces_one_needs_spend_summary_line(fixture_repo):
+    out = sr.render_table(sr.gather())
+    assert "ebz context" in out
+    assert "FREE" in out
+
+
+def test_draw_html_surfaces_the_needs_spend_note(fixture_repo):
+    html_out = sr.draw(sr.gather())
+    assert "ebz context" in html_out
+    assert "FREE" in html_out
+
+
+# --------------------------------------------------------------------------
+# nested buckets, end to end through gather() — not just bucket_for()
+# --------------------------------------------------------------------------
+#
+# The issue's own author made exactly this mistake against live data: an
+# `inventory/`-walker bounded by a shallow max-depth silently rolls a
+# sub-lot's sales up into its PARENT bucket instead of the sub-lot's own
+# context.txt. bucket_for() is unit-tested against this directly
+# (test_a_sub_lot_two_levels_deep_still_resolves_to_the_owning_bucket), but
+# that only proves the resolver is correct in isolation — this fixture runs
+# a sale under a sub-lot THAT HAS ITS OWN context.txt through the full
+# gather() pipeline (sales_ledger.csv -> bucket_for() -> per-bucket rows) to
+# confirm the sub-lot's sale rolls up to the sub-lot, not the parent,
+# end-to-end.
+
+@pytest.fixture
+def nested_fixture_repo(tmp_path, monkeypatch):
+    inv = tmp_path / "inventory"
+    # Parent: FREE, a channel bucket with its own sale.
+    (inv / "FREE" / "misc-item").mkdir(parents=True)
+    (inv / "FREE" / "context.txt").write_text("kind: channel\n")
+    # Sub-lot: FREE/more-mags-444, TWO levels under FREE, with its OWN
+    # context.txt — a real acquisition nested inside an ongoing channel.
+    (inv / "FREE" / "more-mags-444" / "item-1").mkdir(parents=True)
+    (inv / "FREE" / "more-mags-444" / "context.txt").write_text(
+        "kind: event\nspend: 40\n")
+
+    sales = tmp_path / "sales_ledger.csv"
+    rows = [
+        _sale("10", "inventory/FREE/misc-item", gross=12, fee=2, net=10),
+        _sale("11", "inventory/FREE/more-mags-444/item-1", gross=30, fee=4, net=26),
+    ]
+    with sales.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=_SALES_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+    monkeypatch.setattr(sr, "REPO", tmp_path)
+    monkeypatch.setattr(sr, "INVENTORY", inv)
+    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    monkeypatch.setattr(sr._report, "REPO", tmp_path)
+    monkeypatch.setattr(sr._report, "INVENTORY", inv)
+    monkeypatch.setattr(sr._report, "LEDGER", tmp_path / "listings_ledger.csv")
+    return tmp_path
+
+
+def test_gather_rolls_a_nested_sub_lot_sale_up_to_the_sub_lot_not_the_parent(nested_fixture_repo):
+    d = sr.gather()
+    by_key = {b["key"]: b for b in d["buckets"]}
+    assert set(by_key) == {"FREE", "FREE/more-mags-444"}
+
+    # The parent's own sale stays on the parent, untouched by the sub-lot.
+    assert by_key["FREE"]["sold_n"] == 1
+    assert by_key["FREE"]["net"] == pytest.approx(10.0)
+
+    # The sub-lot's sale rolls up to ITSELF, not FREE — the exact mistake
+    # a shallow-max-depth context.txt walk would make against live data.
+    assert by_key["FREE/more-mags-444"]["sold_n"] == 1
+    assert by_key["FREE/more-mags-444"]["net"] == pytest.approx(26.0)
+    assert by_key["FREE/more-mags-444"]["kind"] == "event"
+    assert by_key["FREE/more-mags-444"]["cost_basis"] == pytest.approx(40.0)
+    assert by_key["FREE/more-mags-444"]["roi"] == pytest.approx(26 / 40)
+
+    # Neither bucket's sale total leaks into the other's.
+    assert by_key["FREE"]["net"] != by_key["FREE/more-mags-444"]["net"]
+
+
+# --------------------------------------------------------------------------
+# spend_unit end-to-end through gather() — item/pair rate x unit_count
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def spend_unit_fixture_repo(tmp_path, monkeypatch):
+    inv = tmp_path / "inventory"
+    (inv / "THRIFT" / "item-1").mkdir(parents=True)
+    (inv / "THRIFT" / "item-2").mkdir(parents=True)
+    # $5/item, resolved against however many listings THRIFT has (sold+live+pending).
+    (inv / "THRIFT" / "context.txt").write_text("kind: event\nspend: 5\nspend_unit: item\n")
+
+    sales = tmp_path / "sales_ledger.csv"
+    rows = [
+        _sale("20", "inventory/THRIFT/item-1", gross=20, fee=3, net=17),
+        _sale("21", "inventory/THRIFT/item-2", gross=18, fee=2, net=16),
+    ]
+    with sales.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=_SALES_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+    monkeypatch.setattr(sr, "REPO", tmp_path)
+    monkeypatch.setattr(sr, "INVENTORY", inv)
+    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    monkeypatch.setattr(sr._report, "REPO", tmp_path)
+    monkeypatch.setattr(sr._report, "INVENTORY", inv)
+    monkeypatch.setattr(sr._report, "LEDGER", tmp_path / "listings_ledger.csv")
+    return tmp_path
+
+
+def test_gather_resolves_a_per_item_spend_against_the_buckets_own_unit_count(spend_unit_fixture_repo):
+    d = sr.gather()
+    b = next(x for x in d["buckets"] if x["key"] == "THRIFT")
+    # 2 sold listings, no live/pending -> unit_count 2 -> $5 x 2 = $10 basis.
+    assert b["unit_count"] == 2
+    assert b["cost_basis"] == pytest.approx(10.0)
+    assert b["cost_known"] is True
+    assert b["gap"] is False
+    assert b["roi"] == pytest.approx((17 + 16) / 10)
