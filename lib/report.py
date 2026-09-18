@@ -30,8 +30,16 @@ So this reads BOTH the ledger and every `draft.md` / `draft_group.md` on disk,
 merges them on `ebay_listing_id`, and reports which source each row came from.
 Disk wins on conflict — the draft is what the publisher actually wrote.
 
-Times are stored UTC (`...Z`) and displayed in LOCAL time, because "listed
-today" means the user's today, not UTC's.
+Times are stored UTC (`...Z`) and displayed in PACIFIC TIME — eBay's own
+zone, the one Seller Hub reports, the seller invoice, and the 1099-K all use
+(#122). This used to render in whatever zone the machine running this script
+happened to be set to ("listed today" meant the user's today, not UTC's) —
+but that made a THIRD timezone in play alongside UTC storage and eBay's own
+Pacific truth, and "today" drifting with the operator's machine meant this
+report's day/month buckets could disagree with both the API and with eBay's
+own downloads. `REPORTING_TZ` / `to_report_date()` / `to_report_month()`
+below are the one conversion point: call them wherever a stored UTC
+timestamp becomes a reporting day, never truncate a timestamp by hand.
 """
 
 from __future__ import annotations
@@ -43,10 +51,21 @@ import sys
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parent.parent
 LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
+
+# The single reporting timezone (#122). eBay's Seller Hub reports, the seller
+# invoice, and the 1099-K are all built on this zone — an API read bucketed by
+# UTC (or by whatever zone a workstation happens to be set to) can disagree
+# with eBay's own numbers on order count for a day that straddles midnight.
+# An IANA zone, not a fixed offset: Pacific is PST (UTC-8) roughly Nov-Mar and
+# PDT (UTC-7) roughly Mar-Nov, and `ZoneInfo` gets the two changeover days
+# right where a fixed offset would silently misbucket them.
+REPORTING_TZ = ZoneInfo("America/Los_Angeles")
+REPORTING_TZ_LABEL = "Pacific Time"
 
 
 def _parse_utc(raw: str) -> Optional[datetime]:
@@ -62,8 +81,32 @@ def _parse_utc(raw: str) -> Optional[datetime]:
     return dt
 
 
+def to_report_date(raw: str) -> Optional[date]:
+    """A stored UTC timestamp -> the calendar date it falls on in Pacific
+    time (#122). THE boundary conversion: call this wherever a raw timestamp
+    becomes a day a report groups by, instead of slicing the ISO string or
+    taking `.date()` on a naive/UTC datetime — either of those puts a sale
+    made in the 00:00-07:00 UTC window (17:00-24:00 Pacific the evening
+    before, when people shop) on the wrong side of a month boundary. Storage
+    stays UTC; only the read side converts. Returns None for empty/unparsable
+    input."""
+    dt = _parse_utc(raw)
+    return dt.astimezone(REPORTING_TZ).date() if dt else None
+
+
+def to_report_month(raw: str) -> Optional[str]:
+    """`to_report_date`, truncated to `YYYY-MM` for month bucketing (#122)."""
+    d = to_report_date(raw)
+    return d.strftime("%Y-%m") if d else None
+
+
 def _local(dt: Optional[datetime]) -> Optional[datetime]:
-    return dt.astimezone() if dt else None
+    """Reporting-zone datetime (Pacific), for a caller that needs the
+    time-of-day and not just the bucketed date. Named `_local` for the
+    existing call site's sense of "the user's today" — that today is now
+    Pacific's, matching every other report, rather than the host machine's
+    zone (#122)."""
+    return dt.astimezone(REPORTING_TZ) if dt else None
 
 
 def _yaml_scalar(text: str, key: str) -> str:
@@ -162,15 +205,15 @@ def listed_between(rows: list[dict], start: date, end: date) -> list[dict]:
 
 def report_listed(rows: list[dict], start: date, end: date, *, verbose=False) -> str:
     hits = listed_between(rows, start, end)
-    label = ("today" if start == end == date.today()
+    label = ("today" if start == end == datetime.now(REPORTING_TZ).date()
              else f"{start.isoformat()}" if start == end
              else f"{start.isoformat()} .. {end.isoformat()}")
     if not hits:
-        return f"No items listed {label}."
+        return f"No items listed {label} ({REPORTING_TZ_LABEL})."
 
     total = sum(_money(r["price"]) for r in hits)
-    lines = [f"LISTED {label} — {len(hits)} item(s), ${total:,.2f} total ask",
-             ""]
+    lines = [f"LISTED {label} ({REPORTING_TZ_LABEL}) — {len(hits)} item(s), "
+             f"${total:,.2f} total ask", ""]
     w = max(len(r["title"][:52]) for r in hits)
     for r in hits:
         flag = " [GROUP]" if r.get("group") else ""
@@ -262,7 +305,10 @@ def categorize(title: str) -> str:
 def load_sales(days: Optional[int] = None) -> list[dict]:
     if not SALES.exists():
         return []
-    cutoff = (date.today() - timedelta(days=days)) if days else None
+    # "Today" for a --days window is Pacific's today (#122), matching the
+    # Pacific calendar day sold_at is now bucketed into — a host running in a
+    # different zone must not shift which sales fall inside the window.
+    cutoff = (datetime.now(REPORTING_TZ).date() - timedelta(days=days)) if days else None
     out = []
     with SALES.open(encoding="utf-8", newline="") as fh:
         for r in csv.DictReader(fh):
@@ -303,7 +349,8 @@ def report_performance(sales: list[dict], rows: list[dict], *, label: str = "") 
     # gross can legitimately be 0 (a fully-refunded window, a $0 replacement
     # order), and crashing on the headline would hide the rest of the report.
     fee_pct = f"{fees / gross * 100:.1f}%" if gross else "n/a"
-    out = [f"PERFORMANCE — {len(sales)} sold line item(s){label}", "",
+    out = [f"PERFORMANCE — {len(sales)} sold line item(s){label} "
+           f"(dates in {REPORTING_TZ_LABEL})", "",
            f"  gross ${gross:,.2f}   eBay fees ${fees:,.2f} ({fee_pct})   "
            f"net before postage ${net:,.2f}", ""]
 
@@ -342,9 +389,13 @@ def report_performance(sales: list[dict], rows: list[dict], *, label: str = "") 
     aged = []
     for r in sales:
         lr = byid.get(r.get("sku"))
-        pub = _parse_utc((lr or {}).get("published_at", ""))
+        # `to_report_date`, not `_parse_utc(...).date()`: `_sold` is already a
+        # Pacific calendar day (from sold_at, now Pacific-bucketed at write
+        # time — #122), so the publish side has to land on the same calendar
+        # to keep "days to sell" from picking up a spurious +/-1 near midnight.
+        pub = to_report_date((lr or {}).get("published_at", ""))
         if pub:
-            d = (r["_sold"] - pub.date()).days
+            d = (r["_sold"] - pub).days
             if d >= 0:
                 aged.append((d, r))
     if aged:
@@ -440,7 +491,7 @@ def _cli() -> None:
                     help="Show listing URLs and shoot paths.")
     args = ap.parse_args()
 
-    today = date.today()
+    today = datetime.now(REPORTING_TZ).date()
     if args.yesterday:
         start = end = today - timedelta(days=1)
     elif args.days:

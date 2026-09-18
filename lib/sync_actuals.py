@@ -49,6 +49,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ebay_client import api_send  # noqa: E402
+from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 SALES_LEDGER = REPO / "sales_ledger.csv"
@@ -111,6 +112,16 @@ def _norm(s: str) -> str:
 # source 1 — orders (the actuals)
 # --------------------------------------------------------------------------- #
 def _fetch_orders_window(days: int, verbose: bool) -> list[dict]:
+    # This cutoff is a rolling fetch WINDOW ("give me roughly the last N
+    # days"), not a reporting BOUNDARY — it decides how far back to ask eBay
+    # for orders, not which calendar day/month a fetched order is counted
+    # into. That bucketing happens once, correctly, in flatten_orders() below
+    # via to_report_date() (#122). Computing the cutoff in UTC vs Pacific
+    # shifts it by at most the 7-8h zone offset out of N*24h — immaterial for
+    # a "days" arg that already defaults to 90 and is commonly run as 180/365/
+    # 730 — and eBay's own `creationdate` filter is itself expressed in UTC,
+    # so a UTC cutoff is also the natural unit to hand the API. Left in UTC
+    # deliberately; see the PR description for the full reasoning.
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     orders: list[dict] = []
     offset, limit = 0, 200
@@ -225,9 +236,20 @@ def flatten_orders(orders: list[dict]) -> tuple[list[dict], dict]:
             # nets out refunds and fee credits, so prefer it over our arithmetic.
             net = ((due * share).quantize(Decimal("0.01")) if has_due
                    else gross - refund_share - fee)
+            # `sold_at` is the reporting day this sale is bucketed into, so it
+            # is derived in the reporting timezone (Pacific, #122) rather than
+            # by slicing the first 10 chars of the UTC `creationDate` — that
+            # naive truncation put a sale made in the 00:00-07:00 UTC window
+            # (17:00-24:00 Pacific the evening before) on the wrong side of a
+            # month boundary, which is exactly the discrepancy #122 reports
+            # against eBay's own downloads. This changes only how NEW rows
+            # are written going forward; nothing already in sales_ledger.csv
+            # is touched or re-derived by this change.
+            creation = o.get("creationDate") or ""
+            sold_date = to_report_date(creation)
             rows.append({
                 "order_id": o.get("orderId", ""),
-                "sold_at": (o.get("creationDate") or "")[:10],
+                "sold_at": sold_date.isoformat() if sold_date else creation[:10],
                 "listing_id": li.get("legacyItemId", ""),
                 "sku": li.get("sku") or "",
                 "title": li.get("title", ""),
@@ -409,7 +431,7 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
 
-    print(f"\n=== ACTUALS — {len(rows)} sold line item(s)")
+    print(f"\n=== ACTUALS — {len(rows)} sold line item(s)  (sold_at dates in {REPORTING_TZ_LABEL})")
     print(f"  gross ${_money(gross)}  ·  eBay fees ${_money(fees)} "
           f"({(fees / gross * 100) if gross else 0:.1f}%)  ·  "
           f"net before postage ${_money(net)}")
@@ -496,7 +518,8 @@ def main() -> int:
         print(STORE_JS)
         return 0
 
-    print(f"Fetching orders (last {args.days} days)…")
+    print(f"Fetching orders (last {args.days} days, UTC fetch window; "
+          f"sold_at is bucketed in {REPORTING_TZ_LABEL})…")
     rows, excluded = flatten_orders(fetch_orders(args.days))
     drafts = scan_drafts()
     ledger = load_listings_ledger()

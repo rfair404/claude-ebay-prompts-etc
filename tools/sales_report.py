@@ -55,6 +55,8 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling tools
 
+from report import REPORTING_TZ, REPORTING_TZ_LABEL  # noqa: E402
+
 REPORTS = REPO / "reports"
 ADS_JSON = REPORTS / "ebay_ads.json"
 OUT_HTML = REPORTS / "sales_dashboard.html"
@@ -195,6 +197,12 @@ def gather(days: int) -> dict:
 
     rows = []
     for r in sales:
+        # sold_at is written by sync_actuals.py already bucketed into a
+        # Pacific calendar day (#122) — a bare "YYYY-MM-DD", not a raw UTC
+        # instant. _date() tags it UTC purely because that's its fallback for
+        # an offset-less string; do NOT re-run it through a UTC->Pacific
+        # conversion downstream (to_report_date() et al) or the already-
+        # correct day gets shifted a second time.
         sold = _date(r.get("sold_at", ""))
         pub = published.get(r.get("listing_id", ""))
         rows.append({
@@ -230,7 +238,8 @@ def gather(days: int) -> dict:
     out["tracked"] = sum(1 for r in rows if r["shoot"])
     out["untracked"] = out["count"] - out["tracked"]
 
-    # by month
+    # by month — sold_at is already a Pacific day (#122), so grouping by its
+    # own "YYYY-MM" prefix (no further conversion) is the correct boundary.
     months = defaultdict(lambda: {"n": 0, "gross": 0.0})
     for r in rows:
         if r["sold_at"]:
@@ -452,13 +461,16 @@ def _itm(lid: str, text: str) -> str:
 
 def draw(d: dict) -> str:
     P = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Pacific throughout (#122): the built-at stamp, and every date this page
+    # buckets by, share one clock — eBay's own Seller Hub/invoice/1099-K zone.
+    now = datetime.now(REPORTING_TZ).strftime("%Y-%m-%d %H:%M")
     pulled = d["ads"].get("pulled_at") or "never"
 
     P.append(f'<div class="card"><div class="hdr">'
              f'<p class="eyebrow">ebaybiz · sales</p><h1>Sales &amp; promotion dashboard</h1>'
-             f'<div class="ct">built {_e(now)} local · order window {d["days"]} days · '
-             f'ads pulled {_e(pulled)}</div></div>'
+             f'<div class="ct">built {_e(now)} {_e(REPORTING_TZ_LABEL)} · '
+             f'order window {d["days"]} days (UTC fetch; dates shown in '
+             f'{_e(REPORTING_TZ_LABEL)}) · ads pulled {_e(pulled)}</div></div>'
              f'<div class="stats">'
              + _stat(_money(d["gross"]), "gross realised", f'{d["count"]} sold line items')
              + _stat(_money(d["fee"]), "eBay fees", f'{d["fee_pct"]:.1f}% of gross')
@@ -492,7 +504,9 @@ def draw(d: dict) -> str:
             f'<div class="fill" style="height:{m[1]["gross"] / top * 100:.1f}%"></div>'
             f'<div class="cap">{_e(m[0][2:])}</div></div>'
             for m in d["months"])
-        P.append(f'<div class="card"><div class="pad"><h2>Gross by month</h2>'
+        P.append(f'<div class="card"><div class="pad"><h2>Gross by month '
+                 f'<span class="dim" style="text-transform:none;letter-spacing:0;'
+                 f'font-weight:400">({_e(REPORTING_TZ_LABEL)})</span></h2>'
                  f'<div class="bars">{bars}</div></div></div>')
 
     # promoted listings
