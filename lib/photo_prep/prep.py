@@ -1061,9 +1061,20 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     # planned there, and the colour pass needs the same mask.
     sm = mask_for(img, smode)
     img, sm = _unskewed(img, sm, sk)
+    # What the colour pass must NOT touch. For flat printed goods that is
+    # the whole sheet, not the ink the detector found on it — see
+    # subject.sheet_mask for the frames this shipped damaged. Geometry is
+    # unaffected: the crop box was planned from sm.bbox either way.
+    #
+    # Derived from whichever `sm` is current, never cached across the crop:
+    # `_cropped` re-describes the mask in cropped coordinates, and a sheet
+    # mask built before the crop is the wrong SHAPE after it (the first cut
+    # of this raised IndexError deep in color._at_rails).
+    def _color_mask(s):
+        return subjectmod.sheet_mask(s) if smode == "paper" else s.mask
     # Judged before the crop — a tight crop keeps too little backdrop to
     # tell a sweep from a textured surface (see color._backdrop_lut).
-    pre_stats = colormod.analyze(img, sm.mask)
+    pre_stats = colormod.analyze(img, _color_mask(sm))
     # The check pass already reconciled this frame's backdrop against the
     # rest of the shoot; honour that rather than re-deciding it alone.
     cp = rec.get("color_plan") or {}
@@ -1078,6 +1089,7 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     rec["crop"] = crop
     if crop["applied"]:
         img, sm = _cropped(img, sm, crop["box"])
+    color_mask = _color_mask(sm)
 
     # Every preset renders from the SAME mask and crop. Segmentation is the
     # expensive step by a wide margin, so offering three looks costs barely
@@ -1086,12 +1098,12 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     # How warm the item itself is, off the same mask the colour pass uses.
     # Cheap (a statistic on a 1000px copy) and it decides which look the
     # shoot defaults to — see color.WARM_SUBJECT_MIN_RB.
-    rec["subject_warmth"] = colormod.subject_warmth(img, sm.mask)
+    rec["subject_warmth"] = colormod.subject_warmth(img, color_mask)
 
     rec["presets"] = {}
     variants = {}
     for pname in (only or colormod.PRESETS):
-        rendered, creport = colormod.correct(img, sm.mask, sweep=sweep,
+        rendered, creport = colormod.correct(img, color_mask, sweep=sweep,
                                              bg_class=eff_class, preset=pname)
         p_dir = shoot / ".prep" / "presets" / pname
         p_dir.mkdir(parents=True, exist_ok=True)

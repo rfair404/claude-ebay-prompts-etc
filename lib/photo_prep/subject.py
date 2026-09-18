@@ -244,3 +244,39 @@ def mask_for(bgr: np.ndarray, mode: str = "auto") -> SubjectMask:
         border_fg=float((mask[ring] > 0).mean()),
         alt_bbox=alt_bbox,
     )
+
+
+def sheet_mask(sm) -> "np.ndarray":
+    """The whole SHEET as the protected region — flat printed goods only.
+
+    The contrast detectors find INK, not paper. On a catalog cover the mask
+    comes back holding the dark photo printed in the layout and nothing else:
+    measured on the more-mags-444 shoot, `ANMP0008` masked 11% of the frame
+    when the cover itself is 30%, `ANMP0011` 16% against 50%. Everything the
+    mask missed — the title, the logo, the pale half of the spread, the white
+    margins — is handed to the backdrop pass, which neutralises and blurs it.
+    The frames shipped with "DESTINATION" and "LEGENDS IN" smeared off the
+    page while the one dark figure stayed sharp, and nothing flagged it: the
+    colour pass's own self-check asks whether ITEM pixels moved, and by this
+    mask those pixels were never item.
+
+    A sheet is convex and rectangular, so its bounding box IS the sheet. That
+    is the whole argument for using the box here and it is why this is gated to
+    the `paper` detector: for a ring, a bracelet or anything else with real
+    concavity the box would swallow backdrop that legitimately wants cleaning.
+
+    Deliberately NOT the convex hull of the mask, which was tried first: the
+    hull is computed over every foreground component, the border clutter strip
+    at the bottom of the sweep included (see `center_crop._is_border_sliver` —
+    that filter runs on the crop geometry, not on this mask), so it spanned
+    from the page to the bottom-right corner of the frame. `bbox` comes from
+    `_pick_blob`, which does apply the filter.
+
+    The failure direction is right: a sheet lying at an angle leaves triangles
+    of sweep inside its box unblurred. That is a backdrop left slightly less
+    tidy, against the alternative of a title blurred off the merchandise.
+    """
+    x, y, w, h = sm.bbox
+    out = np.zeros(sm.mask.shape[:2], dtype=sm.mask.dtype)
+    out[y:y + h, x:x + w] = 255 if out.dtype != bool else True
+    return out
