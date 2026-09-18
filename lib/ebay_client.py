@@ -128,6 +128,13 @@ USER_SCOPES_SELL = [
     # (--user-consent-url / --exchange-code below) with this scope included.
     "https://api.ebay.com/oauth/api_scope/sell.finances",
 ]
+# The scopes every refresh_token issued before #119 already carries. A refresh
+# may only ask for a SUBSET of what the token was granted, and eBay answers a
+# superset with `invalid_scope` for the WHOLE refresh — so asking for
+# sell.finances on an old token did not just fail the finances calls, it broke
+# every Sell-API call (2026-09-18, right after #126 merged). The refresh falls
+# back to this set on `invalid_scope`; see get_user_access_token.
+USER_SCOPES_SELL_CORE = [s for s in USER_SCOPES_SELL if not s.endswith("/sell.finances")]
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +410,26 @@ class _UserTokenCache:
 
 
 _user_cache = _UserTokenCache()
+_user_scopes = USER_SCOPES_SELL   # narrowed to USER_SCOPES_SELL_CORE on invalid_scope
+
+
+def _refresh_user_token(creds: EbayCredentials, scopes: list[str]) -> dict:
+    """POST the refresh_token grant for `scopes`. Raises urllib's errors as-is."""
+    basic = base64.b64encode(f"{creds.app_id}:{creds.cert_id}".encode("utf-8")).decode("ascii")
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": creds.user_refresh_token,
+        "scope": " ".join(scopes),
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        creds.env["token_url"], data=body, method="POST",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def get_user_access_token(creds: Optional[EbayCredentials] = None,
@@ -430,24 +457,19 @@ def get_user_access_token(creds: Optional[EbayCredentials] = None,
     if not force_refresh and _user_cache.token and _user_cache.expires_at - 60 > now:
         return _user_cache.token
 
-    basic = base64.b64encode(f"{creds.app_id}:{creds.cert_id}".encode("utf-8")).decode("ascii")
-    body = urllib.parse.urlencode({
-        "grant_type": "refresh_token",
-        "refresh_token": creds.user_refresh_token,
-        "scope": " ".join(USER_SCOPES_SELL),
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        creds.env["token_url"], data=body, method="POST",
-        headers={
-            "Authorization": f"Basic {basic}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
+    # Ask for the full set first; a token consented before sell.finances was
+    # added answers invalid_scope, and then the core set still works. The
+    # finances reader then gets its own 401/403, which it already degrades on.
+    # Remembered per process so an old token costs one extra call, not one per
+    # refresh.
+    global _user_scopes
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+        payload = _refresh_user_token(creds, _user_scopes)
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
+        if "invalid_scope" in body_text and _user_scopes != USER_SCOPES_SELL_CORE:
+            _user_scopes = USER_SCOPES_SELL_CORE
+            return get_user_access_token(creds, force_refresh=True)
         raise EbayAuthError(
             f"Refreshing user token failed (HTTP {e.code}):\n  {body_text}\n"
             "  The refresh_token may be expired (~18 month lifetime) or scoped wrong; re-capture it."
