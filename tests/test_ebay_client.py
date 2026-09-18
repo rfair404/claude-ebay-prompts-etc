@@ -370,3 +370,27 @@ def test_user_token_invalid_scope_on_core_set_still_raises():
         assert len(fake.requests) == 2      # full set, then core set, then stop
 
     _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# Host routing: the Finances API lives on apiz.* (CREDS here is sandbox).
+# ---------------------------------------------------------------------------
+
+def test_finances_paths_go_to_the_apiz_host():
+    fake = _Fake(_token_response("tok-user"), _FakeResponse({"total": 1}))
+
+    def go():
+        ebay_client.api_send("GET", "/sell/finances/v1/transaction?limit=1", creds=CREDS)
+        assert fake.requests[-1].full_url.startswith("https://apiz.sandbox.ebay.com/sell/finances/")
+
+    _patched(fake, go)
+
+
+def test_other_sell_paths_stay_on_the_api_host():
+    fake = _Fake(_token_response("tok-user"), _FakeResponse({"total": 1}))
+
+    def go():
+        ebay_client.api_send("GET", "/sell/fulfillment/v1/order?limit=1", creds=CREDS)
+        assert fake.requests[-1].full_url.startswith("https://api.sandbox.ebay.com/sell/fulfillment/")
+
+    _patched(fake, go)
