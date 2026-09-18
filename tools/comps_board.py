@@ -60,14 +60,19 @@ def main():
             badge += f'<span class="badge drop">excluded · {esc(drops[c["item_id"]])}</span>'
         bo = '<span class="bo">Best Offer accepted — soft ceiling</span>' if c.get("bo_accepted") else ""
         ship = c.get("shipping_cost")
-        shiptxt = "free ship" if ship == 0 else f"+${ship:.2f} ship"
+        if ship is None:
+            shiptxt = "shipping not stated"
+        elif ship == 0:
+            shiptxt = "free ship"
+        else:
+            shiptxt = f"+${ship:.2f} ship"
         cls = ' class="dropped"' if c["item_id"] in drops else ""
         rows.append(f"""<tr{cls}>
   <td class="th">{img}</td>
   <td class="ti"><a href="{esc(c['url'])}" target="_blank" rel="noopener">{esc(c['title'])}</a>
       <div class="meta">sold {esc(c.get('sold_date'))} · {esc(c.get('listing_type'))} ·
       seller {esc(c.get('seller_username'))} ({c.get('seller_feedback_score')})</div>{badge}{bo}</td>
-  <td class="pr"><b>${c['total_price']:.2f}</b><div class="meta">${c['sold_price']:.2f} {shiptxt}</div></td>
+  <td class="pr"><b>${(c['total_price'] if c.get('total_price') is not None else c['sold_price']):.2f}</b><div class="meta">${c['sold_price']:.2f} {shiptxt}</div></td>
 </tr>""")
 
     html = f"""<!doctype html><meta charset="utf-8">

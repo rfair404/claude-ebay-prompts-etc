@@ -46,8 +46,12 @@ def _sku_from_draft(shoot: Path) -> str:
     return m.group(1) if m else ""
 
 
-def _ledger_row(sku: str) -> Optional[dict]:
-    if not sku or not LEDGER.exists():
+def _ledger_row(sku: str, ledger_by_sku: Optional[dict] = None) -> Optional[dict]:
+    if not sku:
+        return None
+    if ledger_by_sku is not None:
+        return ledger_by_sku.get(sku)
+    if not LEDGER.exists():
         return None
     with LEDGER.open(encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
@@ -56,11 +60,17 @@ def _ledger_row(sku: str) -> Optional[dict]:
     return None
 
 
-def gather(shoot: Path) -> dict:
+def gather(shoot: Path, ledger_by_sku: Optional[dict] = None) -> dict:
     """The whole state of one shoot dir, one read pass. Each stage's
     'pending' list is empty iff that stage is fully done — STAGE_CHECK
     itself is the single source of truth for that (unwritten file, an
-    interactive gate's own HARD stop, everything)."""
+    interactive gate's own HARD stop, everything).
+
+    `ledger_by_sku` lets a caller looking at many shoots in one run (e.g.
+    the dashboard's backlog view) preload `listings_ledger.csv` once —
+    `{sku: row}` — instead of this function re-scanning the whole file per
+    shoot. Omitted (the default), it reads the file itself exactly as
+    before; every existing single-shoot caller is unaffected."""
     stages: dict = {}
     next_action = None
     for stage in STAGE_ORDER:
@@ -77,7 +87,7 @@ def gather(shoot: Path) -> dict:
             next_action = f"{stage}: {pending[0]}"
 
     sku = _sku_from_draft(shoot)
-    ledger = _ledger_row(sku)
+    ledger = _ledger_row(sku, ledger_by_sku)
 
     return {
         "shoot": str(shoot),

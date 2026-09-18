@@ -19,6 +19,7 @@ download needed — the colour tests pass an explicit mask.
 Run:  python tests/test_prep.py
   or: pytest tests/test_prep.py
 """
+import argparse
 import contextlib
 import copy
 import json
@@ -2196,3 +2197,195 @@ def test_resume_catches_a_changed_source_even_under_the_empty_only_sentinel():
             "when `only` is the empty 'render everything' sentinel -- a "
             "resumability check against the bare empty tuple would have "
             "skipped this frame unconditionally")
+
+
+# ---------------------------------------------------------------------------
+# --jobs N (#74 item 3, docs/prep-resume-plan.md, the "--jobs N" section)
+# ---------------------------------------------------------------------------
+
+def test_positive_int_rejects_non_positive_and_non_integer_jobs():
+    """The CLI's own `--jobs` type= -- fails at the command line, in
+    argparse's own words, rather than deep inside a render."""
+    for bad in ("0", "-3", "abc", "2.5"):
+        try:
+            P._positive_int(bad)
+            raise AssertionError(f"--jobs {bad!r} must be refused")
+        except argparse.ArgumentTypeError:
+            pass
+    assert P._positive_int("4") == 4
+
+
+def test_run_apply_rejects_a_non_positive_or_non_int_jobs():
+    """The same validation at the `run_apply()` boundary, for callers that
+    skip the CLI entirely (docs/prep-resume-plan.md: '--jobs N ... validate
+    N is a positive int'). `True`/`False` are rejected too even though
+    `bool` is technically an `int` subclass -- accepting `jobs=True` as 1
+    would be an accident waiting to be relied on."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        for bad in (0, -1, "4", 2.5, True, False):
+            try:
+                P.run_apply(shoot, quiet=True, jobs=bad)
+                raise AssertionError(f"jobs={bad!r} must be refused")
+            except ValueError:
+                pass
+
+
+def test_omitting_jobs_defaults_to_serial_in_manifest_order():
+    """`jobs` defaults to 1: serial, in manifest order, identical to the
+    behaviour before --jobs existed."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        rendered = []
+        orig_save_bgr = P._save_bgr
+
+        def spy_save_bgr(path, bgr, quality=94):
+            rendered.append(Path(path).stem)
+            return orig_save_bgr(path, bgr, quality=quality)
+
+        with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+            P.run_apply(shoot, quiet=True)          # jobs defaults to 1
+
+        assert sorted(rendered) == ["IMG_0", "IMG_1"]
+
+
+def test_jobs_n_renders_the_same_presets_as_serial():
+    """The unit of parallelism is a whole FRAME, not a preset (the design
+    doc is explicit: splitting one frame's presets across workers would
+    duplicate the shared segmentation step and race two workers over the
+    same crop decision). Proven here the way it matters: render an identical
+    shoot under --jobs 1 and --jobs 3 and every preset file must come out
+    byte-for-byte the same, showing both modes call the exact same
+    `_render_frame`."""
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        serial = _shoot(base / "serial", n=3)
+        parallel = _shoot(base / "parallel", n=3)
+        for shoot in (serial, parallel):
+            P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+            P.run_approve_auto(shoot)
+
+        P.run_apply(serial, quiet=True, jobs=1)
+        P.run_apply(parallel, quiet=True, jobs=3)
+
+        m1 = P.load_manifest(serial)
+        m2 = P.load_manifest(parallel)
+        assert set(m1["photos"]) == set(m2["photos"])
+        for name, rec1 in m1["photos"].items():
+            rec2 = m2["photos"][name]
+            for pname in rec1["presets"]:
+                b1 = (serial / rec1["presets"][pname]["path"]).read_bytes()
+                b2 = (parallel / rec2["presets"][pname]["path"]).read_bytes()
+                assert b1 == b2, (
+                    f"{name}/{pname}: --jobs 3 must render byte-identical "
+                    f"output to --jobs 1")
+
+
+def test_jobs_n_checkpoints_the_manifest_after_each_completed_frame():
+    """The --jobs N analogue of
+    test_apply_checkpoints_the_manifest_after_each_frame_not_just_at_the_end:
+    a pool completing frames out of order must still leave a manifest with
+    SOME but not all frames done at some point along the way, not a single
+    jump from 0 to N (docs/prep-resume-plan.md item 2, extended to the pool
+    path)."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=3)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+
+        snapshots = []
+        real_save = P.save_manifest
+
+        def spy(shoot_arg, m, force=False):
+            snapshots.append(copy.deepcopy(
+                {k: v for k, v in m.items() if k != P.READ_FINGERPRINT}))
+            return real_save(shoot_arg, m, force=force)
+
+        with patch.object(P, "save_manifest", side_effect=spy):
+            P.run_apply(shoot, quiet=True, jobs=3)
+
+        assert len(snapshots) >= 3, (
+            f"expected at least one checkpoint per frame, got {len(snapshots)}")
+        rendered_counts = [
+            sum(1 for r in snap["photos"].values() if r.get("presets"))
+            for snap in snapshots
+        ]
+        assert rendered_counts[0] < rendered_counts[-1], rendered_counts
+        assert any(0 < c < 3 for c in rendered_counts), (
+            f"a checkpoint must exist with SOME but not all frames done "
+            f"(saw {rendered_counts}) -- otherwise nothing was incremental")
+
+
+def test_jobs_n_composes_with_resume():
+    """A --jobs N run over an already-fully-rendered, unchanged shoot must
+    not dispatch a single frame to the pool -- --resume's staleness check
+    runs BEFORE a frame is ever queued as a pool task (docs/prep-resume-plan.md,
+    the --jobs N section: '--resume is honoured first ... a resumed frame
+    never occupies a worker slot at all')."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=2)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+
+        rendered = []
+        orig_save_bgr = P._save_bgr
+
+        def spy_save_bgr(path, bgr, quality=94):
+            rendered.append(Path(path).stem)
+            return orig_save_bgr(path, bgr, quality=quality)
+
+        with patch.object(P, "_save_bgr", side_effect=spy_save_bgr):
+            P.run_apply(shoot, quiet=True, resume=True, jobs=4)
+
+        assert rendered == [], (
+            f"a fully-resumable shoot must dispatch nothing to the pool "
+            f"under --jobs N, got {rendered}")
+
+
+def test_jobs_n_isolates_a_bad_frame_and_keeps_rendering_the_rest():
+    """Design doc's 'per-frame exception isolation': a source corrupted
+    between --check and --apply must not sink every other frame's future
+    already queued in the pool.
+
+    The shoot-wide auto-pick step at the end of run_apply still raises for
+    the errored frame's missing preset -- exactly as it already does today
+    for a plain MISSING source (proven separately: `run_apply` on a shoot
+    with a deleted source raises the identical SystemExit even at the
+    default `--jobs 1`) -- so that part is a pre-existing gap, not something
+    this test is about. What --jobs N's own contract promises, and what this
+    checks, is that the OTHER frames still render and get checkpointed
+    before that later, unrelated crash."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=3)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        (shoot / "IMG_1.jpg").write_bytes(b"not a jpeg")
+
+        try:
+            P.run_apply(shoot, quiet=True, jobs=2)
+            raise AssertionError(
+                "expected the pre-existing missing-preset SystemExit from "
+                "the final auto-pick step")
+        except SystemExit:
+            pass
+
+        m = P.load_manifest(shoot)
+        assert m["photos"]["IMG_1.jpg"]["status"] == "ERROR"
+        assert m["photos"]["IMG_0.jpg"].get("presets", {}).get("crisp")
+        assert m["photos"]["IMG_2.jpg"].get("presets", {}).get("crisp")
+
+
+def test_apply_run_records_the_jobs_value():
+    """`apply_run.jobs` per docs/prep-resume-plan.md's own documented
+    schema -- informational only (never part of `settings_hash`: `--jobs` is
+    a performance knob, not a statement about what should be rendered)."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot = _shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True, jobs=1)
+        assert P.load_manifest(shoot)["apply_run"]["jobs"] == 1
