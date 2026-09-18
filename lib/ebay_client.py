@@ -118,6 +118,15 @@ USER_SCOPES_SELL = [
     "https://api.ebay.com/oauth/api_scope/sell.account",
     "https://api.ebay.com/oauth/api_scope/sell.marketing",
     "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+    # sell.finances — /sell/finances/v1/transaction (#119, route B): the only
+    # read that carries promoted-listing fee line items and actual postage
+    # (SHIPPING_LABEL transactions), neither of which the Fulfillment API's
+    # order payload ever contains. Adding this scope here changes what the
+    # NEXT consent screen asks for; it grants nothing by itself — every
+    # /sell/finances/v1/* call fails (401/403) against an already-issued
+    # refresh_token until the account owner re-runs the consent flow
+    # (--user-consent-url / --exchange-code below) with this scope included.
+    "https://api.ebay.com/oauth/api_scope/sell.finances",
 ]
 
 
