@@ -48,6 +48,17 @@ sales_ledger.csv
 
 # Any dated backup of the above (e.g. listings_ledger.backup-20260815.csv).
 *.backup-*.csv
+# ...and the ad-hoc ones sessions make by hand before a risky rewrite
+# (listings_ledger.csv.bak, .bak-20260831-115855, .bak-checkers-20260901,
+# .scratch_ledger_backup_20260918_necklaces.csv).
+*.csv.bak
+*.csv.bak-*
+.scratch_*
+
+# Shelf/bin for items listed by hand on eBay (no shoot folder to name), read
+# by lib/sync_actuals.load_hand_locations() for the pick sheet. Kept locally
+# with the ledgers it annotates. Columns: listing_id (or sku),location,note.
+hand_listed_locations.csv
 *_ledger.backup*.csv
 
 # tools/ledger_reconcile.py detail dump — SKU, price, title, url for flagged rows.
