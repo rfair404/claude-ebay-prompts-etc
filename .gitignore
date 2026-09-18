@@ -11,6 +11,14 @@
 #
 # When adding a rule, say which class it belongs to. When in doubt about a file
 # that contains numbers from real sales: it is business data, exclude it.
+#
+# THESE RULES ARE FORWARD-LOOKING ONLY. Untracking a path (`git rm --cached`)
+# stops it appearing in new commits; it does not remove the blob from history.
+# Anything ever committed here — including paths later added to this file —
+# remains fetchable from this public repo at its old commit SHAs. See #104 for
+# what that currently includes and the decision on whether/how to address it.
+# A path listed below with "kept on disk, not tracked" describes today's HEAD,
+# not a guarantee about history.
 
 # ---------------------------------------------------------------- 1. SECRETS
 # Live config holds API tokens — never commit. Use lib/config.example.yaml
@@ -142,6 +150,8 @@ desktop.ini
 # live pipeline read it, and the local copy still carries real listing drafts,
 # prices, eBay draft ids and the seller ZIP. The whole directory stays ignored
 # so an operator's local archive can never be re-added to a public repo.
+# Untracking did NOT scrub history: this content is still present in commits
+# before 2026-08-31 and fetchable by anyone with a clone. See #104.
 /deprecated/
 
 # PREP batch working files — the queue, its log, and the candidate scan. Derived
@@ -196,7 +206,9 @@ desktop.ini
 
 # Business formation checklist — entity names, what has and has not been filed,
 # the counties being worked. Not pipeline, and this repo is public; untracked
-# 2026-08-31 (#99) and kept on disk. Same class as /formation/.
+# 2026-08-31 (#99) and kept on disk. Same class as /formation/. It was tracked
+# from this repo's initial commit until then, so it remains in history and
+# fetchable from old commit SHAs — untracking did not remove it. See #104.
 /todo.md
 
 # local working backups (ledger/sales/config) — never committed
