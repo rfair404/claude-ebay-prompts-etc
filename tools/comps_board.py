@@ -60,7 +60,12 @@ def main():
             badge += f'<span class="badge drop">excluded · {esc(drops[c["item_id"]])}</span>'
         bo = '<span class="bo">Best Offer accepted — soft ceiling</span>' if c.get("bo_accepted") else ""
         ship = c.get("shipping_cost")
-        shiptxt = "free ship" if ship == 0 else f"+${ship:.2f} ship"
+        if ship is None:
+            shiptxt = "ship unknown"      # item-only price; never render it as free
+        elif ship == 0:
+            shiptxt = "free ship"
+        else:
+            shiptxt = f"+${ship:.2f} ship"
         cls = ' class="dropped"' if c["item_id"] in drops else ""
         rows.append(f"""<tr{cls}>
   <td class="th">{img}</td>
