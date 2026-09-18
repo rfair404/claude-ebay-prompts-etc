@@ -148,7 +148,44 @@ def _subject_mask(bgr):
     return mask
 
 
-def _pick_blob(mask):
+def _is_border_sliver(comp, W, H, max_area):
+    """Is this component the studio, rather than a piece of the goods?
+
+    The three drop rules above are all about AREA — a blob spanning the frame,
+    or hugging a border while covering 40%+ of it. None of them catch the shape
+    that actually breaks flat-goods shoots: a wide, thin strip lying along the
+    bottom edge, where the sweep runs out and the table, the floor or whatever
+    is behind it shows. Measured on the more-mags-444 catalogs, every affected
+    frame had one:
+
+        ANMP0001  (2310,5340) 5690x660   8.6:1   17% of the largest piece
+        ANMP0002  (2550,5588) 5450x412  13.2:1    8%
+        ANMP0009  (4102,5693) 3898x307  12.7:1    8%
+
+    Each clears the speck floor (0.06 of the largest) comfortably, so it joined
+    the union and dragged the subject box into the bottom-right corner. Two
+    things went wrong at once and neither announced itself: the crop re-centered
+    on backdrop clutter instead of the item (ANMP0009's box cut the left half
+    off an open spread), and `subject_frac` inflated past MAX_SUBJECT_FRAC so
+    four other frames were refused as "subject fills the frame" when the subject
+    was a quarter of it.
+
+    The test is shape + rank, not area alone. `MAX_BOX_ASPECT` already encodes
+    "a sliver is a seam or an edge, not an item" for the union box; this applies
+    the same standard per component, and only to a component that touches a
+    border AND is a clear minority of the largest piece. A pair or a set is
+    compact and comparable in size, so it is untouched; an item that genuinely
+    is a long thin strip is the LARGEST piece, so it is untouched too.
+    """
+    x, y, ww, hh, area = comp[0], comp[1], comp[2], comp[3], comp[4]
+    touches = x <= 1 or y <= 1 or x + ww >= W - 1 or y + hh >= H - 1
+    if not touches or area >= 0.5 * max_area:
+        return False
+    long_side, short_side = max(ww, hh), max(1, min(ww, hh))
+    return long_side / float(short_side) >= MAX_BOX_ASPECT
+
+
+def _pick_blob(mask, with_clutter=False):
     """Union of ALL foreground pieces into one subject region.
 
     A pair of cufflinks / a set of items is several components; the focal region
@@ -162,9 +199,12 @@ def _pick_blob(mask):
     left-to-right and gets dropped as "background", leaving a chance highlight as
     the subject. That's what the `capture` metric measures and the guards catch.
 
+    A fourth rule sheds BORDER SLIVERS — see `_is_border_sliver`.
+
     Returns (x, y, w, h, cx, cy) of the union in full-res pixels.
     """
     import cv2
+    import numpy as np
 
     H, W = mask.shape[:2]
     n, labels, stats, cents = cv2.connectedComponentsWithStats((mask > 0).astype("uint8"), 8)
@@ -177,21 +217,37 @@ def _pick_blob(mask):
         border_huge = (touch_l or touch_r or touch_t or touch_b) and area > 0.40 * W * H
         if spans or border_huge:
             continue   # background field, not the subject
-        cand.append((int(x), int(y), int(ww), int(hh), int(area), float(cents[i][0]), float(cents[i][1])))
+        cand.append((int(x), int(y), int(ww), int(hh), int(area),
+                     float(cents[i][0]), float(cents[i][1]), i))
     if not cand:
-        return (0, 0, W, H, W / 2.0, H / 2.0)
+        empty = (0, 0, W, H, W / 2.0, H / 2.0)
+        return (empty, np.zeros((H, W), bool)) if with_clutter else empty
 
     max_area = max(c[4] for c in cand)
-    keep = [c for c in cand if c[4] >= max(0.0015 * W * H, 0.06 * max_area)]
+    slivers = [c for c in cand if _is_border_sliver(c, W, H, max_area)]
+    keep = [c for c in cand
+            if c[4] >= max(0.0015 * W * H, 0.06 * max_area)
+            and not _is_border_sliver(c, W, H, max_area)]
     if not keep:
         keep = [max(cand, key=lambda c: c[4])]
+        slivers = []
 
     x0 = min(c[0] for c in keep); y0 = min(c[1] for c in keep)
     x1 = max(c[0] + c[2] for c in keep); y1 = max(c[1] + c[3] for c in keep)
     tot = sum(c[4] for c in keep)
     cx = sum(c[5] * c[4] for c in keep) / tot
     cy = sum(c[6] * c[4] for c in keep) / tot
-    return (x0, y0, x1 - x0, y1 - y0, cx, cy)
+    box = (x0, y0, x1 - x0, y1 - y0, cx, cy)
+
+    # The pixels we just called studio furniture, so `capture` can stop counting
+    # them as subject that fell outside the box. Without this the two rules
+    # contradict each other: `_is_border_sliver` says the bottom strip is the
+    # table, while `capture` reads the same pixels as 26% of a lost item and
+    # refuses the frame as "detection unreliable".
+    clutter = np.zeros((H, W), bool)
+    for c in slivers:
+        clutter |= (labels == c[7])
+    return (box, clutter) if with_clutter else box
 
 
 def _focal_from_bgr(bgr):
@@ -200,7 +256,9 @@ def _focal_from_bgr(bgr):
 
     H, W = bgr.shape[:2]
     mask = _subject_mask(bgr) > 0
-    x, y, ww, hh, _cxw, _cyw = _pick_blob(mask.astype("uint8") * 255)
+    (x, y, ww, hh, _cxw, _cyw), clutter = _pick_blob(
+        mask.astype("uint8") * 255, with_clutter=True)
+    mask = mask & ~clutter
 
     # Frame on the subject's geometric center so every piece stays in-crop.
     cx, cy = x + ww / 2.0, y + hh / 2.0
