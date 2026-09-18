@@ -96,6 +96,7 @@ def _reset_caches():
     ebay_client._app_cache.expires_at = 0.0
     ebay_client._user_cache.token = None
     ebay_client._user_cache.expires_at = 0.0
+    ebay_client._user_scopes = ebay_client.USER_SCOPES_SELL
 
 
 def _token_response(token="tok-1", ttl=7200):
@@ -331,3 +332,41 @@ if __name__ == "__main__":
                 fails += 1
                 print(f"FAIL {name}: {e}")
     sys.exit(1 if fails else 0)
+
+
+# ---------------------------------------------------------------------------
+# A refresh_token consented before sell.finances existed (#126): the refresh
+# must fall back to the core scopes, not break every Sell-API call.
+# ---------------------------------------------------------------------------
+
+def test_user_token_falls_back_to_core_scopes_on_invalid_scope():
+    fake = _Fake(_http_error(400, b'{"error":"invalid_scope"}'), _token_response("tok-core"))
+
+    def go():
+        assert get_user_access_token(CREDS) == "tok-core"
+        assert len(fake.requests) == 2
+        first, second = (r.data.decode() for r in fake.requests)
+        assert "sell.finances" in first
+        assert "sell.finances" not in second
+        assert "sell.fulfillment" in second
+        # Remembered: the next forced refresh goes straight to the core set.
+        get_user_access_token(CREDS, force_refresh=True)
+        assert len(fake.requests) == 3
+        assert "sell.finances" not in fake.requests[2].data.decode()
+
+    _patched(fake, go)
+
+
+def test_user_token_invalid_scope_on_core_set_still_raises():
+    fake = _Fake(_http_error(400, b'{"error":"invalid_scope"}'),
+                 _http_error(400, b'{"error":"invalid_scope"}'))
+
+    def go():
+        try:
+            get_user_access_token(CREDS)
+            raise AssertionError("expected EbayAuthError")
+        except EbayAuthError as e:
+            assert "invalid_scope" in str(e)
+        assert len(fake.requests) == 2      # full set, then core set, then stop
+
+    _patched(fake, go)
