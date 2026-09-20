@@ -66,6 +66,8 @@ COMMANDS = {
                      "EasyPost shipping-rate quotes (#80) — free, no confirm needed"),
     "ship-buy":     ("tools.ship_buy",
                      "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
+    "probe":        ("tools.probe",
+                     "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }
 
 
