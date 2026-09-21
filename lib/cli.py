@@ -43,6 +43,8 @@ COMMANDS = {
                      "sales / fees / promotion dashboard"),
     "dashboard":    ("tools.dashboard",
                      "backlog by stage, drafts awaiting review, live/ledger drift (#31 Phase 1)"),
+    "serve":        ("webapp.server",
+                     "local web app: live dashboard + secret-free job queue, 127.0.0.1 only (#31 Phase 2)"),
     "report":       ("lib.source_report",
                      "cross-directory bucket ROI — report --by-source [--html] (#56)"),
     "context":      ("lib.context_write",
