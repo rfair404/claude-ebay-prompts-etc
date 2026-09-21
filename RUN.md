@@ -176,6 +176,11 @@ Reclassify every "ask the user" moment as HARD or SOFT.
    user says the current one is right, and the code enforces it: a stage will not
    open until its predecessor is approved, approving a stage clears every later
    sign-off, and `--apply` refuses to write `listing/` until all three are in.
+   A `--apply` that could not render every frame exits NON-ZERO, leaves
+   `listing/` untouched and names the frames in `apply_run.failed` — check the
+   exit code before building a review card, especially on a backgrounded
+   `--jobs N` run, which is where a rendered-nothing apply used to read as a
+   success (#138).
    Photos go live ONLY after the user approves. Unlike the maker-mark gate this does NOT degrade in a headless
    run — it halts, because a bad photo is the one error buyers see first and 66
    sideways ones shipped while the rules said otherwise. It is enforced in code

@@ -72,6 +72,11 @@ from . import categories as catmod
 from . import subject as subjectmod
 from . import unskew as skewmod
 from .subject import mask_for
+# The --jobs N pool task. It lives in its own module and HAS to: a
+# ProcessPoolExecutor pickles the callable by qualified name, and THIS module
+# is not importable under the name it claims when PREP is reached through
+# `python -m lib.cli prep` (see apply_worker.py for the full post-mortem).
+from .apply_worker import apply_worker as _apply_worker
 try:
     from ..verdict import emit as verdict_emit
 except ImportError:          # lib/ itself on sys.path: photo_prep is top-level
@@ -1096,7 +1101,7 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     `m["photos"][name]` and checkpoints. That split is what lets this one
     function serve both `--jobs 1` (called serially, in manifest order, from
     inside `run_apply`'s own loop) and `--jobs N>1` (called once per task
-    inside a `ProcessPoolExecutor` worker — see `_apply_worker` below)
+    inside a `ProcessPoolExecutor` worker — see apply_worker.py)
     without two implementations of "how a frame renders" able to drift apart
     (docs/prep-resume-plan.md, the `--jobs N` section).
     """
@@ -1189,31 +1194,6 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
     # in run_apply so `--jobs N` workers stamp it too.
     rec["render_hash"] = _frame_render_hash(rec)
     return rec, before, variants
-
-
-def _apply_worker(shoot: Path, name: str, rec: dict, aspect, pad: float,
-                   smode: str, only: tuple) -> tuple:
-    """`--jobs N` task body: render one frame inside a pool worker process.
-
-    Must take and return only picklable data — no manifest, no shared state,
-    nothing captured by closure — because `ProcessPoolExecutor` pickles the
-    call. `before`/`variants` are deliberately NOT returned: shipping
-    full-resolution images back over the pool's pipe would be the expensive
-    part all over again, so the parent instead reloads a rendered frame's
-    pixels from disk afterwards for the sheet, the same way `--resume`
-    already does for a frame it skips (docs/prep-resume-plan.md, the
-    `--jobs N` section).
-
-    Exceptions are caught and returned rather than raised: one bad source
-    file must not sink every other frame's future already queued in the pool
-    ("per-frame exception isolation" in the same design-doc section).
-    """
-    try:
-        new_rec, _before, _variants = _render_frame(
-            shoot, name, rec, aspect, pad, smode, only)
-        return name, new_rec, None
-    except Exception as exc:                                  # noqa: BLE001 -- see docstring
-        return name, None, f"{type(exc).__name__}: {exc}"
 
 
 def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
@@ -1442,7 +1422,7 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
         # Reassemble `rows` in MANIFEST order for `_presets_sheet` (a pool
         # completes out of order) -- reloaded off disk, since a frame
         # rendered by a worker has no in-memory pixels left in this process
-        # to reuse (see `_apply_worker`'s docstring for why).
+        # to reuse (see apply_worker.apply_worker's docstring for why).
         for name, rec in m["photos"].items():
             if rec.get("status") in ("MISSING", "ERROR"):
                 continue
@@ -1456,6 +1436,39 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     if not quiet:
         verdict_emit(f"{shoot.name} apply", len(m["photos"]), flags,
                      detail=shoot / ".prep" / "prep.json")
+
+    # A RUN THAT DID NOT RENDER EVERY FRAME IS A FAILED RUN, AND MUST SAY SO.
+    #
+    # `flags` is a report; nobody's exit code reads it. So an apply where a
+    # source went MISSING, or where every worker came back ERROR, printed its
+    # FLAG lines, auto-picked a look, returned normally and exited 0 — and a
+    # backgrounded `--apply --jobs N` therefore looked like a success while
+    # having rendered nothing at all. That is how the `--jobs N` pickling bug
+    # stayed invisible: the crash scrolled past in a log nobody re-read, and
+    # the next stage built a review card on the renders from the run before.
+    #
+    # Two halves, and both matter:
+    #   - the failure is written DOWN, into apply_run.failed, so `main()` (and
+    #     anything else driving run_apply) has something to check besides
+    #     stdout, and so a later --status can still see it;
+    #   - the auto-pick is SKIPPED. Picking copies each frame's chosen preset
+    #     into listing/, and a frame that failed this run either has no preset
+    #     to copy (run_pick would die with a confusing "was not rendered") or
+    #     still has a stale one from an earlier run — which is the genuinely
+    #     dangerous case, because it repopulates listing/ with pixels that do
+    #     not answer this invocation's question and reports success doing it.
+    failed = [n for n, r in m["photos"].items()
+              if r.get("status") in ("MISSING", "ERROR")]
+    m["apply_run"]["failed"] = failed
+    save_manifest(shoot, m)
+    if failed:
+        if not quiet:
+            print(f"  {len(failed)} of {len(m['photos'])} frames did not "
+                  f"render: {', '.join(failed[:5])}"
+                  + (" ..." if len(failed) > 5 else ""))
+            print("  listing/ left untouched — fix the flagged frames and "
+                  "re-run --apply (--resume keeps the good ones)")
+        return m
 
     # Adopt the backdrop's default look so `listing/` is populated without a
     # separate step. Both looks stay rendered and `--pick` swaps them; the
@@ -2526,6 +2539,17 @@ def _print_status(shoot: Path, m: dict) -> None:
     src = m.get("preset_source")
     print(f"preset:   {chosen or 'none'}"
           + (f" ({src}; compare .prep/prep_presets.jpg, --pick to change)" if chosen else ""))
+    # Said HERE as well as in run_apply because run_apply's own lines are
+    # quiet-gated and this block is not: under --quiet the exit code was the
+    # only thing that knew, and the status block still read like a clean
+    # shoot — `preset:` in particular names whatever the LAST successful run
+    # picked, which is exactly the stale answer a failed run must not imply.
+    failed = (m.get("apply_run") or {}).get("failed") or []
+    if failed:
+        print(f"apply:    FAILED — {len(failed)} frame(s) did not render: "
+              + ", ".join(failed[:5]) + (" ..." if len(failed) > 5 else ""))
+        print("          listing/ is from an earlier run, if anything — "
+              "re-run --apply")
     print(f"approved: {m.get('approved')}"
           + (f" ({m['approved_at']})" if m.get("approved") else ""))
     if asks:
@@ -2801,6 +2825,11 @@ def main(argv=None) -> int:
         m = run_apply(shoot, quiet=args.quiet, only=only, resume=args.resume,
                       jobs=args.jobs)
         _print_status(shoot, m)
+        # Non-zero, so a backgrounded or scripted apply cannot be mistaken for
+        # a success it wasn't. run_apply has already flagged and explained the
+        # frames; this is only the exit code the caller actually branches on.
+        if (m.get("apply_run") or {}).get("failed"):
+            return 1
     return 0
 
 

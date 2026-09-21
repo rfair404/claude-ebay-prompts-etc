@@ -76,9 +76,15 @@ Add one new top-level manifest field, written at the *start* of `--apply`:
 "apply_run": {
   "settings_hash": "sha256 of (aspect, pad, pop, subject, category, sorted(only)), truncated to 16 hex chars — same convention as _sha256()/_manifest_fingerprint(), not a full 64-hex digest",
   "started_at": "...",
-  "jobs": 4
+  "jobs": 4,
+  "failed": ["DSC_0212.JPG"]
 }
 ```
+
+`failed` is written at the END of the run: every frame whose status came out
+`MISSING` or `ERROR`. It exists because `flags` is printed and then forgotten,
+so an apply that rendered nothing still auto-picked a look and exited 0 — see
+"A failed apply is a failed run" below.
 
 `--resume` refuses to reuse a frame's existing `presets` entry unless:
 
@@ -184,6 +190,16 @@ disjoint from every other frame's.
   be able to blow up a 40-frame batch either), but it becomes necessary once
   frames run concurrently: one bad frame must not orphan the workers already
   in flight for the others.
+- **A failed apply is a failed run.** Per-frame isolation above is about not
+  losing the OTHER frames; it is not permission to call the run a success.
+  Two things follow the render loop, and the `--jobs N` pickling bug (#138)
+  needed both: the failed frame names go into `apply_run.failed` so a caller
+  has something to branch on besides stdout, and the auto-pick is SKIPPED so
+  `listing/` is not repopulated. That second half is the dangerous one — a
+  frame that failed THIS run may still hold a preset from the last one, and
+  copying it in reports success over pixels that answer an older question.
+  `prep --apply` then exits non-zero.
+
 - **Ordering for `_presets_sheet`.** The sheet-builder wants `rows` in the
   manifest's frame order (`m["photos"]` insertion order), not completion
   order. Reassemble `rows` from `m["photos"].items()` after all futures
@@ -229,7 +245,10 @@ disjoint from every other frame's.
    aspect, pad, smode, only)` — pure with respect to the manifest, returns the
    new `rec` plus the in-memory pixels the sheet wants — so the serial
    (`--jobs 1`) path and the pool path call *the same function*, never two
-   implementations that could drift. A pool worker (`_apply_worker`) discards
+   implementations that could drift. A pool worker (`apply_worker.apply_worker`, which lives in its own
+   module because a pool pickles its task by qualified name and `prep.py` is
+   executed as `__main__` by both `python -m` and lib/cli.py's runpy dispatch
+   — #138) discards
    the returned pixels and sends back only the small `rec` dict, to keep the
    pool's IPC cheap; the parent reloads a pool-rendered frame's pixels off
    disk for the sheet afterwards, the same trick `--resume` already used for
