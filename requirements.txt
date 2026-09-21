@@ -44,3 +44,10 @@ pytesseract>=0.3.13            # page-orientation detection wrapper
 #
 # NOT briaai/RMBG-1.4, despite torch already being here: it is CC BY-NC, and this
 # is a commercial seller.
+
+# --- Local web app (webapp/, #31 Phase 2) ---
+# `python -m lib.cli serve` — a localhost-only (127.0.0.1) FastAPI app + a
+# SQLite-backed job queue. No eBay/Apify credentials, no network listener
+# beyond loopback; see docs/webapp-architecture.md's "Hosting" answer.
+fastapi>=0.121.0
+uvicorn>=0.38.0                # ASGI server `serve` runs FastAPI under
