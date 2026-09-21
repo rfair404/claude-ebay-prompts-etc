@@ -759,6 +759,237 @@ def test_build_review_card_withholds_all_clear_when_something_is_flagged():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ---------------------------------------------------------------------------
+# Best Offer gate cross-field checks (#140)
+# ---------------------------------------------------------------------------
+
+def _write_bo_draft(tmp: Path, *, price="199.00", enabled=True, decline=None,
+                    accept=None, notes="", metal=None, purity=None,
+                    melt=None) -> Path:
+    """A minimal sync-ready draft.md with Best Offer + optional gold fields."""
+    shoot = tmp / "shoot"
+    (shoot / "listing").mkdir(parents=True, exist_ok=True)
+    (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff")
+    lines = [
+        "---",
+        'title: "Vintage Widget MPN-100"',
+        f"price: {price}",
+        "quantity: 1",
+        'condition: "USED_GOOD"',
+        'condition_description: "Light shelf wear."',
+        'category_id: "12345"',
+        "item_specifics:",
+        '  type: "Widget"',
+    ]
+    if metal:
+        lines.append("  extra:")
+        lines.append(f'    Metal: "{metal}"')
+        if purity:
+            lines.append(f'    Metal Purity: "{purity}"')
+    lines += [
+        "photos:",
+        '  - "listing/a.jpg"',
+        "shipping:",
+        "  fulfillment_mode: SHIP",
+        "best_offer:",
+        f"  enabled: {'true' if enabled else 'false'}",
+    ]
+    if decline is not None:
+        lines.append(f'  auto_decline_amount: "{decline}"')
+    if accept is not None:
+        lines.append(f'  auto_accept_amount: "{accept}"')
+    lines.append("meta:")
+    if notes:
+        lines.append(f'  notes: "{notes}"')
+    if melt is not None:
+        lines.append(f'  melt_value: "{melt}"')
+    lines += ["---", _BODY, ""]
+    draft_path = shoot / "draft.md"
+    draft_path.write_text("\n".join(lines), encoding="utf-8")
+    return draft_path
+
+
+def test_best_offer_terms_none_when_not_enabled():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={"price": "50.00"}, body=_BODY)
+    assert L._best_offer_terms(draft, "50.00") is None
+
+
+def test_best_offer_terms_normal_floor_below_price():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "50.00",
+        "best_offer": {"enabled": True, "auto_decline_amount": "35.00"},
+    }, body=_BODY)
+    terms = L._best_offer_terms(draft, "50.00")
+    assert terms == {"bestOfferEnabled": True,
+                     "autoDeclinePrice": {"value": "35.00", "currency": "USD"}}
+
+
+def test_best_offer_terms_refuses_floor_at_price():
+    """The home-casino bug (#140): $39.00 list, $38.99 Recommended rounded to
+    nearest -> a $39.00 floor, auto-declining every offer."""
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "39.00",
+        "best_offer": {"enabled": True, "auto_decline_amount": "39.00"},
+    }, body=_BODY)
+    try:
+        L._best_offer_terms(draft, "39.00")
+        raise AssertionError("must refuse floor == price")
+    except ValueError as e:
+        assert "39.00" in str(e)
+
+
+def test_best_offer_terms_refuses_floor_above_price():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "39.00",
+        "best_offer": {"enabled": True, "auto_decline_amount": "40.00"},
+    }, body=_BODY)
+    try:
+        L._best_offer_terms(draft, "39.00")
+        raise AssertionError("must refuse floor > price")
+    except ValueError:
+        pass
+
+
+def test_best_offer_terms_refuses_when_price_is_unverifiable():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "best_offer": {"enabled": True, "auto_decline_amount": "35.00"},
+    }, body=_BODY)
+    try:
+        L._best_offer_terms(draft, None)
+        raise AssertionError("must refuse a floor it cannot verify")
+    except ValueError:
+        pass
+
+
+def test_build_offer_propagates_the_floor_refusal():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "39.00", "quantity": 1,
+        "best_offer": {"enabled": True, "auto_decline_amount": "39.00"},
+    }, body=_BODY)
+    try:
+        L._build_offer(draft, sku="s", category_id="1", location_key="L", policies=_POLICIES)
+        raise AssertionError("_build_offer must refuse a floor >= price")
+    except ValueError:
+        pass
+
+
+def test_edit_bestoffer_refuses_floor_at_or_above_the_live_price():
+    """--edit bestoffer must refuse the same broken state on a LIVE offer,
+    not just at sync time -- this path can push a published listing into it
+    directly (#140)."""
+    import tempfile
+    send, calls = _fake_api({
+        "/offer?sku=": {"offers": [{"offerId": "9", "status": "PUBLISHED",
+                                    "availableQuantity": 1,
+                                    "listing": {"listingId": "206", "listingStatus": "ACTIVE"}}]},
+        "/inventory/v1/offer/9": {"pricingSummary": {"price": {"value": "39.00", "currency": "USD"}},
+                                  "listingPolicies": {"fulfillmentPolicyId": "F-1"}},
+    })
+    L.api_send = send
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td) / "s"
+        tmp.mkdir()
+        (tmp / "draft.md").write_text(
+            '---\nprice: 39.00\nbest_offer:\n  enabled: true\n'
+            '  auto_decline_amount: "39.00"\n'
+            'meta:\n  ebay_inventory_sku: "abc"\n---\nbody\n', encoding="utf-8")
+        try:
+            L.update_listing_fields(tmp / "draft.md", ["bestoffer"], creds=_Creds())
+            raise AssertionError("must refuse a floor >= price on a live edit")
+        except ValueError as e:
+            assert "39.00" in str(e)
+    assert not [c for c in calls if c[0] == "PUT" and "/offer/9" in c[1]], (
+        "a refused bestoffer edit must never PUT the broken terms")
+
+
+def test_validate_flags_floor_at_or_above_price():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="39.00", decline="39.00",
+                            notes="best offer confirmed under $100")
+        issues = L.validate_draft_for_sync(d)
+    assert any("auto_decline_amount" in i and "39.00" in i for i in issues)
+
+
+def test_validate_passes_a_normal_floor_with_headroom():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="199.00", decline="120.00")
+        issues = L.validate_draft_for_sync(d)
+    assert not any("auto_decline_amount" in i for i in issues)
+
+
+def test_validate_flags_undocumented_best_offer_under_100():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="39.00", decline="26.00", notes="")
+        issues = L.validate_draft_for_sync(d)
+    assert any("under $100" in i for i in issues)
+
+
+def test_validate_passes_documented_best_offer_under_100():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="39.00", decline="26.00",
+                            notes="best offer left on deliberately — thin margin accepted")
+        issues = L.validate_draft_for_sync(d)
+    assert not any("under $100" in i for i in issues)
+
+
+def test_validate_ignores_a1_at_or_above_100():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="150.00", decline="100.00", notes="")
+        issues = L.validate_draft_for_sync(d)
+    assert not any("under $100" in i for i in issues)
+
+
+def test_validate_flags_solid_gold_with_no_melt_recorded():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="500.00", decline="300.00",
+                            metal="Yellow Gold", purity="14k")
+        issues = L.validate_draft_for_sync(d)
+    assert any("melt" in i.lower() for i in issues)
+
+
+def test_validate_flags_gold_floor_below_1_25x_melt():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="500.00", decline="240.00",
+                            metal="Yellow Gold", purity="14k", melt="200.00")
+        issues = L.validate_draft_for_sync(d)
+    assert any("1.25x melt" in i for i in issues)
+
+
+def test_validate_passes_gold_floor_at_1_25x_melt():
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="500.00", decline="250.00",
+                            metal="Yellow Gold", purity="14k", melt="200.00")
+        issues = L.validate_draft_for_sync(d)
+    assert not any("melt" in i.lower() for i in issues)
+
+
+def test_validate_ignores_a2_for_plated_gold():
+    """Gold Filled/Plated/Vermeil/HGE have no melt floor (specializations/
+    jewelry.md) — the A2 check must not fire on them."""
+    with tempfile.TemporaryDirectory() as td:
+        d = _write_bo_draft(Path(td), price="500.00", decline="300.00",
+                            metal="Gold Filled")
+        issues = L.validate_draft_for_sync(d)
+    assert not any("melt" in i.lower() for i in issues)
+
+
+def test_build_review_card_folds_in_a_broken_best_offer_floor():
+    """#140: a card that says "Approve publishes this LIVE" must show a
+    floor that would block --sync, not just what a human eye happens to
+    catch scanning the card by hand."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_bo_draft(Path(td), price="39.00", decline="39.00",
+                                     notes="best offer confirmed under $100")
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+    assert "ALL CLEAR" not in card
+    assert any("auto_decline_amount" in ln and "would block --sync" in ln
+              for ln in card.splitlines())
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

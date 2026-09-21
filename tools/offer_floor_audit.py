@@ -12,8 +12,12 @@ below their own Conservative floor, $309 under in total, the Burberry scarf at
 $99 against a $225 floor. This tool looks at the LIVE listings instead, so the
 next one can be caught before it sells.
 
-Three findings, worst first:
+Four findings, worst first:
 
+  FLOOR >= ASK  autoDeclinePrice sits at or above the offer's own asking
+                price (#140) — every possible offer auto-declines, which is
+                worse than Best Offer off: the buyer burns one of their three
+                offers on a machine no instead of getting Best Offer off.
   NO FLOOR      Best Offer is on and no autoDeclinePrice is set — anything can
                 be accepted by hand, and the price file's floor is advisory.
   BELOW FLOOR   autoDeclinePrice sits under the shoot's Conservative tier.
@@ -42,6 +46,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import price_vs_actual as pva                                     # noqa: E402
 
 SKU_RE = re.compile(r'^\s*ebay_inventory_sku:\s*"?([^"\n]+)"?', re.M)
+
+
+def verdict_for(enabled: bool, dv, price, floor, rec) -> str:
+    """One published offer's Best Offer floor verdict, worst first.
+
+    Pulled out of `main()`'s loop so the ordering (#140's `FLOOR >= ASK`
+    ahead of the older three) is a plain function a test can call without
+    faking the Sell API or a live `inventory_sheet.csv`.
+    """
+    if not enabled:
+        return "no best offer"
+    if dv is None:
+        return "NO FLOOR"
+    if price is not None and dv >= price:
+        return "FLOOR >= ASK"
+    if dv < floor:
+        return "BELOW FLOOR"
+    if rec and dv < rec:
+        return "under rec"
+    return "ok"
 
 
 def shoot_by_sku() -> dict:
@@ -99,16 +123,7 @@ def main() -> int:
             dv = pva._f(decline.get("value")) if decline else None
             price = pva._f(((o.get("pricingSummary") or {}).get("price") or {}).get("value"))
             floor, rec = band["floor"], band.get("recommended")
-            if not enabled:
-                verdict = "no best offer"
-            elif dv is None:
-                verdict = "NO FLOOR"
-            elif dv < floor:
-                verdict = "BELOW FLOOR"
-            elif rec and dv < rec:
-                verdict = "under rec"
-            else:
-                verdict = "ok"
+            verdict = verdict_for(enabled, dv, price, floor, rec)
             rows.append({
                 "verdict": verdict, "sku": sku,
                 "shoot": shoot.relative_to(REPO).as_posix().replace("inventory/", ""),
@@ -118,7 +133,8 @@ def main() -> int:
         if a.limit and checked >= a.limit:
             break
 
-    order = {"NO FLOOR": 0, "BELOW FLOOR": 1, "under rec": 2, "no best offer": 3, "ok": 4}
+    order = {"FLOOR >= ASK": 0, "NO FLOOR": 1, "BELOW FLOOR": 2, "under rec": 3,
+             "no best offer": 4, "ok": 5}
     rows.sort(key=lambda r: (order.get(r["verdict"], 9), -(r["ask"] or 0)))
 
     def m(v):
@@ -136,7 +152,7 @@ def main() -> int:
     print("-" * 104)
     print(f"{n} published offers matched to a price band "
           f"({missing_band} live listings have no banded price.txt)")
-    for k in ("NO FLOOR", "BELOW FLOOR", "under rec", "no best offer", "ok"):
+    for k in ("FLOOR >= ASK", "NO FLOOR", "BELOW FLOOR", "under rec", "no best offer", "ok"):
         print(f"  {k:<14} {c.get(k, 0)}")
     print("\nRepair is a PUT on the offer (listingPolicies.bestOfferTerms."
           "autoDeclinePrice)\nand is not automated here — it changes a live listing's terms.")
