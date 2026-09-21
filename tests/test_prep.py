@@ -2357,32 +2357,32 @@ def test_jobs_n_isolates_a_bad_frame_and_keeps_rendering_the_rest():
     between --check and --apply must not sink every other frame's future
     already queued in the pool.
 
-    The shoot-wide auto-pick step at the end of run_apply still raises for
-    the errored frame's missing preset -- exactly as it already does today
-    for a plain MISSING source (proven separately: `run_apply` on a shoot
-    with a deleted source raises the identical SystemExit even at the
-    default `--jobs 1`) -- so that part is a pre-existing gap, not something
-    this test is about. What --jobs N's own contract promises, and what this
-    checks, is that the OTHER frames still render and get checkpointed
-    before that later, unrelated crash."""
+    This used to end in a SystemExit out of the shoot-wide auto-pick, which
+    went looking for the errored frame's missing preset -- the same way a
+    plain MISSING source already blew up even at `--jobs 1`. That was called
+    a pre-existing gap here, and #138 closed it: a run that did not render
+    every frame now records the names in `apply_run.failed` and SKIPS the
+    auto-pick instead of dying inside it, so the caller gets a manifest to
+    read and an exit code to branch on rather than a message about a preset.
+    See tests/test_prep_jobs.py for the exit code itself.
+
+    What --jobs N's own contract promises, and what this test is actually
+    about, is unchanged: the OTHER frames still render and get checkpointed."""
     with tempfile.TemporaryDirectory() as td:
         shoot = _shoot(Path(td) / "s", n=3)
         P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
         P.run_approve_auto(shoot)
         (shoot / "IMG_1.jpg").write_bytes(b"not a jpeg")
 
-        try:
-            P.run_apply(shoot, quiet=True, jobs=2)
-            raise AssertionError(
-                "expected the pre-existing missing-preset SystemExit from "
-                "the final auto-pick step")
-        except SystemExit:
-            pass
+        m = P.run_apply(shoot, quiet=True, jobs=2)
 
+        assert m["apply_run"]["failed"] == ["IMG_1.jpg"], m["apply_run"]
         m = P.load_manifest(shoot)
         assert m["photos"]["IMG_1.jpg"]["status"] == "ERROR"
         assert m["photos"]["IMG_0.jpg"].get("presets", {}).get("crisp")
         assert m["photos"]["IMG_2.jpg"].get("presets", {}).get("crisp")
+        assert not list((shoot / "listing").glob("*.jpg")), (
+            "a run with an ERROR frame must not auto-pick into listing/")
 
 
 def test_apply_run_records_the_jobs_value():
