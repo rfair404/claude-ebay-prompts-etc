@@ -31,6 +31,29 @@ apify:
   # lens_actor: "borderline/google-lens"
 
 # ---------------------------------------------------------------------------
+# Vision — pluggable high-resolution image inspector (lib/fine_inspect.py)
+# ---------------------------------------------------------------------------
+# For reads that are hard to get right from a normal photo pass: fine
+# print, a raised/embossed maker's mark with no printed contrast to key
+# off, a faint signature. IDENTIFY/PREP hand a tight crop straight to a
+# dedicated vision model instead of guessing. Distinct from apify.* above:
+# that's reverse-image SEARCH (what does this look like on the web); this
+# is direct visual INSPECTION (what do these pixels actually say) — no
+# public hosting involved.
+#
+# `backend` selects the engine; each backend gets its own sub-section
+# below. Swapping engines later needs only a new backend class registered
+# in lib/fine_inspect.py's BACKENDS dict, plus a config line here.
+vision:
+  backend: "gemini"
+
+  gemini:
+    # Get a key at https://aistudio.google.com/apikey
+    api_key: "GEMINI_API_KEY_REPLACE_ME"
+    # Optional. Defaults to lib/config.py's DEFAULT_GEMINI_MODEL.
+    # model: "gemini-2.5-pro"
+
+# ---------------------------------------------------------------------------
 # eBay Sell API — credentials for Function 6 (LIST/EDIT) + schema discovery
 # ---------------------------------------------------------------------------
 # Sandbox and Production are separate worlds with separate keysets. This
