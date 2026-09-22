@@ -140,11 +140,15 @@ def _fact(label: str, value: str, cls: str = "") -> str:
             f'<dd>{value}</dd></div>')
 
 
-def build(shoot: Path, out: Path | None = None) -> Path:
+def render(shoot: Path) -> str:
+    """Build the review page as a string — no file I/O beyond reading the
+    shoot's own local, secret-free inputs (draft.md, price.txt,
+    review_card.md, the listing photos). Split out from build() so a live
+    server (webapp/server.py's #31 Phase 2 review route) can return the
+    page directly instead of writing it to disk and reading it back."""
     shoot = Path(shoot)
     draft = parse_draft(shoot / "draft.md")
     fm = draft.frontmatter
-    out = out or (shoot / "review_card.html")
 
     photos = [str(p) for p in (fm.get("photos") or [])]
     frames = []
@@ -161,7 +165,7 @@ def build(shoot: Path, out: Path | None = None) -> Path:
     pk = ship.get("package_in") or {}
     spec = fm.get("item_specifics") or {}
     extra = spec.get("extra") or {}
-    sku = fm.get("meta", {}).get("ebay_inventory_sku") or "not recorded"
+    sku = (fm.get("meta") or {}).get("ebay_inventory_sku") or "not recorded"
     pre, warn = _card_lines(shoot)
     tiers = _price_tiers(shoot)
 
@@ -424,7 +428,13 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
 </div>
 {bigs}
 """
-    out.write_text(page, encoding="utf-8")
+    return page
+
+
+def build(shoot: Path, out: Path | None = None) -> Path:
+    shoot = Path(shoot)
+    out = out or (shoot / "review_card.html")
+    out.write_text(render(shoot), encoding="utf-8")
     return out
 
 

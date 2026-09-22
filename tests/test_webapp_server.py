@@ -84,6 +84,82 @@ def test_list_jobs_returns_newest_first(client):
     assert listed_ids[:3] == list(reversed(ids))
 
 
+# ---------------------------------------------------------------------------
+# /review/{shoot} — live REVIEW gate page (#31 Phase 2 follow-up)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def inventory_client(client, tmp_path, monkeypatch):
+    """The `client` fixture plus a real (throwaway) inventory/ dir wired
+    into webapp.jobs, which /review/{shoot} resolves shoot names against."""
+    import webapp.jobs as jobs
+    inv = tmp_path / "inventory"
+    inv.mkdir()
+    monkeypatch.setattr(jobs, "INVENTORY", inv)
+    return client, inv
+
+
+def _write_shoot(inv, name, draft=True):
+    from PIL import Image
+    shoot = inv / name
+    (shoot / "listing").mkdir(parents=True)
+    Image.new("RGB", (40, 30), (200, 180, 160)).save(shoot / "listing" / "a.jpg")
+    if draft:
+        (shoot / "draft.md").write_text(
+            '---\ntitle: "Test Item"\nprice: "10.00"\n'
+            'meta:\n  ebay_inventory_sku: "SKU-1"\n---\n'
+            '# Description\nbody.\n', encoding="utf-8")
+    return shoot
+
+
+def test_review_route_renders_the_live_review_page(inventory_client):
+    client, inv = inventory_client
+    _write_shoot(inv, "item-1")
+    r = client.get("/review/item-1")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Test Item" in r.text
+    assert "$10.00" in r.text
+
+
+def test_review_route_404s_for_an_unknown_shoot(inventory_client):
+    client, _inv = inventory_client
+    r = client.get("/review/never-shot-this")
+    assert r.status_code == 404
+
+
+def test_review_route_404s_when_draft_has_not_run_yet(inventory_client):
+    client, inv = inventory_client
+    _write_shoot(inv, "item-1", draft=False)
+    r = client.get("/review/item-1")
+    assert r.status_code == 404
+    assert "draft.md" in r.json()["detail"]
+
+
+def test_review_route_rejects_a_path_traversal_shoot_name(inventory_client):
+    client, inv = inventory_client
+    _write_shoot(inv, "item-1")
+    r = client.get("/review/..%2Fitem-1")
+    assert r.status_code in (404, 400)
+
+
+def test_review_route_never_calls_any_ebay_or_apify_client(inventory_client, monkeypatch):
+    # The route must stay strictly local/secret-free (docs/webapp-
+    # architecture.md's Phase-2 boundary) — assert no eBay/Apify module
+    # attribute is even touched by patching both to explode on any access.
+    client, inv = inventory_client
+    _write_shoot(inv, "item-1")
+
+    class _Boom:
+        def __getattr__(self, name):
+            raise AssertionError(f"unexpected eBay/Apify access: {name}")
+
+    import sys
+    monkeypatch.setitem(sys.modules, "ebay_client", _Boom())
+    r = client.get("/review/item-1")
+    assert r.status_code == 200
+
+
 def test_serve_binds_loopback_only():
     # Locks down the one non-negotiable from docs/webapp-architecture.md's
     # "Hosting" answer: no phase before Phase 3 puts this on a
