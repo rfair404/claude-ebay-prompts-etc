@@ -421,6 +421,46 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     elif Decimal(price) <= 0:
         issues.append(f"price: {price} — must be positive")
 
+    # Best Offer cross-field checks (#140) — offline, so these catch a
+    # broken floor before any eBay call, not just at the write paths in
+    # _best_offer_terms().
+    if draft.get("best_offer.enabled") and price is not None:
+        decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
+        if decline is not None and Decimal(decline) >= Decimal(price):
+            issues.append(
+                f"best_offer.auto_decline_amount: ${decline} >= price ${price} "
+                f"— every offer would auto-decline (#140)")
+        # A1: under $100 there's little margin to negotiate away, so Best
+        # Offer defaults off there — turning it on is an explicit,
+        # documented deviation, not a default (user instruction, 2026-09-21).
+        if Decimal(price) < 100:
+            notes = str(draft.get("meta.notes") or "").lower()
+            if "best offer" not in notes:
+                issues.append(
+                    "best_offer.enabled under $100 with no 'best offer' "
+                    "mention in meta.notes — document the deviation or turn "
+                    "it off (#140 A1)")
+        # A2: on solid gold, the floor must never sit below 1.25x melt — but
+        # nothing in lib/ computes melt from spot yet (#140), so this can
+        # only catch the case the issue asks for: a gold draft with no melt
+        # figure recorded at all, rather than silently passing it.
+        extra = draft.get("item_specifics.extra")
+        metal = str((extra or {}).get("Metal") or "").strip().lower() if isinstance(extra, dict) else ""
+        if metal in ("yellow gold", "white gold", "rose gold", "two-tone gold"):
+            melt = _to_decimal_str(draft.get("meta.melt_value"))
+            if melt is None:
+                issues.append(
+                    "best_offer.enabled on solid gold (Metal: "
+                    f"{(extra or {}).get('Metal')}) with no meta.melt_value "
+                    "recorded — cannot verify the floor clears 1.25x melt "
+                    "(#140 A2)")
+            elif decline is not None and Decimal(decline) < Decimal(melt) * Decimal("1.25"):
+                issues.append(
+                    f"best_offer.auto_decline_amount: ${decline} is below "
+                    f"1.25x melt (${melt} x 1.25 = "
+                    f"${Decimal(melt) * Decimal('1.25'):.2f}) on solid gold "
+                    f"(#140 A2)")
+
     qty = draft.get("quantity")
     if not isinstance(qty, int) or qty < 1:
         issues.append(f"quantity: {qty!r} — must be an integer >= 1")
@@ -695,6 +735,39 @@ def _package_type(draft: Draft) -> str:
     return "PACKAGE_THICK_ENVELOPE"
 
 
+def _best_offer_terms(draft: Draft, price: Optional[str]) -> Optional[dict]:
+    """bestOfferTerms for an offer create/edit payload, or None when Best
+    Offer is off.
+
+    Refuses `auto_decline_amount >= price` (#140): a floor at or above the
+    list price silently auto-declines every offer a buyer sends, which is
+    worse than Best Offer off — the listing still advertises "or Best
+    Offer" but a buyer burns one of their three offers on a machine no. The
+    two write paths that assemble `bestOfferTerms` (`_build_offer` and the
+    `--edit bestoffer` live-offer path) share this one check so neither can
+    push that state to eBay quietly.
+    """
+    if not draft.get("best_offer.enabled"):
+        return None
+    terms: dict = {"bestOfferEnabled": True}
+    decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
+    accept = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
+    if decline:
+        if not price:
+            raise ValueError(
+                "best_offer.auto_decline_amount is set but price is missing — "
+                "cannot verify the floor stays below the list price (#140)")
+        if Decimal(decline) >= Decimal(price):
+            raise ValueError(
+                f"best_offer.auto_decline_amount (${decline}) >= price (${price}) "
+                f"— every offer would auto-decline; fix the draft's floor "
+                f"before syncing (#140)")
+        terms["autoDeclinePrice"] = {"value": decline, "currency": CURRENCY}
+    if accept:
+        terms["autoAcceptPrice"] = {"value": accept, "currency": CURRENCY}
+    return terms
+
+
 def _build_offer(draft: Draft, sku: str, category_id: str,
                  location_key: str, policies: dict) -> dict:
     price = _to_decimal_str(draft.get("price"))
@@ -728,14 +801,8 @@ def _build_offer(draft: Draft, sku: str, category_id: str,
             offer["listingPolicies"]["paymentPolicyId"] = policies["payment_auction"]
     else:
         offer["pricingSummary"] = {"price": {"value": price, "currency": CURRENCY}}
-        if draft.get("best_offer.enabled"):
-            terms: dict = {"bestOfferEnabled": True}
-            decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
-            accept = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
-            if decline:
-                terms["autoDeclinePrice"] = {"value": decline, "currency": CURRENCY}
-            if accept:
-                terms["autoAcceptPrice"] = {"value": accept, "currency": CURRENCY}
+        terms = _best_offer_terms(draft, price)
+        if terms:
             offer["listingPolicies"]["bestOfferTerms"] = terms
     return offer
 
@@ -1364,6 +1431,11 @@ def build_review_card(draft_path: Path,
                 f"{_st['listing_id']} ({_st['status']}) — run --repair-meta")
     except Exception:                                      # noqa: BLE001
         pass
+    # Fold in every offline sync-blocking issue (#140) — a card that says
+    # "Approve publishes this LIVE" should show what would make that publish
+    # fail, not just what a human eye happens to catch.
+    for _issue in validate_draft_for_sync(draft_path):
+        flags.append(f"  • ⚠ {_issue} — would block --sync")
     if not flags:
         flags = ["  • None"]
 
@@ -1798,14 +1870,12 @@ def update_listing_fields(draft_path: Path, fields,
             offer["availableQuantity"] = int(draft.get("quantity") or 1)
         if "bestoffer" in offer_fields:
             lp = offer.setdefault("listingPolicies", {})
-            if draft.get("best_offer.enabled"):
-                terms: dict = {"bestOfferEnabled": True}
-                d = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
-                a = _to_decimal_str(draft.get("best_offer.auto_accept_amount"))
-                if d:
-                    terms["autoDeclinePrice"] = {"value": d, "currency": CURRENCY}
-                if a:
-                    terms["autoAcceptPrice"] = {"value": a, "currency": CURRENCY}
+            # The price this edit leaves in effect: draft.get("price") already
+            # reflects a same-call "price" edit above (both read the same
+            # parsed draft), so this is never stale against it.
+            cur_price = _to_decimal_str(draft.get("price"))
+            terms = _best_offer_terms(draft, cur_price)
+            if terms:
                 lp["bestOfferTerms"] = terms
             else:
                 lp.pop("bestOfferTerms", None)

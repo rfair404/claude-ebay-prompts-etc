@@ -112,19 +112,51 @@ publish.
 `price` = working price as string, ≤13 · `cost_of_goods` null ·
 `quantity` per the table below. Best Offer per the gate below.
 
-**Best Offer gate (default):** Best Offer is only worth enabling when the
-list price sits ABOVE the supported price, so there's headroom to negotiate
-down to it.
+**Best Offer gate (default, revised #140):** Best Offer is only worth
+enabling when there's real headroom between the ask and a floor we'd
+actually accept — not just whichever side of Recommended the ask happens to
+land on. `best_offer.auto_accept_amount` is **always null** — never
+auto-accept; the user reviews and accepts offers manually.
 
-- Compare the list `price` to PRICE's **Recommended** tier (from price.txt).
-- **If `price` > Recommended**: `best_offer.enabled` **true** ·
-  `best_offer.auto_decline_amount` = **the Recommended tier price**, rounded
-  to the nearest whole dollar, as a string. (Fallback if price.txt has no
-  Recommended tier: 85% of list, nearest dollar.)
-- **If `price` ≤ Recommended**: `best_offer.enabled` **false**, both amounts
-  null — don't invite offers below the supported price.
-- `best_offer.auto_accept_amount` is **always null** — never auto-accept;
-  the user reviews and accepts offers manually.
+**Invariant, unconditional:** if Best Offer is on, `auto_decline_amount` <
+`price`, strictly. `lib/list_edit.py`'s `_best_offer_terms()` refuses to
+build a sync or a live-offer edit that violates this — if it's ever hit,
+that's a bug in the gate below, not a judgement call.
+
+- **A1 — off by default under $100.** At those prices there's little to no
+  margin: after the measured 16–18% fee band and real Ground Advantage
+  postage, negotiating down nets close to nothing for the same packing and
+  mailbox trip. `best_offer.enabled` **false**, both amounts null. Turning
+  it on anyway below $100 is an explicit, documented deviation, never a
+  default — say so in `meta.notes`, and mention "best offer" in the note
+  (`validate_draft_for_sync` checks for that phrase before it'll let a
+  sub-$100 Best Offer sync).
+- **A2 — never a gold floor below 1.25x melt.** For a solid-gold item
+  (`Metal`: Yellow / White / Rose / Two-Tone Gold — **not** Gold
+  Filled/Plated, Vermeil, or HGE, which have no melt floor),
+  `auto_decline_amount` must be **>= 1.25x melt**, where melt = weight (g) x
+  karat fraction x spot. Record the figure in `meta.melt_value` so the
+  validator can check it — a solid-gold draft with Best Offer on and no
+  `meta.melt_value` gets flagged rather than silently passed, since nothing
+  in `lib/` computes melt from spot yet. If 1.25x melt leaves no real
+  headroom below the ask, Best Offer is off — never walk a gold piece down
+  toward scrap.
+- **B — the headroom test** (replaces the old bare `price > Recommended`
+  comparison):
+  1. **Floor candidates, in order: Recommended, then Conservative** (from
+     price.txt), each rounded **DOWN** to the whole dollar — never to
+     nearest; rounding a floor up moves an agreed sell price toward the ask
+     for no reason. (Fallback if price.txt has no tiers: 85% of list,
+     rounded down.)
+  2. **Headroom test:** `price - floor >= max($5, 10% of price)`. A gap
+     smaller than that is theatre, not a negotiating range.
+  3. Take the **first candidate that passes**, then run the mandatory
+     net-floor check below (which may raise the floor). If raising it
+     breaks the headroom test, Best Offer goes off.
+  4. No candidate passes → Best Offer off, both amounts null.
+  5. A1 and A2 apply on top of B, not instead of it — a candidate that
+     passes the headroom test can still be blocked by A1 (sub-$100) or
+     raised by A2 (gold).
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
 **Net-floor check (MANDATORY — the floor is a price we AGREE to, not a

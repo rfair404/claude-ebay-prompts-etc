@@ -71,9 +71,11 @@ silver/German silver/alpaca/silver-tone. No exemptions. Then:
    widen the bracket rather than fall back. Silver is identifiable — an exact
    maker+pattern+form comp anchors the ceiling.
 3. **Push HIGH by default.** Working/list price = **Push-high (vetted ceiling)**
-   tier, NOT median, with Best Offer ON and auto-decline at Recommended.
-   Bounded by vetted comps — honest ceiling only (plate/silver-on-copper stays
-   modest; solid never below melt).
+   tier, NOT median — Best Offer still gated per draft.md's headroom test
+   (#140) against Push-high, with Recommended as the usual floor candidate.
+   Bounded by vetted comps — honest ceiling only (plate/silver-on-copper
+   stays modest; solid never below melt, this section's rule above — #140's
+   A2 melt-floor check is gold-only for now).
 
 State `SILVER: push-high strategy applied` in price.txt.
 
@@ -334,7 +336,9 @@ those sellers' active listings:
 method, widen the bracket, flag rarity. The three tiers still apply, anchored
 on the era-peer.
 
-**Best Offer gate:** enable if list > Recommended; auto-decline at Recommended.
+**Best Offer gate:** see [draft.md](draft.md)'s headroom-based gate (#140) —
+DRAFT decides this, not PRICE; PRICE's job is handing it clean
+Recommended/Conservative tiers to test headroom against.
 
 ### No-exact-match case
 
