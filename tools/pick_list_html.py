@@ -2,8 +2,21 @@
 """Print-friendly pick list — and packing slip — for one shipment. Open it,
 hit print, done.
 
-    python tools/pick_list_html.py <order-id> --pdf
+    python tools/pick_list_html.py <order-id>
+        -> http://127.0.0.1:8770/pick/<token>     (expires in 48h)
+    python tools/pick_list_html.py <order-id> --local-only --pdf
         -> pick_lists/pick_<id>.html + pick_lists/pick_<id>.pdf
+
+The result is a LINK, not a file path (#151). The rendered page is parked in
+lib/pick_store.py's short-lived store and served by webapp/server.py's
+`/pick/{token}` route, so the sheet can be opened and printed from a browser
+without anyone knowing where on disk it landed — which is what a path is
+worth to the person standing at the shelves. Start the server first:
+
+    python -m lib.cli serve
+
+`--local-only` is the escape hatch (and what `--out` / an unreachable store
+fall back to): the same page written to pick_lists/ the way it always was.
 
 One page == one box. Several ids may share a page only when the buyer AND the
 full ship-to address are identical (the one case eBay merges under a single
@@ -18,9 +31,14 @@ picking off a shelf doesn't require re-reading the title. Deliberately
 low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
-Buyer name and street address are on this page. Like tools/pick_list.py, the
-output goes to pick_lists/ (gitignored) only — never an artifact, never
-committed, never anywhere that leaves the machine.
+Buyer name and street address are on this page. It is served over HTTP now,
+which is a change in that posture and is fenced accordingly: the app binds
+to 127.0.0.1 only, the URL carries 256 bits of randomness and no order id,
+the sheet deletes itself when it expires, and the route sends no-store +
+noindex. lib/pick_store.py holds those rules and the reasoning behind each.
+Everything outside that path is unchanged: the local copies still go to
+pick_lists/ (gitignored), and no sheet, link or token is ever committed,
+written to a ledger, or sent anywhere off this machine.
 
 No seller financials on this page — deliberately. This sheet can end up seen
 by the buyer during packing (dropped in the box by mistake, photographed,
@@ -49,6 +67,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
+import pick_store                                                  # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
@@ -258,6 +277,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
 <title>{html.escape(title)}</title>
 <style>
   * {{ box-sizing: border-box; }}
@@ -425,16 +446,75 @@ def _default_out_name(orders: list[dict]) -> str:
     return f"pick_group_{stem}.html".replace("/", "_")
 
 
+def publish(orders: list[dict], out_html: str, *,
+            ttl_hours: float = pick_store.TTL_HOURS_DEFAULT,
+            port: int = pick_store.DEFAULT_PORT) -> tuple[pick_store.Sheet, bool]:
+    """Park the rendered sheet in the store and return (sheet, server_is_up).
+
+    Re-running the tool for the same order supersedes its previous link
+    rather than adding a second one (lib/pick_store.publish) — one shipment,
+    one live URL, so a stale sheet can't be the one someone opens."""
+    order_ids = [o.get("orderId", "") for o in orders if o.get("orderId")]
+    sheet = pick_store.publish(out_html, order_ids=order_ids, ttl_hours=ttl_hours)
+    return sheet, pick_store.server_is_up(port)
+
+
+def _report(sheet: pick_store.Sheet, up: bool, port: int) -> None:
+    print(f"[OK] {sheet.url(port)}")
+    print(f"     expires {sheet.expires_at} "
+          f"(revoke now: --revoke {sheet.order_ids[0] if sheet.order_ids else sheet.token})")
+    if not up:
+        print(f"[WARN] {pick_store.SERVE_HINT}")
+
+
+def cmd_revoke(target: str) -> int:
+    killed = pick_store.revoke(order_id=target) or pick_store.revoke(token=target)
+    if not killed:
+        print(f"nothing published for {target!r} (already expired, or never was)")
+        return 1
+    print(f"[OK] revoked {len(killed)} sheet(s) — those links are dead now")
+    return 0
+
+
+def cmd_list(port: int) -> int:
+    sheets = pick_store.list_sheets()
+    pick_store.purge_expired()
+    if not sheets:
+        print("no live pick sheets")
+        return 0
+    for s in sheets:
+        print(f"{s.url(port)}  expires {s.expires_at}  "
+              f"orders {', '.join(s.order_ids) or '?'}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("order_id", nargs="+", metavar="ORDER_ID",
+    ap.add_argument("order_id", nargs="*", metavar="ORDER_ID",
                     help="one order id. Several ids are combined onto ONE page only if they are the same buyer AND the same ship-to address (one box, one eBay label); anything else is refused - run the tool once per shipment.")
     ap.add_argument("--days", type=int, default=30, help="lookback window to find the order(s) (default 30)")
-    ap.add_argument("--out", metavar="FILE", help="output path (default pick_lists/pick_<id>.html)")
+    ap.add_argument("--out", metavar="FILE", help="write to this local path instead of publishing a link")
+    ap.add_argument("--local-only", action="store_true",
+                    help="write pick_lists/pick_<id>.html and print the path, the pre-#151 behaviour (no link, no store)")
+    ap.add_argument("--ttl", type=float, default=pick_store.TTL_HOURS_DEFAULT,
+                    metavar="HOURS", help=f"how long the link lives (default {pick_store.TTL_HOURS_DEFAULT}h)")
+    ap.add_argument("--port", type=int, default=pick_store.DEFAULT_PORT,
+                    help=f"port the local app serves on (default {pick_store.DEFAULT_PORT})")
+    ap.add_argument("--revoke", metavar="ORDER_ID|TOKEN",
+                    help="delete a published sheet now instead of waiting for it to expire")
+    ap.add_argument("--list", action="store_true", dest="do_list",
+                    help="list the live published sheets (local only - no route does this)")
     ap.add_argument("--pdf", action="store_true",
-                    help="also render a PDF beside the HTML (headless Chrome/Edge)")
+                    help="also render a local PDF (headless Chrome/Edge); implies a local HTML file beside it")
     args = ap.parse_args()
+
+    if args.revoke:
+        return cmd_revoke(args.revoke)
+    if args.do_list:
+        return cmd_list(args.port)
+    if not args.order_id:
+        ap.error("give at least one ORDER_ID (or --list / --revoke)")
 
     candidates = fetch_orders(args.days, verbose=False)
     matches, missing = [], []
@@ -450,13 +530,31 @@ def main() -> int:
     drafts, ledger = scan_drafts(), load_listings_ledger()
     out_html = render_html(matches, drafts, ledger)
 
-    out_path = Path(args.out) if args.out else OUT_DIR / _default_out_name(matches)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(out_html, encoding="utf-8")
-    print(f"[OK] wrote {out_path}")
-    if args.pdf:
-        pdf_path = to_pdf(out_path)
-        print(f"[OK] wrote {pdf_path}")
+    # A link is the deliverable (#151). Local files are the fallback and the
+    # --pdf path: headless Chrome prints from a file:// URL, so asking for a
+    # PDF still puts an HTML file on disk to print from.
+    want_local = args.local_only or bool(args.out) or args.pdf
+    published = None
+    if not (args.local_only or args.out):
+        try:
+            sheet, up = publish(matches, out_html, ttl_hours=args.ttl, port=args.port)
+            published = sheet
+            _report(sheet, up, args.port)
+        except OSError as e:
+            # The store is a directory; if it can't be written the sheet still
+            # has to reach a human, so say what broke, fall back to the file,
+            # and exit non-zero rather than pretend a link exists.
+            print(f"[FAIL] could not publish the sheet ({e}); writing a local file instead")
+            want_local = True
+
+    if want_local:
+        out_path = Path(args.out) if args.out else OUT_DIR / _default_out_name(matches)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(out_html, encoding="utf-8")
+        print(f"[OK] wrote {out_path}")
+        if args.pdf:
+            print(f"[OK] wrote {to_pdf(out_path)}")
+        return 0 if (published or args.local_only or args.out) else 1
     return 0
 
 

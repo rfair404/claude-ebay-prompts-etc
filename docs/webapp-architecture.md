@@ -122,6 +122,22 @@ token), anything in `lib/ebay_client.py` (publish, offers, policy sweep,
 Fulfillment sync) — those stay chat-only until Phase 3's secrets story
 lands.
 
+**`/pick/{token}` — the one route that serves PII (#151).** The pack step
+needs a pick sheet the operator can open and print, and a path inside
+`pick_lists/` isn't that. So a rendered sheet is published to
+`lib/pick_store.py`'s short-lived store and served here by an unguessable
+token. This is the first route whose content is not secret-free — it
+carries buyer name and street address — so it carries rules the others
+don't need: 256 bits of token entropy, self-deleting expiry enforced on
+read (default 48h), `no-store` + `noindex` + `no-referrer`, and no route
+anywhere that enumerates the store. Localhost-only is currently doing real
+work here rather than just being a phase boundary: the link opens on this
+machine and nowhere else. Phase 3 changing that is the point at which this
+route's fencing has to be re-argued, not quietly inherited — reachability
+plus buyer addresses is a different question from reachability plus a
+dashboard, and the answer may be that a pick sheet needs auth in front of
+it, or a remote object store with signed URLs instead of this one.
+
 ### Phase 3 — network reachability + the secrets story + live eBay/Apify writes
 
 **What:** Only once Phases 1–2 exist and a human has reviewed a written
