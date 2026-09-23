@@ -46,6 +46,7 @@ import os
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -371,17 +372,37 @@ def _draft_price_cell(price) -> str:
     return _money(v) if v is not None else "—"
 
 
+def _shoot_link(path: str) -> Optional[str]:
+    """The shoot name a draft row's `path` implies, for a `/review/<shoot>`
+    link into webapp/server.py's live review page (#31 Phase 2) — or None
+    when there's no single draft.md a review page can read from (a
+    ledger-only row with no disk path, `src: "ledger"`)."""
+    if not path or not path.endswith("/draft.md"):
+        return None
+    parts = Path(path).parts
+    return parts[-2] if len(parts) >= 2 else None
+
+
 def _draft_rows(rows: list[dict]) -> str:
-    return "".join(
-        f'<tr><td>{_e(r.get("title") or "(untitled)")}'
-        + ('<span class="pill on" style="margin-left:8px">GROUP</span>'
-           if r.get("group") else "")
-        + f'<div class="dim" style="font-size:11.5px">{_e(r.get("path") or r.get("sku") or "")}'
-          f'</div></td>'
-        f'<td class="num">{_draft_price_cell(r.get("price"))}</td>'
-        f'<td>{_e(r.get("sku") or "—")}</td>'
-        f'<td class="warn">{_e("; ".join(r.get("blocking_issues") or []) or "—")}</td></tr>'
-        for r in rows[:100])
+    out = []
+    for r in rows[:100]:
+        # A CHOICE group's draft_group.md isn't the single-item frontmatter
+        # the review page reads (tools/review_card_html.py's parse_draft) —
+        # no link rather than one that 404s or misrenders.
+        shoot = None if r.get("group") else _shoot_link(r.get("path") or "")
+        review_cell = (f'<td><a href="/review/{_e(shoot)}">Review</a></td>'
+                       if shoot else "<td>—</td>")
+        out.append(
+            f'<tr><td>{_e(r.get("title") or "(untitled)")}'
+            + ('<span class="pill on" style="margin-left:8px">GROUP</span>'
+               if r.get("group") else "")
+            + f'<div class="dim" style="font-size:11.5px">{_e(r.get("path") or r.get("sku") or "")}'
+              f'</div></td>'
+            f'<td class="num">{_draft_price_cell(r.get("price"))}</td>'
+            f'<td>{_e(r.get("sku") or "—")}</td>'
+            f'<td class="warn">{_e("; ".join(r.get("blocking_issues") or []) or "—")}</td>'
+            + review_cell + '</tr>')
+    return "".join(out)
 
 
 def _drafts_section(d: dict) -> str:
@@ -397,13 +418,13 @@ def _drafts_section(d: dict) -> str:
            f'letter-spacing:.1em;text-transform:uppercase;color:var(--muted);'
            f'margin:0 0 10px">Synced, awaiting publish</h3>'
            f'<div class="scroll"><table><tr><th>Item</th><th class="num">Price</th>'
-           f'<th>SKU</th><th>Blocking</th></tr>{_draft_rows(d["synced"])}</table></div>'
+           f'<th>SKU</th><th>Blocking</th><th></th></tr>{_draft_rows(d["synced"])}</table></div>'
            if d["synced"] else "")
         + (f'<h3 style="font:600 11px/1 &quot;IBM Plex Sans&quot;,sans-serif;'
            f'letter-spacing:.1em;text-transform:uppercase;color:var(--muted);'
            f'margin:22px 0 10px">Drafted, not yet synced</h3>'
            f'<div class="scroll"><table><tr><th>Item</th><th class="num">Price</th>'
-           f'<th>SKU</th><th>Blocking</th></tr>{_draft_rows(d["drafted"])}</table></div>'
+           f'<th>SKU</th><th>Blocking</th><th></th></tr>{_draft_rows(d["drafted"])}</table></div>'
            if d["drafted"] else "")
         + ('' if d["count"] else '<p class="note">Nothing drafted or synced-but-unpublished '
                                   'right now.</p>')

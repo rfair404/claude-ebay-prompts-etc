@@ -13,10 +13,13 @@ all. Nothing here touches eBay or Apify credentials; every job type comes
 from webapp/jobs.py's Phase-2 whitelist. Publish, offers, policy sweep, and
 Apify comp pulls stay chat-only until Phase 3's secrets story lands.
 
-Review-queue local writes (approve a PREP stage, edit a draft field —
-the third bullet of Phase 2's "What") are left for a follow-up PR: this one
-covers the live dashboard and the job queue itself, the two pieces every
-later write-endpoint will sit on top of.
+The review page (`/review/{shoot}`) is read-only — it renders the same
+secret-free page `tools/review_card_html.py` always has, live, from a
+shoot's already-written `draft.md`/`price.txt`/`review_card.md`. It calls
+no eBay/Apify API (those live behind `preflight_listing()`, which this
+route never touches). Review-queue *writes* (approve a PREP stage, edit a
+draft field — the third bullet of Phase 2's "What") are still left for a
+follow-up PR.
 
     python -m lib.cli serve                 # -> http://127.0.0.1:8770
     python -m lib.cli serve --port 8080
@@ -38,7 +41,8 @@ from fastapi.responses import HTMLResponse          # noqa: E402
 from pydantic import BaseModel                       # noqa: E402
 
 import tools.dashboard as _dashboard                 # noqa: E402
-from webapp.jobs import JOB_HANDLERS                 # noqa: E402
+import tools.review_card_html as _review_card_html   # noqa: E402
+from webapp.jobs import JOB_HANDLERS, _resolve_shoot_dir  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
 
 DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
@@ -86,6 +90,25 @@ def _job_dict(job: Job) -> dict:
 @app.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     return _dashboard.draw(_dashboard.gather())
+
+
+@app.get("/review/{shoot}", response_class=HTMLResponse)
+def review(shoot: str) -> str:
+    """The REVIEW gate page, live — same secret-free render
+    tools/review_card_html.py has always produced, from a shoot's own
+    draft.md/price.txt/review_card.md. No eBay/Apify call, no write: this
+    is strictly a faster way to look at what a chat session already
+    produced, not a new way to decide anything (see _shared.md's Publish
+    firewall — nothing here approves or publishes)."""
+    try:
+        shoot_dir = _resolve_shoot_dir(shoot)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not (shoot_dir / "draft.md").exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{shoot!r} has no draft.md yet — DRAFT hasn't run")
+    return _review_card_html.render(shoot_dir)
 
 
 @app.post("/api/jobs")

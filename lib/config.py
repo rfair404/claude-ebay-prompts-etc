@@ -62,6 +62,15 @@ class ConfigError(RuntimeError):
 # reliability (high success rate) + AI-mode + visual/exact match buckets.
 DEFAULT_LENS_ACTOR = "borderline/google-lens"
 
+# lib/fine_inspect.py — pluggable high-resolution image inspector (fine
+# print, raised/embossed marks, signatures). "gemini" is the only backend
+# shipped today; registering a new one in fine_inspect.BACKENDS makes its
+# name valid here too.
+DEFAULT_VISION_BACKEND = "gemini"
+# Chosen for accuracy on fine detail over cost/latency — fine_inspect is
+# called sparingly, on crops other reads already failed on.
+DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+
 DEFAULT_PROFILE = {
     "margin_target": 0.50,
     "buy_point_multiplier": 0.5,
@@ -224,6 +233,63 @@ def get_lens_actor() -> str:
         return str(actor)
 
     return DEFAULT_LENS_ACTOR
+
+
+def get_gemini_api_key() -> str:
+    """Gemini API key for lib/fine_inspect.py. Precedence: env var > config
+    file > error. Same precedence contract as get_apify_token().
+
+    Raises:
+        ConfigError if no key is available anywhere.
+    """
+    env = os.environ.get("GEMINI_API_KEY")
+    if env:
+        return env
+
+    config = load_config()
+    key = _nested(config, "vision", "gemini", "api_key")
+    if key:
+        return str(key)
+
+    raise ConfigError(
+        f"Gemini API key not found.\n"
+        f"  Set the GEMINI_API_KEY environment variable, OR\n"
+        f"  add this to {config_path()}:\n"
+        f"      vision:\n"
+        f"        gemini:\n"
+        f"          api_key: \"<your-key>\"\n"
+        f"  (Get a key at https://aistudio.google.com/apikey)"
+    )
+
+
+def get_gemini_model() -> str:
+    """Gemini model id for fine_inspect's Gemini backend. Precedence:
+    env > config > DEFAULT_GEMINI_MODEL."""
+    env = os.environ.get("GEMINI_VISION_MODEL")
+    if env:
+        return env
+
+    config = load_config()
+    model = _nested(config, "vision", "gemini", "model")
+    if model:
+        return str(model)
+
+    return DEFAULT_GEMINI_MODEL
+
+
+def get_vision_backend() -> str:
+    """Which lib/fine_inspect.py backend to use. Precedence:
+    env > config `vision.backend` > DEFAULT_VISION_BACKEND ("gemini")."""
+    env = os.environ.get("VISION_BACKEND")
+    if env:
+        return env
+
+    config = load_config()
+    backend = _nested(config, "vision", "backend")
+    if backend:
+        return str(backend)
+
+    return DEFAULT_VISION_BACKEND
 
 
 def get_easypost_key() -> str:
@@ -391,6 +457,15 @@ def _cli() -> None:
         print(f"apify.lens_actor: {get_lens_actor()}")
 
         try:
+            gemini_key = get_gemini_api_key()
+            print(f"vision.gemini.api_key: {_redact(gemini_key)}")
+        except ConfigError:
+            print("vision.gemini.api_key: (not set)")
+
+        print(f"vision.backend: {get_vision_backend()}")
+        print(f"vision.gemini.model: {get_gemini_model()}")
+
+        try:
             ep_key = get_easypost_key()
             print(f"easypost.api_key: {_redact(ep_key)}")
         except ConfigError:
@@ -428,6 +503,7 @@ def _cli() -> None:
 
         for name, getter, note in (
             ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
+            ("GEMINI_API_KEY", get_gemini_api_key, "fine_inspect.py only"),
         ):
             try:
                 getter()
