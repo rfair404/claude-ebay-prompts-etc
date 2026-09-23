@@ -102,6 +102,16 @@ where `<store>` is the draft's `store:` field — and read `price_posture`.
    basis the comps are compared on (never mix the two; see the delivered-basis
    rule). On a buyer-pays-shipping storefront this matters twice over: our ask
    plus our postage is what competes with new delivered.
+
+   **Use the CHEAPEST CREDIBLE new, not the median new.** A buyer weighing
+   used against new does not compare against the middle of the market; they
+   compare against the cheapest new one they can actually buy from a seller
+   they trust. Credible means: same spec (same material, same thread
+   standard, same size — a part number alone is not enough, mislabelled
+   titles are common), in stock, and a seller with real feedback. Measured on
+   GROCO IBV-750, 2026-09-23: median new ask $47.58 vs cheapest credible new
+   $33.68 — a cap of $35.68 against $25.26, i.e. a 41% difference in the
+   ceiling from one word in the method.
 3. **Cap the tiers**: `price_stats.apply_new_price_ceiling(tiers,
    new_delivered, pct=<storefront's new_price_ceiling_pct>)`. It caps only the
    tiers that exceed the cap, keeps each original number as `uncapped_price`,
