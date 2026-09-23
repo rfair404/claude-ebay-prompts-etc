@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Print-friendly pick list — and packing slip — for one shipment. Open it,
-hit print, done.
+"""Print-friendly pick list — and packing slip — for one shipment. Renders,
+ships it to temp storage, hands back the link (GH #151). Open it, hit print,
+done.
 
+    python tools/pick_list_html.py <order-id>
+        -> prints an https:// link (48h default TTL, --ttl to change it)
     python tools/pick_list_html.py <order-id> --pdf
-        -> pick_lists/pick_<id>.html + pick_lists/pick_<id>.pdf
+        -> also writes pick_lists/pick_<id>.pdf locally (never uploaded)
+    python tools/pick_list_html.py --poll
+        -> one link per new shipment awaiting shipment; idempotent, same as
+           tools/pick_list.py --poll
+    python tools/pick_list_html.py --revoke <order-id>
+        -> deletes that order's object from temp storage before its link
+           would otherwise expire
 
 One page == one box. Several ids may share a page only when the buyer AND the
 full ship-to address are identical (the one case eBay merges under a single
 shipping label); assert_one_shipment() hard-stops anything else, because a
 combined sheet for two destinations is a mis-ship — the picker packs both
 items into one box and one buyer never gets their order. Run the tool once
-per shipment.
+per shipment. --poll never combines orders onto one sheet — a queue poll has
+no human present to catch a mis-grouping, so each order gets its own link.
 
 Same data as `python -m lib.cli pick-list`, rendered as a page instead of
 terminal text, with a small grayscale thumbnail of the item's hero photo so
@@ -18,21 +28,51 @@ picking off a shelf doesn't require re-reading the title. Deliberately
 low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
-Buyer name and street address are on this page. Like tools/pick_list.py, the
-output goes to pick_lists/ (gitignored) only — never an artifact, never
-committed, never anywhere that leaves the machine.
+----- PII posture (changed by GH #151 — read before touching this file) -----
+
+Buyer name and street address are on this page. Earlier versions of this
+tool promised the rendered HTML "never leaves the machine" — that promise is
+gone. A pick sheet is something a person needs to open from a phone, from
+Remote Control, from wherever they're standing at the shelves, so the tool's
+result is now a **link**, not a file path: the rendered HTML (already fully
+self-contained — thumbnail inlined as base64, no external CSS/JS/fonts) is
+uploaded to Cloudflare R2 (lib/temp_storage.py) and handed back as a
+time-limited, unguessable, TLS-only presigned URL — see that module's
+docstring for exactly what backs each guarantee. In summary:
+
+  - unguessable  — the object key carries 128 bits of random entropy, never
+                    an order number or anything sequential
+  - expiring     — the link stops authenticating on its own after --ttl
+                    hours (default 48; the presigned signature enforces this,
+                    not a lifecycle rule)
+  - revocable    — `--revoke <order-id>` deletes the object early
+  - not a record — the link is never written into a committed file, the
+                    listings ledger, or any shared log; it's ephemeral
+                    output, same as the sheet it points at
+  - offline-safe — with no R2 credentials configured (lib/config.py's
+                    get_r2_credentials() returns None), the tool still
+                    renders and writes the local file in pick_lists/
+                    (gitignored, unchanged) and says plainly that no link is
+                    available — it never prints something path-shaped and
+                    calls it a link, and never exits 0 on a silent upload
+                    failure once an upload was actually attempted and failed
+
+A local copy in pick_lists/ is still written every time as a byproduct (also
+what --pdf renders from), but it is no longer what gets handed to a human.
 
 No seller financials on this page — deliberately. This sheet can end up seen
 by the buyer during packing (dropped in the box by mistake, photographed,
 whatever), so it shows only the order total, which the buyer already knows
 from their own receipt. tools/pick_list.py's terminal output is seller-only
 and does show buyer-paid-shipping / net payout; do not port those figures
-here. See GH #84.
+here. Being one link-forward away from anyone who finds it is a stronger
+reason for that rule, not a weaker one. See GH #84.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import html
 import io
 import re
@@ -49,9 +89,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
+import pick_list                                                    # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
+from temp_storage import R2Error, revoke_key, upload_pick_sheet     # noqa: E402
+
+DEFAULT_TTL_HOURS = 48.0
 
 THUMB_PX = 110      # small on purpose — a pick sheet, not a photo proof; also
                     # what keeps a 4-item grouped list on one printed page
@@ -258,6 +302,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
 <title>{html.escape(title)}</title>
 <style>
   * {{ box-sizing: border-box; }}
@@ -425,16 +470,154 @@ def _default_out_name(orders: list[dict]) -> str:
     return f"pick_group_{stem}.html".replace("/", "_")
 
 
+def render_and_ship(orders: list[dict], drafts: list[dict], ledger: list[dict],
+                    out_path: Path, ttl_hours: float) -> dict:
+    """Render the sheet, write the local byproduct, then try to ship it.
+
+    assert_one_shipment() is the caller's job, and must run BEFORE this —
+    nothing here uploads until that hard-stop has already passed, so a
+    refused group never leaves a half-uploaded object behind (GH #151).
+
+    Always writes `out_path` (the local file is a byproduct, not the
+    result). Returns a dict:
+      - {"configured": False}                                — no R2 creds;
+        offline mode, local file is all there is.
+      - {"configured": True, "url", "key", "expires_at"}      — uploaded.
+      - {"error": "..."}                                       — R2 was
+        configured but the upload itself failed; local file still written.
+    """
+    out_html = render_html(orders, drafts, ledger)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(out_html, encoding="utf-8")
+    try:
+        return upload_pick_sheet(out_html, ttl_hours)
+    except R2Error as e:
+        return {"error": str(e)}
+
+
+def _record_link(order_ids: list[str], result: dict) -> None:
+    state = pick_list._load_state()
+    state.setdefault("html", {})
+    for oid in order_ids:
+        state["html"][oid] = {"url": result["url"], "key": result["key"],
+                              "expires_at": result["expires_at"]}
+    pick_list._save_state(state)
+
+
+def _parse_iso(ts: str | None) -> datetime.datetime | None:
+    if not ts:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+
+def cmd_poll(args) -> int:
+    """--poll: one link per NEW shipment awaiting shipment. Idempotent — an
+    order whose link hasn't expired yet is skipped and NOT re-uploaded;
+    --reprint forces one order through regardless, revoking its old object.
+
+    Never groups orders onto one page (unlike the explicit order-id CLI
+    path) — a queue poll has no human present to confirm a same-buyer
+    merge, so every order gets its own sheet and its own link."""
+    orders = pick_list.fetch_open()
+    drafts, ledger = scan_drafts(), load_listings_ledger()
+    state = pick_list._load_state()
+    state.setdefault("html", {})
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    rendered, skipped, failed = [], [], []
+    for o in orders:
+        oid = o.get("orderId", "")
+        if not oid:
+            continue
+        entry = state["html"].get(oid)
+        stale = oid == args.reprint
+        if entry and not stale:
+            expires_at = _parse_iso(entry.get("expires_at"))
+            if expires_at is None or now < expires_at:
+                skipped.append(oid)
+                continue
+            stale = True  # link on record has expired — treat as new
+
+        out_path = OUT_DIR / _default_out_name([o])
+        result = render_and_ship([o], drafts, ledger, out_path, args.ttl)
+
+        if stale and entry and entry.get("key"):
+            try:
+                revoke_key(entry["key"])
+            except R2Error:
+                pass  # best-effort — the new upload/link still proceeds
+
+        if "error" in result:
+            print(f"[FAIL] {oid}: upload failed ({result['error']}); local file is {out_path}")
+            failed.append(oid)
+            continue
+        if not result.get("configured"):
+            print(f"[OK] {oid}: wrote {out_path} (no temp storage configured — link unavailable)")
+            rendered.append(oid)
+            continue
+
+        state["html"][oid] = {"url": result["url"], "key": result["key"],
+                              "expires_at": result["expires_at"]}
+        print(result["url"])
+        rendered.append(oid)
+
+    pick_list._save_state(state)
+    if not rendered and not skipped and not failed:
+        print("[OK] nothing awaiting shipment")
+    else:
+        print(f"[OK] {len(rendered)} rendered, {len(skipped)} already live (skipped)"
+              + (f", {len(failed)} failed" if failed else ""))
+    return 1 if failed else 0
+
+
+def cmd_revoke(order_id: str) -> int:
+    state = pick_list._load_state()
+    entry = (state.get("html") or {}).get(order_id)
+    if not entry:
+        print(f"[X] no live link on record for order {order_id}")
+        return 1
+    try:
+        revoke_key(entry["key"])
+    except R2Error as e:
+        print(f"[FAIL] could not revoke order {order_id}'s link: {e}")
+        return 1
+    del state["html"][order_id]
+    pick_list._save_state(state)
+    print(f"[OK] revoked the link for order {order_id}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("order_id", nargs="+", metavar="ORDER_ID",
+    ap.add_argument("order_id", nargs="*", metavar="ORDER_ID",
                     help="one order id. Several ids are combined onto ONE page only if they are the same buyer AND the same ship-to address (one box, one eBay label); anything else is refused - run the tool once per shipment.")
     ap.add_argument("--days", type=int, default=30, help="lookback window to find the order(s) (default 30)")
     ap.add_argument("--out", metavar="FILE", help="output path (default pick_lists/pick_<id>.html)")
     ap.add_argument("--pdf", action="store_true",
-                    help="also render a PDF beside the HTML (headless Chrome/Edge)")
+                    help="also render a PDF beside the HTML (headless Chrome/Edge, local only — never uploaded)")
+    ap.add_argument("--ttl", type=float, default=DEFAULT_TTL_HOURS, metavar="HOURS",
+                    help=f"link lifetime in hours (default {DEFAULT_TTL_HOURS:g})")
+    ap.add_argument("--poll", action="store_true",
+                    help="poll for orders awaiting shipment; one link per NEW shipment (idempotent)")
+    ap.add_argument("--reprint", metavar="ORDER_ID",
+                    help="with --poll: force this one order to render + upload again even "
+                         "though its link hasn't expired, revoking the old object")
+    ap.add_argument("--revoke", metavar="ORDER_ID",
+                    help="delete that order's uploaded object before its link expires, and forget it")
     args = ap.parse_args()
+
+    if args.revoke:
+        return cmd_revoke(args.revoke)
+
+    if args.poll:
+        return cmd_poll(args)
+
+    if not args.order_id:
+        ap.error("give one or more ORDER_ID, or use --poll / --revoke")
 
     candidates = fetch_orders(args.days, verbose=False)
     matches, missing = [], []
@@ -448,16 +631,24 @@ def main() -> int:
     assert_one_shipment(matches)
 
     drafts, ledger = scan_drafts(), load_listings_ledger()
-    out_html = render_html(matches, drafts, ledger)
-
     out_path = Path(args.out) if args.out else OUT_DIR / _default_out_name(matches)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(out_html, encoding="utf-8")
-    print(f"[OK] wrote {out_path}")
+    result = render_and_ship(matches, drafts, ledger, out_path, args.ttl)
+
+    rc = 0
+    if "error" in result:
+        print(f"[FAIL] upload to temp storage failed: {result['error']}")
+        print(f"[OK] wrote local fallback {out_path}")
+        rc = 1
+    elif not result.get("configured"):
+        print(f"[OK] wrote {out_path} (no temp storage configured — link unavailable)")
+    else:
+        print(result["url"])
+        _record_link([o.get("orderId", "") for o in matches], result)
+
     if args.pdf:
         pdf_path = to_pdf(out_path)
         print(f"[OK] wrote {pdf_path}")
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

@@ -325,6 +325,35 @@ def get_easypost_key() -> str:
     )
 
 
+def get_r2_credentials() -> Optional[dict]:
+    """Cloudflare R2 credentials for lib/temp_storage.py (GH #151 -- pick
+    sheets shipped to temp storage as expiring links). Precedence, per field:
+    env var > config file.
+
+    Unlike every other credential accessor in this module, a missing/partial
+    credential set returns None instead of raising ConfigError. Being
+    unconfigured is this tool's normal "offline / no network" mode, not a
+    failure -- tools/pick_list_html.py falls back to a local-only file
+    whenever this returns None, and only treats an *attempted* upload that
+    then fails as the loud error case.
+
+    Returns:
+        None if account_id/access_key_id/secret_access_key/bucket aren't
+        all present; otherwise a dict with those four keys.
+    """
+    config = load_config()
+    section = config.get("r2") or {}
+    creds = {
+        "account_id":       os.environ.get("R2_ACCOUNT_ID") or section.get("account_id"),
+        "access_key_id":    os.environ.get("R2_ACCESS_KEY_ID") or section.get("access_key_id"),
+        "secret_access_key": os.environ.get("R2_SECRET_ACCESS_KEY") or section.get("secret_access_key"),
+        "bucket":           os.environ.get("R2_BUCKET") or section.get("bucket"),
+    }
+    if not all(creds.values()):
+        return None
+    return {k: str(v) for k, v in creds.items()}
+
+
 def get_ebay_credentials() -> dict:
     """Return the raw eBay credentials section from config.
 

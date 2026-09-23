@@ -25,7 +25,14 @@ to see the format when the queue is empty.
 Buyer names and street addresses are in this output. It prints to the terminal
 and, with --out / --poll, to a local file (pick_lists/, gitignored); it is
 never written anywhere that leaves the machine — not a commit, not an
-artifact, not a shared log.
+artifact, not a shared log. That guarantee is unchanged and specific to
+*this* module's plain-text output. tools/pick_list_html.py used to make the
+identical promise about its rendered HTML sheet and no longer does — GH #151
+ships that HTML to Cloudflare R2 behind an expiring, unguessable link instead,
+because a pick sheet needs to be opened from wherever the packing actually
+happens, not just from the machine that rendered it. See that module's
+docstring for the new PII posture and what backs each of its guarantees. This
+module's terminal/--poll/--record-tracking flow is untouched by that change.
 
 Buying a shipping label is explicitly OUT of scope here — see GH #32: eBay's
 Logistics API (shipping_quote / shipment) returns an empty-bodied 404 for this
