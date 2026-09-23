@@ -41,8 +41,10 @@ sales_ledger.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
 # Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
-# Terminal, local file, and printer only, per GH #32's PII guardrail; never
-# committed. Regenerate with
+# Terminal, local file, printer, and — since #151 — the localhost-only app at
+# 127.0.0.1:8770/pick/<token>, which serves the published sheets out of
+# pick_lists/.served/ (same directory, same rule, covered by the same line
+# below). Never committed. Regenerate with
 #   python -m lib.cli pick-list --poll
 /pick_lists/
 
