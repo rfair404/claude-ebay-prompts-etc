@@ -4,8 +4,8 @@ hit print, done.
 
     python tools/pick_list_html.py <order-id>
         -> http://127.0.0.1:8770/pick/<token>     (expires in 48h)
-    python tools/pick_list_html.py <order-id> --local-only --pdf
-        -> pick_lists/pick_<id>.html + pick_lists/pick_<id>.pdf
+    python tools/pick_list_html.py <order-id> --local-only
+        -> pick_lists/pick_<id>.html
 
 The result is a LINK, not a file path (#151). The rendered page is parked in
 lib/pick_store.py's short-lived store and served by webapp/server.py's
@@ -54,10 +54,7 @@ import base64
 import html
 import io
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -362,38 +359,6 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 </body></html>"""
 
 
-_BROWSERS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
-
-
-def to_pdf(html_path: Path) -> Path:
-    """Print the sheet to PDF with headless Chrome/Edge — the same engine that
-    renders the HTML, so the PDF is what the page actually looks like. No
-    background graphics flag: the 50%-screened thumbnail is an <img>, and the
-    letterhead is type, so both come through without printing a page of ink."""
-    exe = next((b for b in _BROWSERS if Path(b).exists()), None)
-    if not exe:
-        raise SystemExit("[FAIL] no Chrome or Edge found to render the PDF; "
-                         "open the HTML and print it from the browser instead")
-    pdf_path = html_path.with_suffix(".pdf")
-    profile = tempfile.mkdtemp(prefix="picklist-")
-    try:
-        r = subprocess.run(
-            [exe, "--headless=new", "--disable-gpu", "--no-first-run",
-             f"--user-data-dir={profile}", "--no-pdf-header-footer",
-             f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()],
-            capture_output=True, text=True, timeout=120)
-    finally:
-        shutil.rmtree(profile, ignore_errors=True)
-    if not pdf_path.exists():
-        raise SystemExit(f"[FAIL] PDF render failed ({exe}):\n{r.stderr.strip()[:400]}")
-    return pdf_path
-
-
 def _shipment_key(o: dict) -> tuple:
     """What has to match before two orders may share one page: the buyer and
     the exact place the box is going. Normalised (case/whitespace) but not
@@ -505,8 +470,6 @@ def main() -> int:
                     help="delete a published sheet now instead of waiting for it to expire")
     ap.add_argument("--list", action="store_true", dest="do_list",
                     help="list the live published sheets (local only - no route does this)")
-    ap.add_argument("--pdf", action="store_true",
-                    help="also render a local PDF (headless Chrome/Edge); implies a local HTML file beside it")
     args = ap.parse_args()
 
     if args.revoke:
@@ -530,10 +493,9 @@ def main() -> int:
     drafts, ledger = scan_drafts(), load_listings_ledger()
     out_html = render_html(matches, drafts, ledger)
 
-    # A link is the deliverable (#151). Local files are the fallback and the
-    # --pdf path: headless Chrome prints from a file:// URL, so asking for a
-    # PDF still puts an HTML file on disk to print from.
-    want_local = args.local_only or bool(args.out) or args.pdf
+    # A link is the deliverable (#151); a local file is what --local-only /
+    # --out ask for, and what a failed publish falls back to.
+    want_local = args.local_only or bool(args.out)
     published = None
     if not (args.local_only or args.out):
         try:
@@ -552,8 +514,6 @@ def main() -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(out_html, encoding="utf-8")
         print(f"[OK] wrote {out_path}")
-        if args.pdf:
-            print(f"[OK] wrote {to_pdf(out_path)}")
         return 0 if (published or args.local_only or args.out) else 1
     return 0
 
