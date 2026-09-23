@@ -1022,6 +1022,32 @@ def test_ebay_extra_named_store_reads_its_own_flat_block_not_the_default():
         assert L._ebay_extra("payment_policy_id", store="junk") is None
 
 
+def test_resolve_policies_and_location_does_not_require_international_policy():
+    # Regression: fulfillment_policy_id_international is documented optional
+    # in the surrounding comment ("Only items with shipping.international:
+    # true use it") but was missing from the "these are optional" skip-list
+    # in _resolve_policies_and_location() — every account without one (the
+    # common case; it's for eBay International Shipping specifically) failed
+    # --sync/--publish/--review with a spurious "missing account-specific
+    # settings" error. This is the first test to ever exercise the real
+    # (non-stubbed) _resolve_policies_and_location() — every other test here
+    # replaces it with a lambda (see _patch_sync_collaborators above).
+    with _patched(L, load_config=lambda: {
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {
+                "merchant_location_key": "LOC-1",
+                "fulfillment_policy_id": "F-1",
+                "payment_policy_id": "P-1",
+                "return_policy_id": "R-1",
+                # fulfillment_policy_id_international deliberately unset
+            },
+        }}):
+        policies, location = L._resolve_policies_and_location(_Creds())
+    assert policies["fulfillment_international"] is None
+    assert location == "LOC-1"
+
+
 def _write_draft_for_store(tmp: Path, *, store=None) -> Path:
     shoot = tmp / "shoot"
     (shoot / "listing").mkdir(parents=True, exist_ok=True)

@@ -197,6 +197,85 @@ no policies and `--sync` fails. To switch back later, restore
 
 ---
 
+## Connect a SECOND store, without giving up the first (GH #147)
+
+The flow above **replaces** the active store's credentials — useful for
+switching, useless if you want both connected at once (e.g. a primary
+store plus a "junk" store for low-value/as-is lots you don't want
+cluttering, or accepting returns against, your main store's policies).
+
+For that, add a **named store** under `ebay.stores.<name>:` instead of
+overwriting the top-level `ebay:` block. Unlike the sandbox/production
+split above, a named store's block is flat — its own app keyset, refresh
+token, policies and location, no separate environment sub-nesting (a name
+like "junk" already picks one real account). See `config.example.yaml`'s
+`stores:` section for the exact skeleton to copy.
+
+```
+# 1. Print the consent URL FOR THE NEW STORE
+python lib/ebay_client.py --user-consent-url --store junk
+```
+
+```
+# 2. Open that URL SIGNED IN AS THE JUNK STORE (incognito = safest —
+#    especially now, since you're likely already signed in as your main
+#    store in your normal browser profile). Copy the `code` from the
+#    redirect.
+```
+
+```
+# 3. Exchange the code (prints the new store's refresh token)
+python lib/ebay_client.py --exchange-code "<code>" --store junk
+```
+
+Paste the printed `refresh_token` under `ebay.stores.junk` (NOT the
+top-level `ebay:` block — that stays your default store):
+
+```yaml
+ebay:
+  stores:
+    junk:
+      environment: "production"
+      user_refresh_token: "v^1.1#..."
+```
+
+```
+# 4. Pull the junk store's policy IDs + inventory location
+python lib/list_edit.py --store junk --setup-check
+```
+
+Paste the four values into the same `ebay.stores.junk:` block
+(`merchant_location_key`, `fulfillment_policy_id`, `payment_policy_id`,
+`return_policy_id`) — same field names, just under the store's own name
+instead of `sandbox:`/`production:`.
+
+```
+# 5. Verify both stores independently
+python lib/list_edit.py --setup-check              # default store
+python lib/list_edit.py --store junk --setup-check  # junk store
+```
+
+Once both are configured, target either one per command — nothing else
+about the pipeline changes, and every command that doesn't pass `--store`
+(and isn't overridden by a draft's own `store:` field or `active_store`/
+`EBAYBIZ_STORE`) keeps using the default store exactly as before:
+
+```
+python lib/list_edit.py --review   <shoot-dir>                # default store
+python lib/list_edit.py --list     <shoot-dir> --confirm       # default store
+python lib/list_edit.py --list     <shoot-dir> --store junk --confirm
+python lib/list_edit.py --offers   --store junk                # query the junk store's live offers
+```
+
+Or set `store: "junk"` once in that item's `draft.md` frontmatter —
+`--review`/`--sync`/`--publish`/`--list` all pick it up automatically
+without repeating `--store` on every command (an explicit `--store` flag
+still wins), and the printed REVIEW card names the store on its own
+`Store:` line and bakes `--store junk` into the approve command it shows,
+so there's nothing to remember to add by hand at that gate.
+
+---
+
 ## Going live (publish) — explicit and confirmation-gated
 
 API-created offers are UNPUBLISHED and do **not** appear in the Seller Hub
