@@ -246,6 +246,44 @@ SPECIFIC shot (raking-light macro) and the downstream value impact.
    credit. Needs direct egress (tmpfiles + api.apify.com); in a blocked
    sandbox, host via the lib and drive the actor through the Apify MCP.
 
+6. **Fine inspection (pluggable vision model) — a mark you can see but
+   can't read.** Step 1 found a mark that's genuinely present but stays
+   illegible at whatever resolution the photo affords — a raised/embossed
+   stamp with no paint or oxidation to give it contrast (Lens OCR's known
+   blind spot, step 5 above), worn engraving, tiny fine print. Before
+   writing `needs_followup_photo`, hand the tightest crop of it straight to
+   a dedicated vision model:
+
+       python lib/fine_inspect.py <shoot-dir>/<mark-crop>.jpg \
+           --question "Read every character of the mark stamped/embossed \
+           into this surface, as precisely as you can. Note any letters \
+           you can only partially make out."
+
+   This is a DIRECT READ of the pixels you already have, not a lookup — the
+   image never leaves the crop you give it, and it answers only the one
+   question you ask. Contrast with Lens (step 5), which searches the web
+   for what the photo *resembles*. The backend is pluggable
+   (`vision.backend` in config.yaml, `gemini` by default,
+   [lib/fine_inspect.py](../lib/fine_inspect.py)) — swap engines without
+   touching this prompt.
+
+   Treat the answer as a candidate READ, not ground truth — it can still
+   misread a worn or stylized mark. A confident, specific transcription
+   that matches the mark's visible shape → decode it via the normal mark
+   research (step 3) and cite it as a machine-read mark (not
+   `[BEST-CASE]` on its own). A hedged or empty answer → the mark stays
+   present-but-unresolvable; write `needs_followup_photo` as usual. Record
+   `Fine inspection: <what it read>` on the item and reconcile with your
+   own call, same as the Lens cross-check line.
+
+   **Gate:** run only when step 1 found a mark AND you can't already read
+   it — never on a legible mark (nothing to gain) or a genuinely markless
+   piece (nothing to read). Needs a configured API key (`GEMINI_API_KEY` or
+   `vision.gemini.api_key`) and direct egress to
+   generativelanguage.googleapis.com; degrades to `needs_followup_photo`
+   when either is unavailable — `fine_inspect()` never raises, it reports
+   the failure instead.
+
 ## Output format
 
     SHOOT SUMMARY
