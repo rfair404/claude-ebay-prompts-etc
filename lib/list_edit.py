@@ -64,6 +64,11 @@ policy IDs / locations to paste in.
     python list_edit.py --delete-offer <id> --confirm      # delete an offer (ends listing if live)
     python list_edit.py --delete-item <sku> --confirm      # delete inventory item + ALL its offers
     python list_edit.py --check                             # legacy stub-status report
+
+Add `--store <name>` to any credentialed command above to target a
+secondary eBay account (GH #147, e.g. a "junk" store) configured under
+ebay.stores.<name> in config.yaml — see config.example.yaml and
+lib/SETUP_EBAY_API.md. Omit it for the default/primary account.
 """
 
 from __future__ import annotations
@@ -378,12 +383,19 @@ def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
     return sku, ledger
 
 
-def _ebay_extra(field: str) -> Optional[str]:
-    """Read an account-specific eBay setting for the ACTIVE environment.
+def _ebay_extra(field: str, store: Optional[str] = None) -> Optional[str]:
+    """Read an account-specific eBay setting for the ACTIVE environment of
+    `store` (see ebay_client.load_credentials()'s store resolution — None
+    or "default" reads the top-level `ebay:` block; any other name reads
+    `ebay.stores.<name>`, same shape).
 
     Prefers ebay.<environment>.<field>; falls back to flat ebay.<field>.
     """
-    section = (load_config().get("ebay") or {})
+    top = (load_config().get("ebay") or {})
+    if store and store != "default":
+        section = (top.get("stores") or {}).get(store) or {}
+    else:
+        section = top
     env = section.get("environment") or "sandbox"
     env_section = section.get(env) or {}
     v = env_section.get(field)
@@ -550,10 +562,10 @@ def _assert_photos_cleared(photo_paths: list[Path]) -> None:
 
 
 def upload_photos_to_eps(photo_paths: list[Path],
-                         creds: Optional[EbayCredentials] = None) -> list[str]:
+                         creds: Optional[EbayCredentials] = None, store: Optional[str] = None) -> list[str]:
     """Upload each photo to EPS (in order); return EPS URLs in the same order."""
     _assert_photos_cleared(photo_paths)
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     urls: list[str] = []
     for ph in photo_paths:
         data = Path(ph).read_bytes()
@@ -819,46 +831,49 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     """
     missing = []
     policies = {
-        "fulfillment": _ebay_extra("fulfillment_policy_id"),
-        "payment": _ebay_extra("payment_policy_id"),
-        "return": _ebay_extra("return_policy_id"),
+        "fulfillment": _ebay_extra("fulfillment_policy_id", store=creds.store),
+        "payment": _ebay_extra("payment_policy_id", store=creds.store),
+        "return": _ebay_extra("return_policy_id", store=creds.store),
     }
     # Optional: a Media Mail fulfillment policy used for true media items
     # (books, sheet music, recordings, computer media). NOT magazines /
     # catalogs / anything carrying advertising — periodicals are excluded from
     # Media Mail (DMM 173.4.2). Not required — falls back to default.
-    policies["fulfillment_media"] = _ebay_extra("fulfillment_policy_id_media")
+    policies["fulfillment_media"] = _ebay_extra("fulfillment_policy_id_media", store=creds.store)
     # Optional: a Local-pickup-only policy used for ship-risky items (fragile /
     # oversized). Not required — only items the user marks LOCAL_PICKUP need it.
-    policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup")
+    policies["fulfillment_local_pickup"] = _ebay_extra("fulfillment_policy_id_local_pickup", store=creds.store)
     # Optional: an international (eBay International Shipping) policy — Worldwide
     # shipToLocations, no region exclusions. Only items with
     # `shipping.international: true` use it, and only if they clear the
     # dangerous-goods gate in _international_blockers().
-    policies["fulfillment_international"] = _ebay_extra("fulfillment_policy_id_international")
+    policies["fulfillment_international"] = _ebay_extra("fulfillment_policy_id_international", store=creds.store)
     # US-ONLY: items US export law keeps in the country (firearm magazines and
     # parts, body armor, night vision). Needs its own policy because the
     # default one ships Worldwide — see lib/us_only.py for why that matters.
-    policies["fulfillment_us_only"] = _ebay_extra("fulfillment_policy_id_us_only")
+    policies["fulfillment_us_only"] = _ebay_extra("fulfillment_policy_id_us_only", store=creds.store)
     # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
     # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
     # listings need it; falls back to the default payment policy otherwise.
-    policies["payment_auction"] = _ebay_extra("payment_policy_id_auction")
-    location = _ebay_extra("merchant_location_key")
+    policies["payment_auction"] = _ebay_extra("payment_policy_id_auction", store=creds.store)
+    location = _ebay_extra("merchant_location_key", store=creds.store)
     for k, v in policies.items():
         if k in ("fulfillment_media", "fulfillment_local_pickup", "fulfillment_us_only",
-                  "payment_auction"):
+                  "fulfillment_international", "payment_auction"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")
     if not location:
         missing.append("ebay.merchant_location_key")
     if missing:
+        is_default = creds.store == "default"
+        where = "ebay:" if is_default else f"ebay.stores.{creds.store}:"
+        check_cmd = "--setup-check" if is_default else f"--setup-check --store {creds.store}"
         raise EbayAuthError(
-            "Missing account-specific settings in config.yaml: "
+            f"Missing account-specific settings for store {creds.store!r} in config.yaml: "
             + ", ".join(missing)
-            + "\n  Run `python list_edit.py --setup-check` to list your account's "
-              "policy IDs and locations, then paste them under `ebay:` in config."
+            + f"\n  Run `python list_edit.py {check_cmd}` to list that account's policy "
+              f"IDs and locations, then paste them under `{where}` in config."
         )
     return policies, location
 
@@ -1254,12 +1269,12 @@ def _insurance_notes(draft: Draft) -> list[str]:
     return []
 
 
-def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
+def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                       apply: bool = True) -> list[str]:
     """Check (and, if apply=True, auto-correct) a draft against its eBay
     category BEFORE sync/publish: condition validity + shipping. Returns a
     list of human-readable messages. Safe to run repeatedly (idempotent)."""
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
     category_id = _resolve_category_id(draft, creds)
@@ -1302,7 +1317,7 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
 # ---------------------------------------------------------------------------
 
 def build_review_card(draft_path: Path,
-                      creds: Optional[EbayCredentials] = None) -> tuple[str, str]:
+                      creds: Optional[EbayCredentials] = None, store: Optional[str] = None) -> tuple[str, str]:
     """Prepare an item for the REVIEW gate in ONE step and return
     (card_text, card_path). Does NOT publish.
 
@@ -1319,7 +1334,7 @@ def build_review_card(draft_path: Path,
     (prompts/_shared.md) is unchanged.
     """
     import csv
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     draft_path = _resolve_draft_path(draft_path)
     shoot = draft_path.parent
 
@@ -1542,13 +1557,13 @@ def build_review_card(draft_path: Path,
 # ---------------------------------------------------------------------------
 
 def create_or_update_listing(draft_path: Path,
-                             creds: Optional[EbayCredentials] = None) -> SyncResult:
+                             creds: Optional[EbayCredentials] = None, store: Optional[str] = None) -> SyncResult:
     """Sync a draft.md into eBay as an UNPUBLISHED (draft) offer.
 
     CREATE flow when frontmatter has no ebay_offer_id; EDIT flow otherwise.
     The offer is never published — that is a manual user action in Seller Hub.
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     if not creds.has_user:
         raise EbayAuthError("Sync needs user-context OAuth. Run `python list_edit.py --setup-check`.")
 
@@ -1737,7 +1752,7 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
 
 
 def resolve_draft_state(draft_path: Path,
-                        creds: Optional[EbayCredentials] = None) -> dict:
+                        creds: Optional[EbayCredentials] = None, store: Optional[str] = None) -> dict:
     """The eBay-API-is-truth rule applied to a single draft (GH #40).
 
     A draft's own meta can lie about whether it is live — christmas-elk
@@ -1749,7 +1764,7 @@ def resolve_draft_state(draft_path: Path,
     meta_offer_id, meta_listing_id, stale}; `stale` means the draft's meta
     disagrees with eBay and `--repair-meta` would rewrite it.
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
     st = offer_sellable_state(sku, creds)
@@ -1763,7 +1778,7 @@ def resolve_draft_state(draft_path: Path,
 
 
 def update_listing_fields(draft_path: Path, fields,
-                          creds: Optional[EbayCredentials] = None,
+                          creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                           allow_not_sellable: bool = False) -> list[str]:
     """Update ONLY the named field groups on an existing eBay item/offer.
 
@@ -1777,7 +1792,7 @@ def update_listing_fields(draft_path: Path, fields,
     listing resurrected as a new one. That happened on a real SKU. Checking the
     ledger is not sufficient — an accepted Best Offer never writes back to it.
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     if not creds.has_user:
         raise EbayAuthError("Update needs user-context OAuth. Run `python list_edit.py --setup-check`.")
     draft_path = _resolve_draft_path(draft_path)
@@ -1915,7 +1930,7 @@ class PublishResult:
     listing_url: Optional[str] = None
 
 
-def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
+def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                   confirm: bool = False) -> PublishResult:
     """Publish a previously-synced offer to a LIVE eBay listing.
 
@@ -1924,7 +1939,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     WOULD go live without calling publish. This is the only function that
     calls publishOffer; --sync never does.
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     if not creds.has_user:
         raise EbayAuthError("Publish needs user-context OAuth. Run `python list_edit.py --setup-check`.")
     draft_path = _resolve_draft_path(draft_path)
@@ -1998,7 +2013,7 @@ class EndResult:
     listing_id: Optional[str] = None
 
 
-def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
+def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                 confirm: bool = False) -> EndResult:
     """End (withdraw) a live listing. Dry run unless confirm=True.
 
@@ -2006,7 +2021,7 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     to UNPUBLISHED so it can be re-synced/re-published later. The inverse
     of publish — same guard (does nothing without --confirm).
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     if not creds.has_user:
         raise EbayAuthError("End needs user-context OAuth. Run `python list_edit.py --setup-check`.")
     draft_path = _resolve_draft_path(draft_path)
@@ -2043,12 +2058,12 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
 # (works on ANY offer/SKU on the account, not just ones with a local draft)
 # ---------------------------------------------------------------------------
 
-def list_account_offers(creds: Optional[EbayCredentials] = None) -> list[dict]:
+def list_account_offers(creds: Optional[EbayCredentials] = None, store: Optional[str] = None) -> list[dict]:
     """Enumerate every offer on the account (inventory items -> offers).
 
     Returns rows: sku, title, offer_id, status, listing_id, price, marketplace.
     """
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     if not creds.has_user:
         raise EbayAuthError("Query needs user-context OAuth. Run `python list_edit.py --setup-check`.")
     rows: list[dict] = []
@@ -2087,10 +2102,10 @@ class OfferActionResult:
     detail: str = ""
 
 
-def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
+def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                          confirm: bool = False) -> OfferActionResult:
     """Withdraw (end) a live offer by ID — keeps the offer (UNPUBLISHED)."""
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     off = get_offer(offer_id, creds=creds)
     status = str(off.get("status") or "UNKNOWN")
     listing_id = str((off.get("listing") or {}).get("listingId") or "") or None
@@ -2105,10 +2120,10 @@ def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
                              detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
 
 
-def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
+def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                        confirm: bool = False) -> OfferActionResult:
     """Delete an offer by ID (permanent). If live, this also ends the listing."""
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     off = get_offer(offer_id, creds=creds)
     status = str(off.get("status") or "UNKNOWN")
     listing_id = str((off.get("listing") or {}).get("listingId") or "") or None
@@ -2122,10 +2137,10 @@ def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
                              detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
 
 
-def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
+def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None, store: Optional[str] = None,
                        confirm: bool = False) -> OfferActionResult:
     """Delete an inventory item (SKU) AND all its offers (permanent)."""
-    creds = creds or load_credentials()
+    creds = creds or load_credentials(store)
     try:
         offers = get_offers_for_sku(sku, creds=creds)
     except EbayAPIError:
@@ -2171,15 +2186,15 @@ def stub_status() -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 
-def _print_setup_check() -> None:
-    creds = load_credentials()
-    print(f"environment: {creds.environment}   config: {config_path()}")
+def _print_setup_check(store: Optional[str] = None) -> None:
+    creds = load_credentials(store)
+    print(f"store: {creds.store}   environment: {creds.environment}   config: {config_path()}")
     print(f"  app_id:             {'set' if creds.app_id else '(missing)'}")
     print(f"  cert_id:            {'set' if creds.cert_id else '(missing)'}")
     print(f"  dev_id:             {'set' if creds.dev_id else '(missing — REQUIRED for EPS photo upload)'}")
     print(f"  user_refresh_token: {'set' if creds.user_refresh_token else '(missing — REQUIRED for writes)'}")
     for f in ("merchant_location_key", "fulfillment_policy_id", "payment_policy_id", "return_policy_id"):
-        print(f"  {f}: {_ebay_extra(f) or '(missing)'}")
+        print(f"  {f}: {_ebay_extra(f, store=creds.store) or '(missing)'}")
     if not creds.has_user:
         print("\n[--] Cannot list account policies until app + user credentials are set.")
         return
@@ -2235,6 +2250,15 @@ def _cli() -> None:
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--create-pickup-policy", action="store_true", help="Create (idempotent) a LOCAL-PICKUP-ONLY fulfillment policy and print its ID to paste into config (ebay.fulfillment_policy_id_local_pickup).")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
+    ap.add_argument("--store", metavar="NAME", default=None,
+                    help="Which eBay account to use (GH #147) — a name under "
+                         "ebay.stores.<NAME> in config.yaml, e.g. 'junk'. "
+                         "Omit for the default/primary account (unchanged "
+                         "behavior). Applies to --status/--repair-meta, "
+                         "--setup-check, --create-pickup-policy, --preflight, "
+                         "--review, --sync, --publish, --list, --update, "
+                         "--end, --offers, --withdraw-offer, --delete-offer, "
+                         "--delete-item.")
     args = ap.parse_args()
 
     try:
@@ -2256,7 +2280,7 @@ def _cli() -> None:
                       else sorted(target.rglob("draft.md")))
             if not drafts:
                 raise SystemExit(f"no draft.md under {target}")
-            creds = load_credentials()
+            creds = load_credentials(args.store)
             flagged = []
             for dp in drafts:
                 try:
@@ -2296,10 +2320,10 @@ def _cli() -> None:
                 print(f"[OK] no change — sku {rep['sku_after']!r} already canonical (or none stamped)")
             return
         if args.setup_check:
-            _print_setup_check()
+            _print_setup_check(store=args.store)
             return
         if args.create_pickup_policy:
-            pol = create_local_pickup_policy()
+            pol = create_local_pickup_policy(creds=load_credentials(args.store))
             pid = pol.get("fulfillmentPolicyId")
             print(f"[OK] local-pickup policy: {pid}  ({pol.get('name')!r}, localPickup={pol.get('localPickup')})")
             print(f"  Paste into config.yaml under the active ebay.<env> block:")
@@ -2307,7 +2331,7 @@ def _cli() -> None:
             return
         if args.preflight:
             print(f"Preflight {args.preflight}:")
-            for m in preflight_listing(Path(args.preflight)):
+            for m in preflight_listing(Path(args.preflight), store=args.store):
                 print(f"  {m}")
             return
         if args.set_hero:
@@ -2318,12 +2342,12 @@ def _cli() -> None:
                 print(f"  {i}. {p}")
             return
         if args.review:
-            card, path = build_review_card(Path(args.review))
+            card, path = build_review_card(Path(args.review), store=args.store)
             print(card)
             print(f"\n[review_card] {path}")
             return
         if args.sync:
-            res = create_or_update_listing(Path(args.sync))
+            res = create_or_update_listing(Path(args.sync), store=args.store)
             print(f"[OK] {res.operation} eBay DRAFT (not published).")
             print(f"  offer_id:  {res.offer_id}")
             print(f"  sku:       {res.inventory_sku}")
@@ -2333,7 +2357,7 @@ def _cli() -> None:
             print(f"  to go live: python list_edit.py --publish {args.sync} --confirm")
             return
         if args.publish:
-            res = publish_offer(Path(args.publish), confirm=args.confirm)
+            res = publish_offer(Path(args.publish), confirm=args.confirm, store=args.store)
             if res.status_before == "PUBLISHED":
                 print(f"[i] Already LIVE. listing {res.listing_id}")
                 if res.listing_url: print(f"    {res.listing_url}")
@@ -2354,9 +2378,9 @@ def _cli() -> None:
             # Same --confirm guard as --publish: without it, this syncs and then
             # shows a DRY RUN of what would go live. This is the path the agent
             # runs ONLY after a human approves the REVIEW card.
-            sres = create_or_update_listing(Path(args.list_target))
+            sres = create_or_update_listing(Path(args.list_target), store=args.store)
             print(f"[OK] {sres.operation} eBay DRAFT (offer {sres.offer_id}, {len(sres.photo_eps_urls)} photos).")
-            res = publish_offer(Path(args.list_target), confirm=args.confirm)
+            res = publish_offer(Path(args.list_target), confirm=args.confirm, store=args.store)
             if res.status_before == "PUBLISHED":
                 print(f"[i] Already LIVE. listing {res.listing_id}")
                 if res.listing_url: print(f"    {res.listing_url}")
@@ -2378,7 +2402,8 @@ def _cli() -> None:
             field_list = [f for f in args.fields.split(",") if f.strip()]
             try:
                 changed = update_listing_fields(Path(args.update), field_list,
-                                                allow_not_sellable=args.allow_not_sellable)
+                                                allow_not_sellable=args.allow_not_sellable,
+                                                store=args.store)
             except ListingNotSellable as e:
                 print(f"[SKIP] {e}")
                 sys.exit(2)
@@ -2388,7 +2413,7 @@ def _cli() -> None:
                 print(f"[i] nothing changed on {args.update}.")
             return
         if args.end:
-            res = end_listing(Path(args.end), confirm=args.confirm)
+            res = end_listing(Path(args.end), confirm=args.confirm, store=args.store)
             if res.status_before != "PUBLISHED":
                 print(f"[i] Nothing live to end (offer status: {res.status_before}).")
             elif res.dry_run:
@@ -2401,7 +2426,7 @@ def _cli() -> None:
                 print(f"[ENDED] Withdrew offer {res.offer_id} (listing {res.listing_id}) — no longer live.")
             return
         if args.offers:
-            rows = list_account_offers()
+            rows = list_account_offers(store=args.store)
             print(f"{len(rows)} offer(s) on the account:\n")
             print(f"  {'STATUS':12} {'OFFER_ID':16} {'LISTING_ID':14} {'PRICE':>8}  SKU / TITLE")
             for r in rows:
@@ -2410,7 +2435,7 @@ def _cli() -> None:
                       f"{str(r['listing_id'] or '-'):14} {price:>8}  {r['sku']}  |  {r['title'][:48]}")
             return
         if args.withdraw_offer:
-            res = withdraw_offer_by_id(args.withdraw_offer, confirm=args.confirm)
+            res = withdraw_offer_by_id(args.withdraw_offer, confirm=args.confirm, store=args.store)
             if not res.done and res.status_before != "PUBLISHED":
                 print(f"[i] Offer {res.target} is {res.status_before} — {res.detail}")
             elif res.dry_run:
@@ -2421,7 +2446,7 @@ def _cli() -> None:
                 print(f"[ENDED] Withdrew offer {res.target} — {res.detail}")
             return
         if args.delete_offer:
-            res = delete_offer_by_id(args.delete_offer, confirm=args.confirm)
+            res = delete_offer_by_id(args.delete_offer, confirm=args.confirm, store=args.store)
             if res.dry_run:
                 print("[DRY RUN] WOULD DELETE this offer (permanent):")
                 print(f"  offer:   {res.target}\n  status:  {res.status_before}"
@@ -2432,7 +2457,7 @@ def _cli() -> None:
                 print(f"[DELETED] Offer {res.target} — {res.detail}")
             return
         if args.delete_item:
-            res = delete_item_by_sku(args.delete_item, confirm=args.confirm)
+            res = delete_item_by_sku(args.delete_item, confirm=args.confirm, store=args.store)
             if res.dry_run:
                 print("[DRY RUN] WOULD DELETE this inventory item AND its offers (permanent):")
                 print(f"  sku: {res.target}\n  {res.detail}")

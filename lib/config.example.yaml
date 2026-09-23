@@ -150,6 +150,40 @@ ebay:
                                          # returnShippingCostPayer: SELLER.
                                          # See docs/top-rated-plus.md.
 
+  # -------------------------------------------------------------------------
+  # Multiple eBay accounts (GH #147) — e.g. a secondary "junk" store for
+  # low-value / as-is lots you don't want cluttering (or accepting returns
+  # against) your main store's policies.
+  #
+  # Purely additive: everything above this block is the DEFAULT store and
+  # keeps working exactly as it always has when no --store flag is passed.
+  # Add a name here only when you actually have a second eBay seller
+  # account to point at; each entry is the SAME shape as the top-level
+  # `ebay:` block (environment + sandbox/production, its own app/cert/dev
+  # id, its own refresh token, its own policy IDs — eBay ties all of that
+  # to one seller account, so a second store needs its own full set, not
+  # just different policy ids).
+  #
+  # Use it via `--store <name>` on lib/list_edit.py (e.g.
+  # `python list_edit.py --publish <shoot> --store junk --confirm`) or any
+  # tool that documents a --store flag. Omit --store for the default store.
+  stores:
+    junk:
+      environment: "production"
+      production:
+        app_id: "PRD-app-id"
+        cert_id: "PRD-cert-id"
+        dev_id: "PRD-dev-id"
+        redirect_uri: "PRD-RuName"
+        user_refresh_token: null
+        merchant_location_key: null
+        fulfillment_policy_id: null
+        payment_policy_id: null
+        return_policy_id: null            # a shorter/no-returns policy is
+                                          # exactly the point of a junk store —
+                                          # set one here, distinct from the
+                                          # default store's above.
+
 # ---------------------------------------------------------------------------
 # EasyPost — self-serve carrier-rate API for buying shipping labels (GH #80)
 # ---------------------------------------------------------------------------

@@ -178,6 +178,7 @@ class EbayCredentials:
     dev_id: Optional[str] = None       # legacy XML-API ID; not needed for REST
     redirect_uri: Optional[str] = None # the OAuth redirect URI registered with eBay
     user_refresh_token: Optional[str] = None  # captured from user-consent flow
+    store: str = "default"             # which ebay.stores.<name> this came from (GH #147)
 
     @property
     def has_app(self) -> bool:
@@ -192,10 +193,47 @@ class EbayCredentials:
         return ENVIRONMENTS[self.environment]
 
 
-def load_credentials() -> EbayCredentials:
-    """Load eBay credentials from the YAML config."""
+def _resolve_ebay_section(config: dict, store: Optional[str]) -> tuple[dict, str]:
+    """Return (section, resolved_store_name) for `store`.
+
+    None/"default" reads the top-level `ebay:` block unchanged (every
+    single-store config keeps working exactly as before, GH #147). Any
+    other name reads `ebay.stores.<name>`, which must carry the SAME shape
+    (environment / sandbox / production) — additive, not a migration.
+    """
+    top = config.get("ebay") or {}
+    if not store or store == "default":
+        return top, "default"
+    stores = top.get("stores") or {}
+    section = stores.get(store)
+    if section is None:
+        available = ", ".join(sorted(stores)) or "(none configured)"
+        raise EbayAuthError(
+            f"Unknown eBay store {store!r}. Configured stores: {available}\n"
+            f"  Add it under {config_path()}, in the same shape as the "
+            f"top-level 'ebay:' block:\n"
+            f"      ebay:\n"
+            f"        stores:\n"
+            f"          {store}:\n"
+            f"            environment: \"production\"\n"
+            f"            production:\n"
+            f"              app_id: \"...\"\n"
+            f"              ...\n"
+        )
+    return section, store
+
+
+def load_credentials(store: Optional[str] = None) -> EbayCredentials:
+    """Load eBay credentials from the YAML config.
+
+    `store` selects which account to load (GH #147 — multiple eBay
+    stores, e.g. a "junk" store for low-value/as-is lots). None or
+    "default" reads the top-level `ebay:` block, identical to every
+    config written before this existed. A named store reads
+    `ebay.stores.<name>`, same shape as the top-level block.
+    """
     config = load_config()
-    section = config.get("ebay") or {}
+    section, store_name = _resolve_ebay_section(config, store)
 
     env = section.get("environment") or DEFAULT_ENVIRONMENT
     if env not in ENVIRONMENTS:
@@ -219,6 +257,7 @@ def load_credentials() -> EbayCredentials:
         dev_id=pick("dev_id"),
         redirect_uri=pick("redirect_uri"),
         user_refresh_token=pick("user_refresh_token"),
+        store=store_name,
     )
 
 
@@ -233,7 +272,10 @@ class _AppTokenCache:
     expires_at: float = 0.0  # epoch seconds
 
 
-_app_cache = _AppTokenCache()
+# Keyed by (store, environment) — GH #147. A single-slot cache would let a
+# second store's token silently overwrite (or be served) the first store's,
+# since nothing else distinguishes calls within one process.
+_app_caches: dict[tuple[str, str], _AppTokenCache] = {}
 
 
 def get_app_access_token(creds: Optional[EbayCredentials] = None, force_refresh: bool = False) -> str:
@@ -254,9 +296,10 @@ def get_app_access_token(creds: Optional[EbayCredentials] = None, force_refresh:
             "  Generate keys at https://developer.ebay.com/my/keys"
         )
 
+    cache = _app_caches.setdefault((creds.store, creds.environment), _AppTokenCache())
     now = time.time()
-    if not force_refresh and _app_cache.token and _app_cache.expires_at - 60 > now:
-        return _app_cache.token
+    if not force_refresh and cache.token and cache.expires_at - 60 > now:
+        return cache.token
 
     basic = base64.b64encode(f"{creds.app_id}:{creds.cert_id}".encode("utf-8")).decode("ascii")
     body = urllib.parse.urlencode({
@@ -291,8 +334,8 @@ def get_app_access_token(creds: Optional[EbayCredentials] = None, force_refresh:
     if not token:
         raise EbayAuthError(f"Token response missing access_token: {payload}")
 
-    _app_cache.token = token
-    _app_cache.expires_at = now + float(ttl)
+    cache.token = token
+    cache.expires_at = now + float(ttl)
     return token
 
 
@@ -421,8 +464,12 @@ class _UserTokenCache:
     expires_at: float = 0.0
 
 
-_user_cache = _UserTokenCache()
-_user_scopes = USER_SCOPES_SELL   # narrowed to USER_SCOPES_SELL_CORE on invalid_scope
+# Keyed by (store, environment) — same reasoning as _app_caches above.
+_user_caches: dict[tuple[str, str], _UserTokenCache] = {}
+# narrowed to USER_SCOPES_SELL_CORE on invalid_scope, per (store, environment)
+# since scope narrowing reflects what THAT store's refresh_token was actually
+# consented for, not a process-wide fact.
+_user_scopes_by_store: dict[tuple[str, str], list[str]] = {}
 
 
 def _refresh_user_token(creds: EbayCredentials, scopes: list[str]) -> dict:
@@ -465,22 +512,25 @@ def get_user_access_token(creds: Optional[EbayCredentials] = None,
             f"    4. paste the printed refresh_token into {config_path()}"
         )
 
+    cache_key = (creds.store, creds.environment)
+    cache = _user_caches.setdefault(cache_key, _UserTokenCache())
     now = time.time()
-    if not force_refresh and _user_cache.token and _user_cache.expires_at - 60 > now:
-        return _user_cache.token
+    if not force_refresh and cache.token and cache.expires_at - 60 > now:
+        return cache.token
 
     # Ask for the full set first; a token consented before sell.finances was
     # added answers invalid_scope, and then the core set still works. The
     # finances reader then gets its own 401/403, which it already degrades on.
-    # Remembered per process so an old token costs one extra call, not one per
-    # refresh.
-    global _user_scopes
+    # Remembered per (store, environment) so an old token costs one extra
+    # call, not one per refresh — and so narrowing one store's scope never
+    # narrows a different store's still-fully-scoped token (GH #147).
+    scopes = _user_scopes_by_store.setdefault(cache_key, list(USER_SCOPES_SELL))
     try:
-        payload = _refresh_user_token(creds, _user_scopes)
+        payload = _refresh_user_token(creds, scopes)
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
-        if "invalid_scope" in body_text and _user_scopes != USER_SCOPES_SELL_CORE:
-            _user_scopes = USER_SCOPES_SELL_CORE
+        if "invalid_scope" in body_text and scopes != USER_SCOPES_SELL_CORE:
+            _user_scopes_by_store[cache_key] = list(USER_SCOPES_SELL_CORE)
             return get_user_access_token(creds, force_refresh=True)
         raise EbayAuthError(
             f"Refreshing user token failed (HTTP {e.code}):\n  {body_text}\n"
@@ -492,8 +542,8 @@ def get_user_access_token(creds: Optional[EbayCredentials] = None,
     token = payload.get("access_token")
     if not token:
         raise EbayAuthError(f"Refresh response missing access_token: {payload}")
-    _user_cache.token = token
-    _user_cache.expires_at = now + float(payload.get("expires_in", 7200))
+    cache.token = token
+    cache.expires_at = now + float(payload.get("expires_in", 7200))
     return token
 
 
@@ -1063,6 +1113,10 @@ def _cli() -> None:
                         help="Override category tree ID (skips lookup).")
     parser.add_argument("--json", action="store_true",
                         help="Output raw JSON instead of pretty-printed.")
+    parser.add_argument("--store", metavar="NAME", default=None,
+                        help="Which eBay account to use (GH #147) — a name "
+                             "under ebay.stores.<NAME> in config.yaml. Omit "
+                             "for the default/primary account.")
 
     args = parser.parse_args()
 
@@ -1087,7 +1141,8 @@ def _cli_run(parser: "argparse.ArgumentParser", args: "argparse.Namespace") -> N
 
     # --check works without credentials (it reports their absence)
     if args.check:
-        creds = load_credentials()
+        creds = load_credentials(args.store)
+        print(f"store:              {creds.store}")
         print(f"environment:        {creds.environment}")
         print(f"app_id:             {'set' if creds.app_id else '(missing)'}")
         print(f"cert_id:            {'set' if creds.cert_id else '(missing)'}")
@@ -1111,7 +1166,7 @@ def _cli_run(parser: "argparse.ArgumentParser", args: "argparse.Namespace") -> N
         return
 
     # Live API operations — require credentials
-    creds = load_credentials()
+    creds = load_credentials(args.store)
 
     if args.user_consent_url:
         print(user_consent_url(creds))

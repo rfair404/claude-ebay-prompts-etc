@@ -134,6 +134,16 @@ the listing URL. If publish fails validation, surface the eBay error,
 fix the draft via the owning phase, and re-present the card — never retry
 blind.
 
+**Multiple eBay stores (GH #147).** If the user has a named secondary
+account configured (e.g. "publish this to my junk store"), add `--store
+<name>` to the command above — it must be named on the card BEFORE you ask
+for approval (the eyebrow line or the restate-and-confirm line), never
+inferred silently, since it changes which account's policies/returns apply.
+Omit it for the default store. `python lib/list_edit.py --setup-check
+--store <name>` lists what's configured for a given store; an unconfigured
+name fails loudly with setup instructions rather than falling back to the
+default account.
+
 ## After publish — managing the listing (on user request)
 
 Once live, the user may want to take a listing down or remove it. Use the

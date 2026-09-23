@@ -65,6 +65,7 @@ from ebay_client import EbayAPIError, EbayAuthError            # noqa: E402
 
 class _Creds:
     has_user = True
+    store = "default"   # GH #147 — _resolve_policies_and_location() reads this
 
 
 # ---------------------------------------------------------------------------
@@ -988,6 +989,99 @@ def test_build_review_card_folds_in_a_broken_best_offer_floor():
     assert "ALL CLEAR" not in card
     assert any("auto_decline_amount" in ln and "would block --sync" in ln
               for ln in card.splitlines())
+
+
+# ---------------------------------------------------------------------------
+# Multi-store account settings (GH #147) — _ebay_extra() / _resolve_policies_
+# and_location() reading ebay.stores.<name> instead of the top-level ebay:
+# block. Previously untested (see the module docstring's "explicitly out of
+# scope" note) — this is that coverage, scoped to the store dimension.
+# ---------------------------------------------------------------------------
+
+_MULTI_STORE_CONFIG = {
+    "ebay": {
+        "environment": "sandbox",
+        "sandbox": {"merchant_location_key": "LOC-DEFAULT",
+                   "fulfillment_policy_id": "F-DEFAULT",
+                   "payment_policy_id": "P-DEFAULT",
+                   "return_policy_id": "R-DEFAULT"},
+        "stores": {
+            "junk": {
+                "environment": "sandbox",
+                "sandbox": {"merchant_location_key": "LOC-JUNK",
+                           "fulfillment_policy_id": "F-JUNK",
+                           "payment_policy_id": "P-JUNK",
+                           "return_policy_id": "R-JUNK"},
+            },
+        },
+    },
+}
+
+
+def _with_multi_store_config():
+    return _patched(L, load_config=lambda: _MULTI_STORE_CONFIG)
+
+
+def test_ebay_extra_default_store_is_unchanged():
+    with _with_multi_store_config():
+        assert L._ebay_extra("fulfillment_policy_id") == "F-DEFAULT"
+        assert L._ebay_extra("fulfillment_policy_id", store="default") == "F-DEFAULT"
+
+
+def test_ebay_extra_reads_a_named_store():
+    with _with_multi_store_config():
+        assert L._ebay_extra("fulfillment_policy_id", store="junk") == "F-JUNK"
+        assert L._ebay_extra("merchant_location_key", store="junk") == "LOC-JUNK"
+
+
+def test_ebay_extra_unknown_store_returns_none_not_the_default_stores_value():
+    # Silently falling back to the default store's policy id would publish
+    # under the WRONG account's policies — must come back empty, never leak.
+    with _with_multi_store_config():
+        assert L._ebay_extra("fulfillment_policy_id", store="nope") is None
+
+
+def test_resolve_policies_and_location_picks_the_creds_store():
+    class _StoreCreds:
+        store = "junk"
+
+    with _with_multi_store_config():
+        policies, location = L._resolve_policies_and_location(_StoreCreds())
+    assert policies["fulfillment"] == "F-JUNK"
+    assert policies["payment"] == "P-JUNK"
+    assert policies["return"] == "R-JUNK"
+    assert location == "LOC-JUNK"
+
+
+def test_resolve_policies_and_location_does_not_require_international_policy():
+    # Regression: fulfillment_policy_id_international is documented optional
+    # in the surrounding comment ("Only items with shipping.international:
+    # true use it") but was missing from the "these are optional" skip-list
+    # above — every account without one (the common case; it's for eBay
+    # International Shipping specifically) failed --sync/--publish/--review
+    # with a spurious "missing account-specific settings" error. Found via
+    # this file's new multi-store coverage, which is the first test to ever
+    # exercise the real (non-stubbed) _resolve_policies_and_location().
+    class _StoreCreds:
+        store = "default"
+
+    with _with_multi_store_config():
+        policies, _location = L._resolve_policies_and_location(_StoreCreds())
+    assert policies["fulfillment_international"] is None  # unset — and that's fine
+
+
+def test_resolve_policies_and_location_missing_settings_names_the_store():
+    class _EmptyStoreCreds:
+        store = "junk-unconfigured"
+
+    with _with_multi_store_config():
+        try:
+            L._resolve_policies_and_location(_EmptyStoreCreds())
+            raise AssertionError("expected EbayAuthError")
+        except EbayAuthError as e:
+            assert "junk-unconfigured" in str(e)
+            assert "--store junk-unconfigured" in str(e)
+            assert "ebay.stores.junk-unconfigured:" in str(e)
 
 
 if __name__ == "__main__":

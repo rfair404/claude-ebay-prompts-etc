@@ -325,18 +325,31 @@ def get_easypost_key() -> str:
     )
 
 
-def get_ebay_credentials() -> dict:
+def get_ebay_credentials(store: Optional[str] = None) -> dict:
     """Return the raw eBay credentials section from config.
 
     For typed access + OAuth flow, use `ebay_client.load_credentials()`
     instead. This accessor exists for shell/CLI introspection.
+
+    `store` selects a named account under `ebay.stores.<store>` (GH #147 —
+    multiple eBay stores). None/"default" reads the top-level `ebay:`
+    block, same as every config written before stores existed. Unlike
+    `ebay_client.load_credentials()`, an unknown store name here returns
+    an empty section rather than raising — this accessor has always been
+    soft/best-effort (it doesn't even do the environment sub-block lookup
+    ebay_client.py's loader does; it's for a quick CLI peek, not for
+    building a real API client).
 
     Returns:
         Dict (possibly empty) with keys: environment, app_id, cert_id,
         dev_id, redirect_uri, user_refresh_token.
     """
     config = load_config()
-    section = config.get("ebay") or {}
+    top = config.get("ebay") or {}
+    if store and store != "default":
+        section = (top.get("stores") or {}).get(store) or {}
+    else:
+        section = top
     return {
         "environment":        section.get("environment") or "sandbox",
         "app_id":             section.get("app_id"),
