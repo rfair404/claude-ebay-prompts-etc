@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import sys
 import time
@@ -169,6 +170,9 @@ class EbayAPIError(RuntimeError):
 # Credentials loader
 # ---------------------------------------------------------------------------
 
+DEFAULT_STORE = "default"
+
+
 @dataclass
 class EbayCredentials:
     """Loaded eBay credentials. Missing fields are None."""
@@ -178,6 +182,7 @@ class EbayCredentials:
     dev_id: Optional[str] = None       # legacy XML-API ID; not needed for REST
     redirect_uri: Optional[str] = None # the OAuth redirect URI registered with eBay
     user_refresh_token: Optional[str] = None  # captured from user-consent flow
+    store: str = DEFAULT_STORE         # which ebay.stores.* profile this came from
 
     @property
     def has_app(self) -> bool:
@@ -192,33 +197,88 @@ class EbayCredentials:
         return ENVIRONMENTS[self.environment]
 
 
-def load_credentials() -> EbayCredentials:
-    """Load eBay credentials from the YAML config."""
+def list_stores() -> list[str]:
+    """Names of the additional store profiles configured under ebay.stores.
+
+    The implicit "default" store (ebay.environment/sandbox/production) is
+    always available and is not included here.
+    """
+    section = load_config().get("ebay") or {}
+    return sorted((section.get("stores") or {}).keys())
+
+
+def load_credentials(store: Optional[str] = None) -> EbayCredentials:
+    """Load eBay credentials from the YAML config.
+
+    Args:
+        store: which seller account to load. Precedence: explicit arg >
+            EBAYBIZ_STORE env var > ebay.active_store in config > "default".
+            "default" (or unset) reads the original single-account shape —
+            ebay.environment + ebay.sandbox/production.* — unchanged, so
+            existing single-store configs keep working. Any other name is
+            looked up under ebay.stores.<name>, a flat block (its own
+            environment/app_id/cert_id/.../merchant_location_key/policy
+            ids) letting one config connect to multiple eBay seller
+            accounts at once (e.g. a secondary "junk" store) — see
+            config.example.yaml and GH #147.
+    """
     config = load_config()
     section = config.get("ebay") or {}
 
-    env = section.get("environment") or DEFAULT_ENVIRONMENT
+    if store is None:
+        store = os.environ.get("EBAYBIZ_STORE") or section.get("active_store") or DEFAULT_STORE
+
+    if store == DEFAULT_STORE:
+        env = section.get("environment") or DEFAULT_ENVIRONMENT
+        if env not in ENVIRONMENTS:
+            raise EbayAuthError(
+                f"ebay.environment must be 'sandbox' or 'production' "
+                f"(got '{env}' from {config_path()})"
+            )
+
+        # Per-environment credential blocks (ebay.sandbox.* / ebay.production.*)
+        # take precedence; fall back to flat ebay.* fields for legacy configs.
+        env_section = section.get(env) or {}
+
+        def pick(key):
+            v = env_section.get(key)
+            return v if v is not None else section.get(key)
+
+        return EbayCredentials(
+            environment=env,
+            app_id=pick("app_id"),
+            cert_id=pick("cert_id"),
+            dev_id=pick("dev_id"),
+            redirect_uri=pick("redirect_uri"),
+            user_refresh_token=pick("user_refresh_token"),
+            store=DEFAULT_STORE,
+        )
+
+    stores = section.get("stores") or {}
+    store_section = stores.get(store)
+    if store_section is None:
+        known = ", ".join(sorted(stores.keys())) or "(none configured)"
+        raise EbayAuthError(
+            f"eBay store {store!r} is not configured. "
+            f"Add it under ebay.stores.{store} in {config_path()}.\n"
+            f"  Configured stores: {known}"
+        )
+
+    env = store_section.get("environment") or DEFAULT_ENVIRONMENT
     if env not in ENVIRONMENTS:
         raise EbayAuthError(
-            f"ebay.environment must be 'sandbox' or 'production' "
+            f"ebay.stores.{store}.environment must be 'sandbox' or 'production' "
             f"(got '{env}' from {config_path()})"
         )
 
-    # Per-environment credential blocks (ebay.sandbox.* / ebay.production.*)
-    # take precedence; fall back to flat ebay.* fields for legacy configs.
-    env_section = section.get(env) or {}
-
-    def pick(key):
-        v = env_section.get(key)
-        return v if v is not None else section.get(key)
-
     return EbayCredentials(
         environment=env,
-        app_id=pick("app_id"),
-        cert_id=pick("cert_id"),
-        dev_id=pick("dev_id"),
-        redirect_uri=pick("redirect_uri"),
-        user_refresh_token=pick("user_refresh_token"),
+        app_id=store_section.get("app_id"),
+        cert_id=store_section.get("cert_id"),
+        dev_id=store_section.get("dev_id"),
+        redirect_uri=store_section.get("redirect_uri"),
+        user_refresh_token=store_section.get("user_refresh_token"),
+        store=store,
     )
 
 

@@ -13,8 +13,10 @@ All HTTP is faked by patching urllib.request.urlopen; no network, no creds.
 Run:  python tests/test_ebay_client.py
   or: pytest tests/test_ebay_client.py
 """
+import contextlib
 import io
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -33,6 +35,7 @@ from ebay_client import (  # noqa: E402
     api_send,
     get_app_access_token,
     get_user_access_token,
+    load_credentials,
 )
 
 CREDS = EbayCredentials(environment="sandbox", app_id="app-x", cert_id="cert-x",
@@ -319,6 +322,99 @@ def test_api_get_http_error_becomes_api_error_with_body():
             assert "11001" in e.body
 
     _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# load_credentials(store=...) — multi-store profiles (GH #147)
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _config(data):
+    """Monkeypatch ebay_client.load_config for the duration of the block."""
+    real = ebay_client.load_config
+    ebay_client.load_config = lambda: data
+    try:
+        yield
+    finally:
+        ebay_client.load_config = real
+
+
+def test_load_credentials_default_store_reads_legacy_single_account_shape():
+    with _config({"ebay": {"environment": "sandbox",
+                            "sandbox": {"app_id": "main-app", "cert_id": "main-cert"}}}):
+        creds = load_credentials()
+        assert creds.store == "default"
+        assert creds.environment == "sandbox"
+        assert creds.app_id == "main-app"
+        assert creds.cert_id == "main-cert"
+
+
+def test_load_credentials_named_store_reads_its_own_flat_block():
+    with _config({
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {"app_id": "main-app"},
+            "stores": {
+                "junk": {"environment": "production", "app_id": "junk-app",
+                         "cert_id": "junk-cert", "user_refresh_token": "junk-refresh"},
+            },
+        }
+    }):
+        creds = load_credentials(store="junk")
+        assert creds.store == "junk"
+        assert creds.environment == "production"       # a store's own environment, not the default's
+        assert creds.app_id == "junk-app"
+        assert creds.cert_id == "junk-cert"
+        assert creds.user_refresh_token == "junk-refresh"
+        # the default store's credentials are untouched
+        default_creds = load_credentials(store="default")
+        assert default_creds.app_id == "main-app"
+
+
+def test_load_credentials_unknown_store_raises_auth_error_listing_known_stores():
+    with _config({"ebay": {"stores": {"junk": {"app_id": "x"}}}}):
+        try:
+            load_credentials(store="nope")
+            raise AssertionError("expected EbayAuthError")
+        except EbayAuthError as e:
+            assert "nope" in str(e)
+            assert "junk" in str(e)
+
+
+def test_load_credentials_store_precedence_env_var_over_config_default():
+    with _config({
+        "ebay": {"environment": "sandbox", "active_store": "default",
+                 "stores": {"junk": {"app_id": "junk-app"}}}
+    }):
+        old = os.environ.get("EBAYBIZ_STORE")
+        os.environ["EBAYBIZ_STORE"] = "junk"
+        try:
+            assert load_credentials().store == "junk"
+        finally:
+            if old is None:
+                os.environ.pop("EBAYBIZ_STORE", None)
+            else:
+                os.environ["EBAYBIZ_STORE"] = old
+
+
+def test_load_credentials_explicit_store_arg_wins_over_env_var():
+    with _config({"ebay": {"environment": "sandbox", "stores": {"junk": {"app_id": "junk-app"}}}}):
+        old = os.environ.get("EBAYBIZ_STORE")
+        os.environ["EBAYBIZ_STORE"] = "junk"
+        try:
+            assert load_credentials(store="default").store == "default"
+        finally:
+            if old is None:
+                os.environ.pop("EBAYBIZ_STORE", None)
+            else:
+                os.environ["EBAYBIZ_STORE"] = old
+
+
+def test_list_stores_returns_configured_store_names():
+    with _config({"ebay": {"stores": {"junk": {}, "vintage": {}}}}):
+        assert ebay_client.list_stores() == ["junk", "vintage"]
+    with _config({"ebay": {}}):
+        assert ebay_client.list_stores() == []
 
 
 if __name__ == "__main__":

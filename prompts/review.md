@@ -123,7 +123,8 @@ the same SKU.)
 
 ## On approval — publish (one step)
 
-Run, with the human approval as the authorization for `--confirm`:
+Run the exact command shown at the bottom of the card, with the human
+approval as the authorization for `--confirm`:
 
     python lib/list_edit.py --list <shoot-dir> --confirm
 
@@ -133,6 +134,13 @@ your approval at this gate is what authorizes passing it. On success report
 the listing URL. If publish fails validation, surface the eBay error,
 fix the draft via the owning phase, and re-present the card — never retry
 blind.
+
+**Multiple stores (GH #147).** If the card's `Store:` line names anything
+other than `default` (e.g. a secondary "junk" store), the card's command
+already carries `--store <name>` — copy it as shown, don't drop the flag.
+A draft picks its store once by setting `store: "<name>"` in its
+frontmatter; `--review`/`--sync`/`--publish`/`--list` all honor it without
+repeating `--store` on every command.
 
 ## After publish — managing the listing (on user request)
 

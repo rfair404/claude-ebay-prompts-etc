@@ -65,6 +65,8 @@ from ebay_client import EbayAPIError, EbayAuthError            # noqa: E402
 
 class _Creds:
     has_user = True
+    store = "default"
+    environment = "sandbox"
 
 
 # ---------------------------------------------------------------------------
@@ -988,6 +990,112 @@ def test_build_review_card_folds_in_a_broken_best_offer_floor():
     assert "ALL CLEAR" not in card
     assert any("auto_decline_amount" in ln and "would block --sync" in ln
               for ln in card.splitlines())
+
+
+# ---------------------------------------------------------------------------
+# Multi-store eBay credentials (GH #147) — "publish this to my junk store"
+# ---------------------------------------------------------------------------
+
+class _JunkCreds:
+    has_user = True
+    store = "junk"
+    environment = "production"
+
+
+def test_ebay_extra_default_store_reads_the_legacy_flat_shape():
+    with _patched(L, load_config=lambda: {
+        "ebay": {"environment": "sandbox",
+                 "sandbox": {"merchant_location_key": "loc-main"}}}):
+        assert L._ebay_extra("merchant_location_key") == "loc-main"
+        assert L._ebay_extra("merchant_location_key", store="default") == "loc-main"
+
+
+def test_ebay_extra_named_store_reads_its_own_flat_block_not_the_default():
+    with _patched(L, load_config=lambda: {
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {"merchant_location_key": "loc-main"},
+            "stores": {"junk": {"merchant_location_key": "loc-junk"}},
+        }}):
+        assert L._ebay_extra("merchant_location_key", store="junk") == "loc-junk"
+        # a field the junk store doesn't set is NOT inherited from the default store
+        assert L._ebay_extra("payment_policy_id", store="junk") is None
+
+
+def _write_draft_for_store(tmp: Path, *, store=None) -> Path:
+    shoot = tmp / "shoot"
+    (shoot / "listing").mkdir(parents=True, exist_ok=True)
+    (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff")
+    store_line = f'store: "{store}"\n' if store else ""
+    (shoot / "draft.md").write_text(
+        "---\n"
+        'title: "Vintage Widget MPN-100"\n'
+        "price: 24.99\n"
+        + store_line +
+        "---\n" + _BODY + "\n", encoding="utf-8")
+    return shoot / "draft.md"
+
+
+def test_draft_store_reads_the_frontmatter_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._draft_store(str(draft_path)) == "junk"
+
+
+def test_draft_store_is_none_when_the_field_is_absent():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td))
+        assert L._draft_store(str(draft_path)) is None
+
+
+def test_draft_store_is_none_for_a_missing_target():
+    assert L._draft_store("/no/such/draft.md") is None
+    assert L._draft_store(None) is None
+
+
+def test_resolve_store_cli_flag_wins_over_the_drafts_own_store_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._resolve_store(str(draft_path), "vintage") == "vintage"
+
+
+def test_resolve_store_falls_back_to_the_drafts_own_store_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._resolve_store(str(draft_path), None) == "junk"
+
+
+def test_resolve_store_is_none_when_neither_is_set():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td))
+        assert L._resolve_store(str(draft_path), None) is None
+
+
+def test_build_review_card_shows_the_store_and_its_approve_command():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_JunkCreds())
+
+    assert "Store:     junk  ·  environment: production" in card
+    assert f"python lib/list_edit.py --list {draft_path.parent} --store junk --confirm" in card
+
+
+def test_build_review_card_omits_store_flag_for_the_default_store():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    assert "Store:     default  ·  environment: sandbox" in card
+    assert f"python lib/list_edit.py --list {draft_path.parent} --confirm" in card
+    assert "--store" not in card
 
 
 if __name__ == "__main__":
