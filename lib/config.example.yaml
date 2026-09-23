@@ -344,6 +344,18 @@ store:
 #                                        # the main store — a low price is not
 #                                        # a defect.
 #
+#     price_posture: "below_new"         # NOT the house ceiling-first rule.
+#                                        # Ceiling-first assumes scarcity sets
+#                                        # the price. For goods still sold new
+#                                        # that is false: the buyer's
+#                                        # alternative is the retail box, with
+#                                        # a warranty and a return window. Caps
+#                                        # the ask against NEW delivered.
+#     new_price_ceiling_pct: 0.75        # at/above 75% of new a rational buyer
+#                                        # buys new — more so where returns are
+#                                        # refused. See
+#                                        # price_stats.apply_new_price_ceiling.
+#
 #     # Leave a genuinely undecided policy UNSET so it inherits, rather than
 #     # guessing a value that later reads as a decision someone made. E.g.
 #     # price_posture omitted -> the house ceiling-first rule applies.

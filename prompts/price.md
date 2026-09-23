@@ -79,6 +79,46 @@ silver/German silver/alpaca/silver-tone. No exemptions. Then:
 
 State `SILVER: push-high strategy applied` in price.txt.
 
+## Storefront price posture — check it BEFORE pricing (GH #147)
+
+Ceiling-first above is the DEFAULT storefront's rule, not a universal one.
+Resolve the draft's storefront first — `config.get_storefront(<store>)`,
+where `<store>` is the draft's `store:` field — and read `price_posture`.
+
+- **unset** → the house ceiling-first rule above. Unchanged.
+- **`below_new`** → the item is the kind a buyer could buy NEW. Ceiling-first
+  assumes scarcity sets the price: the comp ceiling is real because nobody
+  can make another one. For anything still manufactured that premise is
+  false — the buyer's alternative is the retail box, with a warranty and a
+  return window. Sold comps stop being the binding constraint.
+
+### Running `below_new`
+
+1. **Establish whether it is buyable new at all.** Search active listings for
+   the same spec in NEW condition (`lib/ebay_browse.py` carries `condition` /
+   `conditionId`); check the manufacturer's own price where it exists. Record
+   what you found, including a null result.
+2. **Get the NEW price on a DELIVERED basis** — item + shipping, the same
+   basis the comps are compared on (never mix the two; see the delivered-basis
+   rule). On a buyer-pays-shipping storefront this matters twice over: our ask
+   plus our postage is what competes with new delivered.
+3. **Cap the tiers**: `price_stats.apply_new_price_ceiling(tiers,
+   new_delivered, pct=<storefront's new_price_ceiling_pct>)`. It caps only the
+   tiers that exceed the cap, keeps each original number as `uncapped_price`,
+   and returns a note per tier it lowered. Show those notes — a number that
+   moved with no stated reason is how a price report loses trust.
+4. **No new supply found** → no cap; the comp math stands. Discontinued goods
+   have no retail alternative, so ceiling-first is right again even here. Say
+   so explicitly rather than leaving it ambiguous.
+5. **Comps at or above the new price** → the helper sets `above_new`. Treat it
+   as a **red flag, never an opportunity**. Used does not outsell new, so one
+   of three things is wrong: the comps are a different item, the comps are
+   stale, or the new reference is the wrong spec. Resolve which before
+   trusting either number — do not just take the capped figure and move on.
+
+State `STOREFRONT: below_new — new delivered $<x>, cap $<y>` in price.txt, or
+`STOREFRONT: below_new — no new supply found, uncapped`.
+
 ## The exact-match hunt (before any era-peer fallback)
 
 Escalate only as each stage dries up; never stop to ask.

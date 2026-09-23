@@ -333,8 +333,25 @@ storefronts:
                                        # account only
     shipping: "buyer_pays_calculated"  # free postage eats a cheap item's margin
     routing: ["as_is", "untested", "damaged"]
-    # price_posture UNSET -> inherits the house ceiling-first rule
+    price_posture: "below_new"         # NOT ceiling-first — see below
+    new_price_ceiling_pct: 0.75
 ```
+
+**Why junk overrides the house price rule.** Ceiling-first reads the sold-comp
+ceiling as the market's top. That is sound for collectables, where nobody can
+make another one, and wrong for anything still manufactured: the buyer's
+alternative is the retail box, with a warranty and a return window. Most junk
+stock is the second kind, so the ask is capped at a fraction of NEW delivered
+(`price_stats.apply_new_price_ceiling`). Three behaviours worth knowing:
+
+- Only tiers **over** the cap move; the original is kept as `uncapped_price`
+  and every change is explained in the report. A cap is a ceiling, not a
+  target — cheap comps stay cheap.
+- **No new supply** (discontinued) → no cap. Ceiling-first is right again.
+- **Comps at or above new** → a red flag, not an opportunity. Used does not
+  outsell new, so either the comps are a different item, the comps are stale,
+  or the new reference is the wrong spec. The helper caps anyway but says so
+  loudly; resolve which before trusting either number.
 
 ---
 
@@ -358,10 +375,16 @@ storefronts:
    promise "sold as-is, no returns" while its eBay policy accepts 30-day
    returns. Worth a `--setup-check` assertion.
 
-4. **Only identity is wired.** DRAFT reads the resolved storefront for the
-   close and sign-off. Price posture, condition bar and voice are defined in
-   the profile but not yet consulted by PRICE, the condition rubric or the
-   style guides — those still read house-global rules.
+4. **Identity and price posture are wired; condition bar and voice are not.**
+   DRAFT reads the resolved storefront for the close and sign-off, and PRICE
+   honours `price_posture: below_new`. The condition rubric and the style
+   guides still read house-global rules, so an as-is storefront does not yet
+   get its own condition bar or voice.
+
+5. **The new-price reference is manual.** `apply_new_price_ceiling` takes a
+   delivered new price; finding it is a PRICE-stage search, not an automated
+   lookup. Nothing enforces that the "new" listing is the same spec, which is
+   exactly the mistake the `above_new` flag exists to catch after the fact.
 
 ---
 
