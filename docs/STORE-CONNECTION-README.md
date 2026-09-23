@@ -260,26 +260,108 @@ The publish firewall is unchanged and per-store: `--sync` never publishes,
 
 ---
 
+## Part 2 — the storefront (the business, not the account)
+
+Credentials answer *which account the API call goes to*. They say nothing
+about the fact that a second store is usually a different **business**:
+different terms, different voice, its own name on the sign-off. Connecting
+the account without onboarding the business is how a junk listing goes out
+reading "Thank you for looking — Pop's Games."
+
+So a store has two halves, and both need doing:
+
+| Half | Where | What it holds |
+|---|---|---|
+| Credentials | `ebay.stores.<name>` | keyset, refresh token, eBay policy IDs, location |
+| Storefront | `storefronts.<name>` | identity, terms, routing, voice |
+
+One `--store junk` selects both — `get_storefront()` uses the same
+precedence as `load_credentials()` (explicit > `EBAYBIZ_STORE` >
+`ebay.active_store` > `"default"`).
+
+**The default storefront is the existing top-level `store:` block, read in
+place.** It is not copied into `storefronts.default`: one fact, one home, and
+single-store configs keep working with nothing to migrate.
+
+### The two inheritance rules
+
+Get these backwards and the mechanism is worse than useless.
+
+- **Policy inherits.** Anything a named storefront doesn't state falls
+  through to the default. A sparse override states only what differs, and an
+  undecided policy stays visibly undecided instead of being invented.
+- **Identity does NOT inherit.** `display_name` and `closing_block` resolve
+  to `None` for a named storefront that omits them, and DRAFT then ships the
+  unnamed thank-you. Inheriting identity is the exact bug this exists to
+  prevent, so it is pinned by `tests/test_storefront.py` rather than left to
+  reviewer memory.
+
+An unknown storefront name is a hard error listing the configured ones. It
+never silently falls back — falling back would ship the main store's name and
+terms on a listing meant for somewhere else, which is the expensive failure
+and a silent one.
+
+### Onboarding checklist for a new storefront
+
+- [ ] `display_name` — or leave `null` deliberately. Null is a safe state,
+      not a blank to fill in: DRAFT ships the unnamed thank-you and never
+      invents a brand.
+- [ ] `closing_block` — its own, written for what this store sells. Every
+      line must be true of every listing it ships on.
+- [ ] `returns` — and make the eBay return policy under
+      `ebay.stores.<name>.return_policy_id` agree with it. The config string
+      is what DRAFT says; the policy ID is what eBay enforces. They are two
+      records of one decision and nothing checks they match.
+- [ ] `shipping` — same split: the string describes, the
+      `fulfillment_policy_id` enforces.
+- [ ] `routing` — what belongs in this store. Prefer condition over value: a
+      cheap but clean, warrantable item still belongs in the main store, and
+      a low price is not a defect.
+- [ ] Leave genuinely undecided policy **unset** so it inherits, rather than
+      guessing a value that then reads as a decision someone made.
+
+### The junk storefront, as onboarded 2026-09-23
+
+```yaml
+storefronts:
+  junk:
+    display_name: null                 # unnamed thank-you until it has a name
+    closing_block: |                   # its own; no "Pop's Games"
+      Sold as-is. ...
+    returns: "none_as_is"              # keeps as-is risk off the main store's
+                                       # metrics; costs Top Rated Plus on THIS
+                                       # account only
+    shipping: "buyer_pays_calculated"  # free postage eats a cheap item's margin
+    routing: ["as_is", "untested", "damaged"]
+    # price_posture UNSET -> inherits the house ceiling-first rule
+```
+
+---
+
 ## Known gaps (as of 2026-09-23)
 
-Found while doing this for real; neither blocks a listing, both will bite.
-
-1. **The storefront close is global, not per-store.** Top-level `store:` in
-   `config.yaml` (`display_name`, `closing_block`) is read by DRAFT for every
-   listing regardless of which eBay store it goes to. A junk-store listing
-   still signs off "Thank you for looking — Pop's Games." A second seller
-   account is a second storefront with a different name, and the close is
-   boilerplate that must be true of every listing it ships on. Needs a
-   per-store override before junk listings go live under their own brand.
-   (Note the name collision too: top-level `store:` is storefront identity;
-   `ebay.stores.<name>:` is credentials; a draft's `store:` selects the
-   latter. Three different `store` keys.)
-
-2. **No API path to make an account sellable.** Business Policies opt-in and
+1. **No API path to make an account sellable.** Business Policies opt-in and
    creating an inventory location are both manual Seller Hub steps, so
    "connect a store" cannot be done end to end from this repo for a new
    account. `--setup-check` diagnoses it but can't fix it.
    (`--create-pickup-policy` is the one policy the app can create itself.)
+
+2. **Three different `store` keys.** Top-level `store:` is the default
+   storefront's identity; `ebay.stores.<name>:` is credentials;
+   `storefronts.<name>:` is a named storefront; and a draft's `store:` field
+   selects the last two together. Consistent once learned, confusing on
+   first read.
+
+3. **The terms are stated twice.** `storefronts.<name>.returns` is what DRAFT
+   writes in the copy; `ebay.stores.<name>.return_policy_id` is what eBay
+   enforces at checkout. Nothing cross-checks them, so a storefront could
+   promise "sold as-is, no returns" while its eBay policy accepts 30-day
+   returns. Worth a `--setup-check` assertion.
+
+4. **Only identity is wired.** DRAFT reads the resolved storefront for the
+   close and sign-off. Price posture, condition bar and voice are defined in
+   the profile but not yet consulted by PRICE, the condition rubric or the
+   style guides — those still read house-global rules.
 
 ---
 

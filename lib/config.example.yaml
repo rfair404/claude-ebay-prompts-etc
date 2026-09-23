@@ -286,3 +286,64 @@ store:
     listings moving.
 
     Thank you for looking, and please take a look at my other listings.
+
+# ---------------------------------------------------------------------------
+# Additional storefronts (GH #147) — the BUSINESS behind a second seller
+# account, as distinct from `ebay.stores.<name>` above, which is only its
+# CREDENTIALS. A second store is usually a different business: its own terms,
+# its own voice, its own name on the sign-off. Connecting the account without
+# onboarding the business is how a junk listing goes out reading
+# "Thank you for looking — <your main store>."
+#
+# Full runbook: docs/STORE-CONNECTION-README.md
+#
+# The DEFAULT storefront is the `store:` block above, read in place — NOT
+# duplicated here as `storefronts.default`. One fact, one home, and existing
+# single-store configs need no migration.
+#
+# Selection matches credentials, so one `--store junk` picks the account and
+# the business together: --store > EBAYBIZ_STORE > ebay.active_store > default.
+#
+# TWO INHERITANCE RULES, and they differ on purpose:
+#
+#   * POLICY inherits. Anything a named storefront omits falls through to the
+#     default, so an override states only what actually differs — and a
+#     policy you have not decided stays visibly undecided instead of being
+#     invented.
+#   * IDENTITY does NOT. `display_name` and `closing_block` resolve to null
+#     for a named storefront that omits them, and DRAFT then ships the
+#     unnamed thank-you. Inheriting identity is the bug this exists to
+#     prevent; tests/test_storefront.py pins it.
+#
+# An unknown storefront name is a hard error listing the configured ones —
+# never a silent fallback to the main store's name and terms.
+#
+# storefronts:
+#   junk:
+#     display_name: null                 # null = unnamed thank-you, never a
+#                                        # borrowed brand. A deliberate state,
+#                                        # not a blank to fill in.
+#     closing_block: |                   # its own — must be true of every
+#       Sold as-is. Please look the photos over and message me with any
+#       questions before buying.
+#
+#       Thank you for looking. Please take a look at my other listings.
+#
+#     returns: "none_as_is"              # what DRAFT writes in the copy. Keep
+#                                        # it agreeing with this store's
+#                                        # ebay.stores.<name>.return_policy_id,
+#                                        # which is what eBay ENFORCES —
+#                                        # nothing cross-checks the two.
+#     shipping: "buyer_pays_calculated"  # same split: this describes, the
+#                                        # fulfillment_policy_id enforces.
+#
+#     routing: ["as_is", "untested", "damaged"]
+#                                        # what belongs here. Prefer CONDITION
+#                                        # over value: a cheap but clean,
+#                                        # warrantable item still belongs in
+#                                        # the main store — a low price is not
+#                                        # a defect.
+#
+#     # Leave a genuinely undecided policy UNSET so it inherits, rather than
+#     # guessing a value that later reads as a decision someone made. E.g.
+#     # price_posture omitted -> the house ceiling-first rule applies.

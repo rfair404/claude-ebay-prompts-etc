@@ -396,6 +396,94 @@ def get_profile(name: Optional[str] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Storefronts (GH #147) — the BUSINESS behind a seller account
+# ---------------------------------------------------------------------------
+#
+# `ebay.stores.<name>` (ebay_client.load_credentials) answers "which account
+# does this API call go to". That is not the same question as "what kind of
+# shop is this". A secondary junk store is a different business: it sells
+# as-is goods, refuses returns, makes the buyer pay postage, and signs off
+# under its own name — none of which is a credential.
+#
+# The default storefront is the existing top-level `store:` block, read in
+# place. It is deliberately NOT copied into `storefronts.default`: one fact,
+# one home, and today's single-store configs keep working untouched.
+
+# Keys a named storefront must state for itself. Inheriting the default
+# store's IDENTITY is the bug this whole mechanism exists to fix — a junk
+# listing that omits display_name must ship the unnamed thank-you, never
+# sign off as the main storefront. Policy keys inherit; these do not.
+STOREFRONT_IDENTITY_KEYS = ("display_name", "closing_block")
+
+
+def list_storefronts() -> list[str]:
+    """Names of the additional storefront profiles under `storefronts:`.
+
+    The default storefront (top-level `store:`) is always available and is
+    not included here — same convention as ebay_client.list_stores().
+    """
+    section = load_config().get("storefronts") or {}
+    return sorted(section.keys())
+
+
+def get_storefront(name: Optional[str] = None) -> dict:
+    """Return the storefront profile for a store, defaults merged in.
+
+    Args:
+        name: storefront to load. Precedence matches
+            ebay_client.load_credentials() so one `--store junk` selects the
+            account AND the business behind it: explicit arg > EBAYBIZ_STORE
+            env var > ebay.active_store in config > "default".
+
+    Returns:
+        Merged dict. Policy keys fall through to the default storefront when
+        the named one omits them, so a sparse override only has to state what
+        actually differs. Identity keys (STOREFRONT_IDENTITY_KEYS) never fall
+        through — an unset display_name is None, not the default store's name.
+
+    Raises:
+        ConfigError if a non-default storefront name has no `storefronts:`
+        entry — silently falling back to the main storefront's terms is how a
+        junk listing would go out under the good store's identity.
+    """
+    config = load_config()
+
+    if name is None:
+        name = (
+            os.environ.get("EBAYBIZ_STORE")
+            or _nested(config, "ebay", "active_store")
+            or "default"
+        )
+
+    base = dict(_nested(config, "store") or {})
+
+    if name == "default":
+        return base
+
+    override = _nested(config, "storefronts", name)
+    if override is None:
+        known = ", ".join(list_storefronts()) or "(none configured)"
+        raise ConfigError(
+            f"Storefront '{name}' not found in {config_path()}.\n"
+            f"  Add it under 'storefronts:' — a named store needs its own "
+            f"identity and terms, and inheriting the default store's would "
+            f"ship its name on the wrong listings.\n"
+            f"  Configured storefronts: {known}"
+        )
+    if not isinstance(override, dict):
+        raise ConfigError(
+            f"Storefront '{name}' in {config_path()} is not a YAML mapping "
+            f"(got {type(override).__name__})"
+        )
+
+    merged = {k: v for k, v in base.items() if k not in STOREFRONT_IDENTITY_KEYS}
+    for k in STOREFRONT_IDENTITY_KEYS:
+        merged[k] = None
+    merged.update(override)
+    return merged
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point (for debugging / verification)
 # ---------------------------------------------------------------------------
 
