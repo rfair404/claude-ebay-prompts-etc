@@ -6,8 +6,11 @@ what to pull, where it lives locally, where it is going, and by when. Three
 things live here:
 
   --poll             check for orders awaiting shipment; render each NEW one to
-                      pick_lists/ (idempotent — an order already rendered is
-                      skipped on the next poll; see --reprint to force one).
+                      pick_lists/ and publish its HTML sheet as a LINK (#151),
+                      printing one URL per shipment. Idempotent — an order
+                      already rendered is skipped on the next poll, though its
+                      link is republished if it expired (see --reprint to force
+                      a re-render, --no-links to stay offline).
   (no flags)          the original one-shot report to the terminal (+ --out).
   --record-tracking   after a human has a tracking number some other way
                       (Seller Hub, a label already bought), write it back to
@@ -22,10 +25,14 @@ HTTP 400. When nothing is waiting there is nothing to pick, so --latest N
 renders the most recent already-shipped orders instead, which is the only way
 to see the format when the queue is empty.
 
-Buyer names and street addresses are in this output. It prints to the terminal
-and, with --out / --poll, to a local file (pick_lists/, gitignored); it is
-never written anywhere that leaves the machine — not a commit, not an
-artifact, not a shared log.
+Buyer names and street addresses are in this output. This module's own sheet
+prints to the terminal and, with --out / --poll, to a local file (pick_lists/,
+gitignored). What --poll additionally publishes as a link is the BUYER-SAFE
+HTML sheet (tools/pick_list_html.py), served by the localhost-only app behind
+an unguessable, self-expiring URL — lib/pick_store.py holds those rules. The
+terminal/txt sheet here shows buyer-paid shipping and net payout and therefore
+never gets a URL. Nothing from either sheet is ever committed, written to a
+ledger, or sent off this machine.
 
 Buying a shipping label is explicitly OUT of scope here — see GH #32: eBay's
 Logistics API (shipping_quote / shipment) returns an empty-bodied 404 for this
@@ -188,9 +195,56 @@ def _send_to_printer(path: Path) -> bool:
         return False
 
 
+def publish_sheet(order: dict, drafts: list[dict], ledger: list[dict], *,
+                  ttl_hours: float | None = None) -> object | None:
+    """Render this order's HTML pick sheet and publish it as a link (#151).
+
+    The BUYER-SAFE sheet is the one that gets a URL. The .txt this function's
+    caller writes beside it is the seller's copy — it carries buyer-paid
+    shipping and net payout (see render()) and stays on this machine, where
+    it always was. Nothing with our margins on it gets a URL.
+
+    Never raises: a link is an upgrade over a file path, not a reason for the
+    poll loop to die. Returns the Sheet, or None with a warning printed."""
+    try:
+        import pick_store                                 # noqa: PLC0415
+        import pick_list_html                             # noqa: PLC0415
+
+        html = pick_list_html.render_html([order], drafts, ledger)
+        return pick_store.publish(
+            html, order_ids=[order.get("orderId", "")],
+            ttl_hours=ttl_hours if ttl_hours is not None else pick_store.TTL_HOURS_DEFAULT)
+    except Exception as e:                                          # noqa: BLE001
+        print(f"  ! could not publish a link for {order.get('orderId','?')} ({e}); "
+              f"the local sheet in {OUT_DIR.name}/ is the fallback")
+        return None
+
+
+def _record_link(entry: dict, sheet) -> None:
+    """Remember a published sheet's link on its state entry — the one place a
+    link is written down, and a gitignored one (STATE_FILE). A sheet that
+    couldn't be published leaves the entry alone rather than recording a
+    stale URL from an earlier run."""
+    if sheet is None:
+        return
+    entry["url"] = sheet.url()
+    entry["token"] = sheet.token
+    entry["expires_at"] = sheet.expires_at
+
+
+def _live_sheet(order_id: str):
+    """The link already published for this order, if it hasn't expired."""
+    try:
+        import pick_store                                 # noqa: PLC0415
+        return pick_store.live_sheet_for([order_id])
+    except Exception:                                     # noqa: BLE001
+        return None
+
+
 def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                    do_print: bool = False, reprint: str | None = None,
-                   fetch=fetch_open) -> tuple[list[str], list[str], dict, list[str]]:
+                   fetch=fetch_open, publish: bool = True,
+                   ttl_hours: float | None = None) -> tuple[list[str], list[str], dict, list[str]]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
     Idempotent: an orderId already recorded in `state["printed"]` is skipped
@@ -204,6 +258,13 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     `_send_to_printer` could not confirm the job reached a printer (on
     Windows this is *every* order, since os.startfile fires the job async and
     never reports back) — the pick list still rendered to out_dir either way.
+
+    With `publish` (the default) each order also gets a published HTML sheet
+    and its link is recorded in the state entry as `url`/`token`/`expires_at`
+    (#151). Idempotency now has two halves that are deliberately different:
+    an order already printed is NOT re-rendered or re-printed, but if its
+    link has expired or been revoked it IS republished, because "we already
+    printed that one" is no reason for the link in someone's hand to 404.
     """
     orders = fetch()
     drafts, ledger = scan_drafts(), load_listings_ledger()
@@ -219,6 +280,12 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
             continue
         if oid in st["printed"] and oid != reprint:
             skipped_ids.append(oid)
+            if publish:
+                entry = st["printed"][oid]
+                sheet = _live_sheet(oid)
+                if sheet is None:
+                    sheet = publish_sheet(o, drafts, ledger, ttl_hours=ttl_hours)
+                _record_link(entry, sheet)
             continue
         text = render(o, drafts, ledger)
         path = out_dir / f"pick_{_safe_filename(oid)}.txt"
@@ -229,6 +296,9 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
             recorded_path = str(path)  # out_dir given outside ROOT (e.g. tests)
         st["printed"][oid] = {"printed_at": _now_iso(),
                               "file": recorded_path.replace("\\", "/")}
+        if publish:
+            _record_link(st["printed"][oid],
+                         publish_sheet(o, drafts, ledger, ttl_hours=ttl_hours))
         new_ids.append(oid)
         if do_print:
             # _send_to_printer already catches everything it knows about and
@@ -348,19 +418,33 @@ def buy_shipping_label(*_args, **_kwargs):
 
 
 def cmd_poll(args) -> int:
-    """--poll: terse verdict to stdout; the PII detail goes to pick_lists/ only
+    """--poll: terse verdict plus one LINK per shipment; the PII stays behind
+    the link and in pick_lists/, never dumped to the terminal wholesale
     (house style — see tools/live_audit.py and friends: one-line verdict,
-    detail in a file, never dumped to the terminal wholesale)."""
+    detail elsewhere).
+
+    Printing a link per order is the one place this deviates from "terse":
+    a list of order ids with the sheets hidden in a directory is what #151
+    was filed about."""
     new_ids, skipped_ids, state, unconfirmed = poll_and_print(
-        do_print=args.do_print, reprint=args.reprint)
+        do_print=args.do_print, reprint=args.reprint,
+        publish=not args.no_links, ttl_hours=args.ttl)
     _save_state(state)
     if not new_ids and not skipped_ids:
         print("[OK] nothing awaiting shipment")
         return 0
     rel = OUT_DIR.relative_to(ROOT)
-    print(f"[OK] {len(new_ids)} new pick list(s) written to {rel}/"
+    print(f"[OK] {len(new_ids)} new pick list(s)"
           + (f"  ({', '.join(new_ids)})" if new_ids else "")
-          + (f"; {len(skipped_ids)} already printed (skipped)" if skipped_ids else ""))
+          + (f"; {len(skipped_ids)} already printed" if skipped_ids else ""))
+    if not args.no_links:
+        import pick_store                                 # noqa: PLC0415
+        for oid in new_ids + skipped_ids:
+            url = (state["printed"].get(oid) or {}).get("url")
+            if url:
+                print(f"  {oid}  {url}")
+        if (new_ids or skipped_ids) and not pick_store.server_is_up():
+            print(f"  ! {pick_store.SERVE_HINT}")
     if unconfirmed:
         print(f"  ~ {len(unconfirmed)} sent to the printer but NOT confirmed printed "
               f"({', '.join(unconfirmed)}) — check the printer, the file in {rel}/ is the fallback")
@@ -423,6 +507,11 @@ def main() -> int:
     ap.add_argument("--reprint", metavar="ORDER_ID",
                     help="with --poll: force this one order to render again even though "
                          "it was already printed")
+    ap.add_argument("--no-links", action="store_true",
+                    help="with --poll: skip publishing the HTML sheets (#151) and leave "
+                         "only the local files — offline/no-server mode")
+    ap.add_argument("--ttl", type=float, metavar="HOURS", default=None,
+                    help="with --poll: how long each published link lives (default 48h)")
     ap.add_argument("--record-tracking", metavar="ORDER_ID",
                     help="write a tracking number back to eBay for one order "
                          "(POST shipping_fulfillment) and advance its SKUs to SHIPPED in "
