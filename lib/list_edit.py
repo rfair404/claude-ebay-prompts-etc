@@ -894,7 +894,7 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     location = _ebay_extra("merchant_location_key", store=store)
     for k, v in policies.items():
         if k in ("fulfillment_media", "fulfillment_local_pickup", "fulfillment_us_only",
-                  "payment_auction"):
+                  "fulfillment_international", "payment_auction"):
             continue  # optional
         if not v:
             missing.append(f"ebay.{k}_policy_id")

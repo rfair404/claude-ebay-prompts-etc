@@ -95,11 +95,11 @@ def _patched(fake, fn):
 
 
 def _reset_caches():
-    ebay_client._app_cache.token = None
-    ebay_client._app_cache.expires_at = 0.0
-    ebay_client._user_cache.token = None
-    ebay_client._user_cache.expires_at = 0.0
-    ebay_client._user_scopes = ebay_client.USER_SCOPES_SELL
+    # Per-store dicts (GH #147) — clearing them is equivalent to the old
+    # single-slot reset, and also covers every store a test may have used.
+    ebay_client._app_caches.clear()
+    ebay_client._user_caches.clear()
+    ebay_client._user_scopes_by_store.clear()
 
 
 def _token_response(token="tok-1", ttl=7200):
