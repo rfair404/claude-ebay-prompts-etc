@@ -627,19 +627,28 @@ def get_return_policies(marketplace: str = DEFAULT_MARKETPLACE,
 def create_free_return_policy(name: str = "30-Day Free Returns - Seller Pays",
                               days: int = 30,
                               marketplace: str = DEFAULT_MARKETPLACE,
-                              creds: Optional[EbayCredentials] = None) -> dict:
-    """Create (or reuse) the return policy that qualifies listings for Top Rated Plus.
+                              creds: Optional[EbayCredentials] = None,
+                              returns_accepted: bool = True) -> dict:
+    """Create (or reuse) a return policy.
 
-    eBay's Top Rated Plus criteria (seller standards policy) are same- or
-    1-business-day handling AND "30-day or longer free returns" — free meaning
-    `returnShippingCostPayer: SELLER`. A 30-day BUYER-pays policy satisfies the
-    window but NOT the free-returns half, so it earns neither the seal nor the
-    10% final-value-fee discount.
+    Default (`returns_accepted=True`) is the policy that qualifies listings
+    for Top Rated Plus. eBay's TRS+ criteria (seller standards policy) are
+    same- or 1-business-day handling AND "30-day or longer free returns" —
+    free meaning `returnShippingCostPayer: SELLER`. A 30-day BUYER-pays
+    policy satisfies the window but NOT the free-returns half, so it earns
+    neither the seal nor the 10% final-value-fee discount.
 
     Free returns must be based on item location: our items are US-located and
     listed on EBAY_US, so 30-day free DOMESTIC returns is what qualifies. The
     international override is left buyer-pays deliberately — it has no bearing
     on TRS+ here and free international return shipping is not worth eating.
+
+    `returns_accepted=False` creates a no-returns ("sold as-is") policy
+    instead: `name`/`days` then just label and size an *unused* window eBay
+    still wants in the request; `returnPeriod`, `refundMethod`,
+    `returnMethod`, `returnShippingCostPayer` and `internationalOverride` are
+    omitted rather than set falsy, since eBay treats their presence as
+    meaningful regardless of `returnsAccepted`. Does not qualify for TRS+.
 
     Idempotent by name: an existing policy with `name` is returned as-is.
     """
@@ -647,24 +656,33 @@ def create_free_return_policy(name: str = "30-Day Free Returns - Seller Pays",
                      if p.get("name") == name), None)
     if existing:
         return existing
-    body = {
-        "name": name,
-        "description": (f"{days}-day returns, seller pays return shipping. "
-                        "Qualifies listings for Top Rated Plus."),
-        "marketplaceId": marketplace,
-        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
-        "returnsAccepted": True,
-        "returnPeriod": {"value": int(days), "unit": "DAY"},
-        "refundMethod": "MONEY_BACK",
-        "returnMethod": "MONEY_BACK",
-        "returnShippingCostPayer": "SELLER",
-        "internationalOverride": {
+    if returns_accepted:
+        body = {
+            "name": name,
+            "description": (f"{days}-day returns, seller pays return shipping. "
+                            "Qualifies listings for Top Rated Plus."),
+            "marketplaceId": marketplace,
+            "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
             "returnsAccepted": True,
-            "returnMethod": "MONEY_BACK",
             "returnPeriod": {"value": int(days), "unit": "DAY"},
-            "returnShippingCostPayer": "BUYER",
-        },
-    }
+            "refundMethod": "MONEY_BACK",
+            "returnMethod": "MONEY_BACK",
+            "returnShippingCostPayer": "SELLER",
+            "internationalOverride": {
+                "returnsAccepted": True,
+                "returnMethod": "MONEY_BACK",
+                "returnPeriod": {"value": int(days), "unit": "DAY"},
+                "returnShippingCostPayer": "BUYER",
+            },
+        }
+    else:
+        body = {
+            "name": name,
+            "description": "Sold as-is. No returns accepted.",
+            "marketplaceId": marketplace,
+            "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+            "returnsAccepted": False,
+        }
     return api_send("POST", "/sell/account/v1/return_policy",
                     body=body, creds=creds, marketplace=None,
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})

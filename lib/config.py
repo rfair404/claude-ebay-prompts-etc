@@ -347,6 +347,28 @@ def get_ebay_credentials() -> dict:
     }
 
 
+def get_store() -> dict:
+    """Return the `store:` branding section from config.
+
+    Every key is a string, defaulting to "" when unset or when there is no
+    config file at all — callers decide what an empty value falls back to
+    (see tools/pick_list_html.py). This does not read `ebay.stores.<name>`
+    (per-store OAuth credentials, see ebay_client.load_credentials()) — the
+    two are unrelated config trees that happen to share the word "store".
+
+    Returns:
+        Dict with keys: display_name, tagline, storefront_url, closing_block.
+    """
+    config = load_config()
+    section = config.get("store") or {}
+    return {
+        "display_name":   section.get("display_name") or "",
+        "tagline":        section.get("tagline") or "",
+        "storefront_url": section.get("storefront_url") or "",
+        "closing_block":  section.get("closing_block") or "",
+    }
+
+
 def get_profile(name: Optional[str] = None) -> dict:
     """Return a CURATE strategy profile by name.
 

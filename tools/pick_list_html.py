@@ -65,9 +65,18 @@ import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
 import pick_store                                                  # noqa: E402
+from config import get_store                                       # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
+
+# Fallback letterhead when `store:` in config.yaml leaves a field unset —
+# what this sheet has always shown, kept as the default so an unconfigured
+# store.yaml changes nothing (see lib/config.get_store()). A second store
+# overrides these via its own config rather than editing this file (#156).
+_DEFAULT_BRAND_NAME = "POP'S GAMES"
+_DEFAULT_BRAND_TAGLINE = "BUY · SELL · TRADE"
+_DEFAULT_BRAND_STOREFRONT = "ebay.com/usr/popsgames"
 
 THUMB_PX = 110      # small on purpose — a pick sheet, not a photo proof; also
                     # what keeps a 4-item grouped list on one printed page
@@ -204,6 +213,11 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
     them as one box, so the pick list should read as one, not N separate
     printouts. Each item still carries its own order id when grouped, since
     that's what ties it back to eBay's merge screen."""
+    _store = get_store()
+    brand_name = _store["display_name"] or _DEFAULT_BRAND_NAME
+    brand_tagline = _store["tagline"] or _DEFAULT_BRAND_TAGLINE
+    brand_storefront = _store["storefront_url"] or _DEFAULT_BRAND_STOREFRONT
+
     grouped = len(orders) > 1
     to = ship_to(orders[0])
     addr = to.get("contactAddress") or {}
@@ -331,12 +345,12 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
-  <div class="labelbtn"><a href="https://www.ebay.com/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener">Buy label &rarr;</a></div>
+  <div class="labelbtn"><a href="https://www.ebay.com/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener" title="Opens Seller Hub for whichever eBay account this browser is logged into — verify it is {html.escape(brand_storefront)} before buying a label off this sheet.">Buy label &rarr;</a></div>
   <div class="brand">
     <div class="hr"></div>
-    <div class="nm">POP'S GAMES</div>
-    <div class="tg">BUY &middot; SELL &middot; TRADE</div>
-    <div class="st">ebay.com/usr/popsgames</div>
+    <div class="nm">{html.escape(brand_name)}</div>
+    <div class="tg">{html.escape(brand_tagline)}</div>
+    <div class="st">{html.escape(brand_storefront)}</div>
   </div>
   <hr class="divider">
   <h1>{heading}</h1>

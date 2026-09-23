@@ -234,6 +234,12 @@ store:
   # DRAFT signs off with the unnamed thank-you rather than inventing a brand.
   display_name: ""
 
+  # Tagline and eBay storefront URL shown on the pick-list/packing-slip page
+  # (tools/pick_list_html.py). Leave EMPTY and the sheet falls back to its
+  # built-in defaults, so an unset config changes nothing.
+  tagline: ""
+  storefront_url: ""
+
   closing_block: |
     Please message me with any questions before buying — I'd rather answer
     one than have you guess.
