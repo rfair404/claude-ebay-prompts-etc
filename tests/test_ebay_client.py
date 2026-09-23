@@ -479,6 +479,58 @@ def test_user_token_scope_narrowing_does_not_leak_across_stores():
 
 
 # ---------------------------------------------------------------------------
+# reset_token_cache() / has_full_user_scopes() — the public API over the
+# per-store caches (GH #147, PR #150 review). External consumers (e.g.
+# tools/ebay_reauth.py) must go through these, not the private dicts
+# directly — that's exactly what broke when the caches were rekeyed.
+# ---------------------------------------------------------------------------
+
+def test_reset_token_cache_clears_only_the_named_store():
+    # Only 3 fetches ever happen: default once (it stays cached throughout,
+    # never re-fetched) and junk twice (once before, once after the reset).
+    fake = _Fake(_token_response("tok-default"), _token_response("tok-junk"),
+                 _token_response("tok-junk-2"))
+    default_creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                                    store="default")
+    junk_creds = EbayCredentials(environment="sandbox", app_id="a2", cert_id="c2",
+                                 store="junk")
+
+    def go():
+        assert get_app_access_token(default_creds) == "tok-default"
+        assert get_app_access_token(junk_creds) == "tok-junk"
+        ebay_client.reset_token_cache("junk")
+        # default's cache survives the junk-store reset...
+        assert get_app_access_token(default_creds) == "tok-default"
+        # ...but junk's was actually cleared, forcing a re-fetch.
+        assert get_app_access_token(junk_creds) == "tok-junk-2"
+        assert len(fake.requests) == 3
+
+    _patched(fake, go)
+
+
+def test_reset_token_cache_also_clears_scope_narrowing_state():
+    fake = _Fake(_http_error(400, b'{"error":"invalid_scope"}'), _token_response("tok-core"),
+                 _token_response("tok-full-again"))
+    creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                            user_refresh_token="r", store="junk")
+
+    def go():
+        assert get_user_access_token(creds) == "tok-core"
+        assert ebay_client.has_full_user_scopes("junk", "sandbox") is False
+        ebay_client.reset_token_cache("junk")
+        assert ebay_client.has_full_user_scopes("junk", "sandbox") is True
+        # and the next refresh asks for the full set again, not the narrowed one
+        assert get_user_access_token(creds) == "tok-full-again"
+        assert "sell.finances" in fake.requests[2].data.decode()
+
+    _patched(fake, go)
+
+
+def test_has_full_user_scopes_defaults_true_before_any_call():
+    assert ebay_client.has_full_user_scopes("never-touched", "sandbox") is True
+
+
+# ---------------------------------------------------------------------------
 # --store on the CLI's own OAuth consent flow (GH #147) — without this,
 # there was no way to run --user-consent-url/--exchange-code FOR a second
 # store, so no documented path to obtain its user_refresh_token at all.

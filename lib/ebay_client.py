@@ -571,6 +571,34 @@ def get_user_access_token(creds: Optional[EbayCredentials] = None,
 
 
 # ---------------------------------------------------------------------------
+# Public cache API (GH #147) — for a tool/test that just wrote NEW
+# credentials for a store and needs the next call to re-fetch rather than
+# serve whatever was cached under the old ones. Kept public/named (rather
+# than reaching into _app_caches/_user_caches/_user_scopes_by_store
+# directly) so a rename or reshape of the caches doesn't silently break an
+# external consumer the way the (store, environment)-keying change itself
+# did to tools/ebay_reauth.py — see PR #150 review.
+# ---------------------------------------------------------------------------
+
+def reset_token_cache(store: str = DEFAULT_STORE) -> None:
+    """Drop every cached app/user token AND scope-narrowing state for
+    `store`, across every environment (a config edit doesn't know which
+    environment was active when the now-stale token was cached)."""
+    for cache_dict in (_app_caches, _user_caches, _user_scopes_by_store):
+        for key in [k for k in cache_dict if k[0] == store]:
+            del cache_dict[key]
+
+
+def has_full_user_scopes(store: str, environment: str) -> bool:
+    """True if `store`'s (store, environment) scope state is still the full
+    USER_SCOPES_SELL set — i.e. its refresh_token has never had to narrow to
+    USER_SCOPES_SELL_CORE (sell.finances included). Only meaningful after a
+    real get_user_access_token() call for that (store, environment); an
+    untouched pair defaults to True (nothing has narrowed it yet)."""
+    return _user_scopes_by_store.get((store, environment), USER_SCOPES_SELL) == USER_SCOPES_SELL
+
+
+# ---------------------------------------------------------------------------
 # Generic JSON write request (user-context: POST / PUT / DELETE)
 # ---------------------------------------------------------------------------
 
