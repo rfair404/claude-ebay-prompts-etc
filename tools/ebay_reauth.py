@@ -3,6 +3,7 @@
 
     python tools/ebay_reauth.py                       # from the main checkout
     python tools/ebay_reauth.py --config PATH         # any other config.yaml
+    python tools/ebay_reauth.py --store junk          # re-auth a NAMED store (GH #147)
 
 Why this exists instead of `ebay_client.py --user-consent-url` / `--exchange-code`:
 
@@ -11,9 +12,11 @@ Why this exists instead of `ebay_client.py --user-consent-url` / `--exchange-cod
   shells mangle when it's pasted as an argument. Here it's read with input(),
   and you can paste the WHOLE address-bar URL; the code is pulled out and decoded.
 - The code expires in about 5 minutes, so there's no manual copy/edit step.
-- `--exchange-code` prints `ebay: user_refresh_token:`, but config.yaml keeps
-  one keyset per environment (`ebay: production: user_refresh_token:`). This
-  writes the right block, after a backup.
+- `--exchange-code` prints the raw `user_refresh_token:` line to paste in
+  yourself; this writes it directly into the right block — the default
+  store's active-environment block (`ebay: <env>: user_refresh_token:`), or
+  a named store's flat block (`ebay: stores: <name>: user_refresh_token:`,
+  see lib/ebay_client.py's load_credentials()) — after a backup.
 - The token is never printed.
 
 Afterwards it refreshes with the full scope set (incl. sell.finances, #126) to
@@ -49,31 +52,49 @@ def extract_code(pasted: str) -> str:
     return code.strip()
 
 
-def set_refresh_token(text: str, env: str, token: str) -> str:
-    """config.yaml text with `ebay: <env>: user_refresh_token:` replaced. Only
-    that one line changes; comments, order and line endings are kept."""
+def set_refresh_token(text: str, token: str, *, store: str = "default", env: str = "sandbox") -> str:
+    """config.yaml text with the right `user_refresh_token:` line replaced.
+    Only that one line changes; comments, order and line endings are kept.
+
+    store="default": the path is `ebay: <env>: user_refresh_token:` — one
+        keyset per environment, unchanged since before GH #147.
+    Any other store: the path is `ebay: stores: <store>: user_refresh_token:`
+        — flat, no further environment sub-nesting (a named store already
+        picks one real account; see lib/ebay_client.py's
+        load_credentials() docstring for why).
+
+    Walks the YAML by indentation (2 spaces/level) tracking which key is
+    open at each level, rather than assuming a fixed depth — the two
+    shapes above nest to different depths under the same `ebay:` root.
+    """
+    target = ["ebay", env] if store == "default" else ["ebay", "stores", store]
     lines = text.splitlines(keepends=True)
-    in_ebay = in_env = False
+    stack: list[str] = []
     for i, line in enumerate(lines):
-        if re.match(r"^\S", line) and not line.lstrip().startswith("#"):   # top-level key
-            in_ebay = line.startswith("ebay:")
-            in_env = False
+        if not line.strip() or line.lstrip().startswith("#"):
             continue
-        if in_ebay and re.match(r"^  [^\s#]", line):                         # ebay: child
-            in_env = line.strip().startswith(f"{env}:")
-            continue
-        if in_env and re.match(r"^\s+user_refresh_token\s*:", line):
-            indent = re.match(r"^(\s*)", line).group(1)
+        m = re.match(r"^( *)(\S[^:]*):", line)
+        if not m or len(m.group(1)) % 2:
+            continue                                          # not a `key:` line we track
+        indent, key = m.group(1), m.group(2)
+        level = len(indent) // 2
+        stack = stack[:level] + [key]
+        if stack[:-1] == target and key == "user_refresh_token":
             nl = "\r\n" if line.endswith("\r\n") else "\n"
             lines[i] = f'{indent}user_refresh_token: "{token}"{nl}'
             return "".join(lines)
-    raise ValueError(f"no `ebay: {env}: user_refresh_token:` line found")
+    path = ":".join(target)
+    raise ValueError(f"no `{path}:user_refresh_token:` line found")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", help="config.yaml to update (default: the one the pipeline reads)")
+    ap.add_argument("--store", metavar="NAME", default=None,
+                    help="Re-auth a NAMED store (GH #147) — e.g. 'junk' under "
+                         "ebay.stores.<NAME> in config.yaml. Omit for the "
+                         "default/primary store.")
     a = ap.parse_args()
     if a.config:
         os.environ["EBAYBIZ_CONFIG"] = str(Path(a.config).expanduser().resolve())
@@ -82,8 +103,9 @@ def main() -> int:
     from config import config_path, load_config
 
     cfg = config_path()
-    creds = ec.load_credentials()
+    creds = ec.load_credentials(a.store)
     print(f"config:      {cfg}")
+    print(f"store:       {creds.store}")
     print(f"environment: {creds.environment}")
     print()
     url = ec.user_consent_url(creds)
@@ -119,22 +141,22 @@ def main() -> int:
         return 1
     try:
         new_text = set_refresh_token(cfg.read_bytes().decode("utf-8"),  # keep CRLF
-                                     creds.environment, rt)
+                                     rt, store=creds.store, env=creds.environment)
     except ValueError as e:
         print(f"[X] {e} in {cfg}; nothing written")
         return 1
     backup = cfg.with_name(f"config.backup-{datetime.now():%Y%m%d-%H%M%S}.yaml")
     shutil.copyfile(cfg, backup)
     cfg.write_text(new_text, encoding="utf-8", newline="")
-    print(f"[OK] refresh token written to {cfg.name} ({creds.environment} block); "
+    block = creds.environment if creds.store == "default" else f"stores.{creds.store}"
+    print(f"[OK] refresh token written to {cfg.name} ({block} block); "
           f"previous config backed up to {backup.name}")
 
     # Prove the new token carries the full scope set, sell.finances included.
     load_config(reload=True)            # config.py caches the pre-write file
-    ec._user_cache.token = None
-    ec._user_scopes = ec.USER_SCOPES_SELL
-    ec.get_user_access_token(ec.load_credentials(), force_refresh=True)
-    if ec._user_scopes is not ec.USER_SCOPES_SELL:
+    ec.reset_token_cache(creds.store)   # drop whatever was cached under the old token
+    ec.get_user_access_token(ec.load_credentials(creds.store), force_refresh=True)
+    if not ec.has_full_user_scopes(creds.store, creds.environment):
         print("[!] the new token works, but eBay did NOT grant sell.finances.")
         return 1
     print("[OK] sell.finances is granted: the full scope set refreshes cleanly")

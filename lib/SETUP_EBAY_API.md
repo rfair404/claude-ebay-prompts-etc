@@ -117,11 +117,16 @@ draft remembers its `ebay_offer_id`).
 
 ---
 
-## Authorize / Reauthorize (connect a store, or switch to a different one)
+## Authorize / Reauthorize the DEFAULT store (or switch which account it is)
 
-The `user_refresh_token` ties the app to **one eBay seller account**. Use
-this to grant access the first time, when the token expires (~18-month
-lifetime), or to **switch the active environment to a different store**.
+This section is about the one, unnamed store — `ebay.environment` /
+`ebay.sandbox:` / `ebay.production:`. Use it to grant access the first
+time, when the token expires (~18-month lifetime), or to **replace** which
+account the default store points to. It does **not** add a second store —
+for that, without touching the default store at all, skip ahead to
+"Connect a SECOND store, without giving up the first" below.
+
+The `user_refresh_token` ties the app to **one eBay seller account**.
 
 **What changes vs. what stays:**
 - **Stays:** the app keyset (`app_id` / `cert_id` / `dev_id` / `redirect_uri`)

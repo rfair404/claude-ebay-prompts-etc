@@ -6,6 +6,7 @@ inventory/ or shells out to prep.
 tools/dashboard.py's own gather()/draw() logic is tests/test_dashboard.py's
 job — here we only check the route wires them together and returns HTML.
 """
+import shutil
 import sys
 from pathlib import Path
 
@@ -14,7 +15,9 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "lib"))
 
+import pick_store  # noqa: E402
 import webapp.server as server  # noqa: E402
 from webapp.queue import JobQueue  # noqa: E402
 
@@ -170,3 +173,111 @@ def test_serve_binds_loopback_only():
     src = inspect.getsource(server.main)
     assert 'host="127.0.0.1"' in src
     assert "0.0.0.0" not in src
+
+
+# --------------------------------------------------------------------------- #
+# /pick/{token} — the pick sheet as a link (#151)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def pick_client(client, tmp_path):
+    """The normal client, pointed at a throwaway pick store. Nothing in this
+    file may read or delete a real sheet — they hold buyer PII."""
+    store = tmp_path / "served"
+    server.set_pick_store_dir(store)
+    yield client, store
+    server.set_pick_store_dir(None)
+
+
+def test_healthz_is_cheap_and_says_up(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
+def test_pick_route_serves_the_published_sheet_by_token(pick_client):
+    client, store = pick_client
+    sheet = pick_store.publish("<html><body>Jamie Buyer</body></html>",
+                               order_ids=["03-1-2"], store_dir=store)
+    r = client.get(f"/pick/{sheet.token}")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Jamie Buyer" in r.text
+
+
+def test_pick_route_serves_a_sheet_that_lives_in_an_item_folder(pick_client):
+    """A sold order's sheet is written into the item's folder under inventory/
+    and served FROM there (publish(source=...)), so the route has to answer for
+    a sheet the store holds no copy of. The file goes under pick_lists/ here --
+    inside the repo, so it passes the containment check, and gitignored, so a
+    crashed test leaves nothing committable."""
+    client, store = pick_client
+    src_dir = ROOT / "pick_lists" / ".webapp-test-sources"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src = src_dir / "pick_03-9-9.html"
+    src.write_text("<html><body>Mike H. &middot; Greensboro, NC</body></html>",
+                   encoding="utf-8")
+    try:
+        sheet = pick_store.publish("NOT THIS COPY", order_ids=["03-9-9"],
+                                   store_dir=store, source=src)
+        assert not (store / f"{sheet.token}.html").exists()
+
+        r = client.get(f"/pick/{sheet.token}")
+        assert r.status_code == 200
+        assert "Greensboro, NC" in r.text
+        assert "NOT THIS COPY" not in r.text
+        # same guardrails as any other sheet
+        assert "no-store" in r.headers["cache-control"]
+        assert "noindex" in r.headers["x-robots-tag"]
+
+        # the file is the live page: re-render in place, no republish needed
+        src.write_text("<html><body>re-rendered</body></html>", encoding="utf-8")
+        assert "re-rendered" in client.get(f"/pick/{sheet.token}").text
+
+        # and the route losing its file is a 404, not a traceback
+        src.unlink()
+        assert client.get(f"/pick/{sheet.token}").status_code == 404
+    finally:
+        shutil.rmtree(src_dir, ignore_errors=True)
+
+
+def test_pick_route_sends_no_store_and_noindex(pick_client):
+    client, store = pick_client
+    sheet = pick_store.publish("<html>x</html>", order_ids=["03-1-2"], store_dir=store)
+    r = client.get(f"/pick/{sheet.token}")
+    # buyer PII: not cached, not indexed, not leaked as a referrer
+    assert "no-store" in r.headers["cache-control"]
+    assert "noindex" in r.headers["x-robots-tag"]
+    assert r.headers["referrer-policy"] == "no-referrer"
+
+
+def test_unknown_token_is_404_and_expired_is_410(pick_client):
+    client, store = pick_client
+    assert client.get("/pick/" + "z" * 43).status_code == 404
+
+    dead = pick_store.publish("<html>x</html>", order_ids=["old-1"],
+                              ttl_hours=-1, store_dir=store)
+    r = client.get(f"/pick/{dead.token}")
+    assert r.status_code == 410
+    assert "expired" in r.json()["detail"]
+    # and serving it deleted it, so the next hit is a plain 404
+    assert client.get(f"/pick/{dead.token}").status_code == 404
+
+
+def test_pick_route_cannot_be_walked_out_of_the_store(pick_client):
+    client, store = pick_client
+    store.mkdir(parents=True, exist_ok=True)
+    (store.parent / "secret.html").write_text("SECRET", encoding="utf-8")
+    for bad in ("../secret", "..%2Fsecret", "secret.html", "a"):
+        r = client.get(f"/pick/{bad}")
+        assert r.status_code in (404, 410)
+        assert "SECRET" not in r.text
+
+
+def test_no_route_lists_the_store(pick_client):
+    client, store = pick_client
+    sheet = pick_store.publish("<html>Jamie Buyer</html>",
+                               order_ids=["03-1-2"], store_dir=store)
+    # the token is the only way in: nothing enumerates what has been published
+    for path in ("/pick", "/pick/", "/api/pick", "/api/picks"):
+        assert client.get(path).status_code in (404, 405)
+    assert sheet.token not in client.get("/").text
