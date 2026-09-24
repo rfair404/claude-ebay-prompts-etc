@@ -31,14 +31,22 @@ picking off a shelf doesn't require re-reading the title. Deliberately
 low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
-Buyer name and street address are on this page. It is served over HTTP now,
-which is a change in that posture and is fenced accordingly: the app binds
-to 127.0.0.1 only, the URL carries 256 bits of randomness and no order id,
-the sheet deletes itself when it expires, and the route sends no-store +
-noindex. lib/pick_store.py holds those rules and the reasoning behind each.
-Everything outside that path is unchanged: the local copies still go to
-pick_lists/ (gitignored), and no sheet, link or token is ever committed,
-written to a ledger, or sent anywhere off this machine.
+No buyer street address and no full buyer name on this page — the buyer reads
+as first name + last initial ("Mike H."), which is all a picker needs to match
+the box to the label eBay prints. The full ship-to is deliberately not
+rendered: the sheet is printed, handed around and photographed, and the
+shipping label already carries the address. tools/pick_list.py's terminal
+output (seller-only, stays on this machine) still shows the full address for
+actually addressing a box.
+
+That leaves the buyer's first name and last initial as the only personal
+thing on a page now served over HTTP, and the fencing around it stands
+regardless: the app binds to 127.0.0.1 only, the URL carries 256 bits of
+randomness and no order id, the sheet deletes itself when it expires, and the
+route sends no-store + noindex. lib/pick_store.py holds those rules and the
+reasoning behind each. Local copies still go to pick_lists/ (gitignored), and
+no sheet, link or token is ever committed, written to a ledger, or sent
+anywhere off this machine.
 
 No seller financials on this page — deliberately. This sheet can end up seen
 by the buyer during packing (dropped in the box by mistake, photographed,
@@ -192,6 +200,19 @@ def _pick_location(folder: str) -> str:
 _HAND_LOC = load_hand_locations()
 
 
+def _short_name(full: str) -> str:
+    """Buyer as first name + last initial — "Mike Hein" -> "Mike H.". Enough
+    to match a box to its label, not enough to be a name on a page that gets
+    printed, photographed and passed around. A single-word name is returned
+    as-is; an empty name stays empty rather than becoming a stray period."""
+    parts = (full or "").split()
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0]}."
+
+
 def _addr_key(o: dict) -> tuple:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
@@ -206,7 +227,6 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
     that's what ties it back to eBay's merge screen."""
     grouped = len(orders) > 1
     to = ship_to(orders[0])
-    addr = to.get("contactAddress") or {}
     mismatch = grouped and any(_addr_key(o) != _addr_key(orders[0]) for o in orders[1:])
 
     ship_by = min((li.get("lineItemFulfillmentInstructions", {}).get("shipByDate") or "zz"
@@ -245,15 +265,13 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         </div>
       </div>""")
 
-    addr_lines = "".join(f"<div>{html.escape(line)}</div>" for line in
-                          (addr.get("addressLine1"), addr.get("addressLine2")) if line)
     ship_by_bit = (f" &middot; SHIP BY {html.escape(ship_by)}"
                    if ship_by and ship_by != "zz" else "")
 
     if grouped:
         title = f"Pick — {len(orders)} orders combined"
         heading = (f"PICK — {len(orders)} orders combined &middot; "
-                   f"{html.escape(to.get('fullName', ''))}")
+                   f"{html.escape(_short_name(to.get('fullName', '')))}")
         vias = sorted({(html.escape(ship_to(o).get('carrier', '')),
                          html.escape(ship_to(o).get('service', ''))) for o in orders})
         via_line = (f"VIA {vias[0][0]} {vias[0][1]}" if len(vias) == 1
@@ -279,9 +297,13 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 <title>{html.escape(title)}</title>
 <style>
   * {{ box-sizing: border-box; }}
-  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; }}
+  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; color-scheme: light; }}
   @page {{ size: letter; margin: .5in; }}
+  /* A pick sheet is a paper object — it commits to one light look. The
+     background is stated rather than inherited so the page still reads as
+     paper when the viewer's browser ground is dark. */
   body {{ font-family: Georgia, 'Times New Roman', serif; color: #111;
+          background: #fff;
           max-width: 640px; margin: 24px auto; padding: 0 16px; }}
   /* Two-face system, matching brand/pops-games: Georgia carries display
      content (headings, item titles), Courier New carries utility/data
@@ -306,6 +328,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   .from {{ font-family: 'Courier New', monospace; letter-spacing: .02em;
            color: #555; font-size: .74rem; margin-top: 4px; }}
   .shipto {{ border-top: 2px solid #111; margin-top: 8px; padding-top: 10px; }}
+  .addrnote {{ color: #777; font-size: 9pt; font-style: italic; margin-top: 3px; }}
   .shipto b {{ display: block; margin-bottom: 4px; font-family: Georgia, serif;
                font-weight: 700; letter-spacing: .26em; text-transform: uppercase;
                font-size: .8rem; color: var(--ink); }}
@@ -346,11 +369,9 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   {warn_html}
   {''.join(item_blocks)}
   <div class="shipto">
-    <b>SHIP TO</b>
-    <div>{html.escape(to.get('fullName', ''))}</div>
-    {addr_lines}
-    <div>{html.escape(addr.get('city', ''))}, {html.escape(addr.get('stateOrProvince', ''))}
-      {html.escape(addr.get('postalCode', ''))} {html.escape(addr.get('countryCode', ''))}</div>
+    <b>BUYER</b>
+    <div>{html.escape(_short_name(to.get('fullName', '')))}</div>
+    <div class="addrnote">ship-to address is on the eBay label — not printed here</div>
   </div>
   <div class="footer">
     {via_line}<br>
