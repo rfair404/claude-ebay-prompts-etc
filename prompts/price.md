@@ -112,11 +112,23 @@ where `<store>` is the draft's `store:` field — and read `price_posture`.
    GROCO IBV-750, 2026-09-23: median new ask $47.58 vs cheapest credible new
    $33.68 — a cap of $35.68 against $25.26, i.e. a 41% difference in the
    ceiling from one word in the method.
-3. **Cap the tiers**: `price_stats.apply_new_price_ceiling(tiers,
-   new_delivered, pct=<storefront's new_price_ceiling_pct>)`. It caps only the
-   tiers that exceed the cap, keeps each original number as `uncapped_price`,
-   and returns a note per tier it lowered. Show those notes — a number that
-   moved with no stated reason is how a price report loses trust.
+3. **Apply the storefront's fraction**: `price_stats.apply_new_price_ceiling(
+   tiers, new_delivered, pct=<storefront's new_price_pct>, target=True)`.
+
+   **`target=True` when the storefront states an ASK, not just a ceiling**
+   (e.g. junk: "ask ~2/3 of new"). The two differ exactly when the comps come
+   in low: as a pure cap the ask follows them down, as a target it does not.
+   Target is right for commodity goods with a thin or absent used market,
+   where a handful of cheap sold listings is noise and the retail price is the
+   real anchor. It does mean a genuinely soft market cannot pull the price
+   down on its own — so when the helper reports a RAISE, read the comps again
+   before accepting it. A price moved UP past the evidence is the direction
+   that most deserves a second look.
+
+   It moves only the tiers it must, keeps each original as `uncapped_price`,
+   and returns a note per change. Show those notes — a number that moved with
+   no stated reason is how a price report loses trust. The conservative floor
+   is never raised: that would invent a floor nobody derived.
 4. **No new supply found** → no cap; the comp math stands. Discontinued goods
    have no retail alternative, so ceiling-first is right again even here. Say
    so explicitly rather than leaving it ambiguous.
@@ -126,8 +138,15 @@ where `<store>` is the draft's `store:` field — and read `price_posture`.
    stale, or the new reference is the wrong spec. Resolve which before
    trusting either number — do not just take the capped figure and move on.
 
-State `STOREFRONT: below_new — new delivered $<x>, cap $<y>` in price.txt, or
-`STOREFRONT: below_new — no new supply found, uncapped`.
+**Best Offer is a storefront decision, not a per-item one.** When the
+resolved storefront sets `best_offer: false`, the draft must ship
+`best_offer.enabled: false` — `validate_draft_for_sync` refuses otherwise,
+and unlike the #140 A1 under-$100 rule it cannot be waived by documenting a
+deviation in `meta.notes`. A store-wide rule that a single draft can opt out
+of is not a rule.
+
+State `STOREFRONT: below_new — new delivered $<x>, target/cap $<y>` in
+price.txt, or `STOREFRONT: below_new — no new supply found, uncapped`.
 
 ## The exact-match hunt (before any era-peer fallback)
 

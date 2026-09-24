@@ -489,6 +489,7 @@ def apply_new_price_ceiling(
     new_delivered: Optional[float],
     *,
     pct: float = NEW_CEILING_PCT,
+    target: bool = False,
 ) -> dict:
     """Cap sold-comp tiers against the price of buying the item NEW.
 
@@ -506,7 +507,18 @@ def apply_new_price_ceiling(
             feedback_price_delivered_basis). None when no new supply was
             found, which is the discontinued case: nothing to cap against,
             so the comp math stands unchanged.
-        pct: fraction of new-delivered to treat as the ceiling.
+        pct: fraction of new-delivered to treat as the ceiling (and, with
+            `target`, as the ask itself).
+        target: when True the fraction is a TARGET, not only a cap — the
+            recommended ask is RAISED to it as well as lowered to it. Use for
+            a storefront whose policy is "ask ~N% of new" rather than "stay
+            under N% of new". The two differ exactly when the comps come in
+            low: as a cap the ask follows the comps down, as a target it does
+            not. Deliberate for commodity goods with a thin or absent used
+            market, where a handful of cheap sold listings is noise and the
+            retail price is the real anchor — but it does mean a genuinely
+            soft market cannot pull the price down on its own, so `notes`
+            records the raise and the comp value it overrode.
 
     Returns:
         A dict with the capped `tiers`, the `cap` applied, and `notes` — one
@@ -537,6 +549,24 @@ def apply_new_price_ceiling(
             f"the NEW delivered price ${round(new_delivered, 2)}. Used does "
             f"not outsell new — check the comps are the same item and the "
             f"new reference is the same spec before trusting either number.")
+
+    if target:
+        rec = (tiers.get("recommended") or {}).get("price")
+        if rec is not None and rec < cap:
+            out["notes"].append(
+                f"recommended: ${rec} -> ${cap} RAISED to the {pct:.0%}-of-new "
+                f"target (storefront policy asks at the target, not merely "
+                f"under it). The comp-derived ask was lower; on a thin used "
+                f"market that is noise, but check the comps if this looks wrong.")
+            tiers = dict(tiers)
+            tiers["recommended"] = {
+                **tiers["recommended"],
+                "price": cap,
+                "basis": (f"{pct:.0%} of NEW delivered (${round(new_delivered, 2)}) "
+                          f"— storefront target; comp-derived was ${rec}: "
+                          f"{tiers['recommended'].get('basis', '')}"),
+                "uncapped_price": rec,
+            }
 
     capped = {}
     for name, tier in tiers.items():

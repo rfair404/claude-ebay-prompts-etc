@@ -128,6 +128,48 @@ def test_flagged_tiers_are_still_capped():
     assert out["tiers"]["push_high"]["price"] == 75.0
 
 
+# ---------------------------------------------------------------------------
+# target=True — "ask AT ~N% of new", not merely "stay under it".
+# The two differ exactly when the comps come in low.
+# ---------------------------------------------------------------------------
+
+def test_target_raises_a_low_recommended_to_the_target():
+    out = apply_new_price_ceiling(_tiers(8.0, 12.0, 20.0), 33.68, pct=0.667, target=True)
+    assert out["tiers"]["recommended"]["price"] == round(33.68 * 0.667, 2)
+
+
+def test_cap_mode_leaves_a_low_recommended_alone():
+    """The contrast that makes target worth having as a separate flag."""
+    out = apply_new_price_ceiling(_tiers(8.0, 12.0, 20.0), 33.68, pct=0.667)
+    assert out["tiers"]["recommended"]["price"] == 12.0
+
+
+def test_target_still_caps_a_high_recommended():
+    out = apply_new_price_ceiling(_tiers(20.0, 30.0, 40.0), 33.68, pct=0.667, target=True)
+    assert out["tiers"]["recommended"]["price"] == round(33.68 * 0.667, 2)
+
+
+def test_target_records_the_raise_and_the_number_it_overrode():
+    """A price moved UP past the comps has to say so — that is the direction
+    an operator would least expect and most want to challenge."""
+    out = apply_new_price_ceiling(_tiers(8.0, 12.0, 20.0), 33.68, pct=0.667, target=True)
+    note = next(n for n in out["notes"] if "RAISED" in n)
+    assert "$12.0" in note
+    assert out["tiers"]["recommended"]["uncapped_price"] == 12.0
+
+
+def test_target_does_nothing_without_a_new_reference():
+    out = apply_new_price_ceiling(_tiers(8.0, 12.0, 20.0), None, target=True)
+    assert out["tiers"]["recommended"]["price"] == 12.0
+
+
+def test_target_does_not_raise_the_floor_tier():
+    """Only the ask moves to the target. Conservative stays the no-objection
+    floor — raising it would invent a floor nobody derived."""
+    out = apply_new_price_ceiling(_tiers(8.0, 12.0, 20.0), 33.68, pct=0.667, target=True)
+    assert out["tiers"]["conservative"]["price"] == 8.0
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

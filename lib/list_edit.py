@@ -474,6 +474,24 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     # Best Offer cross-field checks (#140) — offline, so these catch a
     # broken floor before any eBay call, not just at the write paths in
     # _best_offer_terms().
+    # A storefront can forbid Best Offer outright (storefronts.<name>.
+    # best_offer: false). That is a STORE POLICY, so unlike the #140 A1 rule
+    # below it cannot be satisfied by documenting a deviation in meta.notes —
+    # the point of a store-wide rule is that a single draft does not get to
+    # opt out of it. Checked before the A1 rule so the message names the real
+    # reason rather than asking for a justification that would not help.
+    if draft.get("best_offer.enabled"):
+        try:
+            _sf = get_storefront(draft.get("store") or None)
+        except Exception:  # unknown/absent storefront → fall through to A1
+            _sf = {}
+        if _sf.get("best_offer") is False:
+            issues.append(
+                "best_offer.enabled but this storefront forbids Best Offer "
+                "(storefronts.<store>.best_offer: false) — set "
+                "best_offer.enabled: false. A store-wide rule is not waivable "
+                "per draft.")
+
     if draft.get("best_offer.enabled") and price is not None:
         decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
         if decline is not None and Decimal(decline) >= Decimal(price):

@@ -351,10 +351,21 @@ store:
 #                                        # alternative is the retail box, with
 #                                        # a warranty and a return window. Caps
 #                                        # the ask against NEW delivered.
-#     new_price_ceiling_pct: 0.75        # at/above 75% of new a rational buyer
-#                                        # buys new — more so where returns are
-#                                        # refused. See
-#                                        # price_stats.apply_new_price_ceiling.
+#     new_price_pct: 0.667               # ASK at this fraction of new. A TARGET,
+#                                        # not only a ceiling: the ask lands
+#                                        # here rather than merely staying under
+#                                        # it, so a thin used market cannot drag
+#                                        # the price below the retail anchor.
+#                                        # (target=True in
+#                                        # price_stats.apply_new_price_ceiling.)
+#     new_price_ceiling_pct: 0.667       # keep equal to new_price_pct so the
+#                                        # target and the cap cannot drift.
+#
+#     best_offer: false                  # store-wide: no Best Offer anywhere.
+#                                        # Enforced by validate_draft_for_sync
+#                                        # and NOT waivable per draft — unlike
+#                                        # the #140 A1 under-$100 rule, which a
+#                                        # meta.notes justification satisfies.
 #
 #     # Leave a genuinely undecided policy UNSET so it inherits, rather than
 #     # guessing a value that later reads as a decision someone made. E.g.
