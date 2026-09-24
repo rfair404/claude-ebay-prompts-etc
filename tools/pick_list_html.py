@@ -32,16 +32,16 @@ low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
 No buyer street address and no full buyer name on this page — the buyer reads
-as first name + last initial ("Mike H."), which is all a picker needs to match
-the box to the label eBay prints. The full ship-to is deliberately not
-rendered: the sheet is printed, handed around and photographed, and the
-shipping label already carries the address. tools/pick_list.py's terminal
-output (seller-only, stays on this machine) still shows the full address for
-actually addressing a box.
+as first name + last initial ("Mike H.") plus city and state, which is all a
+picker needs to match the box to the label eBay prints. The street address is
+deliberately not rendered: the sheet is printed, handed around and
+photographed, and the shipping label already carries the full address.
+tools/pick_list.py's terminal output (seller-only, stays on this machine) still
+shows the full address for actually addressing a box.
 
-That leaves the buyer's first name and last initial as the only personal
-thing on a page now served over HTTP, and the fencing around it stands
-regardless: the app binds to 127.0.0.1 only, the URL carries 256 bits of
+That leaves the buyer's first name, last initial and city/state as the only
+personal things on a page now served over HTTP, and the fencing around it
+stands regardless: the app binds to 127.0.0.1 only, the URL carries 256 bits of
 randomness and no order id, the sheet deletes itself when it expires, and the
 route sends no-store + noindex. lib/pick_store.py holds those rules and the
 reasoning behind each. Local copies still go to pick_lists/ (gitignored), and
@@ -227,6 +227,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
     that's what ties it back to eBay's merge screen."""
     grouped = len(orders) > 1
     to = ship_to(orders[0])
+    addr = to.get("contactAddress") or {}
     mismatch = grouped and any(_addr_key(o) != _addr_key(orders[0]) for o in orders[1:])
 
     ship_by = min((li.get("lineItemFulfillmentInstructions", {}).get("shipByDate") or "zz"
@@ -264,6 +265,12 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
           <div class="meta">item {html.escape(str(li.get('legacyItemId', '')))}{sku_bit}{order_bit}</div>{from_line}
         </div>
       </div>""")
+
+    # City + state only. Enough for a picker to sanity-check the box against
+    # the label eBay prints; not a street address, so the sheet stays safe to
+    # print, carry around and photograph.
+    city_state = ", ".join(p for p in (addr.get("city"), addr.get("stateOrProvince")) if p)
+    city_state_html = (f'<div>{html.escape(city_state)}</div>' if city_state else "")
 
     ship_by_bit = (f" &middot; SHIP BY {html.escape(ship_by)}"
                    if ship_by and ship_by != "zz" else "")
@@ -328,7 +335,6 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   .from {{ font-family: 'Courier New', monospace; letter-spacing: .02em;
            color: #555; font-size: .74rem; margin-top: 4px; }}
   .shipto {{ border-top: 2px solid #111; margin-top: 8px; padding-top: 10px; }}
-  .addrnote {{ color: #777; font-size: 9pt; font-style: italic; margin-top: 3px; }}
   .shipto b {{ display: block; margin-bottom: 4px; font-family: Georgia, serif;
                font-weight: 700; letter-spacing: .26em; text-transform: uppercase;
                font-size: .8rem; color: var(--ink); }}
@@ -371,7 +377,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   <div class="shipto">
     <b>BUYER</b>
     <div>{html.escape(_short_name(to.get('fullName', '')))}</div>
-    <div class="addrnote">ship-to address is on the eBay label — not printed here</div>
+    {city_state_html}
   </div>
   <div class="footer">
     {via_line}<br>
