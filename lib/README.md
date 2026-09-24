@@ -341,6 +341,7 @@ The modules above are the ones with setup steps. The rest, one line each:
 | `ebay_visual.py`, `lens_id.py` | Visual lookups. `lens_id` fails silently on an empty result — always run a known-indexed control image first. |
 | `vindex.py`, `marble_*.py`, `mcsa_index.py`, `reembed.py`, `forum_replies.py` | The marble specialization's CLIP index, classifier and forum tooling. |
 | `dir_context.py` | Resolves a shoot directory to repo-relative paths. |
+| `pick_store.py` | The short-lived store behind a pick-sheet link (#151) — publish/fetch/revoke/expire, served by `webapp/server.py`'s `/pick/{token}`. Holds buyer PII, so read the guardrails at the top before changing anything here. |
 
 Setup for the eBay Sell API — the one thing with real prerequisites — is in
 [SETUP_EBAY_API.md](SETUP_EBAY_API.md).

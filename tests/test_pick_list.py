@@ -12,6 +12,7 @@ Run:  python tests/test_pick_list.py
   or: pytest tests/test_pick_list.py
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -163,7 +164,7 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
                           (pick_list, "load_listings_ledger"): lambda: []}):
             new_ids, skipped_ids, state, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
-                fetch=lambda: orders)
+                fetch=lambda: orders, publish=False)
         assert sorted(new_ids) == ["new-1", "new-2"]
         assert skipped_ids == []
         assert unconfirmed == []
@@ -179,7 +180,7 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: []}):
             new_ids2, skipped_ids2, state2, _ = pick_list.poll_and_print(
-                out_dir=out_dir, state=state, fetch=lambda: orders)
+                out_dir=out_dir, state=state, fetch=lambda: orders, publish=False)
         assert new_ids2 == []
         assert sorted(skipped_ids2) == ["new-1", "new-2"]
     finally:
@@ -194,7 +195,7 @@ def test_poll_and_print_reprint_forces_one_order_through():
         with _Patched({(pick_list, "scan_drafts"): lambda: [],
                           (pick_list, "load_listings_ledger"): lambda: []}):
             new_ids, skipped_ids, _, unconfirmed = pick_list.poll_and_print(
-                out_dir=out_dir, state=state, fetch=lambda: orders, reprint="dup-1")
+                out_dir=out_dir, state=state, fetch=lambda: orders, publish=False, reprint="dup-1")
         assert new_ids == ["dup-1"]
         assert skipped_ids == []
         assert unconfirmed == []
@@ -215,7 +216,7 @@ def test_poll_and_print_do_print_failure_never_raises():
                           (pick_list, "_send_to_printer"): boom}):
             new_ids, _, _, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
-                fetch=lambda: orders, do_print=True)
+                fetch=lambda: orders, publish=False, do_print=True)
         assert new_ids == ["print-1"]  # the file still got written
         assert unconfirmed == ["print-1"]  # printing failed, but poll didn't raise
     finally:
@@ -464,5 +465,286 @@ def test_main_rejects_poll_and_record_tracking_together():
         sys.argv = old_argv
 
 
+# --------------------------------------------------------------------------- #
+# render_html()'s BUYER block, rendered for real.
+#
+# Every other test in this file fakes render_html (it reads hero photos and
+# pulls in PIL). That meant a merge could leave render_html raising NameError on
+# every call and the whole suite still passed. These call it, with no photos, so
+# the block a buyer might read over the packer's shoulder is actually asserted.
+# --------------------------------------------------------------------------- #
+def _buyer_order(city="Greensboro", state="NC", name="Mike Hein") -> dict:
+    addr = {"addressLine1": "123 Main St", "addressLine2": "Apt 4",
+            "postalCode": "27401", "countryCode": "US"}
+    if city:
+        addr["city"] = city
+    if state:
+        addr["stateOrProvince"] = state
+    cost = {"value": "34.00", "currency": "USD"}
+    return {
+        "orderId": "12-3456-78901", "creationDate": "2026-09-23T10:00:00.000Z",
+        "orderPaymentStatus": "PAID",
+        "pricingSummary": {"total": cost, "deliveryCost": cost},
+        "paymentSummary": {"totalDueSeller": cost},
+        "lineItems": [{"legacyItemId": "206448267270", "title": "A thing",
+                       "quantity": 1, "sku": "MB-0142", "lineItemCost": cost,
+                       "deliveryCost": {"shippingCost": cost}}],
+        "fulfillmentStartInstructions": [{"shippingStep": {
+            "shipTo": {"fullName": name, "contactAddress": addr},
+            "shippingCarrierCode": "USPS",
+            "shippingServiceCode": "GroundAdvantage"}}]}
+
+
+def _buyer_block(order: dict) -> str:
+    import pick_list_html
+    h = pick_list_html.render_html([order], [], [])
+    return re.search(r'<div class="shipto">.*?</div>\s*</div>', h, re.S).group(0), h
+
+
+def test_buyer_block_is_short_name_plus_city_and_state():
+    block, h = _buyer_block(_buyer_order())
+    assert "Mike H." in block
+    assert "Greensboro, NC" in block
+    # what must never reach a page that gets printed and photographed
+    for leaked in ("123 Main St", "Apt 4", "27401", "Mike Hein"):
+        assert leaked not in h, f"{leaked} leaked onto the sheet"
+
+
+def test_buyer_block_has_no_stray_comma_when_city_or_state_is_missing():
+    city_only, _ = _buyer_block(_buyer_order(state=None))
+    assert "Greensboro" in city_only and "Greensboro," not in city_only
+
+    state_only, _ = _buyer_block(_buyer_order(city=None))
+    assert "NC" in state_only and ", NC" not in state_only
+
+    neither, _ = _buyer_block(_buyer_order(city=None, state=None))
+    assert "," not in neither.split("BUYER")[1]
+
+
+def test_a_one_word_buyer_name_does_not_become_a_stray_period():
+    block, _ = _buyer_block(_buyer_order(name="Cher"))
+    assert "Cher" in block and "Cher." not in block
+
+
+def test_an_empty_buyer_name_stays_empty():
+    block, _ = _buyer_block(_buyer_order(name=""))
+    assert "." not in block.split("BUYER")[1].split("Greensboro")[0]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# --------------------------------------------------------------------------- #
+# --poll publishes a LINK per shipment (#151)
+#
+# pick_list_html.render_html is faked throughout: it reads hero photos out of
+# inventory/ and pulls in PIL/numpy, none of which this file has any business
+# touching. What is under test is the wiring — that a poll publishes, that a
+# re-poll reuses, that an expired link is replaced, and that the seller-only
+# .txt never becomes a URL.
+# --------------------------------------------------------------------------- #
+def _pick_store_at(tmp: Path):
+    """pick_store bound to a throwaway directory, so no test can publish into
+    (or purge) the real pick_lists/.served/."""
+    import pick_store
+    store = tmp / "served"
+
+    class _Bound:
+        TTL_HOURS_DEFAULT = pick_store.TTL_HOURS_DEFAULT
+        SERVE_HINT = pick_store.SERVE_HINT
+        store_dir = store
+
+        @staticmethod
+        def publish(html, order_ids=None, ttl_hours=pick_store.TTL_HOURS_DEFAULT):
+            return pick_store.publish(html, order_ids=order_ids,
+                                      ttl_hours=ttl_hours, store_dir=store)
+
+        @staticmethod
+        def live_sheet_for(order_ids):
+            return pick_store.live_sheet_for(order_ids, store_dir=store)
+
+        @staticmethod
+        def fetch(token):
+            return pick_store.fetch(token, store_dir=store)
+
+        @staticmethod
+        def server_is_up(*a, **k):
+            return True
+
+    return _Bound
+
+
+class _FakeModules:
+    """Put fake `pick_store` / `pick_list_html` in sys.modules for the
+    duration of a `with` — poll_and_print imports both lazily, by name."""
+
+    def __init__(self, **mods):
+        self._mods = mods
+        self._saved = {}
+
+    def __enter__(self):
+        for name, mod in self._mods.items():
+            self._saved[name] = sys.modules.get(name)
+            sys.modules[name] = mod
+        return self
+
+    def __exit__(self, *exc):
+        for name, old in self._saved.items():
+            if old is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = old
+        return False
+
+
+class _FakeHtml:
+    rendered = []
+
+    @classmethod
+    def render_html(cls, orders, drafts, ledger):
+        cls.rendered.append([o.get("orderId") for o in orders])
+        who = orders[0]["fulfillmentStartInstructions"][0]["shippingStep"]["shipTo"]["fullName"]
+        return f"<html><body>{who}</body></html>"
+
+
+def _no_inventory():
+    """The two lookups poll_and_print makes into local inventory/ledger."""
+    return _Patched({(pick_list, "scan_drafts"): lambda: [],
+                     (pick_list, "load_listings_ledger"): lambda: []})
+
+
+def test_poll_publishes_a_link_per_new_order():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    _FakeHtml.rendered = []
+    orders = [_order(oid="link-1")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                new_ids, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+        entry = state["printed"]["link-1"]
+        assert entry["url"].startswith("http://127.0.0.1:8770/pick/")
+        assert entry["token"] and entry["expires_at"]
+        assert _FakeHtml.rendered == [["link-1"]]
+        # the link really resolves to this buyer's sheet
+        html, status = store.fetch(entry["token"])
+        assert status == "ok" and "Jamie Buyer" in html
+        assert new_ids == ["link-1"]
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_second_poll_hands_back_the_same_link_without_republishing():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    _FakeHtml.rendered = []
+    orders = [_order(oid="link-2")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                _, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+                first = dict(state["printed"]["link-2"])
+                new_ids2, skipped2, state2, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state=state, fetch=lambda: orders)
+        assert new_ids2 == [] and skipped2 == ["link-2"]
+        assert state2["printed"]["link-2"]["token"] == first["token"]
+        assert state2["printed"]["link-2"]["url"] == first["url"]
+        assert _FakeHtml.rendered == [["link-2"]]      # rendered once, not twice
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_an_expired_link_is_republished_even_though_the_order_was_printed():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    _FakeHtml.rendered = []
+    orders = [_order(oid="link-3")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                # first poll publishes something already past its TTL
+                _, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders, ttl_hours=-1)
+                dead_token = state["printed"]["link-3"]["token"]
+                _, skipped, state2, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state=state, fetch=lambda: orders)
+        assert skipped == ["link-3"]                   # not re-printed
+        fresh = state2["printed"]["link-3"]["token"]
+        assert fresh != dead_token                     # but re-published
+        assert store.fetch(fresh)[1] == "ok"
+        assert len(_FakeHtml.rendered) == 2
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_no_links_mode_publishes_nothing():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    orders = [_order(oid="link-4")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                _, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders, publish=False)
+        assert "url" not in state["printed"]["link-4"]
+        assert not (out_dir.parent / "served").exists()
+        assert (out_dir / "pick_link-4.txt").exists()   # the local sheet still lands
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_publish_failure_never_breaks_the_poll():
+    out_dir, _ = _scratch_dirs()
+    orders = [_order(oid="link-5")]
+
+    class _Boom:
+        TTL_HOURS_DEFAULT = 48
+
+        @staticmethod
+        def publish(*a, **k):
+            raise RuntimeError("store is on fire")
+
+        @staticmethod
+        def live_sheet_for(order_ids):
+            return None
+
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=_Boom, pick_list_html=_FakeHtml):
+                new_ids, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+        assert new_ids == ["link-5"]
+        assert "url" not in state["printed"]["link-5"]   # no stale/fake link recorded
+        assert (out_dir / "pick_link-5.txt").exists()    # the fallback is the file
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_the_published_sheet_is_the_buyer_safe_one_not_the_seller_txt():
+    # tools/pick_list.py's render() shows buyer-paid shipping and net payout;
+    # the HTML sheet does not. Only the latter may ever get a URL (#84/#151).
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    orders = [_order(oid="link-6")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                _, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+        served = store.fetch(state["printed"]["link-6"]["token"])[0]
+        local_txt = (out_dir / "pick_link-6.txt").read_text(encoding="utf-8")
+        assert "you keep" in local_txt.lower()     # seller copy shows the payout
+        assert "buyer paid" in local_txt.lower()   # ...and what shipping earned
+        assert "you keep" not in served.lower()    # the link shows neither
+        assert "buyer paid" not in served.lower()
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
