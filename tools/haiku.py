@@ -4,10 +4,9 @@
 Personalizes each printed pick list without printing anything personal on
 it: the buyer's name never appears (pick_list_html.py already reduces it to
 first-name-plus-initial for the "BUYER" block above this), so the haiku
-draws only on two *thematic* signals instead — a word bank keyed to what
-the item is (from the listing title) and one keyed to the region the order
-is shipping to (from the ship-to state) — plus a closing line about the
-parcel itself. Nothing in the output is ever the literal title, name, or
+draws only on two *thematic* signals instead — what the item is (from the
+listing title) and the region the order is shipping to (from the ship-to
+state) — to picture the thing in use where the buyer is. Nothing in the output is ever the literal title, name, or
 address text; every line comes from a small curated pool below, so there is
 nothing to leak.
 
@@ -32,10 +31,20 @@ import re
 # Only used by the test suite to keep the pools honest; the generator itself
 # never counts syllables at runtime, it only picks whole pre-counted lines.
 # --------------------------------------------------------------------------- #
+# Words the vowel-group rule miscounts, pinned to how they're said. Add one
+# here rather than bending a good line to fit the heuristic.
+_SYLLABLE_OVERRIDES = {
+    "becomes": 2, "unwrapped": 2, "evenings": 2, "basement": 2,
+    "nowhere": 2, "snowed": 1, "radiators": 4,
+}
+
+
 def _syllables(word: str) -> int:
     word = re.sub(r"[^a-z]", "", word.lower())
     if not word:
         return 0
+    if word in _SYLLABLE_OVERRIDES:
+        return _SYLLABLE_OVERRIDES[word]
     vowels = "aeiouy"
     count = 0
     prev_is_vowel = False
@@ -57,35 +66,60 @@ def line_syllables(line: str) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# item category, from a listing title -> a themed 5-syllable opening line.
-# First matching category wins, so more specific keywords (e.g. "card")
-# are listed ahead of ones that could also match a generic sense of "game".
+# The voice (locked in with the owner on #164): the poem is about the thing
+# being USED, where the buyer is — not about the parcel travelling, and not
+# scenery for its own sake. Plain words, concrete, a dry aside at the end.
+#   line 1 (5)  the item in use           — keyed to the item's category
+#   line 2 (7)  where they are            — a household scene, flavored by
+#                                           the ship-to region
+#   line 3 (5)  how it goes               — keyed to the category again, so
+#                                           the poem reads as one scene
+# e.g. checkers to CA:  Red jumps black. King me. / Out back where the
+#                       evenings cool, / someone sulks. Rematch.
+# New lines should pass the same test: could this only be about this kind
+# of thing, in use? "Boxes wait for hands" could be anything — cut it.
 # --------------------------------------------------------------------------- #
+
+# Item category, from the listing title. First match wins, so the narrow
+# categories (checkers, chess) come ahead of the broad "games". Keywords
+# match whole words (plural "s" allowed) so "card" never hits "cardboard".
 CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "cards": ("card", "tcg", "pokemon", "pokémon", "yugioh", "yu-gi-oh", "mtg"),
-    "toys": ("figure", "figurine", "funko", "plush", "action figure", "doll", "model kit"),
-    "electronics": ("console", "controller", "cable", "adapter", "charger", "headset", "camera"),
+    "checkers": ("checkers", "checker", "draughts"),
+    "chess": ("chess",),
+    "cards": ("card", "tcg", "pokemon", "pokémon", "yugioh", "yu-gi-oh", "mtg", "deck"),
+    "toys": ("toy", "figure", "figurine", "funko", "plush", "action figure", "doll",
+             "model kit"),
+    "electronics": ("console", "controller", "cable", "adapter", "charger", "headset",
+                    "camera", "radio"),
     "books": ("book", "comic", "manga", "novel", "magazine"),
-    "games": ("game", "puzzle", "jigsaw", "dice"),
+    "games": ("game", "board game", "puzzle", "jigsaw", "dice", "dominoes",
+              "backgammon", "cribbage"),
 }
 
 LINE1_BY_CATEGORY: dict[str, tuple[str, ...]] = {
-    "games": ("Dice tumble and land", "Cards shuffle and wait",
-              "Pawns line up to start", "The board opens wide"),
-    "cards": ("Cards shuffle and wait", "A deck rests, unseen",
-              "Bright pieces await", "Old wonders wait here"),
-    "toys": ("Tiny hands reach out", "Bright pieces await",
-              "Old wonders wait here", "Boxes wait for hands"),
-    "electronics": ("Wires coil and rest", "Pixels wait to glow",
-                     "Circuits sit and hum", "Screens wait, dark and still"),
-    "books": ("Pages hold old ink", "Pages hold soft dust",
-              "Old ink waits, unread", "Old wonders wait here"),
-    "general": ("Boxes wait for hands", "Treasure found again",
-                "Old wonders wait here", "Bright pieces await"),
+    "checkers": ("Red jumps black. King me.", "Double jump. King me."),
+    "chess": ("Pawn up two. Your move.",),
+    "games": ("Board out, pieces set", "Shuffle, roll, and deal"),
+    "cards": ("Draw seven, shuffle",),
+    "toys": ("Wind it up, let go", "Floor becomes a town"),
+    "books": ("Chapter one, again", "Pages turn at night"),
+    "electronics": ("Plug in. Hear it hum.", "Power light goes green"),
+    "general": ("Unwrapped, put to use", "Finds its shelf, its job"),
+}
+
+LINE3_BY_CATEGORY: dict[str, tuple[str, ...]] = {
+    "checkers": ("someone sulks. Rematch.",),
+    "chess": ("mate in three. Reset.",),
+    "games": ("loser sets it up.", "best two out of three."),
+    "cards": ("nobody folds first.",),
+    "toys": ("grown-ups play it too.",),
+    "books": ("one more, then the light.",),
+    "electronics": ("still works. Told you so.",),
+    "general": ("right where it belongs.",),
 }
 
 # --------------------------------------------------------------------------- #
-# ship-to state -> US Census region -> a themed 7-syllable middle line.
+# ship-to state -> US Census region -> where the thing gets used (7 syllables).
 # --------------------------------------------------------------------------- #
 _NORTHEAST = {"CT", "ME", "MA", "NH", "RI", "VT", "NJ", "NY", "PA"}
 _MIDWEST = {"IL", "IN", "MI", "OH", "WI", "IA", "KS", "MN", "MO", "NE", "ND", "SD"}
@@ -94,23 +128,12 @@ _SOUTH = {"DE", "FL", "GA", "MD", "NC", "SC", "VA", "DC", "WV", "AL", "KY",
 _WEST = {"AZ", "CO", "ID", "MT", "NV", "NM", "UT", "WY", "AK", "CA", "HI", "OR", "WA"}
 
 LINE2_BY_REGION: dict[str, tuple[str, ...]] = {
-    "northeast": ("Rivers wind toward its home", "Northern winds carry it on",
-                  "Miles fall behind it now"),
-    "midwest": ("Across the fields it travels", "Through quiet prairie towns it rides",
-                "Miles fall behind it now"),
-    "south": ("Southern sun warms the long road", "Coastal fog wraps the journey",
-              "Desert winds carry it home"),
-    "west": ("Over mountains, far away", "Mountain peaks watch it travel",
-             "Desert winds carry it home"),
-    "other": ("Miles fall behind it now", "Beyond the city lights it goes",
-              "Across the fields it travels"),
+    "west": ("on a porch in the late sun,", "out back where the evenings cool,"),
+    "south": ("on the porch while the tea sweats,", "screen door slapping, fan on high,"),
+    "midwest": ("kitchen table, snow outside,", "basement rec room, Friday night,"),
+    "northeast": ("by the radiator's knock,", "snowed in, nowhere else to be,"),
+    "other": ("at your kitchen table, now,",),
 }
-
-LINE3_CLOSING: tuple[str, ...] = (
-    "Sent out with the sun", "Off it goes today", "Safe travels, dear box",
-    "May it arrive well", "Handled with kind care", "The journey begins",
-    "Thank you, safe travels", "Go well, small parcel",
-)
 
 
 def _region_for_state(state: str) -> str:
@@ -129,7 +152,7 @@ def _region_for_state(state: str) -> str:
 def _category_for_title(title: str) -> str:
     low = (title or "").lower()
     for category, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in low for kw in keywords):
+        if any(re.search(rf"\b{re.escape(kw)}s?\b", low) for kw in keywords):
             return category
     return "general"
 
@@ -145,14 +168,15 @@ def _pick(seed: str, pool: tuple[str, ...]) -> str:
 
 
 def generate_haiku(order_id: str, item_title: str, state: str) -> list[str]:
-    """A 3-line haiku personalized to the order's item category and
-    ship-to region — never to the buyer's name, which never enters this
-    function at all. `order_id` seeds the (deterministic) line choices."""
+    """A 3-line haiku about the item in use where the buyer is: category
+    for lines 1 and 3, ship-to region for line 2 — never the buyer's name,
+    which never enters this function at all. `order_id` seeds the
+    (deterministic) line choices."""
     category = _category_for_title(item_title)
     region = _region_for_state(state)
     oid = order_id or "unknown-order"
     return [
         _pick(f"{oid}|1", LINE1_BY_CATEGORY[category]),
         _pick(f"{oid}|2", LINE2_BY_REGION[region]),
-        _pick(f"{oid}|3", LINE3_CLOSING),
+        _pick(f"{oid}|3", LINE3_BY_CATEGORY[category]),
     ]

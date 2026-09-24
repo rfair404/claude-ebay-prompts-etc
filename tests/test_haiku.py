@@ -32,9 +32,28 @@ def test_line2_pools_are_seven_syllables():
             assert haiku.line_syllables(line) == 7, (region, line)
 
 
-def test_line3_pool_is_five_syllables():
-    for line in haiku.LINE3_CLOSING:
-        assert haiku.line_syllables(line) == 5, line
+def test_line3_pools_are_five_syllables():
+    for category, lines in haiku.LINE3_BY_CATEGORY.items():
+        for line in lines:
+            assert haiku.line_syllables(line) == 5, (category, line)
+
+
+def test_every_category_has_both_item_lines():
+    # Lines 1 and 3 are one scene; a category with only one half would crash
+    # generate_haiku() or leave the poem about nothing.
+    cats = set(haiku.CATEGORY_KEYWORDS) | {"general"}
+    assert set(haiku.LINE1_BY_CATEGORY) == cats
+    assert set(haiku.LINE3_BY_CATEGORY) == cats
+
+
+def test_locked_example_checkers_to_california():
+    # The style example agreed on #164 — the poem is the item in use where
+    # the buyer is. If this changes, the voice changed; do it on purpose.
+    lines = haiku.generate_haiku("25-15178-98246",
+                                 "Toys R Us Checkers Set Complete 24 Pieces", "CA")
+    assert lines[0] in haiku.LINE1_BY_CATEGORY["checkers"]
+    assert lines[1] in haiku.LINE2_BY_REGION["west"]
+    assert lines[2] == "someone sulks. Rematch."
 
 
 def test_generate_haiku_returns_three_lines():
@@ -69,6 +88,16 @@ def test_category_detection():
     assert haiku._category_for_title("Vintage Comic Book") == "books"
     assert haiku._category_for_title("Wooden Jigsaw Puzzle") == "games"
     assert haiku._category_for_title("McCoy Beehive Mixing Bowl") == "general"
+    assert haiku._category_for_title("Toys R Us Checkers Set") == "checkers"
+    assert haiku._category_for_title("Wooden Chess Set") == "chess"
+    assert haiku._category_for_title("Tin Wind-Up Toy Robot") == "toys"
+
+
+def test_category_matches_whole_words_only():
+    assert haiku._category_for_title("Cardboard Box Lot") == "general"
+    assert haiku._category_for_title("Dollhouse Furniture Set") == "general"
+    assert haiku._category_for_title("Novelty Salt Shaker") == "general"
+    assert haiku._category_for_title("Vintage Board Games Lot") == "games"
 
 
 def test_region_detection():

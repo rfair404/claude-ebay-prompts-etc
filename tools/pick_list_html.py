@@ -300,11 +300,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 
     # A small personalized haiku (#161) — themed off the item and the ship-to
     # region, never the buyer's name (which is never even passed in here).
-    # See tools/haiku.py for why the lines are always safe to print. Fixed
-    # position so it lands at the vertical center of the bottom half of a
-    # letter page regardless of how many items are above it — fold the
-    # printed sheet in half and the haiku sits roughly on the crease's
-    # opposite half, centered.
+    # See tools/haiku.py for why the lines are always safe to print. The
+    # print CSS (.haiku) pins it to the center of the sheet's lower half.
     first_title = next((li.get("title", "") for o in orders
                         for li in (o.get("lineItems") or [])), "")
     haiku_lines = generate_haiku(orders[0].get("orderId", ""), first_title,
@@ -370,16 +367,25 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
                 font-family: 'Courier New', monospace; margin-top: .15em; }}
   .divider {{ border: none; border-top: 1px solid #ccc; margin: 0 0 14px; }}
 
-  /* Fixed to the page, not the content flow, so it lands at the same spot
-     on the sheet no matter how many items are above it: a letter page is
-     11in tall, the fold falls at 5.5in, and the bottom half's own center is
-     2.75in up from the bottom edge — fold the sheet and this sits roughly
-     centered on the half below the crease. */
-  .haiku {{ position: fixed; left: 0; right: 0; bottom: 2.5in; text-align: center;
-            font-style: italic; color: var(--grey); font-size: .82rem;
-            line-height: 1.5; }}
+  /* On screen the haiku just closes the page, in the normal flow. */
+  .haiku {{ text-align: center; font-style: italic; color: var(--grey);
+            font-size: .82rem; line-height: 1.5; margin-top: 36px; }}
 
-  @media print {{ .printbtn {{ display: none; }} .labelbtn {{ display: none; }} body {{ margin: 0; max-width: none; }} }}
+  @media print {{
+    .printbtn {{ display: none; }} .labelbtn {{ display: none; }}
+    body {{ margin: 0; max-width: none; }}
+    /* On paper it is pinned to the bottom of the sheet, not the content
+       flow, so it lands in the same spot however many items are above it.
+       Fixed boxes are measured from the @page content area, which starts
+       .5in inside the paper edge. The lower half of a letter sheet is
+       5.5in tall with its center 2.75in up from the paper edge — 2.25in up
+       from the content area's bottom — so a 4.5in box pinned to bottom: 0
+       centers the poem there. Fold the sheet and the haiku sits in the
+       middle of the half below the crease. */
+    .haiku {{ position: fixed; left: 0; right: 0; bottom: 0; height: 4.5in;
+              margin: 0; display: flex; flex-direction: column;
+              justify-content: center; align-items: center; }}
+  }}
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
