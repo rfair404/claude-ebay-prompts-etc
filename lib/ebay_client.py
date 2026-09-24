@@ -794,34 +794,30 @@ def create_no_returns_policy(name: str = "No returns - sold as-is",
                              creds: Optional[EbayCredentials] = None) -> dict:
     """Create (or reuse) a NO-RETURNS policy, for an as-is storefront.
 
-    The deliberate inverse of create_free_return_policy(). That one buys Top
-    Rated Plus by eating return shipping, which is correct on curated goods
-    and wrong on a junk store: a returned $20 part costs more in postage than
-    the sale made, and the as-is risk lands on the main store's metrics if
-    the two share an account.
+    A named front door for `create_free_return_policy(returns_accepted=False)`
+    (GH #156), not a second implementation. Two reasons it keeps its own name:
 
-    `returnsAccepted: false` means eBay wants NO returnPeriod, refundMethod
-    or returnShippingCostPayer — they only describe HOW a return works, and
-    sending them alongside a refusal is contradictory. The international
-    override refuses too; an unset override does not inherit the refusal.
+      * `create_free_return_policy(returns_accepted=False)` reads as a
+        contradiction at every call site — "free return policy, no returns".
+        Callers here are choosing a POLICY KIND, not toggling a flag on a
+        differently-named one.
+      * `--create-store-policies` dispatches on the storefront's `returns:`
+        value, so each supported kind wants a name to map to.
+
+    The deliberate inverse of the free-returns policy. That one buys Top
+    Rated Plus by eating return shipping, which is right on curated goods and
+    wrong on a junk store: a returned $20 part costs more in postage than the
+    sale made, and the as-is risk lands on the main store's metrics if the two
+    share an account.
+
+    Verified live 2026-09-23 — created returnPolicyId 264925508013 on the junk
+    account, which reads back `returnsAccepted: false` with no orphaned
+    returnPeriod/refundMethod contradicting it.
 
     Idempotent by name.
     """
-    existing = next((p for p in get_return_policies(marketplace, creds=creds)
-                     if p.get("name") == name), None)
-    if existing:
-        return existing
-    body = {
-        "name": name,
-        "description": "Sold as-is. No returns accepted.",
-        "marketplaceId": marketplace,
-        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
-        "returnsAccepted": False,
-        "internationalOverride": {"returnsAccepted": False},
-    }
-    return api_send("POST", "/sell/account/v1/return_policy",
-                    body=body, creds=creds, marketplace=None,
-                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+    return create_free_return_policy(name=name, marketplace=marketplace,
+                                     creds=creds, returns_accepted=False)
 
 
 def create_calculated_shipping_policy(
