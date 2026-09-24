@@ -62,7 +62,7 @@ _B = [  # camera-frame confessions — BLOCK
     r"\bunshown\b",
     r"\bunphotographed\b",
     r"for\s+(these|the)\s+photo(graph)?s\b",
-    r"\b(from|off)\s+(the\s+)?photos?\b",   # "measured off the photos" shipped live
+    r"\b(from|off)\s+(the\s+)?photo(graph)?s?\b",   # "measured off the photos" shipped live
     r"assessable\s+from",
     r"\bnot\s+(verifiable|identifiable|assessable)\b",
     r"\bcannot\s+be\s+(verified|identified|assessed)\s+from\b",
@@ -89,6 +89,11 @@ _B = [  # camera-frame confessions — BLOCK
     r"\b(not|never|haven'?t|have\s+not|hasn'?t|has\s+not)\s+(yet\s+)?(been\s+)?(yet\s+)?(measured|weighed)\b",
     r"\bunmeasured\b",
     r"\bI(\s+will|'ll)\s+(measure|weigh|put\s+a\s+(tape|ruler|caliper|scale))\b",
+    # Gaps found fixing the live listings: an ask with no "me", a
+    # passive "not taken", and a not-laid-flat excuse.
+    r"\b(ask|message|contact)\b[^.!?\n]{0,15}\bif\b[^.!?\n]{0,40}\b(exact|sizes?|measur\w*|dimensions?|length)\b",
+    r"\b(measurements?|dimensions?|sizes?)\s+(were\s+|was\s+)?not\s+(taken|recorded|checked)\b",
+    r"\bto\s+measure\s+it\b[^.!?\n]{0,40}\bno\s+measurements?\b|\bno\s+measurements?\s+(from\s+me|to\s+quote)\b",
     r"\b(haven'?t|have\s+not|not)\s+(yet\s+)?put\s+(\w+\s+){0,4}?(on\s+)?a\s+(caliper|scale|tape|ruler)\b",
 ]
 BLOCK = [re.compile(p, re.IGNORECASE) for p in _B]

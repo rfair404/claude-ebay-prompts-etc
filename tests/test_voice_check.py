@@ -101,6 +101,10 @@ def test_fact_deferred_to_buyer_blocks():
         "If you need the exact size, message me.",
         "Not weighed.",
         "Ask if a dimension decides it for you and I will put a tape on it.",
+        "Measurements given are approximate — please ask if an exact size matters to you.",
+        "Standard child-size pieces; exact measurements not taken.",
+        "I have not opened the bag, so I have not laid it flat to measure it — there are no measurements from me to quote",
+        "The other three are close approximations taken from the photographs.",
     ]:
         assert _blocks(check_voice(_draft(phrase))), phrase
 
