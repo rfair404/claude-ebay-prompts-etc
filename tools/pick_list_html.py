@@ -219,6 +219,13 @@ def _addr_key(o: dict) -> tuple:
     return (to.get("fullName", ""), addr.get("addressLine1", ""), addr.get("postalCode", ""))
 
 
+def _label_url(order_id: str) -> str:
+    """eBay's direct 'buy this order's shipping label' redirect — the same
+    URL Seller Hub lands on after a seller finds the order in the awaiting-
+    shipment list and clicks Buy Label, minus that search-and-click (#162)."""
+    return f"https://www.ebay.com/lbr/go?t={order_id}"
+
+
 def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> str:
     """One or several orders on one page. Several orders are for the case
     eBay merges into a single shipping label (same buyer) — the seller packs
@@ -297,6 +304,18 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         footer_line = f"ORDER {_money((o.get('pricingSummary') or {{}}).get('total'))} total"
         warn_html = ""
 
+    # One "Buy label" link per order, straight to eBay's per-order label
+    # flow (#162) instead of the awaiting-shipment list the seller used to
+    # have to search through. Grouped orders each keep their own eBay
+    # order and so each keep their own link, labelled by order id so they
+    # don't get mixed up; a single order gets one plain link, as before.
+    def _label_link(o: dict) -> str:
+        oid = o.get("orderId", "")
+        text = f"Buy label (order {html.escape(oid)}) &rarr;" if grouped else "Buy label &rarr;"
+        return f'<a href="{_label_url(oid)}" target="_blank" rel="noopener">{text}</a>'
+
+    labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow, noarchive">
@@ -360,7 +379,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
-  <div class="labelbtn"><a href="https://www.ebay.com/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener">Buy label &rarr;</a></div>
+  <div class="labelbtn">{labelbtn_html}</div>
   <div class="brand">
     <div class="hr"></div>
     <div class="nm">POP'S GAMES</div>

@@ -531,6 +531,28 @@ def test_an_empty_buyer_name_stays_empty():
     assert "." not in block.split("BUYER")[1].split("Greensboro")[0]
 
 
+# --------------------------------------------------------------------------- #
+# "Buy label" link — straight to eBay's per-order label flow, not the
+# awaiting-shipment list the seller used to have to search through (#162).
+# --------------------------------------------------------------------------- #
+def test_buy_label_links_straight_to_this_order():
+    import pick_list_html
+    order = _buyer_order()
+    h = pick_list_html.render_html([order], [], [])
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-78901"' in h
+    assert "status:AWAITING_SHIPMENT" not in h
+
+
+def test_buy_label_has_one_link_per_order_when_grouped():
+    import pick_list_html
+    a = _buyer_order()
+    b = _buyer_order()
+    b["orderId"] = "12-3456-99999"
+    h = pick_list_html.render_html([a, b], [], [])
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-78901"' in h
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-99999"' in h
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 
