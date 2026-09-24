@@ -101,6 +101,7 @@ from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from us_only import us_only_reasons
 from dir_context import load as load_dir_context
+from ebay_schema import CONDITION_ENUM
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     DEFAULT_STORE,
@@ -474,6 +475,31 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     # Best Offer cross-field checks (#140) — offline, so these catch a
     # broken floor before any eBay call, not just at the write paths in
     # _best_offer_terms().
+    # A storefront can cap how GOOD a condition it may claim
+    # (storefronts.<name>.condition_ceiling). The junk store never sells as
+    # NEW — not even sealed, unused goods in original packaging — because
+    # "new" on a no-returns storefront is the most disputable claim available
+    # and the easiest for a buyer to argue once the parcel is open. The
+    # packaging state belongs in the description, not the condition field.
+    #
+    # CONDITION_ENUM is ordered best -> worst, so "at least as used as the
+    # ceiling" is an index comparison. An unknown value is left to the
+    # existing enum check rather than double-reported here.
+    _ceiling = None
+    try:
+        _ceiling = get_storefront(draft.get("store") or None).get("condition_ceiling")
+    except Exception:  # noqa: BLE001 — unknown storefront surfaces elsewhere
+        pass
+    if _ceiling:
+        _cond = draft.get("condition")
+        if _cond in CONDITION_ENUM and _ceiling in CONDITION_ENUM:
+            if CONDITION_ENUM.index(_cond) < CONDITION_ENUM.index(_ceiling):
+                issues.append(
+                    f"condition: {_cond} is better than this storefront allows "
+                    f"(storefronts.<store>.condition_ceiling: {_ceiling}) — "
+                    f"use {_ceiling} or lower and describe the packaging in "
+                    f"the body instead. Store-wide rule, not waivable.")
+
     # A storefront can forbid Best Offer outright (storefronts.<name>.
     # best_offer: false). That is a STORE POLICY, so unlike the #140 A1 rule
     # below it cannot be satisfied by documenting a deviation in meta.notes —

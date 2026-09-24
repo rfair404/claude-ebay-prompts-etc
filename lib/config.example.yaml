@@ -361,6 +361,19 @@ store:
 #     new_price_ceiling_pct: 0.667       # keep equal to new_price_pct so the
 #                                        # target and the cap cannot drift.
 #
+#     condition_ceiling: "USED_EXCELLENT"
+#                                        # the BEST grade this store may claim.
+#                                        # An as-is store never lists NEW — not
+#                                        # even sealed, unused goods in original
+#                                        # packaging. "New" on a no-returns
+#                                        # storefront is the most disputable
+#                                        # claim available and the easiest for a
+#                                        # buyer to argue once the parcel is
+#                                        # open; the packaging state belongs in
+#                                        # the description instead. Compared
+#                                        # against ebay_schema.CONDITION_ENUM,
+#                                        # which is ordered best -> worst.
+#
 #     best_offer: false                  # store-wide: no Best Offer anywhere.
 #                                        # Enforced by validate_draft_for_sync
 #                                        # and NOT waivable per draft — unlike
