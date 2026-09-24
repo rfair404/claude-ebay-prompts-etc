@@ -34,13 +34,17 @@
 listings_log.txt
 listings_ledger.csv
 # Per-store ledger files (GH #158) — listings_ledger-<store>.csv, e.g.
-# listings_ledger-junk.csv. Same data, same rule, just split by store.
+# listings_ledger-junk.csv, is the actual naming _ledger_path() produces.
 listings_ledger-*.csv
+# ...and the dash-free variant some earlier drafts of this convention used
+# (e.g. listings_ledger.junk.csv) — kept too so neither shape can leak (#156).
+listings_ledger.*.csv
 
 # Sales ledger — what each item ACTUALLY sold for, plus eBay's fee and our net.
 # Written by lib/sync_actuals.py from the Fulfillment API. This is revenue data;
 # it is the single most sensitive file the pipeline produces.
 sales_ledger.csv
+sales_ledger.*.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
 # Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
@@ -200,6 +204,9 @@ desktop.ini
 #   python tools/ebay_sheet.py       python tools/inventory_sync.py
 /inventory_sheet.csv
 /inventory_sheet.json
+# ...and any per-store variant, same reasoning as listings_ledger.*.csv above.
+/inventory_sheet.*.csv
+/inventory_sheet.*.json
 /.inventory_live.json
 /.live_listings_consolidated.json
 
