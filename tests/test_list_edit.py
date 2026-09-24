@@ -65,6 +65,8 @@ from ebay_client import EbayAPIError, EbayAuthError            # noqa: E402
 
 class _Creds:
     has_user = True
+    store = "default"
+    environment = "sandbox"
 
 
 # ---------------------------------------------------------------------------
@@ -701,14 +703,22 @@ def test_ledger_path_rejects_a_store_name_that_is_not_a_bare_identifier():
                 raise AssertionError(f"expected ValueError for store={bad!r}")
 
 
-def test_resolve_store_precedence_arg_then_env_then_default():
+def test_ledger_store_fallback_precedence_env_then_config_then_default():
+    """_ledger_store_fallback() is only consulted when a caller has no
+    resolved creds.store to hand _ledger_path() (the --record/--normalize
+    path, which is deliberately credential-free) — it must mirror
+    load_credentials()'s own env-var/config/default fallback without
+    loading any credentials itself."""
     prev = os.environ.get("EBAYBIZ_STORE")
     try:
         os.environ.pop("EBAYBIZ_STORE", None)
-        assert L._resolve_store() == "default"
-        os.environ["EBAYBIZ_STORE"] = "junk"
-        assert L._resolve_store() == "junk", "$EBAYBIZ_STORE must be honored when no explicit arg"
-        assert L._resolve_store("mainline") == "mainline", "an explicit arg must win over the env var"
+        with _patched(L, load_config=lambda: {}):
+            assert L._ledger_store_fallback() == "default"
+        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+            assert L._ledger_store_fallback() == "junk", "config active_store must be honored"
+        os.environ["EBAYBIZ_STORE"] = "mainline"
+        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+            assert L._ledger_store_fallback() == "mainline", "$EBAYBIZ_STORE must win over config"
     finally:
         if prev is None:
             os.environ.pop("EBAYBIZ_STORE", None)
@@ -747,31 +757,26 @@ def test_record_draft_default_and_named_store_land_in_different_files_for_the_sa
             assert len(_ledger_rows(L._ledger_path("junk"))) == 1
 
 
-def test_build_review_card_names_the_store_when_not_default():
+def test_build_review_card_records_and_reads_the_correct_stores_ledger():
+    """build_review_card must record the DRAFTED row to, and read the ledger
+    status back from, creds.store's own file (GH #158) — the card's Store:
+    line and --store-carrying approve command are covered separately by
+    test_build_review_card_shows_the_store_and_its_approve_command; this
+    checks the ledger side actually follows the same account."""
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td))
-        shoot = draft_path.parent
         with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
                      resolve_draft_state=lambda *a, **kw:
                          {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
              _ledger_dir_at(Path(td)):
-            card, _path = L.build_review_card(draft_path, creds=_Creds(), store="junk")
+            card, _path = L.build_review_card(draft_path, creds=_JunkCreds())
 
-    assert "Store:     junk" in card
-    assert "--store junk" in card, "the approve command must carry --store so approval targets the right ledger"
-
-
-def test_build_review_card_omits_the_store_line_for_the_default_store():
-    with tempfile.TemporaryDirectory() as td:
-        draft_path = _write_single_draft(Path(td))
-        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
-                     resolve_draft_state=lambda *a, **kw:
-                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
-             _ledger_at(Path(td)):
-            card, _path = L.build_review_card(draft_path, creds=_Creds())
-
-    assert "Store:" not in card
-    assert "--store" not in card
+            assert "ledger DRAFTED" in card
+            junk_rows = _ledger_rows(L._ledger_path("junk"))
+            assert len(junk_rows) == 1
+            default_rows = _ledger_rows(L._ledger_path())
+            assert default_rows == [], (
+                "a junk-store review must never write into the default store's ledger")
 
 
 # ---------------------------------------------------------------------------
@@ -1123,6 +1128,138 @@ def test_build_review_card_folds_in_a_broken_best_offer_floor():
     assert "ALL CLEAR" not in card
     assert any("auto_decline_amount" in ln and "would block --sync" in ln
               for ln in card.splitlines())
+
+
+# ---------------------------------------------------------------------------
+# Multi-store eBay credentials (GH #147) — "publish this to my junk store"
+# ---------------------------------------------------------------------------
+
+class _JunkCreds:
+    has_user = True
+    store = "junk"
+    environment = "production"
+
+
+def test_ebay_extra_default_store_reads_the_legacy_flat_shape():
+    with _patched(L, load_config=lambda: {
+        "ebay": {"environment": "sandbox",
+                 "sandbox": {"merchant_location_key": "loc-main"}}}):
+        assert L._ebay_extra("merchant_location_key") == "loc-main"
+        assert L._ebay_extra("merchant_location_key", store="default") == "loc-main"
+
+
+def test_ebay_extra_named_store_reads_its_own_flat_block_not_the_default():
+    with _patched(L, load_config=lambda: {
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {"merchant_location_key": "loc-main"},
+            "stores": {"junk": {"merchant_location_key": "loc-junk"}},
+        }}):
+        assert L._ebay_extra("merchant_location_key", store="junk") == "loc-junk"
+        # a field the junk store doesn't set is NOT inherited from the default store
+        assert L._ebay_extra("payment_policy_id", store="junk") is None
+
+
+def test_resolve_policies_and_location_does_not_require_international_policy():
+    # Regression: fulfillment_policy_id_international is documented optional
+    # in the surrounding comment ("Only items with shipping.international:
+    # true use it") but was missing from the "these are optional" skip-list
+    # in _resolve_policies_and_location() — every account without one (the
+    # common case; it's for eBay International Shipping specifically) failed
+    # --sync/--publish/--review with a spurious "missing account-specific
+    # settings" error. This is the first test to ever exercise the real
+    # (non-stubbed) _resolve_policies_and_location() — every other test here
+    # replaces it with a lambda (see _patch_sync_collaborators above).
+    with _patched(L, load_config=lambda: {
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {
+                "merchant_location_key": "LOC-1",
+                "fulfillment_policy_id": "F-1",
+                "payment_policy_id": "P-1",
+                "return_policy_id": "R-1",
+                # fulfillment_policy_id_international deliberately unset
+            },
+        }}):
+        policies, location = L._resolve_policies_and_location(_Creds())
+    assert policies["fulfillment_international"] is None
+    assert location == "LOC-1"
+
+
+def _write_draft_for_store(tmp: Path, *, store=None) -> Path:
+    shoot = tmp / "shoot"
+    (shoot / "listing").mkdir(parents=True, exist_ok=True)
+    (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff")
+    store_line = f'store: "{store}"\n' if store else ""
+    (shoot / "draft.md").write_text(
+        "---\n"
+        'title: "Vintage Widget MPN-100"\n'
+        "price: 24.99\n"
+        + store_line +
+        "---\n" + _BODY + "\n", encoding="utf-8")
+    return shoot / "draft.md"
+
+
+def test_draft_store_reads_the_frontmatter_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._draft_store(str(draft_path)) == "junk"
+
+
+def test_draft_store_is_none_when_the_field_is_absent():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td))
+        assert L._draft_store(str(draft_path)) is None
+
+
+def test_draft_store_is_none_for_a_missing_target():
+    assert L._draft_store("/no/such/draft.md") is None
+    assert L._draft_store(None) is None
+
+
+def test_resolve_store_cli_flag_wins_over_the_drafts_own_store_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._resolve_store(str(draft_path), "vintage") == "vintage"
+
+
+def test_resolve_store_falls_back_to_the_drafts_own_store_field():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td), store="junk")
+        assert L._resolve_store(str(draft_path), None) == "junk"
+
+
+def test_resolve_store_is_none_when_neither_is_set():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_draft_for_store(Path(td))
+        assert L._resolve_store(str(draft_path), None) is None
+
+
+def test_build_review_card_shows_the_store_and_its_approve_command():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_JunkCreds())
+
+    assert "Store:     junk  ·  environment: production" in card
+    assert f"python lib/list_edit.py --list {draft_path.parent} --store junk --confirm" in card
+
+
+def test_build_review_card_omits_store_flag_for_the_default_store():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    assert "Store:     default  ·  environment: sandbox" in card
+    assert f"python lib/list_edit.py --list {draft_path.parent} --confirm" in card
+    assert "--store" not in card
 
 
 if __name__ == "__main__":
