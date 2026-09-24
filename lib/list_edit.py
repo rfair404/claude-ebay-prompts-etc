@@ -94,13 +94,14 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
-from config import ConfigError, config_path, load_config
+from config import ConfigError, config_path, load_config, get_storefront
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from us_only import us_only_reasons
 from dir_context import load as load_dir_context
+from ebay_schema import CONDITION_ENUM
 from ebay_client import (
     DEFAULT_MARKETPLACE,
     DEFAULT_STORE,
@@ -109,6 +110,10 @@ from ebay_client import (
     EbayCredentials,
     api_send,
     create_local_pickup_policy,
+    create_calculated_shipping_policy,
+    create_immediate_payment_policy,
+    create_no_returns_policy,
+    create_free_return_policy,
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
@@ -470,6 +475,49 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     # Best Offer cross-field checks (#140) — offline, so these catch a
     # broken floor before any eBay call, not just at the write paths in
     # _best_offer_terms().
+    # A storefront can cap how GOOD a condition it may claim
+    # (storefronts.<name>.condition_ceiling). The junk store never sells as
+    # NEW — not even sealed, unused goods in original packaging — because
+    # "new" on a no-returns storefront is the most disputable claim available
+    # and the easiest for a buyer to argue once the parcel is open. The
+    # packaging state belongs in the description, not the condition field.
+    #
+    # CONDITION_ENUM is ordered best -> worst, so "at least as used as the
+    # ceiling" is an index comparison. An unknown value is left to the
+    # existing enum check rather than double-reported here.
+    _ceiling = None
+    try:
+        _ceiling = get_storefront(draft.get("store") or None).get("condition_ceiling")
+    except Exception:  # noqa: BLE001 — unknown storefront surfaces elsewhere
+        pass
+    if _ceiling:
+        _cond = draft.get("condition")
+        if _cond in CONDITION_ENUM and _ceiling in CONDITION_ENUM:
+            if CONDITION_ENUM.index(_cond) < CONDITION_ENUM.index(_ceiling):
+                issues.append(
+                    f"condition: {_cond} is better than this storefront allows "
+                    f"(storefronts.<store>.condition_ceiling: {_ceiling}) — "
+                    f"use {_ceiling} or lower and describe the packaging in "
+                    f"the body instead. Store-wide rule, not waivable.")
+
+    # A storefront can forbid Best Offer outright (storefronts.<name>.
+    # best_offer: false). That is a STORE POLICY, so unlike the #140 A1 rule
+    # below it cannot be satisfied by documenting a deviation in meta.notes —
+    # the point of a store-wide rule is that a single draft does not get to
+    # opt out of it. Checked before the A1 rule so the message names the real
+    # reason rather than asking for a justification that would not help.
+    if draft.get("best_offer.enabled"):
+        try:
+            _sf = get_storefront(draft.get("store") or None)
+        except Exception:  # unknown/absent storefront → fall through to A1
+            _sf = {}
+        if _sf.get("best_offer") is False:
+            issues.append(
+                "best_offer.enabled but this storefront forbids Best Offer "
+                "(storefronts.<store>.best_offer: false) — set "
+                "best_offer.enabled: false. A store-wide rule is not waivable "
+                "per draft.")
+
     if draft.get("best_offer.enabled") and price is not None:
         decline = _to_decimal_str(draft.get("best_offer.auto_decline_amount"))
         if decline is not None and Decimal(decline) >= Decimal(price):
@@ -2253,6 +2301,71 @@ def _print_setup_check(store: Optional[str] = None) -> None:
         print(f"  [X] {e}")
 
 
+def _create_store_policies(store: Optional[str] = None) -> None:
+    """Create the three business policies a storefront's own terms describe.
+
+    The storefront profile already states the terms in English
+    (`storefronts.<name>.returns` / `.shipping`); eBay states them as policy
+    IDs. Until now those were two records of one decision with nothing
+    checking they agree — a storefront could promise "sold as-is, no returns"
+    while its eBay policy accepted 30-day returns, and the listing copy and
+    the checkout would simply disagree. Generating the policies FROM the
+    profile closes that by construction (runbook gap 3).
+
+    Every creator is idempotent by name, so re-running adopts what exists
+    rather than creating duplicates.
+    """
+    creds = load_credentials(store=store)
+    sf = get_storefront(creds.store)
+    returns = sf.get("returns") or "free_30_day"
+    shipping = sf.get("shipping") or "free_ground"
+    print(f"store: {creds.store}   returns: {returns}   shipping: {shipping}")
+
+    if returns == "none_as_is":
+        ret = create_no_returns_policy(creds=creds)
+    elif returns == "free_30_day":
+        ret = create_free_return_policy(creds=creds)
+    else:
+        raise SystemExit(
+            f"[X] storefronts.{creds.store}.returns = {returns!r} has no creator.\n"
+            f"    Known: none_as_is, free_30_day. Add one rather than letting "
+            f"this fall back to a policy the storefront did not ask for.")
+
+    if shipping == "buyer_pays_calculated":
+        ful = create_calculated_shipping_policy(creds=creds)
+    else:
+        raise SystemExit(
+            f"[X] storefronts.{creds.store}.shipping = {shipping!r} has no creator.\n"
+            f"    Known: buyer_pays_calculated. The main store's free-ground "
+            f"policy already exists and is not created by this command.")
+
+    pay = create_immediate_payment_policy(creds=creds)
+
+    fid = ful.get("fulfillmentPolicyId")
+    pid = pay.get("paymentPolicyId")
+    rid = ret.get("returnPolicyId")
+    print()
+    print(f"  fulfillment  {fid}   ({ful.get('name')!r})")
+    print(f"  payment      {pid}   ({pay.get('name')!r})")
+    print(f"  return       {rid}   ({ret.get('name')!r})")
+    dest = "the active ebay.<env> block" if creds.store == DEFAULT_STORE else f"ebay.stores.{creds.store}"
+    print()
+    print(f"  Paste into config.yaml under {dest}:")
+    print(f"    fulfillment_policy_id: \"{fid}\"")
+    print(f"    payment_policy_id:     \"{pid}\"")
+    print(f"    return_policy_id:      \"{rid}\"")
+    locs = get_inventory_locations(creds=creds)
+    print()
+    if locs:
+        print("  merchant_location_key candidates:")
+        for l in locs:
+            print(f"    - {l.get('merchantLocationKey')}   ({l.get('name')})")
+    else:
+        print("  [!] NO inventory location on this account — an offer cannot be")
+        print("      created without one, and eBay's UI does not reliably expose")
+        print("      creating one. This still needs solving.")
+
+
 def _cli() -> None:
     import argparse
     try:
@@ -2286,6 +2399,8 @@ def _cli() -> None:
     ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
     ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
+    ap.add_argument("--create-store-policies", action="store_true",
+                    help="Create this store's three business policies FROM its storefront profile (storefronts.<name>.returns/.shipping) and print the IDs. Idempotent by name.")
     ap.add_argument("--create-pickup-policy", action="store_true", help="Create (idempotent) a LOCAL-PICKUP-ONLY fulfillment policy and print its ID to paste into config (ebay.fulfillment_policy_id_local_pickup).")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
     ap.add_argument("--store", metavar="NAME", help="Which eBay seller account to use (e.g. a secondary 'junk' store). Default: ebay.active_store in config, or the EBAYBIZ_STORE env var, or the single-account 'default' store — see ebay.stores.<name> in config.yaml (GH #147).")
@@ -2351,6 +2466,9 @@ def _cli() -> None:
             return
         if args.setup_check:
             _print_setup_check(store=args.store)
+            return
+        if args.create_store_policies:
+            _create_store_policies(store=args.store)
             return
         if args.create_pickup_policy:
             pickup_creds = load_credentials(store=args.store)

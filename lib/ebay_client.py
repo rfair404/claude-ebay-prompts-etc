@@ -789,6 +789,122 @@ def create_free_return_policy(name: str = "30-Day Free Returns - Seller Pays",
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
 
 
+def create_no_returns_policy(name: str = "No returns - sold as-is",
+                             marketplace: str = DEFAULT_MARKETPLACE,
+                             creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) a NO-RETURNS policy, for an as-is storefront.
+
+    A named front door for `create_free_return_policy(returns_accepted=False)`
+    (GH #156), not a second implementation. Two reasons it keeps its own name:
+
+      * `create_free_return_policy(returns_accepted=False)` reads as a
+        contradiction at every call site — "free return policy, no returns".
+        Callers here are choosing a POLICY KIND, not toggling a flag on a
+        differently-named one.
+      * `--create-store-policies` dispatches on the storefront's `returns:`
+        value, so each supported kind wants a name to map to.
+
+    The deliberate inverse of the free-returns policy. That one buys Top
+    Rated Plus by eating return shipping, which is right on curated goods and
+    wrong on a junk store: a returned $20 part costs more in postage than the
+    sale made, and the as-is risk lands on the main store's metrics if the two
+    share an account.
+
+    Verified live 2026-09-23 — created returnPolicyId 264925508013 on the junk
+    account, which reads back `returnsAccepted: false` with no orphaned
+    returnPeriod/refundMethod contradicting it.
+
+    Idempotent by name.
+    """
+    return create_free_return_policy(name=name, marketplace=marketplace,
+                                     creds=creds, returns_accepted=False)
+
+
+def create_calculated_shipping_policy(
+        name: str = "Buyer pays calculated - USPS Ground (1 day)",
+        service: str = "USPSParcel",
+        handling_days: int = 1,
+        marketplace: str = DEFAULT_MARKETPLACE,
+        creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) a CALCULATED, buyer-pays fulfillment policy.
+
+    The inverse of the main store's free-ground default. Free postage is a
+    discount folded into the price, which works when the price can absorb it;
+    on cheap stock it is the whole margin. Calculated charges actual postage
+    by distance and weight, so a heavy, low-value item stays listable.
+
+    `costType: CALCULATED` means no shippingCost is sent — eBay computes it
+    from the item's weight/dimensions and the buyer's ZIP, which is why the
+    draft's packed weight and package_in dimensions stop being cosmetic and
+    start being the price the buyer sees.
+
+    shipToLocations is left unset: US-only domestic. The main store's default
+    carries Worldwide, and that (not any international flag) is what makes a
+    listing eBay-International-Shipping eligible — see lib/us_only.py and the
+    ITAR refusal it exists for. An as-is store has no reason to opt into that.
+
+    The service code is `USPSParcel`, NOT `USPSGroundAdvantage`. eBay's UI
+    calls this service "USPS Ground Advantage" and the Fulfillment/draft layer
+    uses `USPSGroundAdvantage`, but the Account API rejects that string:
+
+        errorId 20403 UNKNOWN_SHIPPING_SERVICE_CODE : USPSGroundAdvantage
+        errorId 20403 LOGISTICS_INFO_IS_MISSING
+
+    Confirmed 2026-09-23 by reading back the main store's own working
+    policies, created in the UI as "Free USPS Ground": they carry
+    shippingServiceCode "USPSParcel". Two names for one service, and the
+    error does not suggest the right one — check an existing policy rather
+    than guessing from the UI label.
+
+    Idempotent by name.
+    """
+    existing = next((p for p in get_fulfillment_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": (f"Buyer pays calculated shipping, {service}. "
+                        f"{handling_days} business day handling."),
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "handlingTime": {"value": int(handling_days), "unit": "DAY"},
+        "shippingOptions": [{
+            "optionType": "DOMESTIC",
+            "costType": "CALCULATED",
+            "shippingServices": [{
+                "sortOrder": 1,
+                "shippingCarrierCode": "USPS",
+                "shippingServiceCode": service,
+                "freeShipping": False,
+            }],
+        }],
+    }
+    return api_send("POST", "/sell/account/v1/fulfillment_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
+def create_immediate_payment_policy(name: str = "Immediate Payment",
+                                    marketplace: str = DEFAULT_MARKETPLACE,
+                                    creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) an immediate-payment policy. Idempotent by name."""
+    existing = next((p for p in get_payment_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": "Immediate payment required.",
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "immediatePay": True,
+    }
+    return api_send("POST", "/sell/account/v1/payment_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
 def set_fulfillment_handling_time(policy_id: str, days: int = 1,
                                   marketplace: str = DEFAULT_MARKETPLACE,
                                   creds: Optional[EbayCredentials] = None) -> dict:
