@@ -33,6 +33,9 @@
 # our ask. Kept locally.
 listings_log.txt
 listings_ledger.csv
+# Per-store ledger files (GH #158) — listings_ledger-<store>.csv, e.g.
+# listings_ledger-junk.csv. Same data, same rule, just split by store.
+listings_ledger-*.csv
 
 # Sales ledger — what each item ACTUALLY sold for, plus eBay's fee and our net.
 # Written by lib/sync_actuals.py from the Fulfillment API. This is revenue data;

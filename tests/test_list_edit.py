@@ -640,6 +640,141 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
 
 
 # ---------------------------------------------------------------------------
+# Per-store ledger (GH #158): each store gets its own listings_ledger file,
+# so a junk-store item can never land in the same file as the main store's.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _ledger_dir_at(tmp_path):
+    """Redirect the repo root _ledger_path() resolves per-store filenames
+    against, WITHOUT setting $EBAYBIZ_LISTINGS_LEDGER — that env var is a
+    single-file override that wins over any store (by design), so it can't
+    be used to test that two stores land in two different files."""
+    with _patched(L, _REPO_ROOT=tmp_path):
+        yield
+
+
+def test_ledger_path_default_store_is_the_unchanged_filename():
+    """No store argument, and the explicit "default" store name, must both
+    resolve to the same listings_ledger.csv the pipeline has always used —
+    the existing 389 rows need no migration under this design."""
+    assert L._ledger_path().name == "listings_ledger.csv"
+    assert L._ledger_path("default").name == "listings_ledger.csv"
+    assert L._ledger_path() == L._ledger_path("default")
+
+
+def test_ledger_path_named_store_gets_its_own_file():
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_dir_at(Path(td)):
+            default_path = L._ledger_path()
+            junk_path = L._ledger_path("junk")
+            assert junk_path.name == "listings_ledger-junk.csv"
+            assert junk_path != default_path
+            assert junk_path.parent == default_path.parent == Path(td)
+
+
+def test_ledger_path_env_override_wins_regardless_of_store():
+    """$EBAYBIZ_LISTINGS_LEDGER is a single absolute-path override that
+    predates the store concept (GH #158) — it must keep winning over every
+    store, default or named, exactly as it did before this change (this is
+    also what lets every OTHER test in this file redirect the ledger with
+    _ledger_at() without knowing about stores at all)."""
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_at(Path(td)) as ledger:
+            assert L._ledger_path() == ledger
+            assert L._ledger_path("junk") == ledger
+            assert L._ledger_path("default") == ledger
+
+
+def test_ledger_path_rejects_a_store_name_that_is_not_a_bare_identifier():
+    """The store name reaches the filesystem as part of a path
+    (listings_ledger-<store>.csv); refuse anything that isn't a bare
+    letters/digits/-/_ token rather than silently building a path outside
+    the repo root or colliding with an unrelated file."""
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_dir_at(Path(td)):
+            for bad in ("../../etc/passwd", "junk/../../x", "junk.csv", "two words"):
+                try:
+                    L._ledger_path(bad)
+                except ValueError:
+                    continue
+                raise AssertionError(f"expected ValueError for store={bad!r}")
+
+
+def test_resolve_store_precedence_arg_then_env_then_default():
+    prev = os.environ.get("EBAYBIZ_STORE")
+    try:
+        os.environ.pop("EBAYBIZ_STORE", None)
+        assert L._resolve_store() == "default"
+        os.environ["EBAYBIZ_STORE"] = "junk"
+        assert L._resolve_store() == "junk", "$EBAYBIZ_STORE must be honored when no explicit arg"
+        assert L._resolve_store("mainline") == "mainline", "an explicit arg must win over the env var"
+    finally:
+        if prev is None:
+            os.environ.pop("EBAYBIZ_STORE", None)
+        else:
+            os.environ["EBAYBIZ_STORE"] = prev
+
+
+def test_record_draft_writes_to_the_named_stores_ledger_only():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _ledger_dir_at(Path(td)):
+            sku, ledger = L.record_draft(draft_path, store="junk")
+
+            assert Path(ledger).name == "listings_ledger-junk.csv"
+            junk_rows = _ledger_rows(L._ledger_path("junk"))
+            assert len(junk_rows) == 1
+            assert junk_rows[0]["sku"] == sku
+
+            default_rows = _ledger_rows(L._ledger_path())
+            assert default_rows == [], (
+                "a junk-store draft must never write a row into the default store's ledger")
+
+
+def test_record_draft_default_and_named_store_land_in_different_files_for_the_same_draft():
+    """The scenario the issue is filed against: the same title/folder (hence
+    the same SKU) recorded once for the main store and once for "junk" must
+    produce two separate one-row files, never one two-row file."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _ledger_dir_at(Path(td)):
+            sku_default, _ = L.record_draft(draft_path)
+            sku_junk, _ = L.record_draft(draft_path, store="junk")
+
+            assert sku_default == sku_junk, "same title+folder must hash to the same SKU"
+            assert len(_ledger_rows(L._ledger_path())) == 1
+            assert len(_ledger_rows(L._ledger_path("junk"))) == 1
+
+
+def test_build_review_card_names_the_store_when_not_default():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        shoot = draft_path.parent
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_dir_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds(), store="junk")
+
+    assert "Store:     junk" in card
+    assert "--store junk" in card, "the approve command must carry --store so approval targets the right ledger"
+
+
+def test_build_review_card_omits_the_store_line_for_the_default_store():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+
+    assert "Store:" not in card
+    assert "--store" not in card
+
+
+# ---------------------------------------------------------------------------
 # build_review_card() — estate context wiring (GH #46)
 # ---------------------------------------------------------------------------
 
