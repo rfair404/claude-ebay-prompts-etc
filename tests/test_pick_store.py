@@ -9,6 +9,7 @@ failure path against a closed port.
 Run:  python tests/test_pick_store.py
   or: pytest tests/test_pick_store.py
 """
+import pytest
 import shutil
 import sys
 import tempfile
@@ -380,6 +381,94 @@ def test_root_is_read_at_call_time_not_captured_at_import():
         pick_store.ROOT = real_root
         shutil.rmtree(other_root, ignore_errors=True)
         shutil.rmtree(store.parent, ignore_errors=True)
+
+
+def test_a_root_that_is_not_its_own_resolved_form_still_round_trips():
+    """Regression, caught by Windows CI and invisible on this machine.
+
+    _rel_to_root() resolved the path but not the root, so a ROOT that resolve()
+    rewrites made relative_to() reject a file inside that very directory. On the
+    CI runner the root arrived 8.3-shortened ("C:/Users/RUNNER~1/...") and
+    resolved to "C:/Users/runneradmin/..."; publish() raised ValueError. A
+    junction or symlink anywhere in ROOT does the same, which is what this
+    exercises portably.
+
+    Skipped where the platform won't give us an unprivileged symlink -- the
+    Windows path is covered on CI, which is where the bug came from."""
+    base = Path(tempfile.mkdtemp(prefix="pickstore-symroot-"))
+    real = base / "real-root"
+    (real / "inventory" / "thing").mkdir(parents=True)
+    link = base / "link-root"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"symlinks not available here: {e}")
+
+    src = link / "inventory" / "thing" / "pick_1-2-3.html"
+    src.write_text("<html>via a symlinked root</html>", encoding="utf-8")
+    store = base / "served"
+    real_root = pick_store.ROOT
+    try:
+        pick_store.ROOT = link            # differs from link.resolve()
+        sheet = pick_store.publish("FALLBACK COPY", order_ids=["sym-1"],
+                                   store_dir=store, source=src)
+        assert sheet.source is not None, "source rejected under an unresolved root"
+        html, status = pick_store.fetch(sheet.token, store_dir=store)
+        assert status == "ok"
+        assert "via a symlinked root" in html
+        assert "FALLBACK COPY" not in html
+    finally:
+        pick_store.ROOT = real_root
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_an_8_3_shortened_root_still_round_trips():
+    """The exact failure Windows CI caught, pinned on the platform it came from.
+
+    The symlink test above skips on Windows (symlinks need a privilege the
+    runner doesn't hand out), which would leave the observed bug uncovered
+    exactly where it happened. On the runner the root arrived 8.3-shortened --
+    "C:/Users/RUNNER~1/..." resolving to "C:/Users/runneradmin/..." -- so ask
+    Windows for that form directly rather than hoping tempfile produces it."""
+    if sys.platform != "win32":
+        pytest.skip("8.3 short paths are a Windows thing")
+
+    import ctypes
+    from ctypes import wintypes
+
+    def short(path: Path) -> Path:
+        fn = ctypes.windll.kernel32.GetShortPathNameW
+        fn.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+        fn.restype = wintypes.DWORD
+        buf = ctypes.create_unicode_buffer(1024)
+        return Path(buf.value) if fn(str(path), buf, 1024) else path
+
+    base = Path(tempfile.mkdtemp(prefix="pickstore-83-"))
+    long_root = base / "a-deliberately-long-directory-name-for-shortening"
+    (long_root / "inventory" / "thing").mkdir(parents=True)
+    src = long_root / "inventory" / "thing" / "pick_1-2-3.html"
+    src.write_text("<html>via an 8.3 root</html>", encoding="utf-8")
+
+    short_root = short(long_root)
+    if str(short_root) == str(long_root):
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip("8.3 name generation is disabled on this volume")
+
+    store = base / "served"
+    real_root = pick_store.ROOT
+    try:
+        pick_store.ROOT = short_root
+        sheet = pick_store.publish("FALLBACK COPY", order_ids=["83-1"],
+                                   store_dir=store, source=src)
+        assert sheet.source is not None, "source rejected under an 8.3 root"
+        html, status = pick_store.fetch(sheet.token, store_dir=store)
+        assert status == "ok"
+        assert "via an 8.3 root" in html
+        assert "FALLBACK COPY" not in html
+    finally:
+        pick_store.ROOT = real_root
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def test_the_meta_file_records_the_source_repo_relative():

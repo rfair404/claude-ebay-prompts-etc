@@ -155,9 +155,16 @@ def _rel_to_root(path: Path, *, root: Path | None = None) -> str:
     """A resolved source as the meta file records it: repo-relative, so the
     pointer survives the checkout moving. Only ever called with a path
     _resolve_source() already vouched for against the same root, which is what
-    makes the relative_to() safe."""
+    makes the relative_to() safe.
+
+    BOTH sides are resolved before comparing, exactly as _resolve_source()
+    does. Resolving only one of them looks fine wherever ROOT is already a
+    real path and breaks where it isn't: on Windows a root carrying an 8.3
+    short component ("C:/Users/RUNNER~1/...") expands under resolve() to its
+    long form, and relative_to() then rejects a child of that very directory.
+    A junction or symlink anywhere in ROOT does the same thing."""
     root = root if root is not None else ROOT
-    return path.resolve().relative_to(root).as_posix()
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def _read_meta(meta_path: Path) -> Sheet | None:

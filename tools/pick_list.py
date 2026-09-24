@@ -224,7 +224,7 @@ def item_folders(order: dict, drafts: list[dict], ledger: list[dict]) -> list[st
 
 
 def drop_in_item_folders(order: dict, html: str, drafts: list[dict],
-                         ledger: list[dict], *, root: Path = ROOT) -> list[Path]:
+                         ledger: list[dict], *, root: Path | None = None) -> list[Path]:
     """Write this order's HTML sheet into each item's own inventory folder.
 
     A sold item's folder already holds its photos and notes; the pick sheet for
@@ -249,6 +249,13 @@ def drop_in_item_folders(order: dict, html: str, drafts: list[dict],
     find out with. lib/pick_store._resolve_source() guards the read side the
     same way.
     """
+    # ROOT read at CALL time, never as a default argument. A default would
+    # capture whatever ROOT was at import, which is right in production and
+    # silently wrong anywhere ROOT is repointed: the folder resolves, the
+    # is_dir() check fails against the stale root, and the sheet quietly goes
+    # nowhere while the link falls back to a stored copy. lib/pick_store.py's
+    # _resolve_source()/_rel_to_root() read their root the same way.
+    root = root if root is not None else ROOT
     written: list[Path] = []
     for folder in item_folders(order, drafts, ledger):
         d = root / folder
