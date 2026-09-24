@@ -12,6 +12,7 @@ Run:  python tests/test_pick_list.py
   or: pytest tests/test_pick_list.py
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -674,6 +675,71 @@ def test_a_poll_drops_sheets_and_still_records_a_working_link():
     finally:
         shutil.rmtree(folder, ignore_errors=True)
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+# render_html()'s BUYER block, rendered for real.
+#
+# Every other test in this file fakes render_html (it reads hero photos and
+# pulls in PIL). That meant a merge could leave render_html raising NameError on
+# every call and the whole suite still passed. These call it, with no photos, so
+# the block a buyer might read over the packer's shoulder is actually asserted.
+# --------------------------------------------------------------------------- #
+def _buyer_order(city="Greensboro", state="NC", name="Mike Hein") -> dict:
+    addr = {"addressLine1": "123 Main St", "addressLine2": "Apt 4",
+            "postalCode": "27401", "countryCode": "US"}
+    if city:
+        addr["city"] = city
+    if state:
+        addr["stateOrProvince"] = state
+    cost = {"value": "34.00", "currency": "USD"}
+    return {
+        "orderId": "12-3456-78901", "creationDate": "2026-09-23T10:00:00.000Z",
+        "orderPaymentStatus": "PAID",
+        "pricingSummary": {"total": cost, "deliveryCost": cost},
+        "paymentSummary": {"totalDueSeller": cost},
+        "lineItems": [{"legacyItemId": "206448267270", "title": "A thing",
+                       "quantity": 1, "sku": "MB-0142", "lineItemCost": cost,
+                       "deliveryCost": {"shippingCost": cost}}],
+        "fulfillmentStartInstructions": [{"shippingStep": {
+            "shipTo": {"fullName": name, "contactAddress": addr},
+            "shippingCarrierCode": "USPS",
+            "shippingServiceCode": "GroundAdvantage"}}]}
+
+
+def _buyer_block(order: dict) -> str:
+    import pick_list_html
+    h = pick_list_html.render_html([order], [], [])
+    return re.search(r'<div class="shipto">.*?</div>\s*</div>', h, re.S).group(0), h
+
+
+def test_buyer_block_is_short_name_plus_city_and_state():
+    block, h = _buyer_block(_buyer_order())
+    assert "Mike H." in block
+    assert "Greensboro, NC" in block
+    # what must never reach a page that gets printed and photographed
+    for leaked in ("123 Main St", "Apt 4", "27401", "Mike Hein"):
+        assert leaked not in h, f"{leaked} leaked onto the sheet"
+
+
+def test_buyer_block_has_no_stray_comma_when_city_or_state_is_missing():
+    city_only, _ = _buyer_block(_buyer_order(state=None))
+    assert "Greensboro" in city_only and "Greensboro," not in city_only
+
+    state_only, _ = _buyer_block(_buyer_order(city=None))
+    assert "NC" in state_only and ", NC" not in state_only
+
+    neither, _ = _buyer_block(_buyer_order(city=None, state=None))
+    assert "," not in neither.split("BUYER")[1]
+
+
+def test_a_one_word_buyer_name_does_not_become_a_stray_period():
+    block, _ = _buyer_block(_buyer_order(name="Cher"))
+    assert "Cher" in block and "Cher." not in block
+
+
+def test_an_empty_buyer_name_stays_empty():
+    block, _ = _buyer_block(_buyer_order(name=""))
+    assert "." not in block.split("BUYER")[1].split("Greensboro")[0]
 
 
 if __name__ == "__main__":
