@@ -290,15 +290,48 @@ _LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
                   "SHIPPED": "shipped_at"}
 
 
-def _ledger_path() -> Path:
-    """Ledger location: $EBAYBIZ_LISTINGS_LEDGER (or legacy $EBAYBIZ_LISTINGS_LOG),
-    else <repo>/listings_ledger.csv."""
+_STORE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _ledger_store_fallback() -> str:
+    """Store to use for the ledger when the caller has no resolved
+    `creds.store` to hand in (GH #158) — the --record/--normalize path is
+    deliberately credential-free, so this mirrors load_credentials()'s own
+    fallback (env var > config active_store > "default") without loading
+    any credentials."""
+    return (os.environ.get("EBAYBIZ_STORE")
+            or (load_config().get("ebay") or {}).get("active_store")
+            or DEFAULT_STORE)
+
+
+def _ledger_path(store: Optional[str] = None) -> Path:
+    """Ledger location: $EBAYBIZ_LISTINGS_LEDGER (or legacy $EBAYBIZ_LISTINGS_LOG)
+    always wins — an explicit single-file override, same regardless of store.
+
+    Otherwise each store gets its own file (GH #158, Option B — see the issue
+    for why B over a shared file with a store column): the default store is
+    <repo>/listings_ledger.csv, unchanged, so the existing rows need no
+    migration; any other store is <repo>/listings_ledger-<store>.csv, kept
+    entirely separate so a reader that hasn't been taught about stores reads
+    a complete, correct (if incomplete) file rather than a blended one.
+    Pass `creds.store` when credentials are already resolved; leave `store`
+    unset only where there are no credentials to read it from."""
     env = os.environ.get("EBAYBIZ_LISTINGS_LEDGER") or os.environ.get("EBAYBIZ_LISTINGS_LOG")
-    return Path(env) if env else Path(__file__).resolve().parent.parent / "listings_ledger.csv"
+    if env:
+        return Path(env)
+    resolved = store or _ledger_store_fallback()
+    if not _STORE_NAME_RE.match(resolved):
+        raise ValueError(
+            f"invalid store name {resolved!r} — use only letters, digits, '-' and '_'")
+    if resolved == DEFAULT_STORE:
+        return _REPO_ROOT / "listings_ledger.csv"
+    return _REPO_ROOT / f"listings_ledger-{resolved}.csv"
 
 
 def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
-                   offer_id: str = "", listing_id: str = "", url: str = "") -> Optional[str]:
+                   offer_id: str = "", listing_id: str = "", url: str = "",
+                   store: Optional[str] = None) -> Optional[str]:
     """Create or update this item's row in the listings ledger (keyed by SKU).
 
     Status only advances sensibly: a re-sync of an already-PUBLISHED item
@@ -310,7 +343,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         return None
     import csv
     try:
-        path = _ledger_path()
+        path = _ledger_path(store)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         rows: list[dict] = []
         if path.exists():
@@ -378,11 +411,12 @@ def set_hero_photo(draft_path: Path, name: str) -> list[str]:
     return order
 
 
-def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
+def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str, Optional[str]]:
     """DRAFT-time, no credentials: compute the SKU (deterministic hash of
     title+folder), stamp it into the draft's frontmatter, and create the
     item's ledger record (status DRAFTED). Lets the record exist from the
     moment a title is chosen; sync/publish later update the same row.
+    `store` selects which store's ledger file the row lands in (GH #158).
     Returns (sku, ledger_path)."""
     draft_path = _resolve_draft_path(draft_path)
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
@@ -393,7 +427,7 @@ def record_draft(draft_path: Path) -> tuple[str, Optional[str]]:
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
         update_meta(draft_path, {"ebay_inventory_sku": sku})
     ledger = upsert_listing(sku, "DRAFTED", title=str(draft.get("title") or ""),
-                            price=_to_decimal_str(draft.get("price")) or "")
+                            price=_to_decimal_str(draft.get("price")) or "", store=store)
     return sku, ledger
 
 
@@ -1406,6 +1440,9 @@ def build_review_card(draft_path: Path,
     (2) runs preflight (condition remap + shipping policy),
     and (3) assembles the decision card deterministically from the draft,
     comps, ledger, and preflight — written to <shoot>/review_card.md.
+    The item is recorded to and read back from `creds.store`'s own ledger
+    file (GH #158), matching the account the rest of this card (policies,
+    location) is already resolved against.
 
     When every checked section is clean (no flags, PREP approved, photos
     match the manifest, no intl blockers) the card leads with one "ALL
@@ -1419,7 +1456,7 @@ def build_review_card(draft_path: Path,
     draft_path = _resolve_draft_path(draft_path)
     shoot = draft_path.parent
 
-    sku, _ = record_draft(draft_path)                  # ensure SKU + DRAFTED
+    sku, _ = record_draft(draft_path, store=creds.store)  # ensure SKU + DRAFTED
     pf = preflight_listing(draft_path, creds=creds)    # remap + shipping
     draft = parse_draft(draft_path)                    # re-read (condition may have changed)
 
@@ -1537,7 +1574,7 @@ def build_review_card(draft_path: Path,
 
     # Ledger status for this SKU.
     status = "?"
-    lp = _ledger_path()
+    lp = _ledger_path(creds.store)
     if lp.exists():
         for r in csv.DictReader(lp.open(encoding="utf-8")):
             if r.get("sku") == sku:
@@ -1647,6 +1684,7 @@ def create_or_update_listing(draft_path: Path,
 
     CREATE flow when frontmatter has no ebay_offer_id; EDIT flow otherwise.
     The offer is never published — that is a manual user action in Seller Hub.
+    The SYNCED ledger row is written to `creds.store`'s own file (GH #158).
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -1718,7 +1756,8 @@ def create_or_update_listing(draft_path: Path,
     # 5) ledger: upsert this item's lifecycle record (-> SYNCED; a re-sync of
     #    an already-published item keeps PUBLISHED).
     if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
-                      offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or ""):
+                      offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or "",
+                      store=creds.store):
         print(f"  [ledger] {sku} -> SYNCED")
 
     hub = "https://www.ebay.com/sh/lst/drafts"
@@ -2023,6 +2062,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     confirm=False it is a DRY RUN — it fetches the offer and reports what
     WOULD go live without calling publish. This is the only function that
     calls publishOffer; --sync never does.
+    The PUBLISHED ledger row is written to `creds.store`'s own file (GH #158).
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -2078,7 +2118,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         })
         upsert_listing(sku, "PUBLISHED", title=title, offer_id=offer_id,
                        listing_id=listing_id, price=price,
-                       url=f"https://www.ebay.com/itm/{listing_id}")
+                       url=f"https://www.ebay.com/itm/{listing_id}", store=creds.store)
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
                          listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None))
@@ -2105,6 +2145,7 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     Withdraws the offer, which ends the public listing; the offer returns
     to UNPUBLISHED so it can be re-synced/re-published later. The inverse
     of publish — same guard (does nothing without --confirm).
+    The ENDED ledger row is written to `creds.store`'s own file (GH #158).
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -2133,7 +2174,7 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
         "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     })
     upsert_listing(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED",
-                   title=title, offer_id=offer_id)
+                   title=title, offer_id=offer_id, store=creds.store)
     return EndResult(dry_run=False, offer_id=offer_id, title=title,
                      status_before=status, ended=True, listing_id=listing_id or None)
 
@@ -2189,7 +2230,8 @@ class OfferActionResult:
 
 def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
                          confirm: bool = False) -> OfferActionResult:
-    """Withdraw (end) a live offer by ID — keeps the offer (UNPUBLISHED)."""
+    """Withdraw (end) a live offer by ID — keeps the offer (UNPUBLISHED).
+    The ENDED ledger row is written to `creds.store`'s own file (GH #158)."""
     creds = creds or load_credentials()
     off = get_offer(offer_id, creds=creds)
     status = str(off.get("status") or "UNKNOWN")
@@ -2200,14 +2242,15 @@ def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("withdraw", True, False, offer_id, status, listing_id=listing_id)
     withdraw_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "ENDED", offer_id=offer_id)
+    upsert_listing(str(off.get("sku") or ""), "ENDED", offer_id=offer_id, store=creds.store)
     return OfferActionResult("withdraw", False, True, offer_id, status,
                              detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
 
 
 def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
                        confirm: bool = False) -> OfferActionResult:
-    """Delete an offer by ID (permanent). If live, this also ends the listing."""
+    """Delete an offer by ID (permanent). If live, this also ends the listing.
+    The DELETED ledger row is written to `creds.store`'s own file (GH #158)."""
     creds = creds or load_credentials()
     off = get_offer(offer_id, creds=creds)
     status = str(off.get("status") or "UNKNOWN")
@@ -2217,14 +2260,15 @@ def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
         return OfferActionResult("delete-offer", True, False, offer_id, status,
                                  detail=f"sku={off.get('sku')} price={price}", listing_id=listing_id)
     delete_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "DELETED", offer_id=offer_id)
+    upsert_listing(str(off.get("sku") or ""), "DELETED", offer_id=offer_id, store=creds.store)
     return OfferActionResult("delete-offer", False, True, offer_id, status,
                              detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
 
 
 def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
                        confirm: bool = False) -> OfferActionResult:
-    """Delete an inventory item (SKU) AND all its offers (permanent)."""
+    """Delete an inventory item (SKU) AND all its offers (permanent).
+    The DELETED ledger row is written to `creds.store`'s own file (GH #158)."""
     creds = creds or load_credentials()
     try:
         offers = get_offers_for_sku(sku, creds=creds)
@@ -2235,7 +2279,7 @@ def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("delete-item", True, False, sku, detail=detail)
     delete_inventory_item(sku, creds=creds)
-    upsert_listing(str(sku), "DELETED")
+    upsert_listing(str(sku), "DELETED", store=creds.store)
     return OfferActionResult("delete-item", False, True, sku,
                              detail=f"inventory item + {len(offers)} offer(s) deleted")
 
@@ -2403,7 +2447,7 @@ def _cli() -> None:
                     help="Create this store's three business policies FROM its storefront profile (storefronts.<name>.returns/.shipping) and print the IDs. Idempotent by name.")
     ap.add_argument("--create-pickup-policy", action="store_true", help="Create (idempotent) a LOCAL-PICKUP-ONLY fulfillment policy and print its ID to paste into config (ebay.fulfillment_policy_id_local_pickup).")
     ap.add_argument("--check", action="store_true", help="Print module/credential status.")
-    ap.add_argument("--store", metavar="NAME", help="Which eBay seller account to use (e.g. a secondary 'junk' store). Default: ebay.active_store in config, or the EBAYBIZ_STORE env var, or the single-account 'default' store — see ebay.stores.<name> in config.yaml (GH #147).")
+    ap.add_argument("--store", metavar="NAME", help="Which eBay seller account to use (e.g. a secondary 'junk' store). Default: ebay.active_store in config, or the EBAYBIZ_STORE env var, or the single-account 'default' store — see ebay.stores.<name> in config.yaml (GH #147). Also selects which store's listings_ledger file is read/written (GH #158).")
     args = ap.parse_args()
 
     try:
@@ -2450,7 +2494,8 @@ def _cli() -> None:
                           len(drafts), flagged)
             return
         if args.record:
-            sku, ledger = record_draft(Path(args.record))
+            sku, ledger = record_draft(Path(args.record),
+                                       store=_resolve_store(args.record, args.store))
             print(f"[OK] recorded DRAFTED — sku {sku}")
             if ledger:
                 print(f"  ledger: {ledger}")

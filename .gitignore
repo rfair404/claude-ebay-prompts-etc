@@ -33,9 +33,11 @@
 # our ask. Kept locally.
 listings_log.txt
 listings_ledger.csv
-# ...and any per-store variant (e.g. listings_ledger.junk.csv) — the bare
-# name above matches only the single-store default, not one with a store
-# tag in it (#156).
+# Per-store ledger files (GH #158) — listings_ledger-<store>.csv, e.g.
+# listings_ledger-junk.csv, is the actual naming _ledger_path() produces.
+listings_ledger-*.csv
+# ...and the dash-free variant some earlier drafts of this convention used
+# (e.g. listings_ledger.junk.csv) — kept too so neither shape can leak (#156).
 listings_ledger.*.csv
 
 # Sales ledger — what each item ACTUALLY sold for, plus eBay's fee and our net.

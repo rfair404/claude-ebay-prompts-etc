@@ -642,6 +642,144 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
 
 
 # ---------------------------------------------------------------------------
+# Per-store ledger (GH #158): each store gets its own listings_ledger file,
+# so a junk-store item can never land in the same file as the main store's.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _ledger_dir_at(tmp_path):
+    """Redirect the repo root _ledger_path() resolves per-store filenames
+    against, WITHOUT setting $EBAYBIZ_LISTINGS_LEDGER — that env var is a
+    single-file override that wins over any store (by design), so it can't
+    be used to test that two stores land in two different files."""
+    with _patched(L, _REPO_ROOT=tmp_path):
+        yield
+
+
+def test_ledger_path_default_store_is_the_unchanged_filename():
+    """No store argument, and the explicit "default" store name, must both
+    resolve to the same listings_ledger.csv the pipeline has always used —
+    the existing 389 rows need no migration under this design."""
+    assert L._ledger_path().name == "listings_ledger.csv"
+    assert L._ledger_path("default").name == "listings_ledger.csv"
+    assert L._ledger_path() == L._ledger_path("default")
+
+
+def test_ledger_path_named_store_gets_its_own_file():
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_dir_at(Path(td)):
+            default_path = L._ledger_path()
+            junk_path = L._ledger_path("junk")
+            assert junk_path.name == "listings_ledger-junk.csv"
+            assert junk_path != default_path
+            assert junk_path.parent == default_path.parent == Path(td)
+
+
+def test_ledger_path_env_override_wins_regardless_of_store():
+    """$EBAYBIZ_LISTINGS_LEDGER is a single absolute-path override that
+    predates the store concept (GH #158) — it must keep winning over every
+    store, default or named, exactly as it did before this change (this is
+    also what lets every OTHER test in this file redirect the ledger with
+    _ledger_at() without knowing about stores at all)."""
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_at(Path(td)) as ledger:
+            assert L._ledger_path() == ledger
+            assert L._ledger_path("junk") == ledger
+            assert L._ledger_path("default") == ledger
+
+
+def test_ledger_path_rejects_a_store_name_that_is_not_a_bare_identifier():
+    """The store name reaches the filesystem as part of a path
+    (listings_ledger-<store>.csv); refuse anything that isn't a bare
+    letters/digits/-/_ token rather than silently building a path outside
+    the repo root or colliding with an unrelated file."""
+    with tempfile.TemporaryDirectory() as td:
+        with _ledger_dir_at(Path(td)):
+            for bad in ("../../etc/passwd", "junk/../../x", "junk.csv", "two words"):
+                try:
+                    L._ledger_path(bad)
+                except ValueError:
+                    continue
+                raise AssertionError(f"expected ValueError for store={bad!r}")
+
+
+def test_ledger_store_fallback_precedence_env_then_config_then_default():
+    """_ledger_store_fallback() is only consulted when a caller has no
+    resolved creds.store to hand _ledger_path() (the --record/--normalize
+    path, which is deliberately credential-free) — it must mirror
+    load_credentials()'s own env-var/config/default fallback without
+    loading any credentials itself."""
+    prev = os.environ.get("EBAYBIZ_STORE")
+    try:
+        os.environ.pop("EBAYBIZ_STORE", None)
+        with _patched(L, load_config=lambda: {}):
+            assert L._ledger_store_fallback() == "default"
+        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+            assert L._ledger_store_fallback() == "junk", "config active_store must be honored"
+        os.environ["EBAYBIZ_STORE"] = "mainline"
+        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+            assert L._ledger_store_fallback() == "mainline", "$EBAYBIZ_STORE must win over config"
+    finally:
+        if prev is None:
+            os.environ.pop("EBAYBIZ_STORE", None)
+        else:
+            os.environ["EBAYBIZ_STORE"] = prev
+
+
+def test_record_draft_writes_to_the_named_stores_ledger_only():
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _ledger_dir_at(Path(td)):
+            sku, ledger = L.record_draft(draft_path, store="junk")
+
+            assert Path(ledger).name == "listings_ledger-junk.csv"
+            junk_rows = _ledger_rows(L._ledger_path("junk"))
+            assert len(junk_rows) == 1
+            assert junk_rows[0]["sku"] == sku
+
+            default_rows = _ledger_rows(L._ledger_path())
+            assert default_rows == [], (
+                "a junk-store draft must never write a row into the default store's ledger")
+
+
+def test_record_draft_default_and_named_store_land_in_different_files_for_the_same_draft():
+    """The scenario the issue is filed against: the same title/folder (hence
+    the same SKU) recorded once for the main store and once for "junk" must
+    produce two separate one-row files, never one two-row file."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _ledger_dir_at(Path(td)):
+            sku_default, _ = L.record_draft(draft_path)
+            sku_junk, _ = L.record_draft(draft_path, store="junk")
+
+            assert sku_default == sku_junk, "same title+folder must hash to the same SKU"
+            assert len(_ledger_rows(L._ledger_path())) == 1
+            assert len(_ledger_rows(L._ledger_path("junk"))) == 1
+
+
+def test_build_review_card_records_and_reads_the_correct_stores_ledger():
+    """build_review_card must record the DRAFTED row to, and read the ledger
+    status back from, creds.store's own file (GH #158) — the card's Store:
+    line and --store-carrying approve command are covered separately by
+    test_build_review_card_shows_the_store_and_its_approve_command; this
+    checks the ledger side actually follows the same account."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""}), \
+             _ledger_dir_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_JunkCreds())
+
+            assert "ledger DRAFTED" in card
+            junk_rows = _ledger_rows(L._ledger_path("junk"))
+            assert len(junk_rows) == 1
+            default_rows = _ledger_rows(L._ledger_path())
+            assert default_rows == [], (
+                "a junk-store review must never write into the default store's ledger")
+
+
+# ---------------------------------------------------------------------------
 # build_review_card() — estate context wiring (GH #46)
 # ---------------------------------------------------------------------------
 
