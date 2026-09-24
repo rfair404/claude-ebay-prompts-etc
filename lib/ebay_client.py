@@ -743,6 +743,113 @@ def create_free_return_policy(name: str = "30-Day Free Returns - Seller Pays",
                     extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
 
 
+def create_no_returns_policy(name: str = "No returns - sold as-is",
+                             marketplace: str = DEFAULT_MARKETPLACE,
+                             creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) a NO-RETURNS policy, for an as-is storefront.
+
+    The deliberate inverse of create_free_return_policy(). That one buys Top
+    Rated Plus by eating return shipping, which is correct on curated goods
+    and wrong on a junk store: a returned $20 part costs more in postage than
+    the sale made, and the as-is risk lands on the main store's metrics if
+    the two share an account.
+
+    `returnsAccepted: false` means eBay wants NO returnPeriod, refundMethod
+    or returnShippingCostPayer — they only describe HOW a return works, and
+    sending them alongside a refusal is contradictory. The international
+    override refuses too; an unset override does not inherit the refusal.
+
+    Idempotent by name.
+    """
+    existing = next((p for p in get_return_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": "Sold as-is. No returns accepted.",
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "returnsAccepted": False,
+        "internationalOverride": {"returnsAccepted": False},
+    }
+    return api_send("POST", "/sell/account/v1/return_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
+def create_calculated_shipping_policy(
+        name: str = "Buyer pays calculated - USPS Ground (1 day)",
+        service: str = "USPSGroundAdvantage",
+        handling_days: int = 1,
+        marketplace: str = DEFAULT_MARKETPLACE,
+        creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) a CALCULATED, buyer-pays fulfillment policy.
+
+    The inverse of the main store's free-ground default. Free postage is a
+    discount folded into the price, which works when the price can absorb it;
+    on cheap stock it is the whole margin. Calculated charges actual postage
+    by distance and weight, so a heavy, low-value item stays listable.
+
+    `costType: CALCULATED` means no shippingCost is sent — eBay computes it
+    from the item's weight/dimensions and the buyer's ZIP, which is why the
+    draft's packed weight and package_in dimensions stop being cosmetic and
+    start being the price the buyer sees.
+
+    shipToLocations is left unset: US-only domestic. The main store's default
+    carries Worldwide, and that (not any international flag) is what makes a
+    listing eBay-International-Shipping eligible — see lib/us_only.py and the
+    ITAR refusal it exists for. An as-is store has no reason to opt into that.
+
+    Idempotent by name.
+    """
+    existing = next((p for p in get_fulfillment_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": (f"Buyer pays calculated shipping, {service}. "
+                        f"{handling_days} business day handling."),
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "handlingTime": {"value": int(handling_days), "unit": "DAY"},
+        "shippingOptions": [{
+            "optionType": "DOMESTIC",
+            "costType": "CALCULATED",
+            "shippingServices": [{
+                "sortOrder": 1,
+                "shippingCarrierCode": "USPS",
+                "shippingServiceCode": service,
+                "freeShipping": False,
+            }],
+        }],
+    }
+    return api_send("POST", "/sell/account/v1/fulfillment_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
+def create_immediate_payment_policy(name: str = "Immediate Payment",
+                                    marketplace: str = DEFAULT_MARKETPLACE,
+                                    creds: Optional[EbayCredentials] = None) -> dict:
+    """Create (or reuse) an immediate-payment policy. Idempotent by name."""
+    existing = next((p for p in get_payment_policies(marketplace, creds=creds)
+                     if p.get("name") == name), None)
+    if existing:
+        return existing
+    body = {
+        "name": name,
+        "description": "Immediate payment required.",
+        "marketplaceId": marketplace,
+        "categoryTypes": [{"name": "ALL_EXCLUDING_MOTORS_VEHICLES"}],
+        "immediatePay": True,
+    }
+    return api_send("POST", "/sell/account/v1/payment_policy",
+                    body=body, creds=creds, marketplace=None,
+                    extra_headers={"X-EBAY-C-MARKETPLACE-ID": marketplace})
+
+
 def set_fulfillment_handling_time(policy_id: str, days: int = 1,
                                   marketplace: str = DEFAULT_MARKETPLACE,
                                   creds: Optional[EbayCredentials] = None) -> dict:
