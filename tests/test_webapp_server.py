@@ -6,6 +6,7 @@ inventory/ or shells out to prep.
 tools/dashboard.py's own gather()/draw() logic is tests/test_dashboard.py's
 job — here we only check the route wires them together and returns HTML.
 """
+import shutil
 import sys
 from pathlib import Path
 
@@ -201,6 +202,42 @@ def test_pick_route_serves_the_published_sheet_by_token(pick_client):
     assert r.status_code == 200
     assert "text/html" in r.headers["content-type"]
     assert "Jamie Buyer" in r.text
+
+
+def test_pick_route_serves_a_sheet_that_lives_in_an_item_folder(pick_client):
+    """A sold order's sheet is written into the item's folder under inventory/
+    and served FROM there (publish(source=...)), so the route has to answer for
+    a sheet the store holds no copy of. The file goes under pick_lists/ here --
+    inside the repo, so it passes the containment check, and gitignored, so a
+    crashed test leaves nothing committable."""
+    client, store = pick_client
+    src_dir = ROOT / "pick_lists" / ".webapp-test-sources"
+    src_dir.mkdir(parents=True, exist_ok=True)
+    src = src_dir / "pick_03-9-9.html"
+    src.write_text("<html><body>Mike H. &middot; Greensboro, NC</body></html>",
+                   encoding="utf-8")
+    try:
+        sheet = pick_store.publish("NOT THIS COPY", order_ids=["03-9-9"],
+                                   store_dir=store, source=src)
+        assert not (store / f"{sheet.token}.html").exists()
+
+        r = client.get(f"/pick/{sheet.token}")
+        assert r.status_code == 200
+        assert "Greensboro, NC" in r.text
+        assert "NOT THIS COPY" not in r.text
+        # same guardrails as any other sheet
+        assert "no-store" in r.headers["cache-control"]
+        assert "noindex" in r.headers["x-robots-tag"]
+
+        # the file is the live page: re-render in place, no republish needed
+        src.write_text("<html><body>re-rendered</body></html>", encoding="utf-8")
+        assert "re-rendered" in client.get(f"/pick/{sheet.token}").text
+
+        # and the route losing its file is a 404, not a traceback
+        src.unlink()
+        assert client.get(f"/pick/{sheet.token}").status_code == 404
+    finally:
+        shutil.rmtree(src_dir, ignore_errors=True)
 
 
 def test_pick_route_sends_no_store_and_noindex(pick_client):
