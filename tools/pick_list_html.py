@@ -73,6 +73,7 @@ import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
 import pick_store                                                  # noqa: E402
+from haiku import generate_haiku                                   # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
@@ -297,6 +298,19 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         footer_line = f"ORDER {_money((o.get('pricingSummary') or {{}}).get('total'))} total"
         warn_html = ""
 
+    # A small personalized haiku (#161) — themed off the item and the ship-to
+    # region, never the buyer's name (which is never even passed in here).
+    # See tools/haiku.py for why the lines are always safe to print. Fixed
+    # position so it lands at the vertical center of the bottom half of a
+    # letter page regardless of how many items are above it — fold the
+    # printed sheet in half and the haiku sits roughly on the crease's
+    # opposite half, centered.
+    first_title = next((li.get("title", "") for o in orders
+                        for li in (o.get("lineItems") or [])), "")
+    haiku_lines = generate_haiku(orders[0].get("orderId", ""), first_title,
+                                 addr.get("stateOrProvince", ""))
+    haiku_html = "<br>".join(html.escape(line) for line in haiku_lines)
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow, noarchive">
@@ -356,6 +370,15 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
                 font-family: 'Courier New', monospace; margin-top: .15em; }}
   .divider {{ border: none; border-top: 1px solid #ccc; margin: 0 0 14px; }}
 
+  /* Fixed to the page, not the content flow, so it lands at the same spot
+     on the sheet no matter how many items are above it: a letter page is
+     11in tall, the fold falls at 5.5in, and the bottom half's own center is
+     2.75in up from the bottom edge — fold the sheet and this sits roughly
+     centered on the half below the crease. */
+  .haiku {{ position: fixed; left: 0; right: 0; bottom: 2.5in; text-align: center;
+            font-style: italic; color: var(--grey); font-size: .82rem;
+            line-height: 1.5; }}
+
   @media print {{ .printbtn {{ display: none; }} .labelbtn {{ display: none; }} body {{ margin: 0; max-width: none; }} }}
 </style></head>
 <body>
@@ -383,6 +406,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
     {via_line}<br>
     {footer_line}
   </div>
+  <div class="haiku">{haiku_html}</div>
 </body></html>"""
 
 
