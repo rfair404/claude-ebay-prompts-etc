@@ -84,6 +84,38 @@ def test_exemptions_do_not_flag():
         assert not _blocks(check_voice(_draft(phrase))), phrase
 
 
+def test_fact_deferred_to_buyer_blocks():
+    # GH #170 — verbatim from the ten drafts that shipped it.
+    for phrase in [
+        "Message me for exact dimensions.",
+        "These are approximate — message me if you need an exact figure before you buy.",
+        "Message me if you need the height and I will measure it.",
+        "I haven't measured these, so I won't quote a diameter.",
+        "I haven't put this on a caliper or a scale yet.",
+        "I have not put a caliper on the medal or a tape on the chain — message me.",
+        "Not measured. Message me if you need the face dimensions and I will measure them.",
+        "A standard single-can Twist-Lok size; message me for a measurement before buying if fit matters.",
+        "The cufflinks and tie clip are standard men's dress sizes; message me if you need a measurement.",
+        "Chain: not measured yet. Message me and I'll measure it before you buy.",
+        "Message me before you buy if exact dimensions matter and I will get them for you the same day.",
+        "If you need the exact size, message me.",
+        "Not weighed.",
+        "Ask if a dimension decides it for you and I will put a tape on it.",
+    ]:
+        assert _blocks(check_voice(_draft(phrase))), phrase
+
+
+def test_questions_without_a_deferred_fact_pass():
+    for phrase in [
+        "Please message me with any questions before buying — I'd rather answer one than have you guess.",
+        "Sold as-is. Please look the photos over and message me with any questions before buying.",
+        "Local pickup only — Greensboro, NC. Not local? Message me for a freight quote.",
+        "Need one clean replacement piece? Message me — I have more silverplate available and combine shipping.",
+        "Measures 4 1/2 in. tall and weighs 3.2 oz.",
+    ]:
+        assert not _blocks(check_voice(_draft(phrase))), phrase
+
+
 def test_photo_word_boundary_does_not_catch_photographic_or_photobook():
     # Copilot review on PR #48: the "from/off the photo(s)" rule was missing
     # a trailing \b, so it matched any word merely STARTING with "photo".

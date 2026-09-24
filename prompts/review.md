@@ -98,8 +98,12 @@ the user says "approve all".
 draft's buyer-visible fields (title, description, condition_description,
 item specifics) for camera-frame language: "visible in the photos",
 "shown/pictured", "as-shown", "not identifiable/verifiable from the
-photos", or tests-not-run narration ("not shake-tested", "odor not
-verified"). Any hit is a copy defect, not a judgment call: fix it via
+photos", tests-not-run narration ("not shake-tested", "odor not
+verified"), or a fact deferred to the buyer ("message me for exact
+dimensions", "Not measured.", GH #170). A deferral is resolved HERE, not
+left to the buyer: ask the in-hand question (measure / weigh it) with the
+card, write the answer into the draft, and never approve copy that still
+invites a buyer to ask for a fact. Any hit is a copy defect, not a judgment call: fix it via
 DRAFT (rephrase to the finding, per draft.md's in-hand-voice rule), then
 re-run `--review`. The standing "Please see the photos…" close line is
 exempt. Grade-setting "Untested; sold as-is." is exempt.

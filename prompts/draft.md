@@ -380,6 +380,14 @@ field (title, body, `condition_description`, item specifics):
   photos", "can't be assessed from the pictures";
 - **inspection-process narration** — enumerating tests not run ("not
   shake-tested", "ring test not performed", "odor not verified").
+- **facts deferred to the buyer** (GH #170) — "message me for exact
+  dimensions", "message me if you need the height and I'll measure it",
+  and the admission that rides with it ("Not measured.", "I haven't put a
+  caliper on it"). A missing measurement/weight/size is a NEEDS_REVIEW
+  in-hand question ("Measure the chain length"), answered at REVIEW before
+  publish — never an invitation for every buyer to ask it again. State the
+  number, or leave the fact out. The standing close ("message me with any
+  questions") and the LOCAL_PICKUP freight-quote line are not deferrals.
 
 This is our internal evidence process leaking into the copy: it tells the
 buyer the seller never handled the item, and it manufactures doubt instead
