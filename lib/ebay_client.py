@@ -780,7 +780,7 @@ def create_no_returns_policy(name: str = "No returns - sold as-is",
 
 def create_calculated_shipping_policy(
         name: str = "Buyer pays calculated - USPS Ground (1 day)",
-        service: str = "USPSGroundAdvantage",
+        service: str = "USPSParcel",
         handling_days: int = 1,
         marketplace: str = DEFAULT_MARKETPLACE,
         creds: Optional[EbayCredentials] = None) -> dict:
@@ -800,6 +800,19 @@ def create_calculated_shipping_policy(
     carries Worldwide, and that (not any international flag) is what makes a
     listing eBay-International-Shipping eligible — see lib/us_only.py and the
     ITAR refusal it exists for. An as-is store has no reason to opt into that.
+
+    The service code is `USPSParcel`, NOT `USPSGroundAdvantage`. eBay's UI
+    calls this service "USPS Ground Advantage" and the Fulfillment/draft layer
+    uses `USPSGroundAdvantage`, but the Account API rejects that string:
+
+        errorId 20403 UNKNOWN_SHIPPING_SERVICE_CODE : USPSGroundAdvantage
+        errorId 20403 LOGISTICS_INFO_IS_MISSING
+
+    Confirmed 2026-09-23 by reading back the main store's own working
+    policies, created in the UI as "Free USPS Ground": they carry
+    shippingServiceCode "USPSParcel". Two names for one service, and the
+    error does not suggest the right one — check an existing policy rather
+    than guessing from the UI label.
 
     Idempotent by name.
     """
