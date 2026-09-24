@@ -31,14 +31,22 @@ picking off a shelf doesn't require re-reading the title. Deliberately
 low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
-Buyer name and street address are on this page. It is served over HTTP now,
-which is a change in that posture and is fenced accordingly: the app binds
-to 127.0.0.1 only, the URL carries 256 bits of randomness and no order id,
-the sheet deletes itself when it expires, and the route sends no-store +
-noindex. lib/pick_store.py holds those rules and the reasoning behind each.
-Everything outside that path is unchanged: the local copies still go to
-pick_lists/ (gitignored), and no sheet, link or token is ever committed,
-written to a ledger, or sent anywhere off this machine.
+No buyer street address and no full buyer name on this page — the buyer reads
+as first name + last initial ("Mike H.") plus city and state, which is all a
+picker needs to match the box to the label eBay prints. The street address is
+deliberately not rendered: the sheet is printed, handed around and
+photographed, and the shipping label already carries the full address.
+tools/pick_list.py's terminal output (seller-only, stays on this machine) still
+shows the full address for actually addressing a box.
+
+That leaves the buyer's first name, last initial and city/state as the only
+personal things on a page now served over HTTP, and the fencing around it
+stands regardless: the app binds to 127.0.0.1 only, the URL carries 256 bits of
+randomness and no order id, the sheet deletes itself when it expires, and the
+route sends no-store + noindex. lib/pick_store.py holds those rules and the
+reasoning behind each. Local copies still go to pick_lists/ (gitignored), and
+no sheet, link or token is ever committed, written to a ledger, or sent
+anywhere off this machine.
 
 No seller financials on this page — deliberately. This sheet can end up seen
 by the buyer during packing (dropped in the box by mistake, photographed,
@@ -66,6 +74,7 @@ from PIL import Image                                              # noqa: E402
 
 import pick_store                                                  # noqa: E402
 from config import get_store                                       # noqa: E402
+from haiku import generate_haiku                                   # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
@@ -201,10 +210,30 @@ def _pick_location(folder: str) -> str:
 _HAND_LOC = load_hand_locations()
 
 
+def _short_name(full: str) -> str:
+    """Buyer as first name + last initial — "Mike Hein" -> "Mike H.". Enough
+    to match a box to its label, not enough to be a name on a page that gets
+    printed, photographed and passed around. A single-word name is returned
+    as-is; an empty name stays empty rather than becoming a stray period."""
+    parts = (full or "").split()
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0]}."
+
+
 def _addr_key(o: dict) -> tuple:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
     return (to.get("fullName", ""), addr.get("addressLine1", ""), addr.get("postalCode", ""))
+
+
+def _label_url(order_id: str) -> str:
+    """eBay's direct 'buy this order's shipping label' redirect — the same
+    URL Seller Hub lands on after a seller finds the order in the awaiting-
+    shipment list and clicks Buy Label, minus that search-and-click (#162)."""
+    return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
 def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> str:
@@ -259,15 +288,19 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         </div>
       </div>""")
 
-    addr_lines = "".join(f"<div>{html.escape(line)}</div>" for line in
-                          (addr.get("addressLine1"), addr.get("addressLine2")) if line)
+    # City + state only. Enough for a picker to sanity-check the box against
+    # the label eBay prints; not a street address, so the sheet stays safe to
+    # print, carry around and photograph.
+    city_state = ", ".join(p for p in (addr.get("city"), addr.get("stateOrProvince")) if p)
+    city_state_html = (f'<div>{html.escape(city_state)}</div>' if city_state else "")
+
     ship_by_bit = (f" &middot; SHIP BY {html.escape(ship_by)}"
                    if ship_by and ship_by != "zz" else "")
 
     if grouped:
         title = f"Pick — {len(orders)} orders combined"
         heading = (f"PICK — {len(orders)} orders combined &middot; "
-                   f"{html.escape(to.get('fullName', ''))}")
+                   f"{html.escape(_short_name(to.get('fullName', '')))}")
         vias = sorted({(html.escape(ship_to(o).get('carrier', '')),
                          html.escape(ship_to(o).get('service', ''))) for o in orders})
         via_line = (f"VIA {vias[0][0]} {vias[0][1]}" if len(vias) == 1
@@ -286,6 +319,37 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         footer_line = f"ORDER {_money((o.get('pricingSummary') or {{}}).get('total'))} total"
         warn_html = ""
 
+    # One "Buy label" link per order, straight to eBay's per-order label
+    # flow (#162) instead of the awaiting-shipment list the seller used to
+    # have to search through. Grouped orders each keep their own eBay
+    # order and so each keep their own link, labelled by order id so they
+    # don't get mixed up; a single order gets one plain link, as before.
+    def _label_link(o: dict) -> str:
+        oid = o.get("orderId", "")
+        text = f"Buy label (order {html.escape(oid)}) &rarr;" if grouped else "Buy label &rarr;"
+        # The warning is #156's, moved in here from the single hard-coded button
+        # main replaced: the link resolves against whichever eBay account the
+        # BROWSER is signed into, not the account the order came from. With two
+        # stores live that is a real way to buy a label on the wrong account, and
+        # now it rides every order's button rather than only the one-order case.
+        warn = (f"Opens the label flow for whichever eBay account this browser is "
+                f"signed into — verify it is {html.escape(brand_storefront)} before "
+                f"buying a label off this sheet.")
+        return (f'<a href="{_label_url(oid)}" target="_blank" rel="noopener" '
+                f'title="{warn}">{text}</a>')
+
+    labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+
+    # A small personalized haiku (#161) — themed off the item and the ship-to
+    # region, never the buyer's name (which is never even passed in here).
+    # See tools/haiku.py for why the lines are always safe to print. The
+    # print CSS (.haiku) pins it to the center of the sheet's lower half.
+    first_title = next((li.get("title", "") for o in orders
+                        for li in (o.get("lineItems") or [])), "")
+    haiku_lines = generate_haiku(orders[0].get("orderId", ""), first_title,
+                                 addr.get("stateOrProvince", ""))
+    haiku_html = "<br>".join(html.escape(line) for line in haiku_lines)
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow, noarchive">
@@ -293,9 +357,13 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 <title>{html.escape(title)}</title>
 <style>
   * {{ box-sizing: border-box; }}
-  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; }}
+  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; color-scheme: light; }}
   @page {{ size: letter; margin: .5in; }}
+  /* A pick sheet is a paper object — it commits to one light look. The
+     background is stated rather than inherited so the page still reads as
+     paper when the viewer's browser ground is dark. */
   body {{ font-family: Georgia, 'Times New Roman', serif; color: #111;
+          background: #fff;
           max-width: 640px; margin: 24px auto; padding: 0 16px; }}
   /* Two-face system, matching brand/pops-games: Georgia carries display
      content (headings, item titles), Courier New carries utility/data
@@ -341,11 +409,29 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
                 font-family: 'Courier New', monospace; margin-top: .15em; }}
   .divider {{ border: none; border-top: 1px solid #ccc; margin: 0 0 14px; }}
 
-  @media print {{ .printbtn {{ display: none; }} .labelbtn {{ display: none; }} body {{ margin: 0; max-width: none; }} }}
+  /* On screen the haiku just closes the page, in the normal flow. */
+  .haiku {{ text-align: center; font-style: italic; color: var(--grey);
+            font-size: .82rem; line-height: 1.5; margin-top: 36px; }}
+
+  @media print {{
+    .printbtn {{ display: none; }} .labelbtn {{ display: none; }}
+    body {{ margin: 0; max-width: none; }}
+    /* On paper it is pinned to the bottom of the sheet, not the content
+       flow, so it lands in the same spot however many items are above it.
+       Fixed boxes are measured from the @page content area, which starts
+       .5in inside the paper edge. The lower half of a letter sheet is
+       5.5in tall with its center 2.75in up from the paper edge — 2.25in up
+       from the content area's bottom — so a 4.5in box pinned to bottom: 0
+       centers the poem there. Fold the sheet and the haiku sits in the
+       middle of the half below the crease. */
+    .haiku {{ position: fixed; left: 0; right: 0; bottom: 0; height: 4.5in;
+              margin: 0; display: flex; flex-direction: column;
+              justify-content: center; align-items: center; }}
+  }}
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
-  <div class="labelbtn"><a href="https://www.ebay.com/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener" title="Opens Seller Hub for whichever eBay account this browser is logged into — verify it is {html.escape(brand_storefront)} before buying a label off this sheet.">Buy label &rarr;</a></div>
+  <div class="labelbtn">{labelbtn_html}</div>
   <div class="brand">
     <div class="hr"></div>
     <div class="nm">{html.escape(brand_name)}</div>
@@ -360,16 +446,15 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   {warn_html}
   {''.join(item_blocks)}
   <div class="shipto">
-    <b>SHIP TO</b>
-    <div>{html.escape(to.get('fullName', ''))}</div>
-    {addr_lines}
-    <div>{html.escape(addr.get('city', ''))}, {html.escape(addr.get('stateOrProvince', ''))}
-      {html.escape(addr.get('postalCode', ''))} {html.escape(addr.get('countryCode', ''))}</div>
+    <b>BUYER</b>
+    <div>{html.escape(_short_name(to.get('fullName', '')))}</div>
+    {city_state_html}
   </div>
   <div class="footer">
     {via_line}<br>
     {footer_line}
   </div>
+  <div class="haiku">{haiku_html}</div>
 </body></html>"""
 
 

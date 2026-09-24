@@ -23,6 +23,15 @@
 
 template_version: v1
 
+# --- STORE (GH #147) -------------------------------------------------------
+# Which eBay seller account this item publishes to. Leave blank for your
+# main/only store. Set to a name configured under `ebay.stores.<name>` in
+# config.yaml (e.g. "junk") to route this item to a secondary account —
+# useful for cheap, as-is, no-returns lots you don't want mixed into your
+# main store. --review/--sync/--publish/--list all honor this automatically;
+# an explicit --store on the command line overrides it.
+store: ""
+
 # --- META (not pushed to eBay; for local bookkeeping only) ---------------
 meta:
   item_id:              ""        # local stable ID for the item
