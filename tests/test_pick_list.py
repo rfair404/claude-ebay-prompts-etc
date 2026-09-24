@@ -466,6 +466,217 @@ def test_main_rejects_poll_and_record_tracking_together():
 
 
 # --------------------------------------------------------------------------- #
+# A sold order's sheet lands in the sold item's own folder under inventory/,
+# and that file is what the link serves.
+#
+# Every test here drives a throwaway `root`, so nothing writes into the real
+# inventory/. `drafts` is what match_sale() resolves a line item against; a
+# draft's "dir" is the item's folder, repo-relative.
+# --------------------------------------------------------------------------- #
+def _draft(dir_: str, sku: str = "", listing_id: str = "", title: str = "",
+           price: str = "10.00") -> dict:
+    return {"dir": dir_, "sku": sku, "listing_id": listing_id,
+            "title": title, "price": price}
+
+
+def _item(sku: str = "", listing_id: str = "", title: str = "A thing",
+          qty: int = 1) -> dict:
+    return {"sku": sku, "legacyItemId": listing_id, "title": title,
+            "quantity": qty, "lineItemCost": {"value": "10.00", "currency": "USD"}}
+
+
+def _root_with(*folders: str) -> Path:
+    root = Path(tempfile.mkdtemp(prefix="pickinv-test-"))
+    for f in folders:
+        (root / f).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def test_the_sheet_lands_in_the_sold_items_own_folder():
+    root = _root_with("inventory/ESTATES/LOT/peacock")
+    try:
+        order = {"orderId": "44-1-2", "lineItems": [_item(sku="MB-1")]}
+        drafts = [_draft("inventory/ESTATES/LOT/peacock", sku="MB-1")]
+        written = pick_list.drop_in_item_folders(order, "<html>SHEET</html>",
+                                                drafts, [], root=root)
+        expected = root / "inventory/ESTATES/LOT/peacock/pick_44-1-2.html"
+        assert written == [expected]
+        assert expected.read_text(encoding="utf-8") == "<html>SHEET</html>"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_two_item_order_puts_the_same_sheet_in_both_folders():
+    root = _root_with("inventory/A/one", "inventory/B/two")
+    try:
+        order = {"orderId": "44-2-2",
+                 "lineItems": [_item(sku="S1"), _item(sku="S2")]}
+        drafts = [_draft("inventory/A/one", sku="S1"),
+                  _draft("inventory/B/two", sku="S2")]
+        written = pick_list.drop_in_item_folders(order, "<html>BOX</html>",
+                                                drafts, [], root=root)
+        assert [w.parent.name for w in written] == ["one", "two"]
+        for w in written:
+            assert w.name == "pick_44-2-2.html"
+            assert w.read_text(encoding="utf-8") == "<html>BOX</html>"
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_two_items_from_one_folder_get_one_copy_not_two():
+    root = _root_with("inventory/A/one")
+    try:
+        order = {"orderId": "44-3-2",
+                 "lineItems": [_item(sku="S1"), _item(sku="S2")]}
+        drafts = [_draft("inventory/A/one", sku="S1"),
+                  _draft("inventory/A/one", sku="S2")]
+        written = pick_list.drop_in_item_folders(order, "<html>x</html>",
+                                                drafts, [], root=root)
+        assert len(written) == 1
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_two_different_sales_coexist_in_one_folder():
+    """A folder can hold sheets for two orders; the order id is in the name."""
+    root = _root_with("inventory/A/one")
+    try:
+        drafts = [_draft("inventory/A/one", sku="S1")]
+        for oid in ("44-4-2", "44-5-2"):
+            pick_list.drop_in_item_folders(
+                {"orderId": oid, "lineItems": [_item(sku="S1")]},
+                f"<html>{oid}</html>", drafts, [], root=root)
+        names = sorted(p.name for p in (root / "inventory/A/one").glob("pick_*.html"))
+        assert names == ["pick_44-4-2.html", "pick_44-5-2.html"]
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_re_rendering_the_same_order_overwrites_in_place():
+    root = _root_with("inventory/A/one")
+    try:
+        order = {"orderId": "44-6-2", "lineItems": [_item(sku="S1")]}
+        drafts = [_draft("inventory/A/one", sku="S1")]
+        pick_list.drop_in_item_folders(order, "<html>first</html>", drafts, [], root=root)
+        pick_list.drop_in_item_folders(order, "<html>second</html>", drafts, [], root=root)
+        sheets = list((root / "inventory/A/one").glob("pick_*.html"))
+        assert len(sheets) == 1
+        assert "second" in sheets[0].read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_hand_listed_item_has_no_folder_and_writes_nothing():
+    """match_sale() places nothing, so there is nowhere to drop the sheet —
+    publish_sheet() falls back to the store holding the copy."""
+    root = _root_with("inventory/A/one")
+    try:
+        order = {"orderId": "44-7-2", "lineItems": [_item(sku="UNKNOWN")]}
+        written = pick_list.drop_in_item_folders(order, "<html>x</html>",
+                                                [], [], root=root)
+        assert written == []
+        assert list((root / "inventory/A/one").glob("pick_*.html")) == []
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_folder_that_has_gone_missing_is_skipped_not_recreated():
+    """The ledger can name a folder that no longer exists. Following the shelf
+    means skipping it, not inventing a tree to hold a sheet nobody will find."""
+    root = _root_with("inventory/A/here")
+    try:
+        order = {"orderId": "44-8-2",
+                 "lineItems": [_item(sku="GONE"), _item(sku="HERE")]}
+        drafts = [_draft("inventory/A/vanished", sku="GONE"),
+                  _draft("inventory/A/here", sku="HERE")]
+        written = pick_list.drop_in_item_folders(order, "<html>x</html>",
+                                                drafts, [], root=root)
+        assert [w.parent.name for w in written] == ["here"]
+        assert not (root / "inventory/A/vanished").exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_folder_pointing_outside_the_repo_is_refused():
+    """The write-side containment guard. scan_drafts() can't produce this, but
+    this is the one place a ledger value becomes a file write."""
+    root = _root_with("inventory/A/one")
+    outside = Path(tempfile.mkdtemp(prefix="pickinv-outside-"))
+    try:
+        order = {"orderId": "44-10-2",
+                 "lineItems": [_item(sku="ESC"), _item(sku="OK")]}
+        drafts = [_draft("../../../escape", sku="ESC"),
+                  _draft("inventory/A/one", sku="OK")]
+        written = pick_list.drop_in_item_folders(order, "<html>x</html>",
+                                                drafts, [], root=root)
+        assert [w.parent.name for w in written] == ["one"]
+        assert list(outside.glob("**/pick_*.html")) == []
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_item_folders_dedupes_and_skips_unplaceable_items():
+    order = {"orderId": "44-9-2",
+             "lineItems": [_item(sku="S1"), _item(sku="S1"), _item(sku="NOPE")]}
+    drafts = [_draft("inventory/A/one", sku="S1")]
+    assert pick_list.item_folders(order, drafts, []) == ["inventory/A/one"]
+
+
+def test_publish_sheet_serves_the_file_it_dropped_in_the_item_folder():
+    """End to end through publish_sheet(): the sheet is written into the item's
+    folder, and the published link reads back from THAT file."""
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    folder = ROOT / "inventory" / "_pickinv_test_folder"
+    folder.mkdir(parents=True, exist_ok=True)
+    rel = "inventory/_pickinv_test_folder"
+    try:
+        order = _order(oid="inv-1")
+        order["lineItems"] = [_item(sku="S1", title="Jamie's thing")]
+        drafts = [_draft(rel, sku="S1")]
+        with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+            sheet = pick_list.publish_sheet(order, drafts, [])
+        dropped = folder / "pick_inv-1.html"
+        assert dropped.exists(), "no sheet landed in the item's folder"
+        html, status = store.fetch(sheet.token)
+        assert status == "ok"
+        assert html == dropped.read_text(encoding="utf-8")
+        # served from the item folder, not from a copy in the store
+        assert not (store.store_dir / f"{sheet.token}.html").exists()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_poll_drops_sheets_and_still_records_a_working_link():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    folder = ROOT / "inventory" / "_pickinv_poll_folder"
+    folder.mkdir(parents=True, exist_ok=True)
+    rel = "inventory/_pickinv_poll_folder"
+    try:
+        order = _order(oid="inv-2")
+        order["lineItems"] = [_item(sku="S9", title="Jamie's other thing")]
+        orders = [order]
+        with _Patched({(pick_list, "scan_drafts"): lambda: [_draft(rel, sku="S9")],
+                       (pick_list, "load_listings_ledger"): lambda: []}):
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                new_ids, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+        assert new_ids == ["inv-2"]
+        assert (folder / "pick_inv-2.html").exists()
+        entry = state["printed"]["inv-2"]
+        assert store.fetch(entry["token"])[1] == "ok"
+        # the seller-only .txt still goes to pick_lists/, not into inventory/
+        assert (out_dir / "pick_inv-2.txt").exists()
+        assert list(folder.glob("*.txt")) == []
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
 # render_html()'s BUYER block, rendered for real.
 #
 # Every other test in this file fakes render_html (it reads hero photos and
@@ -531,6 +742,28 @@ def test_an_empty_buyer_name_stays_empty():
     assert "." not in block.split("BUYER")[1].split("Greensboro")[0]
 
 
+# --------------------------------------------------------------------------- #
+# "Buy label" link — straight to eBay's per-order label flow, not the
+# awaiting-shipment list the seller used to have to search through (#162).
+# --------------------------------------------------------------------------- #
+def test_buy_label_links_straight_to_this_order():
+    import pick_list_html
+    order = _buyer_order()
+    h = pick_list_html.render_html([order], [], [])
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-78901"' in h
+    assert "status:AWAITING_SHIPMENT" not in h
+
+
+def test_buy_label_has_one_link_per_order_when_grouped():
+    import pick_list_html
+    a = _buyer_order()
+    b = _buyer_order()
+    b["orderId"] = "12-3456-99999"
+    h = pick_list_html.render_html([a, b], [], [])
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-78901"' in h
+    assert 'href="https://www.ebay.com/lbr/go?t=12-3456-99999"' in h
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 
@@ -556,9 +789,11 @@ def _pick_store_at(tmp: Path):
         store_dir = store
 
         @staticmethod
-        def publish(html, order_ids=None, ttl_hours=pick_store.TTL_HOURS_DEFAULT):
+        def publish(html, order_ids=None, ttl_hours=pick_store.TTL_HOURS_DEFAULT,
+                    source=None):
             return pick_store.publish(html, order_ids=order_ids,
-                                      ttl_hours=ttl_hours, store_dir=store)
+                                      ttl_hours=ttl_hours, store_dir=store,
+                                      source=source)
 
         @staticmethod
         def live_sheet_for(order_ids):
