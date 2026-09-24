@@ -150,6 +150,50 @@ ebay:
                                          # returnShippingCostPayer: SELLER.
                                          # See docs/top-rated-plus.md.
 
+  # -------------------------------------------------------------------------
+  # Additional eBay seller accounts (GH #147) — connect to more than one
+  # store at once, e.g. a secondary "junk" store for cheap, as-is, no-returns
+  # lots you don't want mixed in with your main store's listings.
+  #
+  # Unlike sandbox:/production: above (two environments of the SAME account),
+  # each block under `stores:` is its OWN seller account: its own keyset,
+  # refresh token, business policies, and merchant location. `environment`
+  # here applies to just that one store, and every field is flat (no nested
+  # sandbox:/production: split) — a name like "junk" already picks one real
+  # account, so there's nothing left to pick with a second axis.
+  #
+  # Use it with:
+  #   python list_edit.py --store junk --setup-check   # verify + list that
+  #                                                     # account's policy IDs
+  #   python list_edit.py --list <shoot> --store junk --confirm
+  # ...or, to avoid typing --store on every command, add `store: "junk"` to
+  # that item's draft.md frontmatter — --review/--sync/--publish/--list all
+  # read it automatically when --store isn't given (CLI flag still wins).
+  # The active store, if you don't want to pass --store at all, can also be
+  # set globally with `active_store: "junk"` below, or the EBAYBIZ_STORE
+  # env var (precedence: --store > EBAYBIZ_STORE > active_store > "default").
+  #
+  # The account without a name here — ebay.environment/sandbox/production
+  # above — is always reachable too, as the implicit store "default".
+  # active_store: "default"
+  stores:
+    junk:
+      environment: "production"
+      app_id: "PRD-junk-app-id"
+      cert_id: "PRD-junk-cert-id"
+      dev_id: "PRD-junk-dev-id"
+      redirect_uri: "PRD-junk-RuName"
+      user_refresh_token: null
+      merchant_location_key: null
+      fulfillment_policy_id: null
+      fulfillment_policy_id_media: null
+      fulfillment_policy_id_local_pickup: null
+      fulfillment_policy_id_international: null
+      fulfillment_policy_id_us_only: null
+      payment_policy_id: null
+      payment_policy_id_auction: null
+      return_policy_id: null
+
 # ---------------------------------------------------------------------------
 # EasyPost — self-serve carrier-rate API for buying shipping labels (GH #80)
 # ---------------------------------------------------------------------------

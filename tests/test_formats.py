@@ -48,7 +48,7 @@ DRAFT_TOP = {
     "_field_constraints", "best_offer", "category_id", "category_path",
     "condition", "condition_description", "cost_of_goods", "format",
     "item_specifics", "meta", "photos", "price", "promoted", "quantity",
-    "returns_policy_id", "shipping", "template_version", "title",
+    "returns_policy_id", "shipping", "store", "template_version", "title",
 }
 DRAFT_META = {
     "drafted_at", "ebay_inventory_sku", "ebay_offer_id", "item_id",
@@ -287,11 +287,16 @@ def test_the_review_card_still_says_all_of_it():
 
 def test_the_publish_command_on_the_card_is_still_gated():
     """The card tells the operator exactly what publishes. If that line loses
-    --confirm it is telling them something untrue about what happens next."""
+    --confirm it is telling them something untrue about what happens next.
+
+    GH #147: the command may also carry an optional `--store <name>` before
+    --confirm (a non-default store), so the lock allows anything in between
+    rather than requiring the two flags adjacent — but --confirm must still
+    follow --list {shoot} somewhere on the same constructed line."""
     src = (ROOT / "lib" / "list_edit.py").read_text(encoding="utf-8")
     i = src.index("def build_review_card")
     body = src[i:src.index("\ndef ", i + 10)]
-    m = re.search(r"--list \{shoot\} --confirm", body)
+    m = re.search(r"--list \{shoot\}.*?--confirm", body, re.DOTALL)
     assert m, "the card's publish command lost --confirm"
 
 
