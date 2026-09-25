@@ -9,12 +9,16 @@ files, and — with `--apply` — makes the local files say what eBay says.
 
 Two live sources, because neither alone is enough:
 
-  Sell API offers   authoritative for OUR side: sku -> offer -> listing id,
-                    the price we set, the offer's own status.
-  Browse actives    authoritative for the BUYER's side: what is actually
-                    purchasable right now. A sold-out listing can still read
-                    PUBLISHED as an offer, so an offer missing from Browse is
-                    the signal that something sold or ended.
+  Sell API offers   authoritative for OUR side, and for whether one of our
+                    listings is purchasable: each offer carries eBay's own
+                    `listing.listingStatus` — ACTIVE, OUT_OF_STOCK (it sold) or
+                    ENDED. That is the buyer-side answer, per listing, exact.
+  Browse actives    what a buyer sees in search: used to cross-check the price
+                    on the live page, and to surface listings made in the eBay
+                    web UI that the Inventory API cannot see at all. NOT used to
+                    decide whether our own listing is alive — Browse takes one
+                    category per call, so a listing in a category the sweep did
+                    not ask for is absent, and absent is not the same as ended.
 
 Live always wins. This tool never pushes local values to eBay — that is
 `list_edit.py`'s job, behind the publish firewall. Here the flow is one-way:
@@ -165,15 +169,34 @@ def reconcile(offers: list[dict], actives: dict, drafts: list[dict],
     for o in offers:
         lid = o.get("listing_id") or ""
         d = by_sku.get(o["sku"]) or by_lid.get(lid)
-        live_active = lid in actives
         act = actives.get(lid, {})
         issues = []
 
-        # what a buyer sees right now beats what our offer record claims
+        # Purchasability comes from the offer's OWN listingStatus, not from
+        # whether the listing turned up in a Browse search.
+        #
+        # eBay answers this directly per offer: ACTIVE means a buyer can buy it,
+        # OUT_OF_STOCK means it sold, ENDED means it was withdrawn. Browse, by
+        # contrast, needs a category per call, so a listing in a category the
+        # sweep did not ask for is simply absent from the results — and absent
+        # is indistinguishable from ended. That misread 19 live listings as GONE
+        # on 2026-09-22 (lures, holsters, harmonicas, DVD sets, rectifiers).
+        # Browse is still fetched, but only to cross-check the price a buyer
+        # sees and to surface listings we did not create; it no longer decides
+        # whether one of OUR listings is alive.
+        listing_status = (o.get("listing_status") or "").upper()
+        if listing_status:
+            live_active = listing_status == "ACTIVE"
+        else:
+            # pre-#175 cached offers JSON has no listing_status — fall back
+            live_active = lid in actives
+
         if o["status"] == "PUBLISHED" and not live_active:
             state = "GONE"
-            issues.append("offer says PUBLISHED but the listing is not purchasable "
-                          "(sold, ended, or out of stock)")
+            detail = {"OUT_OF_STOCK": "it sold", "ENDED": "it was ended"}.get(
+                listing_status, "sold, ended, or out of stock")
+            issues.append(f"offer says PUBLISHED but the listing is not "
+                          f"purchasable ({detail})")
         elif o["status"] == "PUBLISHED":
             state = "LIVE"
         else:
