@@ -59,6 +59,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
+# Sibling tools (pick_list_html) — `python tools/pick_list.py` gets this free as
+# sys.path[0], but `python -m lib.cli pick-list` runs us via runpy and does not.
+sys.path.insert(0, str(ROOT / "tools"))
 
 from comps_csv import _now as _now_iso                              # noqa: E402
 from ebay_client import api_send, EbayAPIError                      # noqa: E402
