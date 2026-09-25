@@ -26,7 +26,9 @@ INK = HexColor("#141210")
 RED = HexColor("#a8322b")
 GHOST = HexColor("#c0392f")     # the misregistered plate, a touch brighter
 GREY = HexColor("#4a443c")
-GUIDE = HexColor("#b9b9b9")
+CROP = HexColor("#000000")      # crop marks: solid black, margin only
+CROP_GAP = 0.03 * IN            # clear space between trim and mark
+CROP_LEN = 0.07 * IN            # ends 0.15in from the sheet edge
 
 FONT_DIR = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
 FACES = {
@@ -106,25 +108,26 @@ MY = (PAGE_H - ROWS * CARD) / 2.0                    # 36pt  = 0.50in
 
 
 def draw_guides(c, mode):
+    """Printer's crop marks: black, in the margin only, aimed at each cut.
+
+    Nothing is printed between the cards, so a trimmed card carries only the
+    design. Each mark stops CROP_GAP short of the trim so a blade that lands a
+    hair outside the line still leaves no ink on the card edge.
+    """
     if mode == "none":
         return
-    c.setStrokeColor(GUIDE)
+    c.setStrokeColor(CROP)
     c.setLineWidth(0.25)
-    xs = [MX + i * CARD for i in range(COLS + 1)]
-    ys = [MY + j * CARD for j in range(ROWS + 1)]
-    if mode == "grid":
-        for x in xs:
-            c.line(x, MY, x, MY + ROWS * CARD)
-        for y in ys:
-            c.line(MX, y, MX + COLS * CARD, y)
-        return
-    tick = 0.1 * IN                                   # marks sit inside the
-    for x in xs:                                      # trim, always printable
-        c.line(x, MY, x, MY + tick)
-        c.line(x, MY + ROWS * CARD - tick, x, MY + ROWS * CARD)
-    for y in ys:
-        c.line(MX, y, MX + tick, y)
-        c.line(MX + COLS * CARD - tick, y, MX + COLS * CARD, y)
+    block_w, block_h = COLS * CARD, ROWS * CARD
+    near, far = CROP_GAP, CROP_GAP + CROP_LEN
+    for i in range(COLS + 1):
+        x = MX + i * CARD
+        c.line(x, MY - far, x, MY - near)
+        c.line(x, MY + block_h + near, x, MY + block_h + far)
+    for j in range(ROWS + 1):
+        y = MY + j * CARD
+        c.line(MX - far, y, MX - near, y)
+        c.line(MX + block_w + near, y, MX + block_w + far, y)
 
 
 def sheet(path, name, tag, store, mode):
@@ -161,9 +164,7 @@ def main():
     out = args.outdir
     made = [
         sheet(os.path.join(out, "thankyou-offregister-20up.pdf"),
-              args.name, args.tag, args.store, "grid"),
-        sheet(os.path.join(out, "thankyou-offregister-20up-ticks.pdf"),
-              args.name, args.tag, args.store, "ticks"),
+              args.name, args.tag, args.store, "crop"),
         sheet(os.path.join(out, "thankyou-offregister-20up-noguides.pdf"),
               args.name, args.tag, args.store, "none"),
         single(os.path.join(out, "thankyou-offregister-card.pdf"),

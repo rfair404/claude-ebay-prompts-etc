@@ -29,8 +29,9 @@ CARD_H = 1.250 * IN                  # 90pt
 
 # The mono plate: a grey the laser halftones, so the off-register strike still
 # reads as a second impression instead of a smudge of solid black on black.
-TICK = HexColor("#7d7d7d")           # light enough to ignore, dark enough
-                                     # for a laser to put down a hairline
+CROP = HexColor("#000000")           # crop marks: solid black, margin only
+CROP_GAP = 0.03 * IN                 # clear space between trim and mark
+CROP_LEN = 0.07 * IN                 # ends 0.15in from the sheet edge
 GHOST_MONO = HexColor("#a8a8a8")
 GREY_MONO = HexColor("#4a443c")
 
@@ -103,23 +104,24 @@ def impose(w, h):
 
 
 def draw_ticks(c, cols, rows, mx, my, w, h):
-    """Corner ticks in the margin, outside the block, aimed at each cut.
+    """Printer's crop marks in the margin, outside the block, aimed at each cut.
 
     Nothing at all is printed between the cards, so a trimmed card comes out
-    carrying only the design -- the blade never crosses a guide.
+    carrying only the design -- the blade never crosses a guide. Each mark
+    stops CROP_GAP short of the trim so no ink reaches the card edge.
     """
-    c.setStrokeColor(TICK)
+    c.setStrokeColor(CROP)
     c.setLineWidth(0.25)
-    tick = 0.1 * IN
     block_w, block_h = cols * w, rows * h
+    near, far = CROP_GAP, CROP_GAP + CROP_LEN
     for i in range(cols + 1):
         x = mx + i * w
-        c.line(x, my - tick, x, my)
-        c.line(x, my + block_h, x, my + block_h + tick)
+        c.line(x, my - far, x, my - near)
+        c.line(x, my + block_h + near, x, my + block_h + far)
     for j in range(rows + 1):
         y = my + j * h
-        c.line(mx - tick, y, mx, y)
-        c.line(mx + block_w, y, mx + block_w + tick, y)
+        c.line(mx - far, y, mx - near, y)
+        c.line(mx + block_w + near, y, mx + block_w + far, y)
 
 
 def sheet(path, name, tag, store, pal, w, h, ticks=True):
