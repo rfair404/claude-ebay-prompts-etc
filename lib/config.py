@@ -347,28 +347,6 @@ def get_ebay_credentials() -> dict:
     }
 
 
-def get_store() -> dict:
-    """Return the `store:` branding section from config.
-
-    Every key is a string, defaulting to "" when unset or when there is no
-    config file at all — callers decide what an empty value falls back to
-    (see tools/pick_list_html.py). This does not read `ebay.stores.<name>`
-    (per-store OAuth credentials, see ebay_client.load_credentials()) — the
-    two are unrelated config trees that happen to share the word "store".
-
-    Returns:
-        Dict with keys: display_name, tagline, storefront_url, closing_block.
-    """
-    config = load_config()
-    section = config.get("store") or {}
-    return {
-        "display_name":   section.get("display_name") or "",
-        "tagline":        section.get("tagline") or "",
-        "storefront_url": section.get("storefront_url") or "",
-        "closing_block":  section.get("closing_block") or "",
-    }
-
-
 def get_profile(name: Optional[str] = None) -> dict:
     """Return a CURATE strategy profile by name.
 
@@ -435,7 +413,10 @@ def get_profile(name: Optional[str] = None) -> dict:
 # store's IDENTITY is the bug this whole mechanism exists to fix — a junk
 # listing that omits display_name must ship the unnamed thank-you, never
 # sign off as the main storefront. Policy keys inherit; these do not.
-STOREFRONT_IDENTITY_KEYS = ("display_name", "closing_block")
+# tagline and storefront_url are identity too: they print on the pick sheet
+# letterhead, and a junk box carrying "ebay.com/usr/popsgames" names the
+# wrong shop just as surely as the wrong display_name would.
+STOREFRONT_IDENTITY_KEYS = ("display_name", "tagline", "storefront_url", "closing_block")
 
 
 def list_storefronts() -> list[str]:
@@ -446,6 +427,18 @@ def list_storefronts() -> list[str]:
     """
     section = load_config().get("storefronts") or {}
     return sorted(section.keys())
+
+
+def active_store() -> str:
+    """Name of the store this process acts for when none is passed explicitly:
+    EBAYBIZ_STORE env var > ebay.active_store in config > "default". Same
+    precedence as ebay_client.load_credentials(), so the account an API call
+    goes to and the storefront a page is branded as can't disagree."""
+    return (
+        os.environ.get("EBAYBIZ_STORE")
+        or _nested(load_config(), "ebay", "active_store")
+        or "default"
+    )
 
 
 def get_storefront(name: Optional[str] = None) -> dict:
@@ -471,11 +464,7 @@ def get_storefront(name: Optional[str] = None) -> dict:
     config = load_config()
 
     if name is None:
-        name = (
-            os.environ.get("EBAYBIZ_STORE")
-            or _nested(config, "ebay", "active_store")
-            or "default"
-        )
+        name = active_store()
 
     base = dict(_nested(config, "store") or {})
 

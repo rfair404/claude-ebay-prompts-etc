@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -667,7 +668,18 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=30, help="window for --latest (default 30)")
     ap.add_argument("--order-id", help="render one specific order")
     ap.add_argument("--out", metavar="FILE", help="also write to a local file")
+    ap.add_argument("--store", metavar="NAME",
+                    help="which eBay seller account's orders to pick (e.g. a secondary 'junk' "
+                         "store, GH #147) — also sets the sheet's letterhead to that store's "
+                         "own identity. Default: $EBAYBIZ_STORE, then ebay.active_store, "
+                         "then the main store")
     args = ap.parse_args()
+    if args.store:
+        # One switch for both halves: fetch_orders() authenticates through
+        # load_credentials() and the letterhead through get_storefront(), and
+        # both read EBAYBIZ_STORE — so the account the orders came from and
+        # the name printed above them can't disagree.
+        os.environ["EBAYBIZ_STORE"] = args.store
 
     if args.record_tracking and args.poll:
         ap.error("--poll and --record-tracking are separate modes; run them separately "

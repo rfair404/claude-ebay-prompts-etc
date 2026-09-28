@@ -61,6 +61,7 @@ import argparse
 import base64
 import html
 import io
+import os
 import re
 import sys
 from pathlib import Path
@@ -73,15 +74,17 @@ import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
 import pick_store                                                  # noqa: E402
-from config import get_store                                       # noqa: E402
+from config import active_store, get_storefront                    # noqa: E402
 from pick_list import _money, ship_to, shipment_key as _shipment_key  # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
 
-# Fallback letterhead when `store:` in config.yaml leaves a field unset —
-# what this sheet has always shown, kept as the default so an unconfigured
-# store.yaml changes nothing (see lib/config.get_store()). A second store
-# overrides these via its own config rather than editing this file (#156).
+# Fallback letterhead for the DEFAULT store only, when `store:` in config.yaml
+# leaves a field unset — what this sheet has always shown, so an unconfigured
+# single-store setup changes nothing. A named store (`--store junk`) never
+# falls back to these: its letterhead is its own `storefronts.<name>` identity
+# or nothing, because a junk box carrying Pop's Games' name is the mix-up the
+# second store exists to prevent (see letterhead()).
 _DEFAULT_BRAND_NAME = "POP'S GAMES"
 _DEFAULT_BRAND_TAGLINE = "BUY · SELL · TRADE"
 _DEFAULT_BRAND_STOREFRONT = "ebay.com/usr/popsgames"
@@ -235,16 +238,36 @@ def _label_url(order_id: str) -> str:
     return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
+def letterhead(store: str | None = None) -> dict:
+    """{store, name, tagline, storefront} for the sheet's brand block.
+
+    The default store falls back to the Pop's Games constants field by field.
+    A named store shows only what its own `storefronts.<name>` entry states —
+    an unnamed junk store gets a blank letterhead, never the main store's."""
+    store = store or active_store()
+    sf = get_storefront(store)
+    if store == "default":
+        return {"store": store,
+                "name": sf.get("display_name") or _DEFAULT_BRAND_NAME,
+                "tagline": sf.get("tagline") or _DEFAULT_BRAND_TAGLINE,
+                "storefront": sf.get("storefront_url") or _DEFAULT_BRAND_STOREFRONT}
+    return {"store": store,
+            "name": sf.get("display_name") or "",
+            "tagline": sf.get("tagline") or "",
+            "storefront": sf.get("storefront_url") or ""}
+
+
 def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> str:
     """One or several orders on one page. Several orders are for the case
     eBay merges into a single shipping label (same buyer) — the seller packs
     them as one box, so the pick list should read as one, not N separate
     printouts. Each item still carries its own order id when grouped, since
     that's what ties it back to eBay's merge screen."""
-    _store = get_store()
-    brand_name = _store["display_name"] or _DEFAULT_BRAND_NAME
-    brand_tagline = _store["tagline"] or _DEFAULT_BRAND_TAGLINE
-    brand_storefront = _store["storefront_url"] or _DEFAULT_BRAND_STOREFRONT
+    lh = letterhead()
+    # What the label button tells the seller to check they're signed into:
+    # the storefront URL when there is one, else the store's config name —
+    # never another store's URL.
+    account_ref = lh["storefront"] or f"the '{lh['store']}' store's eBay account"
 
     grouped = len(orders) > 1
     to = ship_to(orders[0])
@@ -332,12 +355,21 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         # stores live that is a real way to buy a label on the wrong account, and
         # now it rides every order's button rather than only the one-order case.
         warn = (f"Opens the label flow for whichever eBay account this browser is "
-                f"signed into — verify it is {html.escape(brand_storefront)} before "
+                f"signed into — verify it is {html.escape(account_ref)} before "
                 f"buying a label off this sheet.")
         return (f'<a href="{_label_url(oid)}" target="_blank" rel="noopener" '
                 f'title="{warn}">{text}</a>')
 
     labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+
+    # Only the lines this store actually states; no store name at all means no
+    # letterhead block rather than an empty frame or a borrowed name.
+    brand_lines = "".join(
+        f'\n    <div class="{cls}">{html.escape(val)}</div>'
+        for cls, val in (("nm", lh["name"]), ("tg", lh["tagline"]), ("st", lh["storefront"]))
+        if val)
+    brand_html = (f'<div class="brand">\n    <div class="hr"></div>{brand_lines}\n  </div>'
+                  if lh["name"] else "")
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
@@ -406,12 +438,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
   <div class="labelbtn">{labelbtn_html}</div>
-  <div class="brand">
-    <div class="hr"></div>
-    <div class="nm">{html.escape(brand_name)}</div>
-    <div class="tg">{html.escape(brand_tagline)}</div>
-    <div class="st">{html.escape(brand_storefront)}</div>
-  </div>
+  {brand_html}
   <hr class="divider">
   <h1>{heading}</h1>
   <div class="sub">{html.escape(orders[0].get('creationDate', '')[:10])} &middot;
@@ -528,7 +555,18 @@ def main() -> int:
                     help="delete a published sheet now instead of waiting for it to expire")
     ap.add_argument("--list", action="store_true", dest="do_list",
                     help="list the live published sheets (local only - no route does this)")
+    ap.add_argument("--store", metavar="NAME",
+                    help="which eBay seller account's orders to pick (e.g. a secondary 'junk' "
+                         "store, GH #147) — also sets the sheet's letterhead to that store's "
+                         "own identity. Default: $EBAYBIZ_STORE, then ebay.active_store, "
+                         "then the main store")
     args = ap.parse_args()
+    if args.store:
+        # One switch for both halves: fetch_orders() authenticates through
+        # load_credentials() and the letterhead through get_storefront(), and
+        # both read EBAYBIZ_STORE — so the account the orders came from and
+        # the name printed above them can't disagree.
+        os.environ["EBAYBIZ_STORE"] = args.store
 
     if args.revoke:
         return cmd_revoke(args.revoke)
