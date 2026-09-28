@@ -59,6 +59,21 @@ degrade — not crash a whole sync over a scope that isn't consented yet.
   names it explicitly as such — see that module for where the "bought"
   total is surfaced instead, so the two are never presented as one number.
 
+----- One account per read (#156) -----
+
+The Finances feed, like `sell.finances` consent itself, is PER ACCOUNT.
+`fetch_transactions(store=...)` reads with that store's credentials, and
+everything downstream is keyed within that one read: an `orderId` is
+globally unique, but a SKU is not across accounts — a main-store item
+relisted on the junk store keeps its canonical SKU — so
+`attribute_fees_by_sku()` pooled over two stores' feeds would book store A's
+ad spend against store B's item. Never merge FeeLines from two stores before
+attributing them; attribute per store, then (if ever needed) sum the
+per-store results with the store kept as a key. A store whose owner has not
+consented yet raises here like any other 401/403, and its callers leave
+ad_fee/actual_postage blank — blank still means unknown, and with several
+stores it must never be read as "the other store's sync covered it".
+
 ----- PII -----
 
 A raw Finances-API transaction can carry `buyerInfo` (buyer username) and
@@ -94,7 +109,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ebay_client import api_send  # noqa: E402
+from ebay_client import api_send, load_credentials  # noqa: E402
 from report import to_report_date  # noqa: E402  Pacific bucketing (#122 convention)
 
 # transactionType values that carry a real dollar amount against an order.
@@ -181,7 +196,8 @@ def _skus_for(txn: dict) -> list[str]:
 # fetch — paginated, windowed like sync_actuals.fetch_orders
 # ---------------------------------------------------------------------------
 
-def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) -> list[dict]:
+def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool,
+                               creds=None) -> list[dict]:
     # %5B/%5D, not raw [/]: matches the known-working pattern in
     # sync_actuals.fetch_orders (raw brackets in the query string can cause
     # the request to be rejected or parsed inconsistently).
@@ -192,7 +208,7 @@ def _fetch_transactions_window(start: datetime, end: datetime, verbose: bool) ->
     while True:
         path = (f"/sell/finances/v1/transaction?limit={limit}&offset={offset}"
                 f"&filter={date_range}")
-        data = api_send("GET", path, creds=None, marketplace=None)
+        data = api_send("GET", path, creds=creds, marketplace=None)
         batch = data.get("transactions") or []
         out.extend(batch)
         total = data.get("total")
@@ -230,8 +246,11 @@ def _is_http_400(e: Exception) -> bool:
     return "HTTP 400" in str(e)
 
 
-def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
-    """Every Finances-API transaction in the last `days`, paged.
+def fetch_transactions(days: int, verbose: bool = True, *,
+                       store: Optional[str] = None) -> list[dict]:
+    """Every Finances-API transaction in the last `days` on `store`'s
+    account, paged (#156 — see "One account per read" above). `store=None`
+    is the ambient store, via api_send's own load_credentials().
 
     Mirrors `sync_actuals.fetch_orders`: eBay's date-range filters can refuse
     a window that reaches too far back, and the exact cutoff for THIS
@@ -251,11 +270,12 @@ def fetch_transactions(days: int, verbose: bool = True) -> list[dict]:
     # that window twice and retry the identical rejected request before
     # actually narrowing anything.
     windows = list(dict.fromkeys(d for d in (days, 540, 365, 180, 90) if d <= days)) or [days]
+    creds = load_credentials(store) if store is not None else None
     last_err: Optional[Exception] = None
     for attempt in windows:
         start = end - timedelta(days=attempt)
         try:
-            txns = _fetch_transactions_window(start, end, verbose)
+            txns = _fetch_transactions_window(start, end, verbose, creds)
         except Exception as e:                                  # noqa: BLE001
             if not _is_http_400(e):
                 raise
@@ -369,7 +389,10 @@ def attribute_fees_by_sku(fees: list[FeeLine], *, ad_only: bool = True) -> dict[
     """{sku: total fee amount} — same independence from soldViaAdCampaign as
     `attribute_fees_by_order`, keyed by SKU instead for callers that match
     sales by SKU rather than order id (matches `sync_actuals.match_sale`'s
-    SKU-first convention)."""
+    SKU-first convention).
+
+    `fees` must come from ONE store's read (#156 §3): SKUs are not unique
+    across accounts, so this map is only meaningful per store."""
     out: dict[str, Decimal] = defaultdict(lambda: Decimal(0))
     for f in fees:
         if not f.sku:

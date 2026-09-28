@@ -54,6 +54,24 @@ whatever), so it shows only the order total, which the buyer already knows
 from their own receipt. tools/pick_list.py's terminal output is seller-only
 and does show buyer-paid-shipping / net payout; do not port those figures
 here. See GH #84.
+
+Stores (#156). This page IS the packing slip, so its letterhead is the
+store's identity, read from config.get_store(store):
+
+  * default store — its configured strings, falling back to the POP'S GAMES
+    literals this sheet has always printed (an unconfigured single-store
+    setup changes nothing);
+  * a named store — its own configured strings and NOTHING else. An unset
+    field is left off; with none set the sheet goes out with no brand block
+    at all. It never falls back to Pop's Games: an as-is junk lot shipped
+    under the brand that offers 30-day free returns is the exact
+    cross-branding #156 §1 was filed about.
+
+A named store's sheet also says, on screen only (hidden when printed, so the
+store's internal name never goes in the box), which eBay account it expects:
+the "Buy label" links resolve against whichever account the BROWSER is signed
+into, not the one the order came from. `--store NAME` picks the account the
+order is looked up in; a group of orders from two stores is refused.
 """
 from __future__ import annotations
 
@@ -73,18 +91,56 @@ import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
 import pick_store                                                  # noqa: E402
+import stores                                                      # noqa: E402
 from config import get_store                                       # noqa: E402
-from pick_list import _money, ship_to, shipment_key as _shipment_key  # noqa: E402
-from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
-                          match_sale, scan_drafts)
+from pick_list import (_money, drafts_for, fetch_recent,            # noqa: E402
+                       hand_locations_for, ledger_for, order_store, ship_to,
+                       shipment_key as _shipment_key)
+from sync_actuals import match_sale                                 # noqa: E402
 
 # Fallback letterhead when `store:` in config.yaml leaves a field unset —
 # what this sheet has always shown, kept as the default so an unconfigured
-# store.yaml changes nothing (see lib/config.get_store()). A second store
-# overrides these via its own config rather than editing this file (#156).
+# store.yaml changes nothing (see lib/config.get_store()). DEFAULT STORE ONLY:
+# a named store never inherits these (#156) — see letterhead().
 _DEFAULT_BRAND_NAME = "POP'S GAMES"
 _DEFAULT_BRAND_TAGLINE = "BUY · SELL · TRADE"
 _DEFAULT_BRAND_STOREFRONT = "ebay.com/usr/popsgames"
+
+
+def letterhead(store: str) -> dict:
+    """The masthead strings for `store`: {name, tagline, storefront}.
+
+    Default store: configured strings, else the POP'S GAMES literals. Named
+    store: configured strings only — "" where unset, never Pop's Games (#156
+    §1). get_store() already refuses to inherit identity keys from the
+    default store; this refuses to re-add them from a literal."""
+    s = get_store(store)
+    if stores.is_default(store):
+        return {"name": s["display_name"] or _DEFAULT_BRAND_NAME,
+                "tagline": s["tagline"] or _DEFAULT_BRAND_TAGLINE,
+                "storefront": s["storefront_url"] or _DEFAULT_BRAND_STOREFRONT}
+    return {"name": s["display_name"], "tagline": s["tagline"],
+            "storefront": s["storefront_url"]}
+
+
+def _sheet_store(orders: list[dict], store: str | None) -> str:
+    """The one store these orders belong to. An explicit `store` wins; else
+    the orders' own tag (pick_list.order_store); untagged orders keep the
+    pre-#156 behaviour of the ambient store. Orders from two stores on one
+    page is refused outright — it can't be one box (see shipment_key)."""
+    tagged = {order_store(o) for o in orders if o.get("_store")}
+    if len(tagged) > 1:
+        raise ValueError("orders from more than one store can't share a pick sheet: "
+                         + ", ".join(sorted(tagged)))
+    if store:
+        store = stores.resolve_store_name(store)
+        if tagged and tagged != {store}:
+            raise ValueError(f"these orders came from store {tagged.pop()!r}, "
+                             f"not {store!r} — refusing its letterhead")
+        return store
+    if tagged:
+        return tagged.pop()
+    return stores.resolve_store_name(None)
 
 THUMB_PX = 110      # small on purpose — a pick sheet, not a photo proof; also
                     # what keeps a 4-item grouped list on one printed page
@@ -206,9 +262,6 @@ def _pick_location(folder: str) -> str:
     return d.name
 
 
-_HAND_LOC = load_hand_locations()
-
-
 def _short_name(full: str) -> str:
     """Buyer as first name + last initial — "Mike Hein" -> "Mike H.". Enough
     to match a box to its label, not enough to be a name on a page that gets
@@ -235,16 +288,21 @@ def _label_url(order_id: str) -> str:
     return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
-def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> str:
+def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
+                store: str | None = None) -> str:
     """One or several orders on one page. Several orders are for the case
     eBay merges into a single shipping label (same buyer) — the seller packs
     them as one box, so the pick list should read as one, not N separate
     printouts. Each item still carries its own order id when grouped, since
-    that's what ties it back to eBay's merge screen."""
-    _store = get_store()
-    brand_name = _store["display_name"] or _DEFAULT_BRAND_NAME
-    brand_tagline = _store["tagline"] or _DEFAULT_BRAND_TAGLINE
-    brand_storefront = _store["storefront_url"] or _DEFAULT_BRAND_STOREFRONT
+    that's what ties it back to eBay's merge screen.
+
+    `store` (#156) picks the letterhead and the account the label links
+    warn about; by default it is the orders' own store tag."""
+    store = _sheet_store(orders, store)
+    brand = letterhead(store)
+    brand_name, brand_tagline, brand_storefront = (
+        brand["name"], brand["tagline"], brand["storefront"])
+    hand = hand_locations_for(store)
 
     grouped = len(orders) > 1
     to = ship_to(orders[0])
@@ -273,8 +331,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
             # the line rather than print a placeholder explaining our own
             # internals on a sheet that gets packed with the box.
             location = (_pick_location(folder) if folder
-                        else (_HAND_LOC.get(row["listing_id"])
-                              or _HAND_LOC.get(row["sku"]) or ""))
+                        else (hand.get(row["listing_id"])
+                              or hand.get(row["sku"]) or ""))
             from_line = ("\n          <div class=\"from\">FROM&nbsp; "
                          f"{html.escape(location)}</div>") if location else ""
             item_blocks.append(f"""
@@ -332,12 +390,34 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         # stores live that is a real way to buy a label on the wrong account, and
         # now it rides every order's button rather than only the one-order case.
         warn = (f"Opens the label flow for whichever eBay account this browser is "
-                f"signed into — verify it is {html.escape(brand_storefront)} before "
+                f"signed into — verify it is {html.escape(account)} before "
                 f"buying a label off this sheet.")
         return (f'<a href="{_label_url(oid)}" target="_blank" rel="noopener" '
                 f'title="{warn}">{text}</a>')
 
+    # Which account the label links need, in words (#156). Default store: its
+    # storefront, as before. Named store: its name, plus its storefront if
+    # configured — never the default store's.
+    if stores.is_default(store):
+        account = brand_storefront
+    else:
+        account = f"the '{store}' store's eBay account" + (
+            f" ({brand_storefront})" if brand_storefront else "")
     labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+    # Screen-only (hidden in print with the label buttons): the store's
+    # internal name is for the packer, not for the buyer who opens the box.
+    acct_html = ("" if stores.is_default(store) else
+                 f'<div class="acct">Store: <b>{html.escape(store)}</b> &mdash; '
+                 f'sign this browser into {html.escape(account)} before using '
+                 f'Buy label; the link opens whichever eBay account is signed in.</div>')
+    brand_lines = "".join(
+        f'\n    <div class="{cls}">{html.escape(val)}</div>'
+        for cls, val in (("nm", brand_name), ("tg", brand_tagline),
+                         ("st", brand_storefront)) if val)
+    # A named store with no identity configured gets a neutral sheet: no
+    # masthead at all rather than an empty rule or someone else's name.
+    brand_html = (f'<div class="brand">\n    <div class="hr"></div>{brand_lines}\n  </div>\n'
+                  f'  <hr class="divider">' if brand_lines else "")
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
@@ -354,7 +434,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   body {{ font-family: Georgia, 'Times New Roman', serif; color: #111;
           background: #fff;
           max-width: 640px; margin: 24px auto; padding: 0 16px; }}
-  /* Two-face system, matching brand/pops-games: Georgia carries display
+  /* Two-face system, matching the brand/ thank-you cards: Georgia carries display
      content (headings, item titles), Courier New carries utility/data
      (ids, dates, addresses, money) — same split the card uses between its
      "Thank you." headline and its store-line utility text. */
@@ -384,10 +464,13 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
              font-size: .78rem; color: #333; margin-top: 6px; }}
   .printbtn {{ margin: 14px 0; }}
   .labelbtn {{ font-family: 'Courier New', monospace; font-size: .8rem; }}
+  .acct {{ font-family: 'Courier New', monospace; font-size: .78rem; color: var(--red);
+           border: 1px dashed var(--red); padding: 6px 8px; margin: 8px 0 12px; }}
 
-  /* Pop's Games letterhead — same mark/order as the identity block on the
-     brand/pops-games thank-you cards (rule, name, tagline, store), reused
-     here as a masthead instead of a card. */
+  /* Store letterhead — same mark/order as the identity block on the
+     brand/<store> thank-you cards (rule, name, tagline, storefront), reused
+     here as a masthead instead of a card. Brand-neutral on purpose: this
+     stylesheet ships inside every store's sheet (#156). */
   .brand {{ margin-bottom: 14px; }}
   .brand .hr {{ width: 2.6em; height: 2px; background: var(--red); margin-bottom: .4em; }}
   .brand .nm {{ font-size: 1.05rem; letter-spacing: .26em; text-transform: uppercase;
@@ -399,20 +482,15 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   .divider {{ border: none; border-top: 1px solid #ccc; margin: 0 0 14px; }}
 
   @media print {{
-    .printbtn {{ display: none; }} .labelbtn {{ display: none; }}
+    .printbtn {{ display: none; }} .labelbtn {{ display: none; }} .acct {{ display: none; }}
     body {{ margin: 0; max-width: none; }}
   }}
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
   <div class="labelbtn">{labelbtn_html}</div>
-  <div class="brand">
-    <div class="hr"></div>
-    <div class="nm">{html.escape(brand_name)}</div>
-    <div class="tg">{html.escape(brand_tagline)}</div>
-    <div class="st">{html.escape(brand_storefront)}</div>
-  </div>
-  <hr class="divider">
+  {acct_html}
+  {brand_html}
   <h1>{heading}</h1>
   <div class="sub">{html.escape(orders[0].get('creationDate', '')[:10])} &middot;
     {html.escape(payment_bit)}
@@ -528,6 +606,8 @@ def main() -> int:
                     help="delete a published sheet now instead of waiting for it to expire")
     ap.add_argument("--list", action="store_true", dest="do_list",
                     help="list the live published sheets (local only - no route does this)")
+    stores.add_store_args(ap, help_extra="The order is looked up in this store's "
+                                         "account and the sheet carries its letterhead.")
     args = ap.parse_args()
 
     if args.revoke:
@@ -537,7 +617,8 @@ def main() -> int:
     if not args.order_id:
         ap.error("give at least one ORDER_ID (or --list / --revoke)")
 
-    candidates = fetch_orders(args.days, verbose=False)
+    store = stores.resolve_store_name(args.store)
+    candidates = fetch_recent(args.days, store)
     matches, missing = [], []
     for oid in args.order_id:
         found = next((o for o in candidates if oid in (o.get("orderId", ""), o.get("legacyOrderId", ""))), None)
@@ -548,8 +629,9 @@ def main() -> int:
 
     assert_one_shipment(matches)
 
-    drafts, ledger = scan_drafts(), load_listings_ledger()
-    out_html = render_html(matches, drafts, ledger)
+    ledger = ledger_for(store)
+    drafts = drafts_for(store, ledger)
+    out_html = render_html(matches, drafts, ledger, store=store)
 
     # A link is the deliverable (#151); a local file is what --local-only /
     # --out ask for, and what a failed publish falls back to.

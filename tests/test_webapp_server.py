@@ -281,3 +281,68 @@ def test_no_route_lists_the_store(pick_client):
     for path in ("/pick", "/pick/", "/api/pick", "/api/picks"):
         assert client.get(path).status_code in (404, 405)
     assert sheet.token not in client.get("/").text
+
+
+# ---------------------------------------------------------------------------
+# Stores (#156 §5): GET /?store=NAME, and the review page names the store
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def store_client(client, monkeypatch):
+    """`client` with a three-store dashboard whose gather records its args."""
+    calls = []
+    monkeypatch.setattr(server._dashboard, "_store_names",
+                        lambda: ["default", "junk", "outlet"])
+
+    def gather(store_names=None, only_store=None):
+        calls.append((store_names, only_store))
+        return {"stub": f"stores={store_names} only={only_store}"}
+
+    monkeypatch.setattr(server._dashboard, "gather", gather)
+    return client, calls
+
+
+def test_dashboard_default_covers_every_store(store_client):
+    client, calls = store_client
+    assert client.get("/").status_code == 200
+    assert calls == [(None, None)]          # gather() -> every configured store
+
+
+def test_dashboard_store_query_narrows_to_that_store(store_client):
+    client, calls = store_client
+    r = client.get("/?store=outlet")
+    assert r.status_code == 200
+    assert calls == [(["outlet"], "outlet")]
+
+
+def test_dashboard_malformed_store_is_400_before_touching_any_file(store_client):
+    client, calls = store_client
+    for bad in ("..%2Fx", "a.b", "two%20words"):
+        r = client.get(f"/?store={bad}")
+        assert r.status_code == 400, bad
+    assert calls == []
+
+
+def test_dashboard_unconfigured_store_is_404(store_client):
+    client, calls = store_client
+    r = client.get("/?store=records")
+    assert r.status_code == 404
+    assert calls == []
+
+
+def test_review_page_names_a_named_drafts_store(inventory_client):
+    client, inv = inventory_client
+    shoot = _write_shoot(inv, "item-j")
+    draft = shoot / "draft.md"
+    draft.write_text(draft.read_text(encoding="utf-8").replace(
+        'price: "10.00"\n', 'price: "10.00"\nstore: junk\n'), encoding="utf-8")
+    r = client.get("/review/item-j")
+    assert r.status_code == 200
+    assert "store: junk" in r.text
+
+
+def test_review_page_says_default_when_the_draft_names_no_store(inventory_client):
+    client, inv = inventory_client
+    _write_shoot(inv, "item-d")
+    r = client.get("/review/item-d")
+    assert "store: default" in r.text

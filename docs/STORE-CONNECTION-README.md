@@ -355,6 +355,56 @@ stock is the second kind, so the ask is capped at a fraction of NEW delivered
 
 ---
 
+## Part 3 — what a store owns, and running the stack per store (GH #156)
+
+A store is the account **and** the business, and `lib/stores.py` is the one
+module that knows both. Every tool resolves "which store" with the same rule
+(`--store` > `EBAYBIZ_STORE` > `ebay.active_store` > `default`) and finds that
+store's data through `stores.paths(store)` — no tool names a ledger file
+itself. Nothing assumes two stores; add a third block and it just works.
+
+| Data | default store | named store `junk` |
+|---|---|---|
+| listings ledger | `listings_ledger.csv` | `listings_ledger-junk.csv` |
+| sales ledger | `sales_ledger.csv` | `sales_ledger-junk.csv` |
+| live inventory sheet | `inventory_sheet.csv/.json` | `inventory_sheet-junk.csv/.json` |
+| hand-listed locations | `hand_listed_locations.csv` | `hand_listed_locations-junk.csv` |
+| pick-list print state | `.pick_list_state.json` | `.pick_list_state-junk.json` |
+| finances / ads / dashboards | `reports/<name>.<ext>` | `reports/<name>-junk.<ext>` |
+
+The default store keeps every historic filename, so nothing migrates. Every
+named-store variant is gitignored, and `tests/test_stores.py` checks that
+with `git check-ignore` itself — the dotted ignore rules once missed the
+dashed filenames the code actually writes.
+
+**Every account-touching command takes `--store`**, and the dispatcher takes
+it before the command too:
+
+```bash
+python -m lib.cli --store junk reconcile          # == reconcile --store junk
+python -m lib.cli --all-stores pick-list --poll    # once per configured store
+python -m lib.cli --all-stores dashboard
+```
+
+`--all-stores` is refused on commands that bulk-write to eBay or spend money
+(`policy-sweep`, `listing`, `promote`, `ship-buy`, `ship-quote`): name the
+store, once, by hand. `ebz help` tags the store-aware commands `[store]`; a
+store-neutral command (`voice`, `prep`, ...) refuses a store rather than
+ignoring it.
+
+**Identity keys never inherit** from the default store: `display_name`,
+`closing_block`, `tagline`, `storefront_url`, `seller_username`. A junk pick
+sheet with no configured name prints a neutral letterhead, never Pop's Games.
+Policy keys (`ship_from`, `returns`, pricing posture, ...) and `profile` (the
+CURATE buy-point profile) are per store and inherit where unset.
+
+**Which store owns a draft** is its `store:` frontmatter, or `default` —
+never the ambient env var, which would move items between stores by
+environment. An item relisted from main to junk keeps its SKU (the SKU hashes
+title + folder), so per-store ledger files are what keep the two lives apart.
+
+---
+
 ## Known gaps (as of 2026-09-23)
 
 1. **No API path to make an account sellable.** Business Policies opt-in and
@@ -367,7 +417,9 @@ stock is the second kind, so the ask is capped at a fraction of NEW delivered
    storefront's identity; `ebay.stores.<name>:` is credentials;
    `storefronts.<name>:` is a named storefront; and a draft's `store:` field
    selects the last two together. Consistent once learned, confusing on
-   first read.
+   first read. The *flag* is no longer ambiguous: `--store` means this sense
+   everywhere, and the thank-you card scripts' storefront-URL flag is now
+   `--storefront-url` (#156 §6).
 
 3. **The terms are stated twice.** `storefronts.<name>.returns` is what DRAFT
    writes in the copy; `ebay.stores.<name>.return_policy_id` is what eBay

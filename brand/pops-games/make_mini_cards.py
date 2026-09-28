@@ -10,7 +10,7 @@ Two inks on bare paper and no flood coverage -- --mono drops the red plate to
 a grey halftone for a black-only laser.
 
   python make_mini_cards.py
-  python make_mini_cards.py --card 2x1.25 --store ebay.com/usr/popsgames
+  python make_mini_cards.py --card 2x1.25 --storefront-url ebay.com/usr/popsgames
 """
 import argparse
 import os
@@ -157,10 +157,15 @@ def parse_card(spec):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
+    # allow_abbrev=False: otherwise argparse would still accept `--store X` as
+    # an abbreviation of --storefront-url, and `--store` would keep meaning two
+    # things repo-wide — the collision #156 §6 renamed this flag to remove.
+    # Repo-wide, `--store` is the seller account (lib/stores.py).
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument("--name", default="POP'S GAMES")
     p.add_argument("--tag", default="BUY · SELL · TRADE")
-    p.add_argument("--store", default="ebay.com/usr/popsgames")
+    p.add_argument("--storefront-url", default="ebay.com/usr/popsgames",
+                   help="storefront URL printed on the card (was --store before #156)")
     p.add_argument("--card", default="2x1.25", help="inches, WIDTHxHEIGHT")
     p.add_argument("--outdir", default=os.path.dirname(os.path.abspath(__file__)))
     args = p.parse_args()
@@ -175,11 +180,11 @@ def main():
     n = cols * rows
     made = [
         sheet(os.path.join(out, "thankyou-mini-%dup-ticks.pdf" % n),
-              args.name, args.tag, args.store, COLOR, w, h),
+              args.name, args.tag, args.storefront_url, COLOR, w, h),
         sheet(os.path.join(out, "thankyou-mini-%dup-ticks-mono.pdf" % n),
-              args.name, args.tag, args.store, MONO, w, h),
+              args.name, args.tag, args.storefront_url, MONO, w, h),
         single(os.path.join(out, "thankyou-mini-card.pdf"),
-               args.name, args.tag, args.store, COLOR, w, h),
+               args.name, args.tag, args.storefront_url, COLOR, w, h),
     ]
     for f, count in made:
         print(os.path.basename(f), count, "up,", os.path.getsize(f), "bytes")

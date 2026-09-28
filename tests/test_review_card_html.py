@@ -196,3 +196,26 @@ def test_it_is_theme_aware_in_both_directions(tmp_path):
     assert "@media (prefers-color-scheme: dark)" in html
     assert ':root[data-theme="dark"]' in html
     assert ':root:not([data-theme="light"])' in html
+
+
+# #156 §5 — the store a draft publishes to is part of what is being approved.
+def test_the_page_names_the_drafts_store(tmp_path):
+    s = _shoot(tmp_path)
+    (s / "draft.md").write_text(DRAFT.replace('quantity: 1\n', 'quantity: 1\nstore: junk\n'),
+                                encoding="utf-8")
+    page = R.render(s)
+    assert "store: junk" in page
+
+
+def test_no_store_field_reads_as_the_default_store(tmp_path):
+    page = R.render(_shoot(tmp_path))
+    assert "store: default" in page
+
+
+def test_a_malformed_store_name_is_flagged_not_rendered_raw(tmp_path):
+    s = _shoot(tmp_path)
+    (s / "draft.md").write_text(DRAFT.replace('quantity: 1\n', 'quantity: 1\nstore: "<b>x</b>"\n'),
+                                encoding="utf-8")
+    page = R.render(s)
+    assert "not a valid store name" in page
+    assert "<b>x</b>" not in page

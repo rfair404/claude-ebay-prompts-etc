@@ -191,6 +191,60 @@ def draft_store(draft: Optional[dict]) -> str:
     return validate_store_name(str(v)) if v else DEFAULT_STORE
 
 
+def draft_store_from_text(text: str) -> str:
+    """draft_store() for a draft.md's raw text — reads `store:` from the
+    frontmatter only (never a body line that happens to start with it).
+
+    Regex, not YAML: drafts carry flow mappings and free-text notes that trip
+    strict loaders. An invalid value comes back raw, so it matches no real
+    store rather than silently landing on the default one.
+    """
+    fm = ""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        fm = text[3:end] if end != -1 else ""
+    m = re.search(r'^\s*store:\s*"?([^"\n]*)"?\s*$', fm, re.M)
+    raw = m.group(1).strip() if m else ""
+    if raw in ("null", "~"):
+        raw = ""
+    try:
+        return draft_store({"store": raw})
+    except ValueError:
+        return raw
+
+
+def ledger_keys(rows: list[dict]) -> set[str]:
+    """Every SKU and listing id in one store's listings ledger — the
+    membership set draft_belongs_to_store() checks. One set is safe: a
+    canonical SKU is 8 hex chars and a listing id 12 digits."""
+    return {v for r in rows for v in ((r.get("sku") or "").strip(),
+                                      (r.get("listing_id") or "").strip()) if v}
+
+
+def draft_belongs_to_store(draft: dict, store: str, keys: set[str]) -> bool:
+    """Whether a local draft is one of `store`'s items — THE ownership rule,
+    shared by order matching (sync_actuals), reports and every audit tool, so
+    a sale, a report and an audit agree on which folders a store owns:
+
+      1. its `store:` names `store` (blank = "default"), OR
+      2. its SKU or listing id is in `store`'s OWN listings ledger (`keys`).
+
+    (2) is the tiebreaker for #147's workflow: an item that didn't sell on the
+    main store is relisted on the junk store with the same title and folder —
+    so the same canonical SKU — while its `store:` may still say where it
+    STARTED. The ledger row is the record that it was listed on THIS account.
+    Such a draft belongs to both stores, which is the truth: one physical item
+    offered on both.
+
+    A draft that passes neither test does not exist as far as `store` is
+    concerned — not even as a title-fallback candidate. That is what stops a
+    store-B sale being matched to (and stamped into) a store-A folder.
+    """
+    if (draft.get("store") or DEFAULT_STORE) == store:
+        return True
+    return any(draft.get(k) and draft[k] in keys for k in ("sku", "listing_id"))
+
+
 # ---------------------------------------------------------------------------
 # CLI contract
 # ---------------------------------------------------------------------------
@@ -241,6 +295,7 @@ __all__ = [
     "DEFAULT_STORE", "STORE_ENV_VAR", "STORE_NAME_RE", "ConfigError",
     "validate_store_name", "resolve_store_name", "is_default",
     "configured_stores", "store_label", "store_file", "StorePaths", "paths",
-    "draft_store", "add_store_args", "stores_from_args",
+    "draft_store", "draft_store_from_text", "ledger_keys",
+    "draft_belongs_to_store", "add_store_args", "stores_from_args",
     "require_explicit_store",
 ]

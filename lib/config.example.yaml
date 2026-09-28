@@ -284,6 +284,24 @@ store:
   tagline: ""
   storefront_url: ""
 
+  # This store's eBay username — what tools/live_audit.py filters the public
+  # Browse half by, so it audits the same account the Sell half reads.
+  # seller_username: ""
+
+  # CURATE buy-point profile for this store (a name under `profiles:` below).
+  # Unset -> active_profile. A named storefront sets its own (#156).
+  # profile: "default"
+
+  # Default ship-from for ship-quote / ship-buy. Explicit --from-* flags win.
+  # Same fields as those flags. POLICY, so a named storefront inherits it
+  # unless it ships from somewhere else.
+  # ship_from:
+  #   name: ""
+  #   street1: ""
+  #   city: ""
+  #   state: ""
+  #   zip: ""
+
   closing_block: |
     Please message me with any questions before buying — I'd rather answer
     one than have you guess.
@@ -309,6 +327,10 @@ store:
 #
 # Selection matches credentials, so one `--store junk` picks the account and
 # the business together: --store > EBAYBIZ_STORE > ebay.active_store > default.
+# lib/stores.py owns that rule, and every per-store data file: the default
+# store keeps listings_ledger.csv, sales_ledger.csv, inventory_sheet.csv ...;
+# a named store gets listings_ledger-<name>.csv etc. Any number of stores —
+# nothing assumes two. `python -m lib.cli --all-stores <cmd>` loops them.
 #
 # TWO INHERITANCE RULES, and they differ on purpose:
 #
@@ -379,6 +401,13 @@ store:
 #                                        # the description instead. Compared
 #                                        # against ebay_schema.CONDITION_ENUM,
 #                                        # which is ordered best -> worst.
+#
+#     tagline: null                      # identity, like display_name: a
+#     storefront_url: null               # named store never borrows the main
+#     seller_username: null              # store's — pick sheets, cards and
+#                                        # live_audit read these (#156).
+#     profile: "junk-lots"               # its own CURATE buy math; a junk lot
+#                                        # is not a $100-profit-floor item.
 #
 #     best_offer: false                  # store-wide: no Best Offer anywhere.
 #                                        # Enforced by validate_draft_for_sync

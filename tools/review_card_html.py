@@ -39,6 +39,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from PIL import Image                                          # noqa: E402
 
+import stores                                                  # noqa: E402
 from draft_io import parse_draft                               # noqa: E402
 
 PREVIEW_PX = 1100          # one copy per frame, used by preview and chip alike
@@ -168,6 +169,18 @@ def render(shoot: Path) -> str:
     sku = (fm.get("meta") or {}).get("ebay_inventory_sku") or "not recorded"
     pre, warn = _card_lines(shoot)
     tiers = _price_tiers(shoot)
+    # Which store this publishes to (#156 §5). Since #150 a draft's `store:`
+    # picks the account, its policies and its storefront voice, so it is part
+    # of what is being approved — shown in the header, not buried in specifics.
+    # Absent = the default store (stores.draft_store), never the ambient one.
+    try:
+        store = stores.draft_store(fm)
+        store_html = (f'<span class="pill acc">store: {html.escape(store)}</span>'
+                      if not stores.is_default(store)
+                      else '<span class="pill">store: default</span>')
+    except ValueError:
+        store_html = (f'<span class="pill warn">store: '
+                      f'{html.escape(str(fm.get("store")))} — not a valid store name</span>')
 
     # --- per-frame CSS: which preview shows, which command shows -----------
     sel = "\n".join(
@@ -259,6 +272,7 @@ body{{margin:0;padding:26px 20px 60px;background:var(--ground);color:var(--ink);
 h1{{font:500 25px/1.24 Newsreader,Georgia,serif;margin:0;text-wrap:balance;max-width:30ch}}
 .hdr .ct{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11.5px;
   color:var(--muted);margin-top:7px}}
+.store{{margin:0 0 9px}}
 .ask{{margin-left:auto;text-align:right}}
 .ask .amt{{font:500 30px/1 "IBM Plex Mono",ui-monospace,monospace;
   font-variant-numeric:tabular-nums;color:var(--accent)}}
@@ -364,6 +378,7 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
   <div class="hdr">
     <div>
       <p class="eyebrow">Review gate · nothing is live until you say so</p>
+      <p class="store">{store_html}</p>
       <h1>{html.escape(title)}</h1>
       <div class="ct">{len(title)}/80 characters · sku {html.escape(str(sku))} · {len(frames)} photos</div>
     </div>

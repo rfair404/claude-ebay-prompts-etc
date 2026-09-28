@@ -50,6 +50,18 @@ app, meaning the route isn't served at all pending eBay enabling it for the
 developer account. Even once/if it is, no polling loop may ever purchase a
 label unattended — only --record-tracking exists, and only for a tracking
 number a human already obtained.
+
+Stores (#156). Every mode takes `--store NAME`; --poll also takes
+`--all-stores` and runs the whole poll once per configured store. Orders are
+read with THAT store's credentials, its idempotency state lives in its own
+file (stores.paths(store).pick_list_state — the default store keeps the
+historic .pick_list_state.json), and its sheet carries its own letterhead
+(pick_list_html). Orders from two stores are never combined onto one sheet,
+even for the same buyer at the same address: they are two eBay accounts, two
+labels bought from two logins, so two boxes as far as this tool is concerned.
+--record-tracking WRITES to an account, so once more than one store is
+configured it refuses to run without an explicit --store (the env var and
+ebay.active_store are fine for reads, not for a write — #156 §4).
 """
 from __future__ import annotations
 
@@ -66,7 +78,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from comps_csv import _now as _now_iso                              # noqa: E402
-from ebay_client import api_send, EbayAPIError                      # noqa: E402
+import stores                                                       # noqa: E402
+from ebay_client import api_send, EbayAPIError, load_credentials    # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
 
@@ -78,21 +91,98 @@ OPEN_FILTER = "orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D"
 STATE_FILE = ROOT / ".pick_list_state.json"
 OUT_DIR = ROOT / "pick_lists"
 
+# The key an order is tagged with once we know which store's credentials
+# fetched it (#156). Underscored so it can never be mistaken for an eBay field.
+STORE_KEY = "_store"
+
+
+# --------------------------------------------------------------------------- #
+# stores (#156) — which account an order came from, and that account's files
+# --------------------------------------------------------------------------- #
+def _configured_stores() -> list[str]:
+    """stores.configured_stores(), behind a name tests can patch."""
+    return stores.configured_stores()
+
+
+def _creds(store: str | None):
+    """Explicit credentials for `store`, or None to let api_send() resolve the
+    ambient store the way it always has. Only None when no store was named at
+    all — a named store never falls back to ambient state."""
+    return load_credentials(store) if store else None
+
+
+def order_store(o: dict) -> str:
+    """The store an order was fetched from; untagged means the default store
+    (every order predating #156, and every single-store run)."""
+    return o.get(STORE_KEY) or stores.DEFAULT_STORE
+
+
+def tag_orders(orders: list[dict], store: str | None) -> list[dict]:
+    """Stamp each order with the store whose credentials fetched it."""
+    if store:
+        for o in orders:
+            o[STORE_KEY] = store
+    return orders
+
+
+def fetch_recent(days: int, store: str | None = None) -> list[dict]:
+    """sync_actuals.fetch_orders() on one store's account, tagged with it."""
+    return tag_orders(fetch_orders(days, verbose=False, store=store), store)
+
+
+def _state_file(store: str | None) -> Path:
+    """Per-store idempotency state. The default store keeps STATE_FILE (the
+    historic name, and the attribute tests patch); a named store gets
+    .pick_list_state-<store>.json via stores.paths()."""
+    if stores.is_default(store):
+        return STATE_FILE
+    return stores.paths(store).pick_list_state
+
+
+def ledger_for(store: str | None) -> list[dict]:
+    """The listings ledger of the store an order came from (None: the ambient
+    store, as before) — never the default's for a named store, where a shared
+    SKU would place a store-B item from a store-A row (#156 §3)."""
+    return load_listings_ledger(store) if store else load_listings_ledger()
+
+
+def drafts_for(store: str | None, ledger: list[dict] | None = None) -> list[dict]:
+    """The drafts match_sale() may place this store's items against:
+    sync_actuals.scan_drafts(store) keeps only drafts that belong to it (its
+    `store:`, or a SKU / listing id in its ledger). None: every draft, as before."""
+    return scan_drafts(store, ledger) if store else scan_drafts()
+
+
+_HAND_BY_STORE: dict[str, dict[str, str]] = {}
+
+
+def hand_locations_for(store: str | None) -> dict[str, str]:
+    """hand_listed_locations for one store (sync_actuals.load_hand_locations),
+    read once per store per process — a poll renders many orders."""
+    if stores.is_default(store):
+        return _HAND_LOC
+    if store not in _HAND_BY_STORE:
+        _HAND_BY_STORE[store] = load_hand_locations(store)
+    return _HAND_BY_STORE[store]
+
 
 def _money(m: dict | None) -> str:
     return f"${float((m or {}).get('value', 0)):,.2f}"
 
 
-def fetch_open() -> list[dict]:
+def fetch_open(store: str | None = None) -> list[dict]:
+    """Orders awaiting shipment on `store`'s account (None: the ambient store),
+    tagged with that store (#156)."""
+    creds = _creds(store)
     orders, offset = [], 0
     while True:
         d = api_send("GET", f"/sell/fulfillment/v1/order?limit=50&offset={offset}"
-                            f"&filter={OPEN_FILTER}", creds=None, marketplace=None)
+                            f"&filter={OPEN_FILTER}", creds=creds, marketplace=None)
         batch = d.get("orders") or []
         orders.extend(batch)
         offset += 50
         if offset >= (d.get("total") or 0) or not batch:
-            return orders
+            return tag_orders(orders, store)
 
 
 def ship_to(o: dict) -> dict:
@@ -108,10 +198,16 @@ def ship_to(o: dict) -> dict:
 def shipment_key(o: dict) -> tuple:
     """What has to match before two orders may share one page: the buyer and
     the exact place the box is going. Normalised (case/whitespace) but not
-    fuzzy — a near-match is a different shipment."""
+    fuzzy — a near-match is a different shipment.
+
+    The store leads the key (#156): the same buyer at the same address on two
+    of our accounts is two orders on two logins with two labels, so it is two
+    sheets — combining them would put one store's letterhead on the other's
+    item and send the picker to buy both labels from one account."""
     to = ship_to(o)
     a = to.get("contactAddress") or {}
-    parts = [(o.get("buyer") or {}).get("username") or "",
+    parts = [order_store(o),
+             (o.get("buyer") or {}).get("username") or "",
              to.get("fullName") or "",
              a.get("addressLine1") or "", a.get("addressLine2") or "",
              a.get("city") or "", a.get("stateOrProvince") or "",
@@ -135,7 +231,7 @@ def group_shipments(orders: list[dict]) -> list[list[dict]]:
     return list(groups.values())
 
 
-_HAND_LOC = load_hand_locations()
+_HAND_LOC = load_hand_locations(stores.DEFAULT_STORE)
 
 
 def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
@@ -146,9 +242,10 @@ def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
                    for li in items), default="")[:10]
 
     L = []
+    label = stores.store_label(order_store(o))
     L.append("=" * 66)
     L.append(f"PICK  order {o.get('orderId','')}   sales record #{o.get('salesRecordReference','')}"
-             f"   {o.get('creationDate','')[:10]}")
+             f"   {o.get('creationDate','')[:10]}" + (f"   {label}" if label else ""))
     L.append(f"      status {o.get('orderFulfillmentStatus','')} / {o.get('orderPaymentStatus','')}"
              + (f"   SHIP BY {ship_by}" if ship_by and ship_by != "zz" else ""))
     L.append("-" * 66)
@@ -157,7 +254,8 @@ def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
                "title": li.get("title", "")}
         folder, ask, how = match_sale(row, drafts, ledger)
         if not folder:
-            bin_ = _HAND_LOC.get(row["listing_id"]) or _HAND_LOC.get(row["sku"])
+            hand = hand_locations_for(order_store(o))
+            bin_ = hand.get(row["listing_id"]) or hand.get(row["sku"])
             if bin_:
                 folder, how = bin_, "bin"
         L.append(f"  [{n}] x{li.get('quantity',1)}  {li.get('title','')}")
@@ -184,11 +282,12 @@ def render(o: dict, drafts: list[dict], ledger: list[dict]) -> str:
 # idempotent-print state (GH #32 — "an order already printed doesn't print
 # again on the next poll")
 # --------------------------------------------------------------------------- #
-def _load_state() -> dict:
-    if not STATE_FILE.exists():
+def _load_state(store: str | None = None) -> dict:
+    path = _state_file(store)
+    if not path.exists():
         return {"printed": {}, "shipped": {}}
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {"printed": {}, "shipped": {}}
     if not isinstance(data, dict):
@@ -198,8 +297,8 @@ def _load_state() -> dict:
     return data
 
 
-def _save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=1), encoding="utf-8")
+def _save_state(state: dict, store: str | None = None) -> None:
+    _state_file(store).write_text(json.dumps(state, indent=1), encoding="utf-8")
 
 
 def _safe_filename(order_id: str) -> str:
@@ -331,6 +430,8 @@ def publish_sheet(orders: dict | list[dict], drafts: list[dict], ledger: list[di
         import pick_store                                 # noqa: PLC0415
         import pick_list_html                             # noqa: PLC0415
 
+        # The letterhead follows the orders' own store tag (#156) — the
+        # group is single-store by construction (shipment_key leads with it).
         html = pick_list_html.render_html(orders, drafts, ledger)
         # The sheet lands in the item's folder first, and the link is then
         # pointed AT that file rather than at a second copy in the store. One
@@ -374,8 +475,9 @@ def _live_sheet(order_ids: list[str]):
 
 def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                    do_print: bool = False, reprint: str | None = None,
-                   fetch=fetch_open, publish: bool = True,
-                   ttl_hours: float | None = None) -> tuple[list[str], list[str], dict, list[str]]:
+                   fetch=None, publish: bool = True,
+                   ttl_hours: float | None = None,
+                   store: str | None = None) -> tuple[list[str], list[str], dict, list[str]]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
     Idempotent: an orderId already recorded in `state["printed"]` is skipped
@@ -396,10 +498,16 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     an order already printed is NOT re-rendered or re-printed, but if its
     link has expired or been revoked it IS republished, because "we already
     printed that one" is no reason for the link in someone's hand to 404.
+
+    `store` (#156) scopes one poll to one account: orders come from its
+    credentials (unless `fetch` is injected), items are placed against its
+    ledger, and a `state` loaded here is its own file. One call, one store —
+    --all-stores is a loop over this, never a merged queue.
     """
-    orders = fetch()
-    drafts, ledger = scan_drafts(), load_listings_ledger()
-    st = state if state is not None else _load_state()
+    orders = tag_orders(fetch() if fetch is not None else fetch_open(store), store)
+    ledger = ledger_for(store)
+    drafts = drafts_for(store, ledger)
+    st = state if state is not None else _load_state(store)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     new_ids: list[str] = []
@@ -456,11 +564,12 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
 # (GH #32 step 4; step 3 "buy a label" is deliberately NOT implemented here —
 # see the module docstring and NotImplementedError below)
 # --------------------------------------------------------------------------- #
-def fetch_order(order_id: str) -> dict | None:
-    """One order by id, or None on a 404 (unknown / mistyped id)."""
+def fetch_order(order_id: str, store: str | None = None) -> dict | None:
+    """One order by id from `store`'s account, or None on a 404 (unknown /
+    mistyped id — or an order that belongs to a different store)."""
     try:
-        return api_send("GET", f"/sell/fulfillment/v1/order/{order_id}",
-                        creds=None, marketplace=None)
+        return tag_orders([api_send("GET", f"/sell/fulfillment/v1/order/{order_id}",
+                                    creds=_creds(store), marketplace=None)], store)[0]
     except EbayAPIError as e:
         if e.status == 404:
             return None
@@ -488,7 +597,8 @@ def build_shipping_fulfillment_body(order: dict, carrier: str, tracking_number: 
 
 
 def record_tracking(order_id: str, carrier: str, tracking_number: str,
-                    line_item_ids: list[str] | None = None, order: dict | None = None) -> dict:
+                    line_item_ids: list[str] | None = None, order: dict | None = None,
+                    store: str | None = None) -> dict:
     """POST the tracking number to eBay for one order. Real write — no dry-run
     gate here; the CLI (--record-tracking / --confirm) is what gates it.
 
@@ -496,18 +606,18 @@ def record_tracking(order_id: str, carrier: str, tracking_number: str,
     fetches once to build the dry-run preview, then reuses that same order
     here on --confirm instead of fetching it a second time)."""
     if order is None:
-        order = fetch_order(order_id)
+        order = fetch_order(order_id, store=store)
         if order is None:
             raise ValueError(f"no such order: {order_id}")
     body = build_shipping_fulfillment_body(order, carrier, tracking_number, line_item_ids)
     if not body["lineItems"]:
         raise ValueError(f"order {order_id} has no matching line items to mark shipped")
     resp = api_send("POST", f"/sell/fulfillment/v1/order/{order_id}/shipping_fulfillment",
-                    body=body, creds=None, marketplace=None)
+                    body=body, creds=_creds(store), marketplace=None)
     return {"order": order, "response": resp}
 
 
-def advance_ledger_for_order(order: dict) -> int:
+def advance_ledger_for_order(order: dict, store: str | None = None) -> int:
     """Advance every SKU on this order to SHIPPED in listings_ledger.csv.
 
     Follows the pattern lib/sync_actuals.mark_sold_in_ledger uses for the
@@ -515,6 +625,9 @@ def advance_ledger_for_order(order: dict) -> int:
     Best-effort by construction (upsert_listing never raises); a line item
     with no local SKU (listed by hand, outside the pipeline) is skipped —
     there is no local ledger row for it to advance.
+
+    `store` picks the ledger file (#156): the SHIPPED row is the one in the
+    ledger of the account the order was fetched from, never the default's.
     """
     from list_edit import upsert_listing
     n = 0
@@ -524,7 +637,8 @@ def advance_ledger_for_order(order: dict) -> int:
             continue
         listing_id = li.get("legacyItemId", "")
         upsert_listing(sku, "SHIPPED", listing_id=listing_id,
-                       url=f"https://www.ebay.com/itm/{listing_id}" if listing_id else "")
+                       url=f"https://www.ebay.com/itm/{listing_id}" if listing_id else "",
+                       store=store)
         n += 1
     return n
 
@@ -559,16 +673,31 @@ def cmd_poll(args) -> int:
 
     Printing a link per order is the one place this deviates from "terse":
     a list of order ids with the sheets hidden in a directory is what #151
-    was filed about."""
+    was filed about.
+
+    --all-stores (#156) runs one complete poll per configured store, each
+    with its own credentials, ledger and state file, each verdict prefixed
+    with its store label. The queues are never merged."""
+    rc = 0
+    for store in stores.stores_from_args(args):
+        rc = max(rc, _poll_one_store(args, store))
+    return rc
+
+
+def _poll_one_store(args, store: str) -> int:
+    label = stores.store_label(store)
+    tag = f"{label} " if label else ""
+    # OUT_DIR read at call time (not poll_and_print's import-time default) so
+    # a repointed OUT_DIR is honoured here too.
     new_ids, skipped_ids, state, unconfirmed = poll_and_print(
-        do_print=args.do_print, reprint=args.reprint,
-        publish=not args.no_links, ttl_hours=args.ttl)
-    _save_state(state)
+        out_dir=OUT_DIR, do_print=args.do_print, reprint=args.reprint,
+        publish=not args.no_links, ttl_hours=args.ttl, store=store)
+    _save_state(state, store)
     if not new_ids and not skipped_ids:
-        print("[OK] nothing awaiting shipment")
+        print(f"[OK] {tag}nothing awaiting shipment")
         return 0
-    rel = OUT_DIR.relative_to(ROOT)
-    print(f"[OK] {len(new_ids)} new pick list(s)"
+    rel = OUT_DIR.name
+    print(f"[OK] {tag}{len(new_ids)} new pick list(s)"
           + (f"  ({', '.join(new_ids)})" if new_ids else "")
           + (f"; {len(skipped_ids)} already printed" if skipped_ids else ""))
     if not args.no_links:
@@ -594,14 +723,27 @@ def cmd_record_tracking(args) -> int:
     if not args.carrier or not args.tracking_number:
         print("[X] --record-tracking needs both --carrier and --tracking-number")
         return 2
+    if getattr(args, "all_stores", False):
+        print("[X] --record-tracking writes to ONE account; --all-stores is refused")
+        return 2
+    # A write to an eBay account. With one store there is nothing to confuse;
+    # with two or more, the account must be on the command line (#156 §4) —
+    # the order id alone does not say which login it belongs to.
+    store = getattr(args, "store", None)
+    if len(_configured_stores()) > 1:
+        store = stores.require_explicit_store(args, "--record-tracking")
+    elif store:
+        store = stores.resolve_store_name(store)
+    label = stores.store_label(store)
+    who = f" on {label}" if label else ""
 
     # Dry-run needs the order + body to report line-item count without writing
     # anything, so it fetches/builds once here; the real write below goes
     # through record_tracking() (same fetch+build+POST it would do internally)
     # rather than re-fetching, to keep the single POST call in one place.
-    order = fetch_order(order_id)
+    order = fetch_order(order_id, store=store)
     if order is None:
-        print(f"[X] no such order: {order_id}")
+        print(f"[X] no such order{who}: {order_id}")
         return 1
     body = build_shipping_fulfillment_body(order, args.carrier, args.tracking_number)
     if not body["lineItems"]:
@@ -609,25 +751,26 @@ def cmd_record_tracking(args) -> int:
         return 1
 
     if not args.confirm:
-        print(f"[DRY RUN] would POST shipping_fulfillment for order {order_id}: "
+        print(f"[DRY RUN] would POST shipping_fulfillment{who} for order {order_id}: "
               f"{args.carrier} {args.tracking_number}, {len(body['lineItems'])} line item(s)")
         print("  re-run with --confirm to write it to eBay and advance the local ledger")
         return 0
 
     try:
-        result = record_tracking(order_id, args.carrier, args.tracking_number, order=order)
+        result = record_tracking(order_id, args.carrier, args.tracking_number,
+                                 order=order, store=store)
     except (ValueError, EbayAPIError) as e:
         print(f"[X] could not record tracking for order {order_id}: {e}")
         return 1
     resp = result["response"]
-    advanced = advance_ledger_for_order(result["order"])
+    advanced = advance_ledger_for_order(result["order"], store=store)
 
-    state = _load_state()
+    state = _load_state(store)
     state["shipped"][order_id] = {"recorded_at": _now_iso(), "carrier": args.carrier}
-    _save_state(state)
+    _save_state(state, store)
 
     fid = resp.get("fulfillmentId") if isinstance(resp, dict) else None
-    print(f"[OK] recorded tracking for order {order_id} ({args.carrier} {args.tracking_number})"
+    print(f"[OK] recorded tracking{who} for order {order_id} ({args.carrier} {args.tracking_number})"
           + (f"  fulfillmentId={fid}" if fid else "")
           + f" — advanced {advanced} SKU(s) to SHIPPED")
     return 0
@@ -667,6 +810,10 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=30, help="window for --latest (default 30)")
     ap.add_argument("--order-id", help="render one specific order")
     ap.add_argument("--out", metavar="FILE", help="also write to a local file")
+    stores.add_store_args(
+        ap, all_stores=True,
+        help_extra="--record-tracking requires it explicitly once more than one "
+                   "store is configured; --all-stores applies to --poll only.")
     args = ap.parse_args()
 
     if args.record_tracking and args.poll:
@@ -679,8 +826,12 @@ def main() -> int:
     if args.poll:
         return cmd_poll(args)
 
+    if args.all_stores:
+        ap.error("--all-stores applies to --poll only; name one --store for a report")
+    store = stores.resolve_store_name(args.store)
+
     if args.latest or args.order_id:
-        orders = sorted(fetch_orders(args.days, verbose=False),
+        orders = sorted(fetch_recent(args.days, store),
                         key=lambda o: o.get("creationDate", ""), reverse=True)
         if args.order_id:
             orders = [o for o in orders if args.order_id in
@@ -692,14 +843,18 @@ def main() -> int:
             orders = orders[:args.latest]
         header = f"(not the queue — {len(orders)} most recent order(s), already shipped)"
     else:
-        orders = fetch_open()
+        orders = fetch_open(store)
         header = f"AWAITING SHIPMENT — {len(orders)} order(s)"
         if not orders:
             print("Nothing to pick — no orders awaiting shipment.\n"
                   "Use --latest 1 to see the format against a recent order.")
             return 0
 
-    drafts, ledger = scan_drafts(), load_listings_ledger()
+    label = stores.store_label(store)
+    if label:
+        header = f"{label} {header}"
+    ledger = ledger_for(store)
+    drafts = drafts_for(store, ledger)
     out = "\n".join([header] + [render(o, drafts, ledger) for o in orders] + ["=" * 66])
     print(out)
     if args.out:

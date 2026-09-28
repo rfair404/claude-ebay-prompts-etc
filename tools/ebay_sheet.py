@@ -29,6 +29,12 @@ listing to a buyer and one row in eBay's own seller view, so any count of
 truthful answer is 139.
 
     python tools/ebay_sheet.py                 # -> inventory_sheet.csv + .json
+    python tools/ebay_sheet.py --store junk    # -> inventory_sheet-junk.csv + .json
+
+Per store (#156): `--store` picks the account read AND the default output files
+(stores.paths(store).inventory_sheet_csv/.json), so two stores never overwrite
+one sheet. The category-path cache stays shared — the taxonomy is eBay's, not
+an account's.
 """
 from __future__ import annotations
 import argparse, csv, json, sys, urllib.request
@@ -37,6 +43,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
+import stores                                                            # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,          # noqa: E402
                          get_offers_for_sku, get_app_access_token, EbayAPIError)
 
@@ -49,13 +56,14 @@ COLUMNS = ["sku", "title", "listing_id", "item_url", "offer_id", "live",
            "aspect_brand"]
 
 
-def category_paths(refresh: bool = False) -> dict:
+def category_paths(refresh: bool = False, creds=None) -> dict:
     """categoryId -> 'Books & Magazines > Catalogs' for the whole US tree."""
     if TREE_CACHE.exists() and not refresh:
         d = json.loads(TREE_CACHE.read_text(encoding="utf-8"))
         if d:
             return d
-    tok = get_app_access_token(load_credentials())
+    # Any store's app token reads the (marketplace-wide) taxonomy.
+    tok = get_app_access_token(creds or load_credentials())
     req = urllib.request.Request(
         "https://api.ebay.com/commerce/taxonomy/v1/category_tree/0",
         headers={"Authorization": f"Bearer {tok}", "Accept": "application/json"})
@@ -76,9 +84,9 @@ def category_paths(refresh: bool = False) -> dict:
     return paths
 
 
-def build() -> list[dict]:
-    creds = load_credentials()
-    paths = category_paths()
+def build(store: str | None = None) -> list[dict]:
+    creds = load_credentials(store=store)
+    paths = category_paths(creds=creds)
     items = iter_inventory_items(creds=creds)
     print(f"inventory items from eBay: {len(items)}")
 
@@ -133,13 +141,22 @@ def build() -> list[dict]:
     return rows
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default="inventory_sheet.csv")
-    ap.add_argument("--json", default="inventory_sheet.json")
-    a = ap.parse_args()
+    ap.add_argument("--csv", default=None,
+                    help="default: the store's inventory_sheet csv (stores.paths)")
+    ap.add_argument("--json", default=None,
+                    help="default: the store's inventory_sheet json (stores.paths)")
+    stores.add_store_args(ap)
+    a = ap.parse_args(argv)
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+    sp = stores.paths(store)
+    a.csv = a.csv or str(sp.inventory_sheet_csv)
+    a.json = a.json or str(sp.inventory_sheet_json)
 
-    rows = build()
+    rows = build(store)
     with open(a.csv, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS)
         w.writeheader()

@@ -23,6 +23,8 @@ import urllib.request
 from contextlib import redirect_stdout
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
@@ -657,6 +659,101 @@ def test_ship_quote_double_quotes_a_service_name_with_spaces():
     out = buf.getvalue()
     assert '--service "Priority Mail Express"' in out
     assert "'Priority Mail Express'" not in out
+
+
+# ---------------------------------------------------------------------------
+# tools/ship_quote.py — ship-from defaults from the store's storefront (#156 §1)
+# ---------------------------------------------------------------------------
+
+_TO_ONLY_ARGV = [
+    "ship_quote.py",
+    "--to-name", "Jane Buyer", "--to-street1", "1 Main St",
+    "--to-city", "Springfield", "--to-state", "IL", "--to-zip", "62704",
+    "--weight-oz", "24",
+]
+
+_SHIP_CFG = {
+    "ebay": {"stores": {"junk": {}}},
+    "store": {"ship_from": {"name": "Main Shelf", "street1": "9 Ship St",
+                            "city": "Elgin", "state": "IL", "zip": "60120",
+                            "phone": "555-0100"}},
+    "storefronts": {
+        "junk": {"ship_from": {"name": "Junk Barn", "street1": "1 Barn Rd",
+                               "city": "Greensboro", "state": "NC", "zip": "27401"}},
+        "outlet": {},    # no ship_from of its own -> inherits the default's
+    },
+}
+
+
+def _quote_with_cfg(cfg, extra_argv):
+    """Run ship_quote.main() against a fake config; return (rc, from_addr)."""
+    seen = {}
+
+    def fake(to_addr, from_addr, parcel):
+        seen["from"] = from_addr
+        return ("shp_1", [])
+
+    real_load, real_argv, real_rates = CFG.load_config, sys.argv, ship_quote.get_rates
+    real_env = os.environ.pop("EBAYBIZ_STORE", None)
+    CFG.load_config = lambda *a, **k: cfg
+    sys.argv = _TO_ONLY_ARGV + extra_argv
+    ship_quote.get_rates = fake
+    try:
+        rc = ship_quote.main()
+    finally:
+        CFG.load_config, sys.argv, ship_quote.get_rates = real_load, real_argv, real_rates
+        if real_env is not None:
+            os.environ["EBAYBIZ_STORE"] = real_env
+    return rc, seen.get("from")
+
+
+def test_ship_quote_defaults_ship_from_to_the_default_stores_config():
+    rc, frm = _quote_with_cfg(_SHIP_CFG, [])
+    assert rc == 0
+    assert (frm.name, frm.city, frm.zip, frm.country, frm.phone) ==         ("Main Shelf", "Elgin", "60120", "US", "555-0100")
+
+
+def test_ship_quote_uses_the_named_stores_own_ship_from():
+    rc, frm = _quote_with_cfg(_SHIP_CFG, ["--store", "junk"])
+    assert rc == 0
+    assert (frm.name, frm.city, frm.state) == ("Junk Barn", "Greensboro", "NC")
+
+
+def test_ship_quote_named_store_without_ship_from_inherits_the_default():
+    rc, frm = _quote_with_cfg(_SHIP_CFG, ["--store", "outlet"])
+    assert rc == 0 and frm.city == "Elgin"
+
+
+def test_ship_quote_explicit_from_flags_win_over_config():
+    rc, frm = _quote_with_cfg(_SHIP_CFG, ["--from-name", "Override Co"])
+    assert rc == 0
+    assert frm.name == "Override Co" and frm.city == "Elgin"
+
+
+def test_ship_quote_full_explicit_address_never_reads_config():
+    # _BASE_ARGV gives every required --from-* flag; the store's ship_from
+    # must not be consulted (no configured street2/phone blended in).
+    def boom(*a, **k):
+        raise AssertionError("config read for a fully explicit ship-from")
+    real = CFG.load_config
+    CFG.load_config = boom
+    try:
+        rc = _run_ship_quote_cli([], fake=lambda *a, **kw: ("shp_1", []))
+    finally:
+        CFG.load_config = real
+    assert rc == 0
+
+
+def test_ship_quote_with_no_flags_and_no_config_keeps_the_required_error():
+    with pytest.raises(SystemExit) as e:
+        _quote_with_cfg({}, [])
+    assert e.value.code == 2
+
+
+def test_ship_quote_rejects_a_malformed_store_name():
+    with pytest.raises(SystemExit) as e:
+        _quote_with_cfg(_SHIP_CFG, ["--store", "../x"])
+    assert e.value.code == 2
 
 
 # ---------------------------------------------------------------------------

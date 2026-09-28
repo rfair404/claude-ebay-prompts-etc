@@ -230,11 +230,15 @@ fallback would fail at publish anyway, and would mean offering a restricted item
 abroad. Also set `shipping.international: false` on these for tidiness, but do
 not mistake that flag for the protection.
 
-**Carrier: there is no carrier choice.** Every item ships on one of the account's
-policies — normally `296458692014` ("Free USPS Ground + eBay International
-Shipping", free calculated USPS Ground Advantage, 1 day handling), or
-`297194269014` ("US Only - Free USPS Ground") when the gate above fires. Same
-terms either way. Do not propose a carrier switch, do not estimate a rival
+**Carrier: there is no carrier choice.** Every item ships on one of its
+store's configured policies — `fulfillment_policy_id`, or
+`fulfillment_policy_id_us_only` when the gate above fires. On the default
+store those are `296458692014` ("Free USPS Ground + eBay International
+Shipping", free calculated USPS Ground Advantage, 1 day handling) and
+`297194269014` ("US Only - Free USPS Ground"). Policy IDs are per ACCOUNT: a
+draft with `store: <name>` ships on `ebay.stores.<name>.*` and its storefront's
+`shipping:` terms — never cite the default store's IDs or terms on it (#156).
+Same terms either way within a store. Do not propose a carrier switch, do not estimate a rival
 carrier's cost, and do not override the policy at LIST time. Weight and dimensions are still worth
 recording — they drive the calculated rate and a freight quote. If an item
 genuinely cannot go USPS (oversize / >70 lb), say so in `meta.notes` and

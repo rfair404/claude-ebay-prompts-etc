@@ -16,6 +16,11 @@ feed the tracking number into the local ledger's SHIPPED transition (#70)
 — that ledger write is NOT done here; #70 owns it, and has not landed on
 `main` as of this writing. Composing with it once it lands needs nothing
 more than running the printed command.
+
+`--store NAME` (#156) names the eBay account the label is for. EasyPost
+itself is one account for every store, so the purchase is unchanged; the
+store rides into the printed `pick-list --record-tracking` command, which
+writes to eBay and so needs an explicit --store once two stores exist.
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
+import stores                                                         # noqa: E402
 from config import ConfigError                                        # noqa: E402
 from easypost_client import EasyPostAPIError, EasyPostAuthError, Rate, buy_label  # noqa: E402
 
@@ -51,7 +57,14 @@ def main() -> int:
     ap.add_argument("--confirm", action="store_true",
                     help="required to actually buy the label. Without it: DRY RUN — no money "
                          "spent, no call made to EasyPost's purchase endpoint.")
+    stores.add_store_args(ap, help_extra="Carried into the printed pick-list "
+                                         "--record-tracking command.")
     args = ap.parse_args()
+    if args.store:
+        try:
+            stores.validate_store_name(args.store)
+        except ValueError as e:
+            ap.error(str(e))
 
     # The rate object buy_label() needs for a DRY RUN print is exactly what
     # ship-quote already showed the operator; a confirmed purchase re-quotes
@@ -89,7 +102,8 @@ def main() -> int:
     order_id = args.order_id or "ORDER_ID"
     print()
     print("  Feed this into the local ledger's SHIPPED transition once #70 lands:")
-    print(f"    python -m lib.cli pick-list --record-tracking {order_id} "
+    store_flag = f"--store {args.store} " if args.store else ""
+    print(f"    python -m lib.cli pick-list {store_flag}--record-tracking {order_id} "
          f"--carrier {result.carrier} --tracking-number {result.tracking_code} --confirm")
     return 0
 

@@ -30,8 +30,16 @@ and the row itself for a SKU that was drafted but never synced).
     python tools/ledger_reconcile.py             # show the drift, change nothing
     python tools/ledger_reconcile.py --apply     # rewrite the ledger from eBay
     python tools/ledger_reconcile.py --apply --prune-unknown
+    python tools/ledger_reconcile.py --store junk          # a named store (#156)
+    python tools/ledger_reconcile.py --all-stores          # report every store
 
 A backup is written next to the ledger before any rewrite.
+
+Per store (#156): each store reconciles its own listings ledger against its own
+Sell API account, protects SOLD rows with its own sales ledger, and writes its
+own report — all from stores.paths(store). The default store keeps the historic
+filenames. `--apply` rewrites only the one named store's local files, and is
+refused with --all-stores so a bulk rewrite always names its store.
 """
 from __future__ import annotations
 
@@ -46,11 +54,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 
+import stores                                                         # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,        # noqa: E402
                          get_offers_for_sku, EbayAPIError)
 
-LEDGER = REPO / "listings_ledger.csv"
-SALES = REPO / "sales_ledger.csv"
+# No module-level LEDGER / SALES: which file is "the ledger" depends on the
+# store, resolved per run from stores.paths(store) (#156).
 FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id", "url",
           "drafted_at", "synced_at", "published_at", "ended_at", "shipped_at",
           "updated_at"]
@@ -104,18 +113,19 @@ def _status_for(offer: dict) -> str:
 # is not a relist and does not outrank SOLD.
 
 
-def _sold_skus() -> set:
-    if not SALES.exists():
+def _sold_skus(sales: Path) -> set:
+    """SKUs with an order in `sales` — the store's own sales ledger (#156)."""
+    if not sales.exists():
         return set()
-    with SALES.open(encoding="utf-8-sig", newline="") as f:
+    with sales.open(encoding="utf-8-sig", newline="") as f:
         return {r["sku"] for r in csv.DictReader(f) if r.get("sku")}
 
 
-def _sold_on() -> set:
+def _sold_on(sales: Path) -> set:
     """(sku, listing_id) pairs an order was actually placed on."""
-    if not SALES.exists():
+    if not sales.exists():
         return set()
-    with SALES.open(encoding="utf-8-sig", newline="") as f:
+    with sales.open(encoding="utf-8-sig", newline="") as f:
         return {(r["sku"], (r.get("listing_id") or "").strip())
                 for r in csv.DictReader(f)
                 if r.get("sku") and (r.get("listing_id") or "").strip()}
@@ -169,9 +179,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def ebay_truth(verbose: bool = True) -> dict:
-    """sku -> the row eBay's own data implies. Offers are the authority."""
-    creds = load_credentials()
+def ebay_truth(verbose: bool = True, store: str | None = None) -> dict:
+    """sku -> the row eBay's own data implies. Offers are the authority.
+
+    `store` picks the seller account. It must be the store whose ledger the
+    result is diffed against, or every SKU reads as missing/orphan (#156).
+    """
+    creds = load_credentials(store=store)
     truth = {}
     skus = [it.get("sku") for it in iter_inventory_items(creds) if it.get("sku")]
     for i, sku in enumerate(skus, 1):
@@ -279,29 +293,26 @@ def write_report(path: Path, by_sku: dict, result: dict) -> None:
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--apply", action="store_true",
-                    help="rewrite the ledger from eBay (default: report only)")
-    ap.add_argument("--prune-unknown", action="store_true", dest="prune",
-                    help="drop ledger rows for SKUs eBay has no inventory item for "
-                         "(default: keep them and flag)")
-    a = ap.parse_args()
+def reconcile(store: str, apply: bool = False, prune: bool = False) -> int:
+    """One store: its ledger, its sales ledger, its account, its report (#156)."""
+    sp = stores.paths(store)
+    ledger, sales = sp.listings_ledger, sp.sales_ledger
+    if not stores.is_default(store):
+        print(f"store: {store}  (ledger {ledger.name})")
 
-    if not LEDGER.exists():
-        print(f"no ledger at {LEDGER}")
+    if not ledger.exists():
+        print(f"no ledger at {ledger}")
         return 1
 
-    with LEDGER.open(encoding="utf-8-sig", newline="") as f:
+    with ledger.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))
     by_sku = {r["sku"]: r for r in rows}
 
     print("reading eBay ...")
-    truth = ebay_truth()
+    truth = ebay_truth(store=store)
     print()
 
-    sold, sold_on = _sold_skus(), _sold_on()
+    sold, sold_on = _sold_skus(sales), _sold_on(sales)
     result = compute_drift(by_sku, truth, sold, sold_on)
     drift, missing, orphan = result["drift"], result["missing"], result["orphan"]
     never_listed, blanked, unbacked = (result["never_listed"], result["blanked"],
@@ -312,7 +323,7 @@ def main() -> int:
               + len(blanked) + len(unbacked))
     # Always (re)written, flagged or not — otherwise a fixed drift leaves a
     # stale report describing a problem that no longer exists.
-    report = LEDGER.with_name("ledger_reconcile_report.json")
+    report = sp.reconcile_report_json
     write_report(report, by_sku, result)
     if not flagged:
         print(f"OK — {len(truth)} SKUs checked, ledger matches eBay"
@@ -327,18 +338,22 @@ def main() -> int:
         if protected:
             print(f"  protected (SOLD kept over eBay): {protected}")
 
-    if not a.apply:
+    if not apply:
         if drift or missing:
             print("report only — re-run with --apply to rewrite the ledger from eBay")
         return 0
 
-    if not (drift or missing or (orphan and a.prune)):
+    if not (drift or missing or (orphan and prune)):
         print("nothing to write.")
         return 0
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = LEDGER.with_name(f"listings_ledger.backup-{stamp}.csv")
-    shutil.copyfile(LEDGER, backup)
+    # <ledger stem>.backup-<stamp>.csv: the default store keeps the historic
+    # listings_ledger.backup-*.csv; a named store's backup starts with its own
+    # stem (listings_ledger-junk.backup-*), covered by .gitignore's
+    # listings_ledger-*.csv rule (#156).
+    backup = ledger.with_name(f"{ledger.stem}.backup-{stamp}.csv")
+    shutil.copyfile(ledger, backup)
     print(f"backed up -> {backup.name}")
 
     now = _now()
@@ -375,17 +390,39 @@ def main() -> int:
         if changed:
             row["updated_at"] = now
 
-    if a.prune and orphan:
+    if prune and orphan:
         rows = [r for r in rows if r["sku"] not in set(orphan)]
         print(f"pruned {len(orphan)} row(s) eBay does not know")
 
-    with LEDGER.open("w", encoding="utf-8", newline="") as f:
+    with ledger.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in FIELDS})
-    print(f"wrote {LEDGER.name} — {len(rows)} rows, eBay treated as truth")
+    print(f"wrote {ledger.name} — {len(rows)} rows, eBay treated as truth")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--apply", action="store_true",
+                    help="rewrite the ledger from eBay (default: report only)")
+    ap.add_argument("--prune-unknown", action="store_true", dest="prune",
+                    help="drop ledger rows for SKUs eBay has no inventory item for "
+                         "(default: keep them and flag)")
+    stores.add_store_args(ap, all_stores=True)
+    a = ap.parse_args(argv)
+
+    if a.apply and a.all_stores:
+        # Local files only, but still a bulk rewrite: name the store (#156 §4).
+        print("[X] --apply rewrites one store's ledger — name it with --store, "
+              "not --all-stores")
+        return 2
+    worst = 0
+    for store in stores.stores_from_args(a):
+        worst = max(worst, reconcile(store, apply=a.apply, prune=a.prune))
+    return worst
 
 
 if __name__ == "__main__":

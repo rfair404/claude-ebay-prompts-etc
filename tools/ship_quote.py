@@ -17,6 +17,17 @@ none is needed; buying (`ship-buy`) is the gated step.
 
 Prints every rate, cheapest first, plus the exact `ship-buy` invocation
 (as a DRY RUN) to buy the cheapest one.
+
+Ship-from per store (#156 §1). The --from-* flags used to be the only place a
+ship-from address could come from, so nothing could persist one per store.
+Now, when the --from-* flags don't give a complete address, the missing
+fields come from the store's `ship_from:` mapping in its storefront profile
+(config.get_storefront(store) — same field names as the flags: name, street1,
+street2, city, state, zip, country, phone). Any --from-* flag given still
+wins over the configured value. If neither supplies a complete address, the
+old "required" error stands.
+
+    python -m lib.cli ship-quote --store junk --to-... --weight-oz 24
 """
 from __future__ import annotations
 
@@ -28,22 +39,78 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
-from config import ConfigError                                       # noqa: E402
+import stores                                                        # noqa: E402
+from config import ConfigError, get_storefront                       # noqa: E402
 from easypost_client import (                                        # noqa: E402
     Address, EasyPostAPIError, EasyPostAuthError, Parcel, get_rates,
 )
 
 
-def _add_address_args(ap: argparse.ArgumentParser, prefix: str, label: str) -> None:
-    ap.add_argument(f"--{prefix}-name", required=True, help=f"{label} recipient name")
-    ap.add_argument(f"--{prefix}-street1", required=True, help=f"{label} street address")
+ADDRESS_FIELDS = ("name", "street1", "street2", "city", "state", "zip", "country", "phone")
+REQUIRED_FIELDS = ("name", "street1", "city", "state", "zip")
+
+
+def _add_address_args(ap: argparse.ArgumentParser, prefix: str, label: str,
+                      required: bool = True) -> None:
+    """`required=False` is for the ship-from block (#156): its fields may
+    come from the store's `ship_from:` instead, and are checked after parse
+    by _fill_ship_from(). Country then defaults to None, not "US", so a
+    configured country isn't masked by an argparse default."""
+    ap.add_argument(f"--{prefix}-name", required=required, help=f"{label} recipient name")
+    ap.add_argument(f"--{prefix}-street1", required=required, help=f"{label} street address")
     ap.add_argument(f"--{prefix}-street2", default=None, help=f"{label} street address line 2")
-    ap.add_argument(f"--{prefix}-city", required=True, help=f"{label} city")
-    ap.add_argument(f"--{prefix}-state", required=True, help=f"{label} state/province code")
-    ap.add_argument(f"--{prefix}-zip", required=True, help=f"{label} postal code")
-    ap.add_argument(f"--{prefix}-country", default="US", help=f"{label} country code (default US)")
+    ap.add_argument(f"--{prefix}-city", required=required, help=f"{label} city")
+    ap.add_argument(f"--{prefix}-state", required=required, help=f"{label} state/province code")
+    ap.add_argument(f"--{prefix}-zip", required=required, help=f"{label} postal code")
+    ap.add_argument(f"--{prefix}-country", default="US" if required else None,
+                    help=f"{label} country code (default US)")
     ap.add_argument(f"--{prefix}-phone", default=None,
                     help=f"{label} phone (some carrier services require one)")
+
+
+def store_ship_from(store: str | None) -> dict:
+    """The store's configured ship-from mapping, or {} when unset.
+
+    `ship_from` is a policy-ish storefront key, so a named store that omits
+    it inherits the default store's (same shelf, same return address) — a
+    named store that ships from elsewhere states its own. Raises ConfigError
+    for a named store with no storefront entry, and for a ship_from that
+    isn't a mapping."""
+    sf = get_storefront(store).get("ship_from") or {}
+    if not isinstance(sf, dict):
+        raise ConfigError(f"storefront ship_from for store {store!r} must be a "
+                          f"mapping of {', '.join(ADDRESS_FIELDS)}")
+    return {k: (str(v) if v is not None else None) for k, v in sf.items()
+            if k in ADDRESS_FIELDS}
+
+
+def _fill_ship_from(args: argparse.Namespace, ap: argparse.ArgumentParser) -> None:
+    """Complete args.from_* in place: flags win, the store's ship_from fills
+    the gaps, and a still-incomplete address is the old argparse error.
+
+    When the flags already give every required field, config is not read at
+    all — a fully explicit address stays exactly what was typed, with no
+    configured street2/phone blended into it."""
+    if args.store:
+        try:
+            stores.validate_store_name(args.store)
+        except ValueError as e:
+            ap.error(str(e))
+    given = {f: getattr(args, f"from_{f}") for f in ADDRESS_FIELDS}
+    if not all(given[f] for f in REQUIRED_FIELDS):
+        try:
+            configured = store_ship_from(stores.resolve_store_name(args.store))
+        except (ConfigError, ValueError) as e:
+            ap.error(str(e))
+        for f in ADDRESS_FIELDS:
+            if not given[f] and configured.get(f):
+                setattr(args, f"from_{f}", configured[f])
+    if not args.from_country:
+        args.from_country = "US"
+    missing = [f"--from-{f}" for f in REQUIRED_FIELDS if not getattr(args, f"from_{f}")]
+    if missing:
+        ap.error("the following arguments are required: " + ", ".join(missing)
+                 + " (or set storefront ship_from for this store in config.yaml)")
 
 
 def _dquote(s: str) -> str:
@@ -74,13 +141,17 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     _add_address_args(ap, "to", "ship-to")
-    _add_address_args(ap, "from", "ship-from")
+    _add_address_args(ap, "from", "ship-from (default: the store's configured ship_from)",
+                      required=False)
     ap.add_argument("--weight-oz", type=float, required=True, help="parcel weight, ounces")
     ap.add_argument("--length-in", type=float, default=None, help="parcel length, inches")
     ap.add_argument("--width-in", type=float, default=None, help="parcel width, inches")
     ap.add_argument("--height-in", type=float, default=None, help="parcel height, inches")
     ap.add_argument("--json", action="store_true", help="print raw rates as JSON")
+    stores.add_store_args(ap, help_extra="Supplies the default ship-from address "
+                                         "(storefront ship_from).")
     args = ap.parse_args()
+    _fill_ship_from(args, ap)
 
     dims = (args.length_in, args.width_in, args.height_in)
     if any(d is not None for d in dims) and not all(d is not None for d in dims):
@@ -122,7 +193,10 @@ def main() -> int:
     print()
     print("  Nothing has been bought — quoting spends nothing. To buy the cheapest")
     print("  one (still a DRY RUN — add --confirm yourself to actually spend money):")
-    print(f"    python -m lib.cli ship-buy --shipment-id {shipment_id} "
+    # Carry the store forward so the chain ship-buy -> pick-list
+    # --record-tracking stays on the account this quote was for (#156).
+    store_flag = f"--store {args.store} " if args.store else ""
+    print(f"    python -m lib.cli ship-buy {store_flag}--shipment-id {shipment_id} "
          f"--rate-id {cheapest.id} --carrier {cheapest.carrier} "
          f"--service {_dquote(cheapest.service)} --price {cheapest.rate:.2f} "
          f"--currency {cheapest.currency}")

@@ -75,7 +75,7 @@ def test_ads_carry_the_ad_group(capsys):
 
     sent = {}
 
-    def fake(method, path, body=None):
+    def fake(method, path, body=None, **k):
         sent.update(method=method, path=path, body=body)
         return {"responses": []}
 

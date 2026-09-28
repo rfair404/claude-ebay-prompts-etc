@@ -261,6 +261,13 @@ Every account/ops tool runs through the `ebz` dispatcher (V4_PLAN Phase 3):
 
     python -m lib.cli                      # list the commands
     python -m lib.cli <command> [args...]
+    python -m lib.cli --store junk <command> [args...]   # one named store
+    python -m lib.cli --all-stores <command> [args...]   # once per store
+
+Commands tagged `[store]` in the listing touch an eBay account or its
+per-store files and take `--store NAME`; without it they use `$EBAYBIZ_STORE`,
+then `ebay.active_store`, then the default store. See
+[docs/STORE-CONNECTION-README.md](docs/STORE-CONNECTION-README.md) Part 3.
 
 `reconcile` (ledger vs Sell API — eBay wins), `live-audit` (local files vs
 live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
