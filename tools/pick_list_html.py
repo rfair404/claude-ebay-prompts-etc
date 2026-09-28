@@ -79,6 +79,7 @@ import argparse
 import base64
 import html
 import io
+import os
 import re
 import sys
 from pathlib import Path
@@ -396,13 +397,14 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
                 f'title="{warn}">{text}</a>')
 
     # Which account the label links need, in words (#156). Default store: its
-    # storefront, as before. Named store: its name, plus its storefront if
-    # configured — never the default store's.
+    # storefront, as before. Named store: its own storefront first when it has
+    # one (#178), always with its name — never the default store's.
     if stores.is_default(store):
         account = brand_storefront
+    elif brand_storefront:
+        account = f"{brand_storefront} (the '{store}' store's eBay account)"
     else:
-        account = f"the '{store}' store's eBay account" + (
-            f" ({brand_storefront})" if brand_storefront else "")
+        account = f"the '{store}' store's eBay account"
     labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
     # Screen-only (hidden in print with the label buttons): the store's
     # internal name is for the packer, not for the buyer who opens the box.
@@ -609,6 +611,12 @@ def main() -> int:
     stores.add_store_args(ap, help_extra="The order is looked up in this store's "
                                          "account and the sheet carries its letterhead.")
     args = ap.parse_args()
+    if args.store:
+        # One switch for both halves: fetch_orders() authenticates through
+        # load_credentials() and the letterhead through get_storefront(), and
+        # both read EBAYBIZ_STORE — so the account the orders came from and
+        # the name printed above them can't disagree.
+        os.environ["EBAYBIZ_STORE"] = args.store
 
     if args.revoke:
         return cmd_revoke(args.revoke)

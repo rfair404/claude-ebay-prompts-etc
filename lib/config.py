@@ -472,6 +472,14 @@ def list_storefronts() -> list[str]:
     return sorted(section.keys())
 
 
+def active_store() -> str:
+    """Name of the store this process acts for when none is passed explicitly
+    (#178). Kept as a name for callers; the precedence rule itself lives once,
+    in lib/stores.resolve_store_name (#156), shared with load_credentials()."""
+    from stores import resolve_store_name  # local: stores imports config
+    return resolve_store_name()
+
+
 def get_storefront(name: Optional[str] = None) -> dict:
     """Return the storefront profile for a store, defaults merged in.
 

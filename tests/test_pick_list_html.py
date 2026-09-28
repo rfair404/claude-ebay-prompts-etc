@@ -179,3 +179,53 @@ if __name__ == "__main__":
                 failures += 1
                 print(f"FAIL {name}: {e}")
     sys.exit(1 if failures else 0)
+
+
+# ---------------------------------------------------------------------------
+# Letterhead follows the store the orders came from (GH #147). A junk-store
+# box must never carry the main store's name, tagline or storefront URL —
+# including on the "verify you're signed into ..." label-button warning.
+# ---------------------------------------------------------------------------
+
+_CFG = {
+    "ebay": {},
+    "store": {"display_name": "Pop's Games", "tagline": "BUY · SELL · TRADE",
+              "storefront_url": "ebay.com/usr/popsgames"},
+    "storefronts": {
+        "junk": {"display_name": None, "returns": "none_as_is"},
+        "named": {"display_name": "Bargain Bin", "storefront_url": "ebay.com/usr/bargainbin"},
+    },
+}
+
+
+@pytest.fixture
+def cfg(monkeypatch):
+    import config as config_mod
+    monkeypatch.setattr(config_mod, "load_config", lambda *a, **k: _CFG)
+    monkeypatch.delenv("EBAYBIZ_STORE", raising=False)
+    return monkeypatch
+
+
+def test_default_store_letterhead_is_pops_games(cfg):
+    out = pick_list_html.render_html([_order()], [], [])
+    assert "Pop&#x27;s Games" in out
+    assert "verify it is ebay.com/usr/popsgames" in out
+
+
+def test_unnamed_junk_store_gets_no_letterhead_and_no_main_store_url(cfg):
+    cfg.setenv("EBAYBIZ_STORE", "junk")
+    out = pick_list_html.render_html([_order()], [], [])
+    body = out[out.index("<body>"):]
+    assert "popsgames" not in body.lower()
+    assert "Pop&#x27;s" not in body and "POP&#x27;S" not in body
+    assert 'class="brand"' not in body
+    assert "the &#x27;junk&#x27; store" in body or "the 'junk' store" in body
+
+
+def test_named_store_prints_its_own_identity_only(cfg):
+    cfg.setenv("EBAYBIZ_STORE", "named")
+    out = pick_list_html.render_html([_order()], [], [])
+    body = out[out.index("<body>"):]
+    assert "Bargain Bin" in body and "verify it is ebay.com/usr/bargainbin" in body
+    assert "popsgames" not in body.lower()
+    assert "BUY · SELL · TRADE" not in body   # tagline is identity: not inherited

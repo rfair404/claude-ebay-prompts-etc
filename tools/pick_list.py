@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -815,6 +816,12 @@ def main() -> int:
         help_extra="--record-tracking requires it explicitly once more than one "
                    "store is configured; --all-stores applies to --poll only.")
     args = ap.parse_args()
+    if args.store:
+        # One switch for both halves: fetch_orders() authenticates through
+        # load_credentials() and the letterhead through get_storefront(), and
+        # both read EBAYBIZ_STORE — so the account the orders came from and
+        # the name printed above them can't disagree.
+        os.environ["EBAYBIZ_STORE"] = args.store
 
     if args.record_tracking and args.poll:
         ap.error("--poll and --record-tracking are separate modes; run them separately "
