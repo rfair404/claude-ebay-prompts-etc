@@ -8,7 +8,9 @@ things live here:
   --poll             check for orders awaiting shipment; render each NEW one to
                       pick_lists/, drop its HTML sheet into the sold item's own
                       folder under inventory/, and publish that file as a LINK
-                      (#151), printing one URL per shipment. Idempotent — an
+                      (#151), printing one URL per shipment. Orders for
+                      the same buyer at the same address always share one
+                      sheet and one URL (group_shipments). Idempotent — an
                       order already rendered is skipped on the next poll,
                       though its link is republished if it expired (see
                       --reprint to force a re-render, --no-links to stay
@@ -101,6 +103,36 @@ def ship_to(o: dict) -> dict:
                     "service": step.get("shippingServiceCode", ""),
                     "by": (f.get("maxEstimatedDeliveryDate") or "")[:10]}
     return {}
+
+
+def shipment_key(o: dict) -> tuple:
+    """What has to match before two orders may share one page: the buyer and
+    the exact place the box is going. Normalised (case/whitespace) but not
+    fuzzy — a near-match is a different shipment."""
+    to = ship_to(o)
+    a = to.get("contactAddress") or {}
+    parts = [(o.get("buyer") or {}).get("username") or "",
+             to.get("fullName") or "",
+             a.get("addressLine1") or "", a.get("addressLine2") or "",
+             a.get("city") or "", a.get("stateOrProvince") or "",
+             a.get("postalCode") or "", a.get("countryCode") or ""]
+    return tuple(re.sub(r"\s+", " ", x).strip().casefold() for x in parts)
+
+
+def group_shipments(orders: list[dict]) -> list[list[dict]]:
+    """Open orders grouped into boxes: every order for the same buyer at the
+    same ship-to address goes on ONE sheet, always — that is one box and one
+    label, however many checkouts the buyer made. Groups keep first-seen
+    order, and orders inside a group keep theirs.
+
+    Same buyer at two different addresses stays two groups: that is two boxes,
+    and a combined sheet for it is a mis-ship (see
+    pick_list_html.assert_one_shipment)."""
+    groups: dict[tuple, list[dict]] = {}
+    for o in orders:
+        if o.get("orderId"):
+            groups.setdefault(shipment_key(o), []).append(o)
+    return list(groups.values())
 
 
 _HAND_LOC = load_hand_locations()
@@ -279,9 +311,13 @@ def drop_in_item_folders(order: dict, html: str, drafts: list[dict],
     return written
 
 
-def publish_sheet(order: dict, drafts: list[dict], ledger: list[dict], *,
+def publish_sheet(orders: dict | list[dict], drafts: list[dict], ledger: list[dict], *,
                   ttl_hours: float | None = None) -> object | None:
-    """Render this order's HTML pick sheet and publish it as a link (#151).
+    """Render one shipment's HTML pick sheet and publish it as a link (#151).
+
+    `orders` is one order or a group_shipments() group — several orders for
+    one buyer at one address share a single sheet and a single link, and every
+    item's folder gets a copy of that combined sheet.
 
     The BUYER-SAFE sheet is the one that gets a URL. The .txt this function's
     caller writes beside it is the seller's copy — it carries buyer-paid
@@ -290,23 +326,26 @@ def publish_sheet(order: dict, drafts: list[dict], ledger: list[dict], *,
 
     Never raises: a link is an upgrade over a file path, not a reason for the
     poll loop to die. Returns the Sheet, or None with a warning printed."""
+    orders = [orders] if isinstance(orders, dict) else list(orders)
     try:
         import pick_store                                 # noqa: PLC0415
         import pick_list_html                             # noqa: PLC0415
 
-        html = pick_list_html.render_html([order], drafts, ledger)
+        html = pick_list_html.render_html(orders, drafts, ledger)
         # The sheet lands in the item's folder first, and the link is then
         # pointed AT that file rather than at a second copy in the store. One
         # sheet on disk, in the folder the picker is already opening. An order
         # with no placeable item (hand listed) has no folder to land in, and
         # falls back to the store holding the copy itself.
-        copies = drop_in_item_folders(order, html, drafts, ledger)
+        copies = [p for o in orders
+                  for p in drop_in_item_folders(o, html, drafts, ledger)]
         return pick_store.publish(
-            html, order_ids=[order.get("orderId", "")],
+            html, order_ids=[o.get("orderId", "") for o in orders],
             ttl_hours=ttl_hours if ttl_hours is not None else pick_store.TTL_HOURS_DEFAULT,
             source=copies[0] if copies else None)
     except Exception as e:                                          # noqa: BLE001
-        print(f"  ! could not publish a link for {order.get('orderId','?')} ({e}); "
+        ids = ", ".join(o.get("orderId", "?") for o in orders)
+        print(f"  ! could not publish a link for {ids} ({e}); "
               f"the local sheet in {OUT_DIR.name}/ is the fallback")
         return None
 
@@ -323,11 +362,12 @@ def _record_link(entry: dict, sheet) -> None:
     entry["expires_at"] = sheet.expires_at
 
 
-def _live_sheet(order_id: str):
-    """The link already published for this order, if it hasn't expired."""
+def _live_sheet(order_ids: list[str]):
+    """The link already published for exactly these orders, if it hasn't
+    expired. A solo sheet does not count for a group that has since grown."""
     try:
         import pick_store                                 # noqa: PLC0415
-        return pick_store.live_sheet_for([order_id])
+        return pick_store.live_sheet_for(order_ids)
     except Exception:                                     # noqa: BLE001
         return None
 
@@ -365,46 +405,49 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     new_ids: list[str] = []
     skipped_ids: list[str] = []
     unconfirmed_print_ids: list[str] = []
-    for o in orders:
-        oid = o.get("orderId", "")
-        if not oid:
-            continue
-        if oid in st["printed"] and oid != reprint:
-            skipped_ids.append(oid)
-            if publish:
-                entry = st["printed"][oid]
-                sheet = _live_sheet(oid)
-                if sheet is None:
-                    sheet = publish_sheet(o, drafts, ledger, ttl_hours=ttl_hours)
-                _record_link(entry, sheet)
-            continue
-        text = render(o, drafts, ledger)
-        path = out_dir / f"pick_{_safe_filename(oid)}.txt"
-        path.write_text(text + "\n", encoding="utf-8")
-        try:
-            recorded_path = str(path.relative_to(ROOT))
-        except ValueError:
-            recorded_path = str(path)  # out_dir given outside ROOT (e.g. tests)
-        st["printed"][oid] = {"printed_at": _now_iso(),
-                              "file": recorded_path.replace("\\", "/")}
-        if publish:
-            _record_link(st["printed"][oid],
-                         publish_sheet(o, drafts, ledger, ttl_hours=ttl_hours))
-        new_ids.append(oid)
-        if do_print:
-            # _send_to_printer already catches everything it knows about and
-            # is contracted to never raise — this guard is for the case that
-            # contract is ever violated (e.g. by a test double, or a future
-            # bug): a poll loop must never die over a printer, the file in
-            # out_dir is always the fallback.
+    for group in group_shipments(orders):
+        group_ids = [o["orderId"] for o in group]
+        fresh = False
+        for o in group:
+            oid = o["orderId"]
+            if oid in st["printed"] and oid != reprint:
+                skipped_ids.append(oid)
+                continue
+            fresh = True
+            text = render(o, drafts, ledger)
+            path = out_dir / f"pick_{_safe_filename(oid)}.txt"
+            path.write_text(text + "\n", encoding="utf-8")
             try:
-                confirmed = _send_to_printer(path)
-            except Exception as e:                                  # noqa: BLE001
-                print(f"  ! printing {path.name} raised unexpectedly ({e}); "
-                      f"file is still ready to print by hand")
-                confirmed = False
-            if not confirmed:
-                unconfirmed_print_ids.append(oid)
+                recorded_path = str(path.relative_to(ROOT))
+            except ValueError:
+                recorded_path = str(path)  # out_dir given outside ROOT (e.g. tests)
+            st["printed"][oid] = {"printed_at": _now_iso(),
+                                  "file": recorded_path.replace("\\", "/")}
+            new_ids.append(oid)
+            if do_print:
+                # _send_to_printer already catches everything it knows about and
+                # is contracted to never raise — this guard is for the case that
+                # contract is ever violated (e.g. by a test double, or a future
+                # bug): a poll loop must never die over a printer, the file in
+                # out_dir is always the fallback.
+                try:
+                    confirmed = _send_to_printer(path)
+                except Exception as e:                              # noqa: BLE001
+                    print(f"  ! printing {path.name} raised unexpectedly ({e}); "
+                          f"file is still ready to print by hand")
+                    confirmed = False
+                if not confirmed:
+                    unconfirmed_print_ids.append(oid)
+        if publish:
+            # One sheet, one link per box. A group with a new order in it is
+            # re-rendered even if some of its orders were printed alone on an
+            # earlier poll — publishing it revokes their solo links, so the
+            # picker can't pack from a sheet that is missing an item.
+            sheet = None if fresh else _live_sheet(group_ids)
+            if sheet is None:
+                sheet = publish_sheet(group, drafts, ledger, ttl_hours=ttl_hours)
+            for oid in group_ids:
+                _record_link(st["printed"][oid], sheet)
     return new_ids, skipped_ids, st, unconfirmed_print_ids
 
 
@@ -530,10 +573,14 @@ def cmd_poll(args) -> int:
           + (f"; {len(skipped_ids)} already printed" if skipped_ids else ""))
     if not args.no_links:
         import pick_store                                 # noqa: PLC0415
+        # One line per box: orders combined onto one sheet share one URL.
+        by_url: dict[str, list[str]] = {}
         for oid in new_ids + skipped_ids:
             url = (state["printed"].get(oid) or {}).get("url")
             if url:
-                print(f"  {oid}  {url}")
+                by_url.setdefault(url, []).append(oid)
+        for url, oids in by_url.items():
+            print(f"  {' + '.join(oids)}  {url}")
         if (new_ids or skipped_ids) and not pick_store.server_is_up():
             print(f"  ! {pick_store.SERVE_HINT}")
     if unconfirmed:

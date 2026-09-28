@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""tools/pick_list_html.py — the printed haiku block (GH #161).
+"""tools/pick_list_html.py — what the rendered sheet does and doesn't carry.
 
 render_html() is otherwise covered indirectly (it's the tool behind the
-`/pick/{token}` route), but the haiku it now appends at the bottom of the
-page has its own rule worth locking down: the haiku's own text must never
-carry the buyer's name, only the item/region-themed lines from
-tools/haiku.py's curated pools.
+`/pick/{token}` route). These lock down two rules: the sheet carries no haiku
+(GH #161's block was dropped from the template), and a same-buyer,
+same-address group renders every order's items onto the one page.
 
 Run:  python tests/test_pick_list_html.py
   or: pytest tests/test_pick_list_html.py
 """
-import html
-import re
 import sys
 from pathlib import Path
 
@@ -24,7 +21,6 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 pick_list_html = pytest.importorskip(
     "pick_list_html", reason="pick_list_html imports numpy/Pillow")
-import haiku                                                       # noqa: E402
 
 
 def _money(v):
@@ -62,39 +58,25 @@ def _order(*, oid="03-11111-22222", title="Pokemon TCG Booster Box",
     }
 
 
-def _haiku_block(out_html: str) -> str:
-    m = re.search(r'<div class="haiku">(.*?)</div>', out_html, re.S)
-    assert m, "no <div class=\"haiku\"> block in rendered page"
-    return html.unescape(m.group(1))
-
-
-def test_render_html_includes_a_haiku_block():
+def test_render_html_has_no_haiku():
     out = pick_list_html.render_html([_order()], [], [])
-    assert 'class="haiku"' in out
+    assert "haiku" not in out.lower()
 
 
-def test_haiku_block_matches_the_generator():
-    order = _order()
-    out = pick_list_html.render_html([order], [], [])
-    block = _haiku_block(out)
-    expected = "<br>".join(haiku.generate_haiku(
-        order["orderId"], order["lineItems"][0]["title"], "OH"))
-    assert block == expected
+def test_same_buyer_orders_render_onto_one_page():
+    a = _order(oid="03-11111-22222", title="Aristo MultiLog Slide Rule")
+    b = _order(oid="03-33333-44444", title="Aristo Darmstadt Slide Rule")
+    pick_list_html.assert_one_shipment([a, b])        # same buyer + address
+    out = pick_list_html.render_html([a, b], [], [])
+    assert "Aristo MultiLog Slide Rule" in out
+    assert "Aristo Darmstadt Slide Rule" in out
 
 
-def test_haiku_text_never_contains_buyer_name():
-    order = _order(fullname="Jamie Buyer", city="Springfield", state="OH")
-    out = pick_list_html.render_html([order], [], [])
-    block = _haiku_block(out).lower()
-    for forbidden in ("jamie", "buyer", "springfield"):
-        assert forbidden not in block
-
-
-def test_haiku_block_stable_across_rerenders():
-    order = _order()
-    first = _haiku_block(pick_list_html.render_html([order], [], []))
-    second = _haiku_block(pick_list_html.render_html([order], [], []))
-    assert first == second
+def test_different_addresses_are_still_refused():
+    a = _order(oid="03-11111-22222")
+    b = _order(oid="03-33333-44444", city="Dayton")
+    with pytest.raises(SystemExit):
+        pick_list_html.assert_one_shipment([a, b])
 
 
 if __name__ == "__main__":

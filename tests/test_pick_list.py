@@ -983,3 +983,66 @@ def test_the_published_sheet_is_the_buyer_safe_one_not_the_seller_txt():
         assert "buyer paid" not in served.lower()
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# same buyer + same address -> one sheet, one link, always
+# --------------------------------------------------------------------------- #
+def test_group_shipments_combines_same_buyer_same_address():
+    a, b = _order(oid="g-1"), _order(oid="g-2")
+    c = _order(oid="g-3", fullname="Someone Else")
+    assert [[o["orderId"] for o in g] for g in pick_list.group_shipments([a, c, b])] \
+        == [["g-1", "g-2"], ["g-3"]]
+
+
+def test_group_shipments_keeps_same_buyer_at_two_addresses_apart():
+    a, b = _order(oid="g-4"), _order(oid="g-5")
+    b["fulfillmentStartInstructions"][0]["shippingStep"]["shipTo"][
+        "contactAddress"]["addressLine1"] = "2 Other Rd"
+    assert len(pick_list.group_shipments([a, b])) == 2
+
+
+def test_poll_combines_same_buyer_orders_onto_one_link():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    _FakeHtml.rendered = []
+    orders = [_order(oid="combo-1"), _order(oid="combo-2")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                new_ids, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: orders)
+        assert new_ids == ["combo-1", "combo-2"]
+        assert _FakeHtml.rendered == [["combo-1", "combo-2"]]   # one sheet
+        assert state["printed"]["combo-1"]["url"] == state["printed"]["combo-2"]["url"]
+        # the seller's .txt copies stay per order
+        assert (out_dir / "pick_combo-1.txt").exists()
+        assert (out_dir / "pick_combo-2.txt").exists()
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_later_order_from_the_same_buyer_folds_into_the_earlier_sheet():
+    out_dir, _ = _scratch_dirs()
+    store = _pick_store_at(out_dir.parent)
+    _FakeHtml.rendered = []
+    first = [_order(oid="late-1")]
+    both = [_order(oid="late-1"), _order(oid="late-2")]
+    try:
+        with _no_inventory():
+            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                _, _, state, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                    fetch=lambda: first)
+                solo = state["printed"]["late-1"]["token"]
+                new_ids, skipped, state2, _ = pick_list.poll_and_print(
+                    out_dir=out_dir, state=state, fetch=lambda: both)
+        assert new_ids == ["late-2"] and skipped == ["late-1"]
+        assert _FakeHtml.rendered == [["late-1"], ["late-1", "late-2"]]
+        combined = state2["printed"]["late-2"]["token"]
+        assert state2["printed"]["late-1"]["token"] == combined
+        assert store.fetch(solo)[1] != "ok"             # the solo sheet is revoked
+        assert store.fetch(combined)[1] == "ok"
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
