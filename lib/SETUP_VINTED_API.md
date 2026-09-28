@@ -65,7 +65,8 @@ rejects stale signature timestamps).
 
 ## 5. What the pipeline still needs before it can publish
 
-The transport layer is done. These are the follow-ups, in order:
+The transport layer is done. The full phased plan is in
+[docs/VINTED_PLAN.md](../docs/VINTED_PLAN.md); in short:
 
 1. **Ontology mapping.** A draft's eBay `category_id` / `condition` /
    `item_specifics` → Vinted `catalog_id` / `status_id` / `item_attributes` /
