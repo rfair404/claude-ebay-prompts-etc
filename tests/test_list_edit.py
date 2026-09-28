@@ -652,7 +652,8 @@ def _ledger_dir_at(tmp_path):
     against, WITHOUT setting $EBAYBIZ_LISTINGS_LEDGER — that env var is a
     single-file override that wins over any store (by design), so it can't
     be used to test that two stores land in two different files."""
-    with _patched(L, _REPO_ROOT=tmp_path):
+    import stores
+    with _patched(stores, REPO=tmp_path):
         yield
 
 
@@ -703,22 +704,23 @@ def test_ledger_path_rejects_a_store_name_that_is_not_a_bare_identifier():
                 raise AssertionError(f"expected ValueError for store={bad!r}")
 
 
-def test_ledger_store_fallback_precedence_env_then_config_then_default():
-    """_ledger_store_fallback() is only consulted when a caller has no
-    resolved creds.store to hand _ledger_path() (the --record/--normalize
-    path, which is deliberately credential-free) — it must mirror
-    load_credentials()'s own env-var/config/default fallback without
-    loading any credentials itself."""
+def test_ledger_path_without_a_store_resolves_env_then_config_then_default():
+    """_ledger_path(None) is the --record/--normalize path, which is
+    deliberately credential-free — it must resolve the store exactly as
+    load_credentials() does (lib/stores.resolve_store_name, GH #156)
+    without loading any credentials itself."""
+    import stores
     prev = os.environ.get("EBAYBIZ_STORE")
     try:
         os.environ.pop("EBAYBIZ_STORE", None)
-        with _patched(L, load_config=lambda: {}):
-            assert L._ledger_store_fallback() == "default"
-        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
-            assert L._ledger_store_fallback() == "junk", "config active_store must be honored"
-        os.environ["EBAYBIZ_STORE"] = "mainline"
-        with _patched(L, load_config=lambda: {"ebay": {"active_store": "junk"}}):
-            assert L._ledger_store_fallback() == "mainline", "$EBAYBIZ_STORE must win over config"
+        with tempfile.TemporaryDirectory() as td, _ledger_dir_at(Path(td)):
+            with _patched(stores, load_config=lambda: {}):
+                assert L._ledger_path().name == "listings_ledger.csv"
+            with _patched(stores, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+                assert L._ledger_path().name == "listings_ledger-junk.csv",                     "config active_store must be honored"
+            os.environ["EBAYBIZ_STORE"] = "mainline"
+            with _patched(stores, load_config=lambda: {"ebay": {"active_store": "junk"}}):
+                assert L._ledger_path().name == "listings_ledger-mainline.csv",                     "$EBAYBIZ_STORE must win over config"
     finally:
         if prev is None:
             os.environ.pop("EBAYBIZ_STORE", None)

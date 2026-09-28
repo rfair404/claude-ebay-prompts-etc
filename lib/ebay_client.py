@@ -85,6 +85,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import ConfigError, config_path, load_config
+from stores import DEFAULT_STORE, resolve_store_name
 from ebay_schema import get_schema, print_schema
 
 
@@ -170,9 +171,6 @@ class EbayAPIError(RuntimeError):
 # Credentials loader
 # ---------------------------------------------------------------------------
 
-DEFAULT_STORE = "default"
-
-
 @dataclass
 class EbayCredentials:
     """Loaded eBay credentials. Missing fields are None."""
@@ -225,8 +223,7 @@ def load_credentials(store: Optional[str] = None) -> EbayCredentials:
     config = load_config()
     section = config.get("ebay") or {}
 
-    if store is None:
-        store = os.environ.get("EBAYBIZ_STORE") or section.get("active_store") or DEFAULT_STORE
+    store = resolve_store_name(store)
 
     if store == DEFAULT_STORE:
         env = section.get("environment") or DEFAULT_ENVIRONMENT
