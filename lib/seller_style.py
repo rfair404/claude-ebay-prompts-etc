@@ -59,6 +59,16 @@ DEFAULT_CATEGORIES = [
     ("625", "Cameras & Photo"),
     ("64482", "Sports Mem, Cards & Fan Shop"),
     ("11233", "Music"),
+    # Added after a live audit read 19 buyable listings as GONE purely because
+    # their top-level category was missing here: lures and holsters (888),
+    # harmonicas (619), Great Courses DVD sets (11232), selenium rectifiers and
+    # lamp stock (12576), a leg massager (26395). A category we do not ask for
+    # is indistinguishable from a listing that ended.
+    ("888", "Sporting Goods"),
+    ("619", "Musical Instruments & Gear"),
+    ("11232", "DVDs & Movies"),
+    ("12576", "Business & Industrial"),
+    ("26395", "Health & Beauty"),
 ]
 
 ERA_WORDS = {

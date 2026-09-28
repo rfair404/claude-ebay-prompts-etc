@@ -2187,7 +2187,14 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
 def list_account_offers(creds: Optional[EbayCredentials] = None) -> list[dict]:
     """Enumerate every offer on the account (inventory items -> offers).
 
-    Returns rows: sku, title, offer_id, status, listing_id, price, marketplace.
+    Returns rows: sku, title, offer_id, status, listing_id, price, marketplace,
+    listing_status, sold_quantity, available_quantity.
+
+    `listing_status` is eBay's own word for what a BUYER sees — ACTIVE,
+    OUT_OF_STOCK (it sold) or ENDED — and it is the field that says whether a
+    listing is purchasable. It used to be dropped here, which forced callers to
+    rediscover purchasability by searching Browse category by category; a
+    listing in a category nobody searched then read as dead. Keep it.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -2203,13 +2210,19 @@ def list_account_offers(creds: Optional[EbayCredentials] = None) -> list[dict]:
         if not offers:
             rows.append({"sku": sku, "title": title, "offer_id": None,
                          "status": "NO_OFFER", "listing_id": None,
+                         "listing_status": None, "sold_quantity": None,
+                         "available_quantity": None,
                          "price": None, "marketplace": None})
         for off in offers:
+            listing = off.get("listing") or {}
             rows.append({
                 "sku": sku, "title": title,
                 "offer_id": off.get("offerId"),
                 "status": off.get("status"),
-                "listing_id": (off.get("listing") or {}).get("listingId"),
+                "listing_id": listing.get("listingId"),
+                "listing_status": listing.get("listingStatus"),
+                "sold_quantity": listing.get("soldQuantity"),
+                "available_quantity": off.get("availableQuantity"),
                 "price": ((off.get("pricingSummary") or {}).get("price") or {}).get("value"),
                 "marketplace": off.get("marketplaceId"),
             })
