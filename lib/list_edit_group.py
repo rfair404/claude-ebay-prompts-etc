@@ -375,6 +375,7 @@ def publish_group(group_path: Path, creds: Optional[EbayCredentials] = None,
     creds = creds or load_credentials()
     group_path = _resolve_group_path(group_path)
     draft = parse_draft(group_path)
+    le._refuse_if_sold(group_path, store=creds.store)
     group_key = str(draft.get("meta.ebay_inventory_item_group_key")
                     or draft.get("meta.group_id") or group_path.parent.name)
     if not confirm:

@@ -290,6 +290,46 @@ _LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
                   "SHIPPED": "shipped_at"}
 
 
+# Ledger statuses that mean the thing has left (or is leaving) the building.
+_TERMINAL_SOLD = ("SOLD", "SHIPPED")
+
+
+class AlreadySoldError(ValueError):
+    """Publishing this draft would list an item that has already sold."""
+
+
+def sold_reason(draft_path: Path, sku: str = "", store: Optional[str] = None) -> str:
+    """Why this draft must never go live again, or "" if nothing says it sold.
+
+    Two independent local markers, either one is enough: the folder's SOLD.md
+    stamp (written by sync_actuals, which also catches items that were listed
+    by hand and matched by title) and a SOLD/SHIPPED row for the SKU in the
+    listings ledger."""
+    stamp = Path(draft_path).parent / "SOLD.md"
+    if stamp.exists():
+        first = stamp.read_text(encoding="utf-8", errors="ignore").splitlines()[:3]
+        order = next((ln.strip("- ").strip() for ln in first if "order" in ln), "")
+        return f"{stamp} exists" + (f" ({order})" if order else "")
+    if sku:
+        import csv
+        path = _ledger_path(store)
+        if path.exists():
+            with path.open(newline="", encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    if r.get("sku") == sku and (r.get("status") or "") in _TERMINAL_SOLD:
+                        return f"listings ledger has SKU {sku} as {r['status']}"
+    return ""
+
+
+def _refuse_if_sold(draft_path: Path, sku: str = "", store: Optional[str] = None) -> None:
+    why = sold_reason(draft_path, sku, store)
+    if why:
+        raise AlreadySoldError(
+            f"refusing to publish {draft_path}: this item already SOLD — {why}. "
+            "Re-listing it would sell something we no longer have. If the sale "
+            "was matched to the wrong folder, fix SOLD.md / the ledger row first.")
+
+
 _STORE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -361,6 +401,11 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         cur = row.get("status") or ""
         if status == "DRAFTED":
             row["status"] = cur or "DRAFTED"
+        elif cur in _TERMINAL_SOLD and status in ("SYNCED", "PUBLISHED", "SOLD"):
+            # A sold item stays sold: a stray re-sync must not make it look
+            # listable again, and a re-run of sync_actuals must not walk a
+            # SHIPPED row back to SOLD. ENDED/DELETED still apply.
+            row["status"] = "SHIPPED" if "SHIPPED" in (cur, status) else cur
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
         else:                       # PUBLISHED / ENDED / DELETED / SHIPPED
@@ -2069,6 +2114,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         raise EbayAuthError("Publish needs user-context OAuth. Run `python list_edit.py --setup-check`.")
     draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
+    _refuse_if_sold(draft_path, str(draft.get("meta.ebay_inventory_sku") or ""), creds.store)
     offer_id = str(draft.get("meta.ebay_offer_id") or "").strip()
     if not offer_id:
         raise ValueError("draft has no meta.ebay_offer_id — run `--sync` first to create the offer.")
@@ -2078,6 +2124,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     _ps = off.get("pricingSummary") or {}
     price = str((_ps.get("price") or _ps.get("auctionStartPrice") or {}).get("value") or "?")
     sku = str(off.get("sku") or draft.get("meta.ebay_inventory_sku") or "")
+    _refuse_if_sold(draft_path, sku, creds.store)
     title = str(draft.get("title") or "")
     if not title and sku:
         try:

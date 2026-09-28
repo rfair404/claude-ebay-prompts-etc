@@ -598,15 +598,22 @@ def write_finances_status(status: dict, *, days: int, orders_total: int,
     FINANCES_STATUS_JSON.write_text(json.dumps(doc, indent=1), encoding="utf-8")
 
 
-def mark_sold_in_ledger(rows: list[dict]) -> int:
+def mark_sold_in_ledger(rows: list[dict], drafts: list[dict] | None = None) -> int:
     """Advance the listings ledger to SOLD. The `price` column is deliberately
-    left alone: it is the ASK, and sales_ledger.csv holds the actual."""
+    left alone: it is the ASK, and sales_ledger.csv holds the actual.
+
+    A sale matched to a local folder by title (listed by hand, or a second copy
+    of a draft) carries eBay's SKU, not the draft's — so the draft's own SKU is
+    marked SOLD too, otherwise the ledger keeps offering it as listable."""
     from list_edit import upsert_listing
+    sku_by_dir = {d["dir"]: d["sku"] for d in (drafts or []) if d.get("sku")}
     n = 0
     for r in rows:
-        if r["sku"]:
-            upsert_listing(r["sku"], "SOLD", listing_id=r["listing_id"],
-                           url=f"https://www.ebay.com/itm/{r['listing_id']}")
+        url = f"https://www.ebay.com/itm/{r['listing_id']}"
+        skus = {r["sku"], sku_by_dir.get(r.get("shoot_dir") or "", "")} - {""}
+        for sku in skus:
+            upsert_listing(sku, "SOLD", url=url,
+                           listing_id=r["listing_id"] if sku == r["sku"] else "")
             n += 1
     return n
 
@@ -697,6 +704,7 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
               f"(publishing these would DUPLICATE a sold item)")
         for d in stale:
             print(f"  {d['dir']}  ask ${d['price']}")
+        print("  (--apply stamps SOLD.md in each; publish_offer refuses any folder with one)")
 
     if store:
         active = store.get("active", [])
@@ -826,7 +834,7 @@ def main() -> int:
                 stamped += 1
             else:
                 declined += 1
-    marked = mark_sold_in_ledger(rows)
+    marked = mark_sold_in_ledger(rows, drafts)
     print(f"\n[OK] wrote {SALES_LEDGER}  ({len(rows)} rows)")
     print(f"[OK] stamped SOLD.md in {stamped} folder(s)"
           + (f"; {declined} left alone (already record a different order)" if declined else ""))
