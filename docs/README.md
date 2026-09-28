@@ -14,6 +14,7 @@ prompt, not the archive.
 | Doc | What it is |
 |---|---|
 | [V4_PLAN.md](V4_PLAN.md) | The refactor being worked: skinny prompts, terse tools, one CLI, fewer round-trips, a session observer. Phase checkboxes are the live status. |
+| [STORE-CONNECTION-README.md](STORE-CONNECTION-README.md) | IMPLEMENTED (#147/#150) — the runbook for connecting an ADDITIONAL eBay seller account (e.g. a junk store) so both stay connected at once. The procedure, in order, with the silent-failure steps called out. |
 | [local-pickup-fragile.md](local-pickup-fragile.md) | IMPLEMENTED — how ship-risky items route to the local-pickup fulfillment policy, and the freight fallback for distant buyers. |
 | [price-strategy-v2.md](price-strategy-v2.md) | IMPLEMENTED — the distribution-based PRICE strategy (`lib/price_stats.py`) and the policy defaults it ships with. |
 | [top-rated-plus.md](top-rated-plus.md) | What eBay's seller-standards policy requires a *listing* to carry, separated from the behavioral requirements a listing cannot encode. |

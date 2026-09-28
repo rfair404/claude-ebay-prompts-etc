@@ -62,6 +62,15 @@ class ConfigError(RuntimeError):
 # reliability (high success rate) + AI-mode + visual/exact match buckets.
 DEFAULT_LENS_ACTOR = "borderline/google-lens"
 
+# lib/fine_inspect.py — pluggable high-resolution image inspector (fine
+# print, raised/embossed marks, signatures). "gemini" is the only backend
+# shipped today; registering a new one in fine_inspect.BACKENDS makes its
+# name valid here too.
+DEFAULT_VISION_BACKEND = "gemini"
+# Chosen for accuracy on fine detail over cost/latency — fine_inspect is
+# called sparingly, on crops other reads already failed on.
+DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+
 DEFAULT_PROFILE = {
     "margin_target": 0.50,
     "buy_point_multiplier": 0.5,
@@ -226,6 +235,63 @@ def get_lens_actor() -> str:
     return DEFAULT_LENS_ACTOR
 
 
+def get_gemini_api_key() -> str:
+    """Gemini API key for lib/fine_inspect.py. Precedence: env var > config
+    file > error. Same precedence contract as get_apify_token().
+
+    Raises:
+        ConfigError if no key is available anywhere.
+    """
+    env = os.environ.get("GEMINI_API_KEY")
+    if env:
+        return env
+
+    config = load_config()
+    key = _nested(config, "vision", "gemini", "api_key")
+    if key:
+        return str(key)
+
+    raise ConfigError(
+        f"Gemini API key not found.\n"
+        f"  Set the GEMINI_API_KEY environment variable, OR\n"
+        f"  add this to {config_path()}:\n"
+        f"      vision:\n"
+        f"        gemini:\n"
+        f"          api_key: \"<your-key>\"\n"
+        f"  (Get a key at https://aistudio.google.com/apikey)"
+    )
+
+
+def get_gemini_model() -> str:
+    """Gemini model id for fine_inspect's Gemini backend. Precedence:
+    env > config > DEFAULT_GEMINI_MODEL."""
+    env = os.environ.get("GEMINI_VISION_MODEL")
+    if env:
+        return env
+
+    config = load_config()
+    model = _nested(config, "vision", "gemini", "model")
+    if model:
+        return str(model)
+
+    return DEFAULT_GEMINI_MODEL
+
+
+def get_vision_backend() -> str:
+    """Which lib/fine_inspect.py backend to use. Precedence:
+    env > config `vision.backend` > DEFAULT_VISION_BACKEND ("gemini")."""
+    env = os.environ.get("VISION_BACKEND")
+    if env:
+        return env
+
+    config = load_config()
+    backend = _nested(config, "vision", "backend")
+    if backend:
+        return str(backend)
+
+    return DEFAULT_VISION_BACKEND
+
+
 def get_easypost_key() -> str:
     """EasyPost API key. Precedence: env var > config file > error.
 
@@ -281,6 +347,28 @@ def get_ebay_credentials() -> dict:
     }
 
 
+def get_store() -> dict:
+    """Return the `store:` branding section from config.
+
+    Every key is a string, defaulting to "" when unset or when there is no
+    config file at all — callers decide what an empty value falls back to
+    (see tools/pick_list_html.py). This does not read `ebay.stores.<name>`
+    (per-store OAuth credentials, see ebay_client.load_credentials()) — the
+    two are unrelated config trees that happen to share the word "store".
+
+    Returns:
+        Dict with keys: display_name, tagline, storefront_url, closing_block.
+    """
+    config = load_config()
+    section = config.get("store") or {}
+    return {
+        "display_name":   section.get("display_name") or "",
+        "tagline":        section.get("tagline") or "",
+        "storefront_url": section.get("storefront_url") or "",
+        "closing_block":  section.get("closing_block") or "",
+    }
+
+
 def get_profile(name: Optional[str] = None) -> dict:
     """Return a CURATE strategy profile by name.
 
@@ -326,6 +414,94 @@ def get_profile(name: Optional[str] = None) -> dict:
     # Merge with built-in defaults so partial profiles still work
     merged = dict(DEFAULT_PROFILE)
     merged.update(profile)
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Storefronts (GH #147) — the BUSINESS behind a seller account
+# ---------------------------------------------------------------------------
+#
+# `ebay.stores.<name>` (ebay_client.load_credentials) answers "which account
+# does this API call go to". That is not the same question as "what kind of
+# shop is this". A secondary junk store is a different business: it sells
+# as-is goods, refuses returns, makes the buyer pay postage, and signs off
+# under its own name — none of which is a credential.
+#
+# The default storefront is the existing top-level `store:` block, read in
+# place. It is deliberately NOT copied into `storefronts.default`: one fact,
+# one home, and today's single-store configs keep working untouched.
+
+# Keys a named storefront must state for itself. Inheriting the default
+# store's IDENTITY is the bug this whole mechanism exists to fix — a junk
+# listing that omits display_name must ship the unnamed thank-you, never
+# sign off as the main storefront. Policy keys inherit; these do not.
+STOREFRONT_IDENTITY_KEYS = ("display_name", "closing_block")
+
+
+def list_storefronts() -> list[str]:
+    """Names of the additional storefront profiles under `storefronts:`.
+
+    The default storefront (top-level `store:`) is always available and is
+    not included here — same convention as ebay_client.list_stores().
+    """
+    section = load_config().get("storefronts") or {}
+    return sorted(section.keys())
+
+
+def get_storefront(name: Optional[str] = None) -> dict:
+    """Return the storefront profile for a store, defaults merged in.
+
+    Args:
+        name: storefront to load. Precedence matches
+            ebay_client.load_credentials() so one `--store junk` selects the
+            account AND the business behind it: explicit arg > EBAYBIZ_STORE
+            env var > ebay.active_store in config > "default".
+
+    Returns:
+        Merged dict. Policy keys fall through to the default storefront when
+        the named one omits them, so a sparse override only has to state what
+        actually differs. Identity keys (STOREFRONT_IDENTITY_KEYS) never fall
+        through — an unset display_name is None, not the default store's name.
+
+    Raises:
+        ConfigError if a non-default storefront name has no `storefronts:`
+        entry — silently falling back to the main storefront's terms is how a
+        junk listing would go out under the good store's identity.
+    """
+    config = load_config()
+
+    if name is None:
+        name = (
+            os.environ.get("EBAYBIZ_STORE")
+            or _nested(config, "ebay", "active_store")
+            or "default"
+        )
+
+    base = dict(_nested(config, "store") or {})
+
+    if name == "default":
+        return base
+
+    override = _nested(config, "storefronts", name)
+    if override is None:
+        known = ", ".join(list_storefronts()) or "(none configured)"
+        raise ConfigError(
+            f"Storefront '{name}' not found in {config_path()}.\n"
+            f"  Add it under 'storefronts:' — a named store needs its own "
+            f"identity and terms, and inheriting the default store's would "
+            f"ship its name on the wrong listings.\n"
+            f"  Configured storefronts: {known}"
+        )
+    if not isinstance(override, dict):
+        raise ConfigError(
+            f"Storefront '{name}' in {config_path()} is not a YAML mapping "
+            f"(got {type(override).__name__})"
+        )
+
+    merged = {k: v for k, v in base.items() if k not in STOREFRONT_IDENTITY_KEYS}
+    for k in STOREFRONT_IDENTITY_KEYS:
+        merged[k] = None
+    merged.update(override)
     return merged
 
 
@@ -391,6 +567,15 @@ def _cli() -> None:
         print(f"apify.lens_actor: {get_lens_actor()}")
 
         try:
+            gemini_key = get_gemini_api_key()
+            print(f"vision.gemini.api_key: {_redact(gemini_key)}")
+        except ConfigError:
+            print("vision.gemini.api_key: (not set)")
+
+        print(f"vision.backend: {get_vision_backend()}")
+        print(f"vision.gemini.model: {get_gemini_model()}")
+
+        try:
             ep_key = get_easypost_key()
             print(f"easypost.api_key: {_redact(ep_key)}")
         except ConfigError:
@@ -428,6 +613,7 @@ def _cli() -> None:
 
         for name, getter, note in (
             ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
+            ("GEMINI_API_KEY", get_gemini_api_key, "fine_inspect.py only"),
         ):
             try:
                 getter()

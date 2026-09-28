@@ -69,6 +69,19 @@ CONSERVATIVE_PCT = 25       # no-objection floor percentile
 RECOMMENDED_PCT = 50        # working-price percentile (median)
 PUSH_HIGH_FALLBACK_PCT = 90  # ceiling when no price_high comp vets out
 
+# --- storefront price posture: below_new (GH #147) --------------------------
+# Ceiling-first assumes scarcity sets the price: the comp ceiling is real
+# because nobody can make another one. For goods still sold new that premise
+# is false — the buyer's alternative is not our next-best comp, it is the
+# retail box. So a `below_new` storefront caps the ask at a fraction of the
+# NEW delivered price rather than at the sold-comp ceiling.
+#
+# 0.75: at or above three-quarters of new, a rational buyer buys new and gets
+# a warranty, no wear and a returnable parcel. Used has to be visibly cheaper
+# to be worth the risk, and more so on a store that refuses returns. This is a
+# knob, not a law — override per storefront with new_price_ceiling_pct.
+NEW_CEILING_PCT = 0.75
+
 THIN_N = 3                  # n < THIN_N like-condition comps → fall back
 GOOD_N = 8                  # n >= GOOD_N (and tight IQR) → confidence "good"
 TIGHT_DISPERSION = 0.50     # IQR/median at/below this is "tight"
@@ -469,6 +482,113 @@ def charm_ending(price: float) -> str:
     """
     cents = int(round((price - int(price)) * 100)) % 100
     return _CHARM_ENDING_CENTS.get(cents, "other")
+
+
+def apply_new_price_ceiling(
+    tiers: dict,
+    new_delivered: Optional[float],
+    *,
+    pct: float = NEW_CEILING_PCT,
+    target: bool = False,
+) -> dict:
+    """Cap sold-comp tiers against the price of buying the item NEW.
+
+    For the `below_new` storefront posture (GH #147). Ceiling-first pricing
+    reads a sold-comp ceiling as the market's true top. That holds for
+    collectables and breaks for anything still on a shelf: the buyer's real
+    alternative is the retail box, with a warranty and a return window, so
+    the used ask has to sit visibly under it.
+
+    Args:
+        tiers: the `report["tiers"]` mapping — conservative / recommended /
+            push_high, each a dict with a "price".
+        new_delivered: price of the item NEW on a delivered basis (item +
+            shipping, matching how comps are compared — see
+            feedback_price_delivered_basis). None when no new supply was
+            found, which is the discontinued case: nothing to cap against,
+            so the comp math stands unchanged.
+        pct: fraction of new-delivered to treat as the ceiling (and, with
+            `target`, as the ask itself).
+        target: when True the fraction is a TARGET, not only a cap — the
+            recommended ask is RAISED to it as well as lowered to it. Use for
+            a storefront whose policy is "ask ~N% of new" rather than "stay
+            under N% of new". The two differ exactly when the comps come in
+            low: as a cap the ask follows the comps down, as a target it does
+            not. Deliberate for commodity goods with a thin or absent used
+            market, where a handful of cheap sold listings is noise and the
+            retail price is the real anchor — but it does mean a genuinely
+            soft market cannot pull the price down on its own, so `notes`
+            records the raise and the comp value it overrode.
+
+    Returns:
+        A dict with the capped `tiers`, the `cap` applied, and `notes` — one
+        line per tier actually lowered, so the report can show its working
+        rather than silently producing different numbers.
+
+        `above_new` is True when the UNCAPPED push-high sat at or above the
+        full new price. That is a red flag, not an opportunity: either the
+        comps are a different item, or they are stale, or the "new" reference
+        is wrong. Nobody pays more for used than for new, and a report that
+        quietly caps it hides the fact that something upstream is broken.
+    """
+    out = {"tiers": tiers, "cap": None, "notes": [], "above_new": False}
+    if not new_delivered or new_delivered <= 0:
+        out["notes"].append(
+            "no new-price reference found (discontinued or not stocked) — "
+            "sold-comp tiers stand uncapped")
+        return out
+
+    cap = round(new_delivered * pct, 2)
+    out["cap"] = cap
+
+    uncapped_high = (tiers.get("push_high") or {}).get("price")
+    if uncapped_high is not None and uncapped_high >= new_delivered:
+        out["above_new"] = True
+        out["notes"].append(
+            f"RED FLAG: sold-comp push-high ${uncapped_high} is at or above "
+            f"the NEW delivered price ${round(new_delivered, 2)}. Used does "
+            f"not outsell new — check the comps are the same item and the "
+            f"new reference is the same spec before trusting either number.")
+
+    if target:
+        rec = (tiers.get("recommended") or {}).get("price")
+        if rec is not None and rec < cap:
+            out["notes"].append(
+                f"recommended: ${rec} -> ${cap} RAISED to the {pct:.0%}-of-new "
+                f"target (storefront policy asks at the target, not merely "
+                f"under it). The comp-derived ask was lower; on a thin used "
+                f"market that is noise, but check the comps if this looks wrong.")
+            tiers = dict(tiers)
+            tiers["recommended"] = {
+                **tiers["recommended"],
+                "price": cap,
+                "basis": (f"{pct:.0%} of NEW delivered (${round(new_delivered, 2)}) "
+                          f"— storefront target; comp-derived was ${rec}: "
+                          f"{tiers['recommended'].get('basis', '')}"),
+                "uncapped_price": rec,
+            }
+
+    capped = {}
+    for name, tier in tiers.items():
+        price = tier.get("price")
+        if price is not None and price > cap:
+            capped[name] = {
+                **tier,
+                "price": cap,
+                "basis": (
+                    f"capped at {pct:.0%} of NEW delivered "
+                    f"(${round(new_delivered, 2)}) — was ${price}: "
+                    f"{tier.get('basis', '')}"
+                ),
+                "uncapped_price": price,
+            }
+            out["notes"].append(
+                f"{name}: ${price} -> ${cap} (buyable new at "
+                f"${round(new_delivered, 2)} delivered)")
+        else:
+            capped[name] = tier
+    out["tiers"] = capped
+    return out
 
 
 def apply_charm_ending(price: float, pattern: str) -> float:

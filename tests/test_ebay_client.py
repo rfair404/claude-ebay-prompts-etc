@@ -13,8 +13,10 @@ All HTTP is faked by patching urllib.request.urlopen; no network, no creds.
 Run:  python tests/test_ebay_client.py
   or: pytest tests/test_ebay_client.py
 """
+import contextlib
 import io
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -33,6 +35,7 @@ from ebay_client import (  # noqa: E402
     api_send,
     get_app_access_token,
     get_user_access_token,
+    load_credentials,
 )
 
 CREDS = EbayCredentials(environment="sandbox", app_id="app-x", cert_id="cert-x",
@@ -92,11 +95,11 @@ def _patched(fake, fn):
 
 
 def _reset_caches():
-    ebay_client._app_cache.token = None
-    ebay_client._app_cache.expires_at = 0.0
-    ebay_client._user_cache.token = None
-    ebay_client._user_cache.expires_at = 0.0
-    ebay_client._user_scopes = ebay_client.USER_SCOPES_SELL
+    # Per-store dicts (GH #147) — clearing them is equivalent to the old
+    # single-slot reset, and also covers every store a test may have used.
+    ebay_client._app_caches.clear()
+    ebay_client._user_caches.clear()
+    ebay_client._user_scopes_by_store.clear()
 
 
 def _token_response(token="tok-1", ttl=7200):
@@ -319,6 +322,310 @@ def test_api_get_http_error_becomes_api_error_with_body():
             assert "11001" in e.body
 
     _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# load_credentials(store=...) — multi-store profiles (GH #147)
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _config(data):
+    """Monkeypatch ebay_client.load_config for the duration of the block."""
+    real = ebay_client.load_config
+    ebay_client.load_config = lambda: data
+    try:
+        yield
+    finally:
+        ebay_client.load_config = real
+
+
+def test_load_credentials_default_store_reads_legacy_single_account_shape():
+    with _config({"ebay": {"environment": "sandbox",
+                            "sandbox": {"app_id": "main-app", "cert_id": "main-cert"}}}):
+        creds = load_credentials()
+        assert creds.store == "default"
+        assert creds.environment == "sandbox"
+        assert creds.app_id == "main-app"
+        assert creds.cert_id == "main-cert"
+
+
+def test_load_credentials_named_store_reads_its_own_flat_block():
+    with _config({
+        "ebay": {
+            "environment": "sandbox",
+            "sandbox": {"app_id": "main-app"},
+            "stores": {
+                "junk": {"environment": "production", "app_id": "junk-app",
+                         "cert_id": "junk-cert", "user_refresh_token": "junk-refresh"},
+            },
+        }
+    }):
+        creds = load_credentials(store="junk")
+        assert creds.store == "junk"
+        assert creds.environment == "production"       # a store's own environment, not the default's
+        assert creds.app_id == "junk-app"
+        assert creds.cert_id == "junk-cert"
+        assert creds.user_refresh_token == "junk-refresh"
+        # the default store's credentials are untouched
+        default_creds = load_credentials(store="default")
+        assert default_creds.app_id == "main-app"
+
+
+def test_load_credentials_unknown_store_raises_auth_error_listing_known_stores():
+    with _config({"ebay": {"stores": {"junk": {"app_id": "x"}}}}):
+        try:
+            load_credentials(store="nope")
+            raise AssertionError("expected EbayAuthError")
+        except EbayAuthError as e:
+            assert "nope" in str(e)
+            assert "junk" in str(e)
+
+
+def test_load_credentials_store_precedence_env_var_over_config_default():
+    with _config({
+        "ebay": {"environment": "sandbox", "active_store": "default",
+                 "stores": {"junk": {"app_id": "junk-app"}}}
+    }):
+        old = os.environ.get("EBAYBIZ_STORE")
+        os.environ["EBAYBIZ_STORE"] = "junk"
+        try:
+            assert load_credentials().store == "junk"
+        finally:
+            if old is None:
+                os.environ.pop("EBAYBIZ_STORE", None)
+            else:
+                os.environ["EBAYBIZ_STORE"] = old
+
+
+def test_load_credentials_explicit_store_arg_wins_over_env_var():
+    with _config({"ebay": {"environment": "sandbox", "stores": {"junk": {"app_id": "junk-app"}}}}):
+        old = os.environ.get("EBAYBIZ_STORE")
+        os.environ["EBAYBIZ_STORE"] = "junk"
+        try:
+            assert load_credentials(store="default").store == "default"
+        finally:
+            if old is None:
+                os.environ.pop("EBAYBIZ_STORE", None)
+            else:
+                os.environ["EBAYBIZ_STORE"] = old
+
+
+def test_list_stores_returns_configured_store_names():
+    with _config({"ebay": {"stores": {"junk": {}, "vintage": {}}}}):
+        assert ebay_client.list_stores() == ["junk", "vintage"]
+    with _config({"ebay": {}}):
+        assert ebay_client.list_stores() == []
+
+
+# ---------------------------------------------------------------------------
+# Per-store token cache isolation (GH #147) — using two stores in one
+# process ("at once", the issue's own framing) must never let one store's
+# cached/narrowed token leak into the other.
+# ---------------------------------------------------------------------------
+
+def test_app_token_cache_is_isolated_per_store():
+    fake = _Fake(_token_response("tok-default"), _token_response("tok-junk"))
+    default_creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                                    store="default")
+    junk_creds = EbayCredentials(environment="sandbox", app_id="a2", cert_id="c2",
+                                 store="junk")
+
+    def go():
+        assert get_app_access_token(default_creds) == "tok-default"
+        assert get_app_access_token(junk_creds) == "tok-junk"
+        # Both re-served from their own cache — no third HTTP call.
+        assert get_app_access_token(default_creds) == "tok-default"
+        assert get_app_access_token(junk_creds) == "tok-junk"
+        assert len(fake.requests) == 2
+
+    _patched(fake, go)
+
+
+def test_user_token_cache_is_isolated_per_store():
+    fake = _Fake(_token_response("utok-default"), _token_response("utok-junk"))
+    default_creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                                    user_refresh_token="r1", store="default")
+    junk_creds = EbayCredentials(environment="sandbox", app_id="a2", cert_id="c2",
+                                 user_refresh_token="r2", store="junk")
+
+    def go():
+        assert get_user_access_token(default_creds) == "utok-default"
+        assert get_user_access_token(junk_creds) == "utok-junk"
+        assert get_user_access_token(default_creds) == "utok-default"
+        assert len(fake.requests) == 2
+
+    _patched(fake, go)
+
+
+def test_user_token_scope_narrowing_does_not_leak_across_stores():
+    # The junk store's refresh_token predates sell.finances (invalid_scope);
+    # the default store's must keep using the full scope set afterward.
+    fake = _Fake(
+        _http_error(400, b'{"error":"invalid_scope"}'), _token_response("tok-junk-core"),
+        _token_response("tok-default-full"),
+    )
+    default_creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                                    user_refresh_token="r1", store="default")
+    junk_creds = EbayCredentials(environment="sandbox", app_id="a2", cert_id="c2",
+                                 user_refresh_token="r2", store="junk")
+
+    def go():
+        assert get_user_access_token(junk_creds) == "tok-junk-core"
+        assert get_user_access_token(default_creds) == "tok-default-full"
+        assert "sell.finances" not in fake.requests[1].data.decode()  # junk, narrowed
+        assert "sell.finances" in fake.requests[2].data.decode()      # default, still full
+
+    _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# reset_token_cache() / has_full_user_scopes() — the public API over the
+# per-store caches (GH #147, PR #150 review). External consumers (e.g.
+# tools/ebay_reauth.py) must go through these, not the private dicts
+# directly — that's exactly what broke when the caches were rekeyed.
+# ---------------------------------------------------------------------------
+
+def test_reset_token_cache_clears_only_the_named_store():
+    # Only 3 fetches ever happen: default once (it stays cached throughout,
+    # never re-fetched) and junk twice (once before, once after the reset).
+    fake = _Fake(_token_response("tok-default"), _token_response("tok-junk"),
+                 _token_response("tok-junk-2"))
+    default_creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                                    store="default")
+    junk_creds = EbayCredentials(environment="sandbox", app_id="a2", cert_id="c2",
+                                 store="junk")
+
+    def go():
+        assert get_app_access_token(default_creds) == "tok-default"
+        assert get_app_access_token(junk_creds) == "tok-junk"
+        ebay_client.reset_token_cache("junk")
+        # default's cache survives the junk-store reset...
+        assert get_app_access_token(default_creds) == "tok-default"
+        # ...but junk's was actually cleared, forcing a re-fetch.
+        assert get_app_access_token(junk_creds) == "tok-junk-2"
+        assert len(fake.requests) == 3
+
+    _patched(fake, go)
+
+
+def test_reset_token_cache_also_clears_scope_narrowing_state():
+    fake = _Fake(_http_error(400, b'{"error":"invalid_scope"}'), _token_response("tok-core"),
+                 _token_response("tok-full-again"))
+    creds = EbayCredentials(environment="sandbox", app_id="a", cert_id="c",
+                            user_refresh_token="r", store="junk")
+
+    def go():
+        assert get_user_access_token(creds) == "tok-core"
+        assert ebay_client.has_full_user_scopes("junk", "sandbox") is False
+        ebay_client.reset_token_cache("junk")
+        assert ebay_client.has_full_user_scopes("junk", "sandbox") is True
+        # and the next refresh asks for the full set again, not the narrowed one
+        assert get_user_access_token(creds) == "tok-full-again"
+        assert "sell.finances" in fake.requests[2].data.decode()
+
+    _patched(fake, go)
+
+
+def test_has_full_user_scopes_defaults_true_before_any_call():
+    assert ebay_client.has_full_user_scopes("never-touched", "sandbox") is True
+
+
+# ---------------------------------------------------------------------------
+# --store on the CLI's own OAuth consent flow (GH #147) — without this,
+# there was no way to run --user-consent-url/--exchange-code FOR a second
+# store, so no documented path to obtain its user_refresh_token at all.
+# ---------------------------------------------------------------------------
+
+def _cli_args(argv):
+    import argparse
+    parser = argparse.ArgumentParser()
+    for name, kw in (
+        ("--check", dict(action="store_true")), ("--schema", dict(default=None)),
+        ("--category-tree-id", dict(action="store_true")),
+        ("--category-suggestions", dict(default=None)),
+        ("--category-aspects", dict(default=None)),
+        ("--user-consent-url", dict(action="store_true")),
+        ("--exchange-code", dict(default=None)),
+        ("--marketplace", dict(default=ebay_client.DEFAULT_MARKETPLACE)),
+        ("--tree-id", dict(default=None)), ("--json", dict(action="store_true")),
+        ("--store", dict(default=None)),
+    ):
+        parser.add_argument(name, **kw)
+    return parser, parser.parse_args(argv)
+
+
+def test_cli_check_reports_the_selected_store():
+    config = {"ebay": {"environment": "sandbox",
+                       "stores": {"readonly": {"environment": "sandbox"}}}}
+
+    def go():
+        parser, args = _cli_args(["--check", "--store", "readonly"])
+        import io as _io
+        from contextlib import redirect_stdout
+        buf = _io.StringIO()
+        with redirect_stdout(buf):
+            ebay_client._cli_run(parser, args)
+        assert "store:              readonly" in buf.getvalue()
+
+    real_load = ebay_client.load_config
+    ebay_client.load_config = lambda: config
+    try:
+        go()
+    finally:
+        ebay_client.load_config = real_load
+
+
+def test_cli_exchange_code_pastes_under_the_named_store():
+    fake = _Fake(_FakeResponse({"access_token": "at", "refresh_token": "rt-junk"}))
+    # A named store's block is FLAT (no sandbox:/production: nesting) — see
+    # ebay_client.load_credentials()'s own docstring.
+    config = {"ebay": {"environment": "sandbox",
+                       "sandbox": {"app_id": "a", "cert_id": "c", "redirect_uri": "ru"},
+                       "stores": {"junk": {"environment": "sandbox", "app_id": "a2",
+                                          "cert_id": "c2", "redirect_uri": "ru2"}}}}
+
+    def go():
+        parser, args = _cli_args(["--exchange-code", "CODE", "--store", "junk"])
+        import io as _io
+        from contextlib import redirect_stdout
+        buf = _io.StringIO()
+        with redirect_stdout(buf):
+            ebay_client._cli_run(parser, args)
+        out = buf.getvalue()
+        assert "stores:" in out
+        assert "junk:" in out
+        assert 'user_refresh_token: "rt-junk"' in out
+
+    real_load = ebay_client.load_config
+    ebay_client.load_config = lambda: config
+    try:
+        _patched(fake, go)
+    finally:
+        ebay_client.load_config = real_load
+
+
+def test_cli_exchange_code_pastes_flat_for_the_default_store():
+    fake = _Fake(_FakeResponse({"access_token": "at", "refresh_token": "rt-default"}))
+    config = {"ebay": {"environment": "sandbox",
+                       "sandbox": {"app_id": "a", "cert_id": "c", "redirect_uri": "ru"}}}
+
+    def go():
+        parser, args = _cli_args(["--exchange-code", "CODE"])
+        import io as _io
+        from contextlib import redirect_stdout
+        buf = _io.StringIO()
+        with redirect_stdout(buf):
+            ebay_client._cli_run(parser, args)
+        out = buf.getvalue()
+        assert "stores:" not in out
+        assert 'user_refresh_token: "rt-default"' in out
+
+    real_load = ebay_client.load_config
+    ebay_client.load_config = lambda: config
+    try:
+        _patched(fake, go)
+    finally:
+        ebay_client.load_config = real_load
 
 
 if __name__ == "__main__":

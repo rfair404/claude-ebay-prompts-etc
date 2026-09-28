@@ -164,7 +164,13 @@ def build(shoot: Path) -> Path:
     sub = f"approved: {', '.join(done) if done else 'nothing yet'}"
     if pending:
         sub += f"   ·   now deciding: {pending.upper()}"
-    sub += f"   ·   look: {m.get('preset') or m.get('pick') or 'not picked'}"
+    # `chosen_preset` is the key PREP actually writes; `preset`/`pick` never
+    # existed on the manifest, so this line read "not picked" on every shoot —
+    # including ones where the operator had explicitly picked a look.
+    look = m.get("chosen_preset") or m.get("preset") or m.get("pick")
+    if look and not m.get("preset_picked_by_operator"):
+        look += " (default)"
+    sub += f"   ·   look: {look or 'not picked'}"
     d.text((PAD, 60), sub, MUTED, font=f_sub)
 
     for i, name in enumerate(names, start=1):

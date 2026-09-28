@@ -308,6 +308,37 @@ def test_draft_price_cell_renders_a_dash_not_zero_for_a_missing_price():
     assert dash._draft_price_cell("19.99") == "$19.99"
 
 
+def test_shoot_link_reads_the_shoot_name_from_a_draft_path():
+    assert dash._shoot_link("inventory/lot/synced-item/draft.md") == "synced-item"
+    assert dash._shoot_link("inventory/plain-item/draft.md") == "plain-item"
+
+
+def test_shoot_link_none_for_no_path_or_a_non_draft_path():
+    assert dash._shoot_link("") is None
+    assert dash._shoot_link("inventory/lot/group-item/draft_group.md") is None
+
+
+def test_draft_rows_link_to_the_review_page_for_a_single_item(repo):
+    inv = repo / "inventory"
+    _shoot(inv, "lot", "synced-item")
+    ((inv / "lot" / "synced-item") / "draft.md").write_text(
+        '---\ntitle: "Synced Item"\nprice: "10.00"\nmeta:\n'
+        '  ebay_offer_id: "OFFER-1"\n---\nbody\n')
+    d = dash.gather_drafts()
+    html = dash._draft_rows(d["synced"])
+    assert '<a href="/review/synced-item">Review</a>' in html
+
+
+def test_draft_rows_no_review_link_for_a_choice_group(repo):
+    inv = repo / "inventory"
+    _shoot(inv, "lot", "group-item")
+    ((inv / "lot" / "group-item") / "draft_group.md").write_text(
+        '---\ntitle: "Group"\nprice: "10.00"\nmeta:\n---\nbody\n')
+    d = dash.gather_drafts()
+    html = dash._draft_rows(d["drafted"])
+    assert "/review/" not in html
+
+
 def test_gather_drafts_skips_validation_for_group_drafts(repo):
     inv = repo / "inventory"
     s = _shoot(inv, "lot", "group-item")

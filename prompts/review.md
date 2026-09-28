@@ -98,8 +98,12 @@ the user says "approve all".
 draft's buyer-visible fields (title, description, condition_description,
 item specifics) for camera-frame language: "visible in the photos",
 "shown/pictured", "as-shown", "not identifiable/verifiable from the
-photos", or tests-not-run narration ("not shake-tested", "odor not
-verified"). Any hit is a copy defect, not a judgment call: fix it via
+photos", tests-not-run narration ("not shake-tested", "odor not
+verified"), or a fact deferred to the buyer ("message me for exact
+dimensions", "Not measured.", GH #170). A deferral is resolved HERE, not
+left to the buyer: ask the in-hand question (measure / weigh it) with the
+card, write the answer into the draft, and never approve copy that still
+invites a buyer to ask for a fact. Any hit is a copy defect, not a judgment call: fix it via
 DRAFT (rephrase to the finding, per draft.md's in-hand-voice rule), then
 re-run `--review`. The standing "Please see the photos…" close line is
 exempt. Grade-setting "Untested; sold as-is." is exempt.
@@ -123,7 +127,8 @@ the same SKU.)
 
 ## On approval — publish (one step)
 
-Run, with the human approval as the authorization for `--confirm`:
+Run the exact command shown at the bottom of the card, with the human
+approval as the authorization for `--confirm`:
 
     python lib/list_edit.py --list <shoot-dir> --confirm
 
@@ -133,6 +138,13 @@ your approval at this gate is what authorizes passing it. On success report
 the listing URL. If publish fails validation, surface the eBay error,
 fix the draft via the owning phase, and re-present the card — never retry
 blind.
+
+**Multiple stores (GH #147).** If the card's `Store:` line names anything
+other than `default` (e.g. a secondary "junk" store), the card's command
+already carries `--store <name>` — copy it as shown, don't drop the flag.
+A draft picks its store once by setting `store: "<name>"` in its
+frontmatter; `--review`/`--sync`/`--publish`/`--list` all honor it without
+repeating `--store` on every command.
 
 ## After publish — managing the listing (on user request)
 

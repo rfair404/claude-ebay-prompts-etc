@@ -62,7 +62,7 @@ _B = [  # camera-frame confessions — BLOCK
     r"\bunshown\b",
     r"\bunphotographed\b",
     r"for\s+(these|the)\s+photo(graph)?s\b",
-    r"\b(from|off)\s+(the\s+)?photos?\b",   # "measured off the photos" shipped live
+    r"\b(from|off)\s+(the\s+)?photo(graph)?s?\b",   # "measured off the photos" shipped live
     r"assessable\s+from",
     r"\bnot\s+(verifiable|identifiable|assessable)\b",
     r"\bcannot\s+be\s+(verified|identified|assessed)\s+from\b",
@@ -74,6 +74,27 @@ _B = [  # camera-frame confessions — BLOCK
     r"\b(not\s+)?shake[-\s]?tested?\b|\bshake\s+test\b",
     r"\bodou?r\b[^.!?\n]{0,24}\b(not\s+)?(verified|checked|tested|assessed)",
     r"\b(ring|sound)\s+test\s+(not\s+)?(performed|run|done)",
+    # GH #170 — a fact deferred to the buyer. "Message me for exact
+    # dimensions" hands every interested buyer a question REVIEW should have
+    # answered once; the gap is an in-hand question, never buyer copy. Ten
+    # drafts carried it (verbatim phrases in tests/test_voice_check.py).
+    # Sales offers ("message me — I have more silverplate") and the standing
+    # close ("message me with any questions") name no fact and pass.
+    r"\b(message|contact|ask|e-?mail|reach\s+out\s+to|write\s+to)\s+(me|us)\b[^.!?\n]{0,80}?"
+    r"\b(measur\w*|dimensions?|sizes?|height|width|length|diameter|weigh\w*|exact|precise|caliper)\b",
+    r"\b(need|want)\s+(an?\s+|the\s+)?(exact\s+|precise\s+)?(measurements?|dimensions?|size|height|weight)"
+    r"[^.!?\n]{0,40}\b(message|contact|ask|e-?mail)\s+(me|us)\b",
+    # ...and the admission that travels with it. State the number or leave
+    # the fact out; never tell the buyer it wasn't checked.
+    r"\b(not|never|haven'?t|have\s+not|hasn'?t|has\s+not)\s+(yet\s+)?(been\s+)?(yet\s+)?(measured|weighed)\b",
+    r"\bunmeasured\b",
+    r"\bI(\s+will|'ll)\s+(measure|weigh|put\s+a\s+(tape|ruler|caliper|scale))\b",
+    # Gaps found fixing the live listings: an ask with no "me", a
+    # passive "not taken", and a not-laid-flat excuse.
+    r"\b(ask|message|contact)\b[^.!?\n]{0,15}\bif\b[^.!?\n]{0,40}\b(exact|sizes?|measur\w*|dimensions?|length)\b",
+    r"\b(measurements?|dimensions?|sizes?)\s+(were\s+|was\s+)?not\s+(taken|recorded|checked)\b",
+    r"\bto\s+measure\s+it\b[^.!?\n]{0,40}\bno\s+measurements?\b|\bno\s+measurements?\s+(from\s+me|to\s+quote)\b",
+    r"\b(haven'?t|have\s+not|not)\s+(yet\s+)?put\s+(\w+\s+){0,4}?(on\s+)?a\s+(caliper|scale|tape|ruler)\b",
 ]
 BLOCK = [re.compile(p, re.IGNORECASE) for p in _B]
 
@@ -99,6 +120,7 @@ _E = [  # sentence-level exemptions — correct copy that must NOT be flagged
     r"\buntested\b",                                         # grade-setter
     r"photography\s+by",                                     # the item's own content
     r"pictured\s+(and\s+named|include)",
+    r"freight\s+quote",                                      # LOCAL_PICKUP logistics (draft.md)
     r"\(\s*(see\s+)?photos?\s*\d*\s*\)",                     # bare photo pointer, sing. or pl.
 ]
 EXEMPT = [re.compile(p, re.IGNORECASE) for p in _E]

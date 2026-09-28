@@ -30,6 +30,8 @@ from draft_io import Draft                                    # noqa: E402
 
 class _Creds:
     has_user = True
+    store = "default"
+    environment = "sandbox"
 
 
 def _draft(frontmatter):

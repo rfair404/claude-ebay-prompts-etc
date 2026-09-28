@@ -34,6 +34,8 @@ import list_edit as L                                        # noqa: E402
 
 class _Creds:
     has_user = True
+    store = "default"
+    environment = "sandbox"
 
 
 def _fake_api(responses):

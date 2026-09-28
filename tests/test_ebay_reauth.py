@@ -41,24 +41,50 @@ CFG = (
     '    app_id: "p"\n'
     '    user_refresh_token: "PROD-OLD"\n'
     '    merchant_location_key: "ebaybiz-primary"\n'
+    "\n"
+    "  stores:\n"
+    "    junk:\n"
+    '      app_id: "j"\n'
+    '      user_refresh_token: "JUNK-OLD"\n'
+    "    vintage:\n"
+    '      user_refresh_token: "VINTAGE-OLD"\n'
     "store:\n  user_refresh_token: not-this-one\n"
 )
 
 
 def test_set_refresh_token_touches_only_the_active_environment_line():
-    out = set_refresh_token(CFG, "production", "NEW")
+    out = set_refresh_token(CFG, "NEW", store="default", env="production")
     assert '    user_refresh_token: "NEW"\n' in out
     assert "SANDBOX-OLD" in out and "PROD-OLD" not in out
+    assert "JUNK-OLD" in out and "VINTAGE-OLD" in out       # other stores untouched
     assert "not-this-one" in out
     assert out.count("\n") == CFG.count("\n")
 
 
 def test_set_refresh_token_keeps_crlf_line_endings():
-    out = set_refresh_token(CFG.replace("\n", "\r\n"), "sandbox", "NEW")
+    out = set_refresh_token(CFG.replace("\n", "\r\n"), "NEW", store="default", env="sandbox")
     assert '    user_refresh_token: "NEW"\r\n' in out
     assert "PROD-OLD" in out
 
 
-def test_set_refresh_token_raises_when_block_is_missing():
+def test_set_refresh_token_raises_when_environment_block_is_missing():
     with pytest.raises(ValueError):
-        set_refresh_token(CFG, "staging", "NEW")
+        set_refresh_token(CFG, "NEW", store="default", env="staging")
+
+
+def test_set_refresh_token_writes_a_named_stores_block():
+    # GH #147: a named store's block is flat (ebay: stores: <name>:) —
+    # distinct depth from the default store's ebay: <env>: shape, and
+    # distinct from the decoy top-level `store:` (singular) key.
+    out = set_refresh_token(CFG, "NEW", store="junk")
+    assert '      user_refresh_token: "NEW"\n' in out
+    assert "JUNK-OLD" not in out
+    assert "VINTAGE-OLD" in out       # the sibling store is untouched
+    assert "SANDBOX-OLD" in out and "PROD-OLD" in out   # the default store is untouched
+    assert "not-this-one" in out      # the decoy top-level `store:` key is untouched
+    assert out.count("\n") == CFG.count("\n")
+
+
+def test_set_refresh_token_raises_when_named_store_is_missing():
+    with pytest.raises(ValueError):
+        set_refresh_token(CFG, "NEW", store="does-not-exist")

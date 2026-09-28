@@ -79,6 +79,75 @@ silver/German silver/alpaca/silver-tone. No exemptions. Then:
 
 State `SILVER: push-high strategy applied` in price.txt.
 
+## Storefront price posture — check it BEFORE pricing (GH #147)
+
+Ceiling-first above is the DEFAULT storefront's rule, not a universal one.
+Resolve the draft's storefront first — `config.get_storefront(<store>)`,
+where `<store>` is the draft's `store:` field — and read `price_posture`.
+
+- **unset** → the house ceiling-first rule above. Unchanged.
+- **`below_new`** → the item is the kind a buyer could buy NEW. Ceiling-first
+  assumes scarcity sets the price: the comp ceiling is real because nobody
+  can make another one. For anything still manufactured that premise is
+  false — the buyer's alternative is the retail box, with a warranty and a
+  return window. Sold comps stop being the binding constraint.
+
+### Running `below_new`
+
+1. **Establish whether it is buyable new at all.** Search active listings for
+   the same spec in NEW condition (`lib/ebay_browse.py` carries `condition` /
+   `conditionId`); check the manufacturer's own price where it exists. Record
+   what you found, including a null result.
+2. **Get the NEW price on a DELIVERED basis** — item + shipping, the same
+   basis the comps are compared on (never mix the two; see the delivered-basis
+   rule). On a buyer-pays-shipping storefront this matters twice over: our ask
+   plus our postage is what competes with new delivered.
+
+   **Use the CHEAPEST CREDIBLE new, not the median new.** A buyer weighing
+   used against new does not compare against the middle of the market; they
+   compare against the cheapest new one they can actually buy from a seller
+   they trust. Credible means: same spec (same material, same thread
+   standard, same size — a part number alone is not enough, mislabelled
+   titles are common), in stock, and a seller with real feedback. Measured on
+   GROCO IBV-750, 2026-09-23: median new ask $47.58 vs cheapest credible new
+   $33.68 — a cap of $35.68 against $25.26, i.e. a 41% difference in the
+   ceiling from one word in the method.
+3. **Apply the storefront's fraction**: `price_stats.apply_new_price_ceiling(
+   tiers, new_delivered, pct=<storefront's new_price_pct>, target=True)`.
+
+   **`target=True` when the storefront states an ASK, not just a ceiling**
+   (e.g. junk: "ask ~2/3 of new"). The two differ exactly when the comps come
+   in low: as a pure cap the ask follows them down, as a target it does not.
+   Target is right for commodity goods with a thin or absent used market,
+   where a handful of cheap sold listings is noise and the retail price is the
+   real anchor. It does mean a genuinely soft market cannot pull the price
+   down on its own — so when the helper reports a RAISE, read the comps again
+   before accepting it. A price moved UP past the evidence is the direction
+   that most deserves a second look.
+
+   It moves only the tiers it must, keeps each original as `uncapped_price`,
+   and returns a note per change. Show those notes — a number that moved with
+   no stated reason is how a price report loses trust. The conservative floor
+   is never raised: that would invent a floor nobody derived.
+4. **No new supply found** → no cap; the comp math stands. Discontinued goods
+   have no retail alternative, so ceiling-first is right again even here. Say
+   so explicitly rather than leaving it ambiguous.
+5. **Comps at or above the new price** → the helper sets `above_new`. Treat it
+   as a **red flag, never an opportunity**. Used does not outsell new, so one
+   of three things is wrong: the comps are a different item, the comps are
+   stale, or the new reference is the wrong spec. Resolve which before
+   trusting either number — do not just take the capped figure and move on.
+
+**Best Offer is a storefront decision, not a per-item one.** When the
+resolved storefront sets `best_offer: false`, the draft must ship
+`best_offer.enabled: false` — `validate_draft_for_sync` refuses otherwise,
+and unlike the #140 A1 under-$100 rule it cannot be waived by documenting a
+deviation in `meta.notes`. A store-wide rule that a single draft can opt out
+of is not a rule.
+
+State `STOREFRONT: below_new — new delivered $<x>, target/cap $<y>` in
+price.txt, or `STOREFRONT: below_new — no new supply found, uncapped`.
+
 ## The exact-match hunt (before any era-peer fallback)
 
 Escalate only as each stage dries up; never stop to ask.

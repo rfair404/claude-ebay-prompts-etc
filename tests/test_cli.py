@@ -40,3 +40,19 @@ def test_argv_passes_through():
                        cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert r.returncode == 2
     assert "usage" in r.stdout.lower()
+
+
+def test_pick_list_sibling_imports_resolve_under_dispatch():
+    # `pick-list --poll` imports pick_list_html (tools/) lazily. Under
+    # `python -m lib.cli` tools/ is not sys.path[0], so the module must put it
+    # there itself — this is the path that failed with "No module named
+    # 'pick_list_html'". Run from outside the repo so cwd can't mask it.
+    code = (
+        "import sys, runpy; sys.path.insert(0, %r); import lib.cli; "
+        "runpy.run_module('tools.pick_list', run_name='ebz_test'); "
+        "import pick_list_html, pick_store; "
+        "assert callable(pick_list_html.render_html)" % str(ROOT)
+    )
+    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT.parent,
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr

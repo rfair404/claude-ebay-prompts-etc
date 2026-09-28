@@ -336,12 +336,23 @@ thinner listing):
   attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
-- **The close** — the standing block, same on every listing, from
-  `store.closing_block` in [`../config.yaml`](../config.yaml). Boilerplate
-  on purpose. Render it verbatim; **do not compose it per listing**, do not
-  add claims to it. If a line stops being true, the fix is config, not a
-  listing. When `store.display_name` is set, the sign-off names the store;
-  when empty, the unnamed thank-you ships — never invent a brand name.
+- **The close** — the standing block, same on every listing **for that
+  storefront**, resolved with `config.get_storefront(<store>)` where
+  `<store>` is the draft's `store:` field (default when unset). That returns
+  the top-level `store:` block for the default storefront and
+  `storefronts.<name>` for any other — see
+  [`../config.yaml`](../config.yaml). Boilerplate on purpose. Render it
+  verbatim; **do not compose it per listing**, do not add claims to it. If a
+  line stops being true, the fix is config, not a listing. When the resolved
+  `display_name` is set, the sign-off names the store; when empty, the
+  unnamed thank-you ships — never invent a brand name.
+
+  **A second storefront never borrows the first one's identity.** Identity
+  keys (`display_name`, `closing_block`) do not inherit: a junk listing whose
+  storefront has no name ships the unnamed thank-you, and must never sign off
+  as the main store. Policy keys (returns, shipping, price posture) DO
+  inherit, so a sparse storefront only states what differs — read them off
+  the same resolved profile rather than assuming the house default (GH #147).
 
 **Length:** aim ~130–180 words. Short paragraphs, ~20 words per sentence. A
 body under ~100 words is usually a section left empty — check which one
@@ -369,6 +380,14 @@ field (title, body, `condition_description`, item specifics):
   photos", "can't be assessed from the pictures";
 - **inspection-process narration** — enumerating tests not run ("not
   shake-tested", "ring test not performed", "odor not verified").
+- **facts deferred to the buyer** (GH #170) — "message me for exact
+  dimensions", "message me if you need the height and I'll measure it",
+  and the admission that rides with it ("Not measured.", "I haven't put a
+  caliper on it"). A missing measurement/weight/size is a NEEDS_REVIEW
+  in-hand question ("Measure the chain length"), answered at REVIEW before
+  publish — never an invitation for every buyer to ask it again. State the
+  number, or leave the fact out. The standing close ("message me with any
+  questions") and the LOCAL_PICKUP freight-quote line are not deferrals.
 
 This is our internal evidence process leaking into the copy: it tells the
 buyer the seller never handled the item, and it manufactures doubt instead

@@ -405,6 +405,7 @@ def main() -> None:
     ap.add_argument("--sync", metavar="GROUP", help="Create items + group + UNPUBLISHED offers")
     ap.add_argument("--publish", metavar="GROUP", help="Publish the group live (needs --confirm)")
     ap.add_argument("--confirm", action="store_true", help="Actually publish (with --publish)")
+    ap.add_argument("--store", metavar="NAME", help="Which eBay seller account to use (see list_edit.py --store / ebay.stores.<name> in config.yaml, GH #147).")
     args = ap.parse_args()
 
     try:
@@ -418,15 +419,17 @@ def main() -> None:
             print("[OK] group draft is sync-ready.")
         elif args.dry_run:
             import json
-            built = sync_group(_resolve_group_path(args.dry_run), dry_run=True)
+            built = sync_group(_resolve_group_path(args.dry_run), dry_run=True,
+                               creds=load_credentials(store=args.store))
             print(json.dumps(built, indent=2, default=str))
         elif args.sync:
-            built = sync_group(_resolve_group_path(args.sync))
+            built = sync_group(_resolve_group_path(args.sync), creds=load_credentials(store=args.store))
             print(f"[OK] synced group '{built['group_key']}' with "
                   f"{len(built['variant_skus'])} variations (UNPUBLISHED): {', '.join(built['variant_skus'])}")
             print("  Review, then: python list_edit_group.py --publish <group> --confirm")
         elif args.publish:
-            res = publish_group(_resolve_group_path(args.publish), confirm=args.confirm)
+            res = publish_group(_resolve_group_path(args.publish), creds=load_credentials(store=args.store),
+                                confirm=args.confirm)
             if res.get("dry_run"):
                 print("DRY RUN — would publish group:", res["group_key"])
                 print("  ", res["would_call"], res["body"])

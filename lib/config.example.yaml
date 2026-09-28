@@ -31,6 +31,29 @@ apify:
   # lens_actor: "borderline/google-lens"
 
 # ---------------------------------------------------------------------------
+# Vision — pluggable high-resolution image inspector (lib/fine_inspect.py)
+# ---------------------------------------------------------------------------
+# For reads that are hard to get right from a normal photo pass: fine
+# print, a raised/embossed maker's mark with no printed contrast to key
+# off, a faint signature. IDENTIFY/PREP hand a tight crop straight to a
+# dedicated vision model instead of guessing. Distinct from apify.* above:
+# that's reverse-image SEARCH (what does this look like on the web); this
+# is direct visual INSPECTION (what do these pixels actually say) — no
+# public hosting involved.
+#
+# `backend` selects the engine; each backend gets its own sub-section
+# below. Swapping engines later needs only a new backend class registered
+# in lib/fine_inspect.py's BACKENDS dict, plus a config line here.
+vision:
+  backend: "gemini"
+
+  gemini:
+    # Get a key at https://aistudio.google.com/apikey
+    api_key: "GEMINI_API_KEY_REPLACE_ME"
+    # Optional. Defaults to lib/config.py's DEFAULT_GEMINI_MODEL.
+    # model: "gemini-2.5-pro"
+
+# ---------------------------------------------------------------------------
 # eBay Sell API — credentials for Function 6 (LIST/EDIT) + schema discovery
 # ---------------------------------------------------------------------------
 # Sandbox and Production are separate worlds with separate keysets. This
@@ -127,6 +150,50 @@ ebay:
                                          # returnShippingCostPayer: SELLER.
                                          # See docs/top-rated-plus.md.
 
+  # -------------------------------------------------------------------------
+  # Additional eBay seller accounts (GH #147) — connect to more than one
+  # store at once, e.g. a secondary "junk" store for cheap, as-is, no-returns
+  # lots you don't want mixed in with your main store's listings.
+  #
+  # Unlike sandbox:/production: above (two environments of the SAME account),
+  # each block under `stores:` is its OWN seller account: its own keyset,
+  # refresh token, business policies, and merchant location. `environment`
+  # here applies to just that one store, and every field is flat (no nested
+  # sandbox:/production: split) — a name like "junk" already picks one real
+  # account, so there's nothing left to pick with a second axis.
+  #
+  # Use it with:
+  #   python list_edit.py --store junk --setup-check   # verify + list that
+  #                                                     # account's policy IDs
+  #   python list_edit.py --list <shoot> --store junk --confirm
+  # ...or, to avoid typing --store on every command, add `store: "junk"` to
+  # that item's draft.md frontmatter — --review/--sync/--publish/--list all
+  # read it automatically when --store isn't given (CLI flag still wins).
+  # The active store, if you don't want to pass --store at all, can also be
+  # set globally with `active_store: "junk"` below, or the EBAYBIZ_STORE
+  # env var (precedence: --store > EBAYBIZ_STORE > active_store > "default").
+  #
+  # The account without a name here — ebay.environment/sandbox/production
+  # above — is always reachable too, as the implicit store "default".
+  # active_store: "default"
+  stores:
+    junk:
+      environment: "production"
+      app_id: "PRD-junk-app-id"
+      cert_id: "PRD-junk-cert-id"
+      dev_id: "PRD-junk-dev-id"
+      redirect_uri: "PRD-junk-RuName"
+      user_refresh_token: null
+      merchant_location_key: null
+      fulfillment_policy_id: null
+      fulfillment_policy_id_media: null
+      fulfillment_policy_id_local_pickup: null
+      fulfillment_policy_id_international: null
+      fulfillment_policy_id_us_only: null
+      payment_policy_id: null
+      payment_policy_id_auction: null
+      return_policy_id: null
+
 # ---------------------------------------------------------------------------
 # EasyPost — self-serve carrier-rate API for buying shipping labels (GH #80)
 # ---------------------------------------------------------------------------
@@ -211,6 +278,12 @@ store:
   # DRAFT signs off with the unnamed thank-you rather than inventing a brand.
   display_name: ""
 
+  # Tagline and eBay storefront URL shown on the pick-list/packing-slip page
+  # (tools/pick_list_html.py). Leave EMPTY and the sheet falls back to its
+  # built-in defaults, so an unset config changes nothing.
+  tagline: ""
+  storefront_url: ""
+
   closing_block: |
     Please message me with any questions before buying — I'd rather answer
     one than have you guess.
@@ -219,3 +292,100 @@ store:
     listings moving.
 
     Thank you for looking, and please take a look at my other listings.
+
+# ---------------------------------------------------------------------------
+# Additional storefronts (GH #147) — the BUSINESS behind a second seller
+# account, as distinct from `ebay.stores.<name>` above, which is only its
+# CREDENTIALS. A second store is usually a different business: its own terms,
+# its own voice, its own name on the sign-off. Connecting the account without
+# onboarding the business is how a junk listing goes out reading
+# "Thank you for looking — <your main store>."
+#
+# Full runbook: docs/STORE-CONNECTION-README.md
+#
+# The DEFAULT storefront is the `store:` block above, read in place — NOT
+# duplicated here as `storefronts.default`. One fact, one home, and existing
+# single-store configs need no migration.
+#
+# Selection matches credentials, so one `--store junk` picks the account and
+# the business together: --store > EBAYBIZ_STORE > ebay.active_store > default.
+#
+# TWO INHERITANCE RULES, and they differ on purpose:
+#
+#   * POLICY inherits. Anything a named storefront omits falls through to the
+#     default, so an override states only what actually differs — and a
+#     policy you have not decided stays visibly undecided instead of being
+#     invented.
+#   * IDENTITY does NOT. `display_name` and `closing_block` resolve to null
+#     for a named storefront that omits them, and DRAFT then ships the
+#     unnamed thank-you. Inheriting identity is the bug this exists to
+#     prevent; tests/test_storefront.py pins it.
+#
+# An unknown storefront name is a hard error listing the configured ones —
+# never a silent fallback to the main store's name and terms.
+#
+# storefronts:
+#   junk:
+#     display_name: null                 # null = unnamed thank-you, never a
+#                                        # borrowed brand. A deliberate state,
+#                                        # not a blank to fill in.
+#     closing_block: |                   # its own — must be true of every
+#       Sold as-is. Please look the photos over and message me with any
+#       questions before buying.
+#
+#       Thank you for looking. Please take a look at my other listings.
+#
+#     returns: "none_as_is"              # what DRAFT writes in the copy. Keep
+#                                        # it agreeing with this store's
+#                                        # ebay.stores.<name>.return_policy_id,
+#                                        # which is what eBay ENFORCES —
+#                                        # nothing cross-checks the two.
+#     shipping: "buyer_pays_calculated"  # same split: this describes, the
+#                                        # fulfillment_policy_id enforces.
+#
+#     routing: ["as_is", "untested", "damaged"]
+#                                        # what belongs here. Prefer CONDITION
+#                                        # over value: a cheap but clean,
+#                                        # warrantable item still belongs in
+#                                        # the main store — a low price is not
+#                                        # a defect.
+#
+#     price_posture: "below_new"         # NOT the house ceiling-first rule.
+#                                        # Ceiling-first assumes scarcity sets
+#                                        # the price. For goods still sold new
+#                                        # that is false: the buyer's
+#                                        # alternative is the retail box, with
+#                                        # a warranty and a return window. Caps
+#                                        # the ask against NEW delivered.
+#     new_price_pct: 0.667               # ASK at this fraction of new. A TARGET,
+#                                        # not only a ceiling: the ask lands
+#                                        # here rather than merely staying under
+#                                        # it, so a thin used market cannot drag
+#                                        # the price below the retail anchor.
+#                                        # (target=True in
+#                                        # price_stats.apply_new_price_ceiling.)
+#     new_price_ceiling_pct: 0.667       # keep equal to new_price_pct so the
+#                                        # target and the cap cannot drift.
+#
+#     condition_ceiling: "USED_EXCELLENT"
+#                                        # the BEST grade this store may claim.
+#                                        # An as-is store never lists NEW — not
+#                                        # even sealed, unused goods in original
+#                                        # packaging. "New" on a no-returns
+#                                        # storefront is the most disputable
+#                                        # claim available and the easiest for a
+#                                        # buyer to argue once the parcel is
+#                                        # open; the packaging state belongs in
+#                                        # the description instead. Compared
+#                                        # against ebay_schema.CONDITION_ENUM,
+#                                        # which is ordered best -> worst.
+#
+#     best_offer: false                  # store-wide: no Best Offer anywhere.
+#                                        # Enforced by validate_draft_for_sync
+#                                        # and NOT waivable per draft — unlike
+#                                        # the #140 A1 under-$100 rule, which a
+#                                        # meta.notes justification satisfies.
+#
+#     # Leave a genuinely undecided policy UNSET so it inherits, rather than
+#     # guessing a value that later reads as a decision someone made. E.g.
+#     # price_posture omitted -> the house ceiling-first rule applies.

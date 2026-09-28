@@ -65,6 +65,7 @@ lives so it isn't copy-pasted into every module.
 | Article | Covers | Status |
 |---|---|---|
 | [silver-hallmarks.md](articles/silver-hallmarks.md) | Sterling vs coin vs plate vs not-silver; reading US maker marks & British hallmark sets (standard/town/date-letter/maker); continental fineness; `925` forgery & EPNS red flags | v1 |
+| [makers-marks.md](articles/makers-marks.md) | Identifying the MAKER (gold, silver and costume): the print canon vs lead-generator databases; the National Stamping Act trademark duty and its non-retroactive 1962 start; the 41-term punch-outline descriptor vocabulary; which mark-image corpora may legally be ingested; and the market test that decides whether an attribution is worth anything | v1 |
 | [ebay-sold-comps.md](articles/ebay-sold-comps.md) | Finding real sold-price comps: sold≠asking, the Apify/Chrome ladder, query craft, delivered basis, distribution tiers, comp pitfalls | v1 |
 | [taxonomies/marble-types-top100.md](taxonomies/marble-types-top100.md) | The 100 most-collectable marble types, grouped by family with value tiers; doubles as the keyword matcher for the eBay-sold visual library | v1 |
 

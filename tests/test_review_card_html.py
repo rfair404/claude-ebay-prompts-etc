@@ -78,6 +78,38 @@ def _page(tmp_path):
     return R.build(s).read_text(encoding="utf-8"), s
 
 
+def test_render_returns_exactly_what_build_writes(tmp_path):
+    # webapp/server.py's /review/{shoot} route (#31 Phase 2) calls render()
+    # directly instead of build() + read — the two must never drift apart.
+    s = _shoot(tmp_path)
+    from_build = R.build(s).read_text(encoding="utf-8")
+    from_render = R.render(s)
+    assert from_render == from_build
+
+
+def test_render_does_not_write_a_file(tmp_path):
+    s = _shoot(tmp_path)
+    assert not (s / "review_card.html").exists()
+    R.render(s)
+    assert not (s / "review_card.html").exists()
+
+
+def test_render_survives_an_empty_meta_block(tmp_path):
+    # `meta:` present with nothing under it parses as `meta: None` in YAML,
+    # not `{}` — fm.get("meta", {}) then returns None, and .get() on it used
+    # to raise AttributeError instead of falling through to "not recorded".
+    from PIL import Image
+    s = tmp_path / "1"
+    (s / "listing").mkdir(parents=True)
+    Image.new("RGB", (40, 30), (200, 180, 160)).save(s / "listing" / "a.jpg")
+    (s / "draft.md").write_text(
+        '---\ntitle: "No Meta Yet"\nprice: "9.00"\nmeta:\nphotos:\n'
+        '  - listing/a.jpg\n---\n# Description\nbody.\n', encoding="utf-8")
+    html = R.render(s)
+    assert "No Meta Yet" in html
+    assert "sku not recorded" in html
+
+
 def test_the_page_runs_without_javascript(tmp_path):
     """No script tag, no inline handler, no href="javascript:". If the page
     ever needs one, it has stopped being usable where it is used."""

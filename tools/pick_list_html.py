@@ -2,8 +2,21 @@
 """Print-friendly pick list — and packing slip — for one shipment. Open it,
 hit print, done.
 
-    python tools/pick_list_html.py <order-id> --pdf
-        -> pick_lists/pick_<id>.html + pick_lists/pick_<id>.pdf
+    python tools/pick_list_html.py <order-id>
+        -> http://127.0.0.1:8770/pick/<token>     (expires in 48h)
+    python tools/pick_list_html.py <order-id> --local-only
+        -> pick_lists/pick_<id>.html
+
+The result is a LINK, not a file path (#151). The rendered page is parked in
+lib/pick_store.py's short-lived store and served by webapp/server.py's
+`/pick/{token}` route, so the sheet can be opened and printed from a browser
+without anyone knowing where on disk it landed — which is what a path is
+worth to the person standing at the shelves. Start the server first:
+
+    python -m lib.cli serve
+
+`--local-only` is the escape hatch (and what `--out` / an unreachable store
+fall back to): the same page written to pick_lists/ the way it always was.
 
 One page == one box. Several ids may share a page only when the buyer AND the
 full ship-to address are identical (the one case eBay merges under a single
@@ -18,9 +31,22 @@ picking off a shelf doesn't require re-reading the title. Deliberately
 low-res/low-quality/grayscale — this is a pick sheet, not a photo proof, and
 should not burn a color cartridge printing it.
 
-Buyer name and street address are on this page. Like tools/pick_list.py, the
-output goes to pick_lists/ (gitignored) only — never an artifact, never
-committed, never anywhere that leaves the machine.
+No buyer street address and no full buyer name on this page — the buyer reads
+as first name + last initial ("Mike H.") plus city and state, which is all a
+picker needs to match the box to the label eBay prints. The street address is
+deliberately not rendered: the sheet is printed, handed around and
+photographed, and the shipping label already carries the full address.
+tools/pick_list.py's terminal output (seller-only, stays on this machine) still
+shows the full address for actually addressing a box.
+
+That leaves the buyer's first name, last initial and city/state as the only
+personal things on a page now served over HTTP, and the fencing around it
+stands regardless: the app binds to 127.0.0.1 only, the URL carries 256 bits of
+randomness and no order id, the sheet deletes itself when it expires, and the
+route sends no-store + noindex. lib/pick_store.py holds those rules and the
+reasoning behind each. Local copies still go to pick_lists/ (gitignored), and
+no sheet, link or token is ever committed, written to a ledger, or sent
+anywhere off this machine.
 
 No seller financials on this page — deliberately. This sheet can end up seen
 by the buyer during packing (dropped in the box by mistake, photographed,
@@ -36,10 +62,7 @@ import base64
 import html
 import io
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,9 +72,20 @@ sys.path.insert(0, str(ROOT / "tools"))
 import numpy as np                                                 # noqa: E402
 from PIL import Image                                              # noqa: E402
 
+import pick_store                                                  # noqa: E402
+from config import get_store                                       # noqa: E402
+from haiku import generate_haiku                                   # noqa: E402
 from pick_list import _money, ship_to                              # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
+
+# Fallback letterhead when `store:` in config.yaml leaves a field unset —
+# what this sheet has always shown, kept as the default so an unconfigured
+# store.yaml changes nothing (see lib/config.get_store()). A second store
+# overrides these via its own config rather than editing this file (#156).
+_DEFAULT_BRAND_NAME = "POP'S GAMES"
+_DEFAULT_BRAND_TAGLINE = "BUY · SELL · TRADE"
+_DEFAULT_BRAND_STOREFRONT = "ebay.com/usr/popsgames"
 
 THUMB_PX = 110      # small on purpose — a pick sheet, not a photo proof; also
                     # what keeps a 4-item grouped list on one printed page
@@ -176,10 +210,30 @@ def _pick_location(folder: str) -> str:
 _HAND_LOC = load_hand_locations()
 
 
+def _short_name(full: str) -> str:
+    """Buyer as first name + last initial — "Mike Hein" -> "Mike H.". Enough
+    to match a box to its label, not enough to be a name on a page that gets
+    printed, photographed and passed around. A single-word name is returned
+    as-is; an empty name stays empty rather than becoming a stray period."""
+    parts = (full or "").split()
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]} {parts[-1][0]}."
+
+
 def _addr_key(o: dict) -> tuple:
     to = ship_to(o)
     addr = to.get("contactAddress") or {}
     return (to.get("fullName", ""), addr.get("addressLine1", ""), addr.get("postalCode", ""))
+
+
+def _label_url(order_id: str) -> str:
+    """eBay's direct 'buy this order's shipping label' redirect — the same
+    URL Seller Hub lands on after a seller finds the order in the awaiting-
+    shipment list and clicks Buy Label, minus that search-and-click (#162)."""
+    return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
 def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> str:
@@ -188,6 +242,11 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
     them as one box, so the pick list should read as one, not N separate
     printouts. Each item still carries its own order id when grouped, since
     that's what ties it back to eBay's merge screen."""
+    _store = get_store()
+    brand_name = _store["display_name"] or _DEFAULT_BRAND_NAME
+    brand_tagline = _store["tagline"] or _DEFAULT_BRAND_TAGLINE
+    brand_storefront = _store["storefront_url"] or _DEFAULT_BRAND_STOREFRONT
+
     grouped = len(orders) > 1
     to = ship_to(orders[0])
     addr = to.get("contactAddress") or {}
@@ -229,15 +288,19 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         </div>
       </div>""")
 
-    addr_lines = "".join(f"<div>{html.escape(line)}</div>" for line in
-                          (addr.get("addressLine1"), addr.get("addressLine2")) if line)
+    # City + state only. Enough for a picker to sanity-check the box against
+    # the label eBay prints; not a street address, so the sheet stays safe to
+    # print, carry around and photograph.
+    city_state = ", ".join(p for p in (addr.get("city"), addr.get("stateOrProvince")) if p)
+    city_state_html = (f'<div>{html.escape(city_state)}</div>' if city_state else "")
+
     ship_by_bit = (f" &middot; SHIP BY {html.escape(ship_by)}"
                    if ship_by and ship_by != "zz" else "")
 
     if grouped:
         title = f"Pick — {len(orders)} orders combined"
         heading = (f"PICK — {len(orders)} orders combined &middot; "
-                   f"{html.escape(to.get('fullName', ''))}")
+                   f"{html.escape(_short_name(to.get('fullName', '')))}")
         vias = sorted({(html.escape(ship_to(o).get('carrier', '')),
                          html.escape(ship_to(o).get('service', ''))) for o in orders})
         via_line = (f"VIA {vias[0][0]} {vias[0][1]}" if len(vias) == 1
@@ -256,14 +319,51 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
         footer_line = f"ORDER {_money((o.get('pricingSummary') or {{}}).get('total'))} total"
         warn_html = ""
 
+    # One "Buy label" link per order, straight to eBay's per-order label
+    # flow (#162) instead of the awaiting-shipment list the seller used to
+    # have to search through. Grouped orders each keep their own eBay
+    # order and so each keep their own link, labelled by order id so they
+    # don't get mixed up; a single order gets one plain link, as before.
+    def _label_link(o: dict) -> str:
+        oid = o.get("orderId", "")
+        text = f"Buy label (order {html.escape(oid)}) &rarr;" if grouped else "Buy label &rarr;"
+        # The warning is #156's, moved in here from the single hard-coded button
+        # main replaced: the link resolves against whichever eBay account the
+        # BROWSER is signed into, not the account the order came from. With two
+        # stores live that is a real way to buy a label on the wrong account, and
+        # now it rides every order's button rather than only the one-order case.
+        warn = (f"Opens the label flow for whichever eBay account this browser is "
+                f"signed into — verify it is {html.escape(brand_storefront)} before "
+                f"buying a label off this sheet.")
+        return (f'<a href="{_label_url(oid)}" target="_blank" rel="noopener" '
+                f'title="{warn}">{text}</a>')
+
+    labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+
+    # A small personalized haiku (#161) — themed off the item and the ship-to
+    # region, never the buyer's name (which is never even passed in here).
+    # See tools/haiku.py for why the lines are always safe to print. The
+    # print CSS (.haiku) pins it to the center of the sheet's lower half.
+    first_title = next((li.get("title", "") for o in orders
+                        for li in (o.get("lineItems") or [])), "")
+    haiku_lines = generate_haiku(orders[0].get("orderId", ""), first_title,
+                                 addr.get("stateOrProvince", ""))
+    haiku_html = "<br>".join(html.escape(line) for line in haiku_lines)
+
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
 <title>{html.escape(title)}</title>
 <style>
   * {{ box-sizing: border-box; }}
-  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; }}
+  :root {{ --ink: #141210; --red: #a8322b; --grey: #4a443c; color-scheme: light; }}
   @page {{ size: letter; margin: .5in; }}
+  /* A pick sheet is a paper object — it commits to one light look. The
+     background is stated rather than inherited so the page still reads as
+     paper when the viewer's browser ground is dark. */
   body {{ font-family: Georgia, 'Times New Roman', serif; color: #111;
+          background: #fff;
           max-width: 640px; margin: 24px auto; padding: 0 16px; }}
   /* Two-face system, matching brand/pops-games: Georgia carries display
      content (headings, item titles), Courier New carries utility/data
@@ -309,16 +409,34 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
                 font-family: 'Courier New', monospace; margin-top: .15em; }}
   .divider {{ border: none; border-top: 1px solid #ccc; margin: 0 0 14px; }}
 
-  @media print {{ .printbtn {{ display: none; }} .labelbtn {{ display: none; }} body {{ margin: 0; max-width: none; }} }}
+  /* On screen the haiku just closes the page, in the normal flow. */
+  .haiku {{ text-align: center; font-style: italic; color: var(--grey);
+            font-size: .82rem; line-height: 1.5; margin-top: 36px; }}
+
+  @media print {{
+    .printbtn {{ display: none; }} .labelbtn {{ display: none; }}
+    body {{ margin: 0; max-width: none; }}
+    /* On paper it is pinned to the bottom of the sheet, not the content
+       flow, so it lands in the same spot however many items are above it.
+       Fixed boxes are measured from the @page content area, which starts
+       .5in inside the paper edge. The lower half of a letter sheet is
+       5.5in tall with its center 2.75in up from the paper edge — 2.25in up
+       from the content area's bottom — so a 4.5in box pinned to bottom: 0
+       centers the poem there. Fold the sheet and the haiku sits in the
+       middle of the half below the crease. */
+    .haiku {{ position: fixed; left: 0; right: 0; bottom: 0; height: 4.5in;
+              margin: 0; display: flex; flex-direction: column;
+              justify-content: center; align-items: center; }}
+  }}
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
-  <div class="labelbtn"><a href="https://www.ebay.com/sh/ord/?filter=status:AWAITING_SHIPMENT" target="_blank" rel="noopener">Buy label &rarr;</a></div>
+  <div class="labelbtn">{labelbtn_html}</div>
   <div class="brand">
     <div class="hr"></div>
-    <div class="nm">POP'S GAMES</div>
-    <div class="tg">BUY &middot; SELL &middot; TRADE</div>
-    <div class="st">ebay.com/usr/popsgames</div>
+    <div class="nm">{html.escape(brand_name)}</div>
+    <div class="tg">{html.escape(brand_tagline)}</div>
+    <div class="st">{html.escape(brand_storefront)}</div>
   </div>
   <hr class="divider">
   <h1>{heading}</h1>
@@ -328,49 +446,16 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict]) -> s
   {warn_html}
   {''.join(item_blocks)}
   <div class="shipto">
-    <b>SHIP TO</b>
-    <div>{html.escape(to.get('fullName', ''))}</div>
-    {addr_lines}
-    <div>{html.escape(addr.get('city', ''))}, {html.escape(addr.get('stateOrProvince', ''))}
-      {html.escape(addr.get('postalCode', ''))} {html.escape(addr.get('countryCode', ''))}</div>
+    <b>BUYER</b>
+    <div>{html.escape(_short_name(to.get('fullName', '')))}</div>
+    {city_state_html}
   </div>
   <div class="footer">
     {via_line}<br>
     {footer_line}
   </div>
+  <div class="haiku">{haiku_html}</div>
 </body></html>"""
-
-
-_BROWSERS = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
-
-
-def to_pdf(html_path: Path) -> Path:
-    """Print the sheet to PDF with headless Chrome/Edge — the same engine that
-    renders the HTML, so the PDF is what the page actually looks like. No
-    background graphics flag: the 50%-screened thumbnail is an <img>, and the
-    letterhead is type, so both come through without printing a page of ink."""
-    exe = next((b for b in _BROWSERS if Path(b).exists()), None)
-    if not exe:
-        raise SystemExit("[FAIL] no Chrome or Edge found to render the PDF; "
-                         "open the HTML and print it from the browser instead")
-    pdf_path = html_path.with_suffix(".pdf")
-    profile = tempfile.mkdtemp(prefix="picklist-")
-    try:
-        r = subprocess.run(
-            [exe, "--headless=new", "--disable-gpu", "--no-first-run",
-             f"--user-data-dir={profile}", "--no-pdf-header-footer",
-             f"--print-to-pdf={pdf_path}", html_path.resolve().as_uri()],
-            capture_output=True, text=True, timeout=120)
-    finally:
-        shutil.rmtree(profile, ignore_errors=True)
-    if not pdf_path.exists():
-        raise SystemExit(f"[FAIL] PDF render failed ({exe}):\n{r.stderr.strip()[:400]}")
-    return pdf_path
 
 
 def _shipment_key(o: dict) -> tuple:
@@ -425,16 +510,73 @@ def _default_out_name(orders: list[dict]) -> str:
     return f"pick_group_{stem}.html".replace("/", "_")
 
 
+def publish(orders: list[dict], out_html: str, *,
+            ttl_hours: float = pick_store.TTL_HOURS_DEFAULT,
+            port: int = pick_store.DEFAULT_PORT) -> tuple[pick_store.Sheet, bool]:
+    """Park the rendered sheet in the store and return (sheet, server_is_up).
+
+    Re-running the tool for the same order supersedes its previous link
+    rather than adding a second one (lib/pick_store.publish) — one shipment,
+    one live URL, so a stale sheet can't be the one someone opens."""
+    order_ids = [o.get("orderId", "") for o in orders if o.get("orderId")]
+    sheet = pick_store.publish(out_html, order_ids=order_ids, ttl_hours=ttl_hours)
+    return sheet, pick_store.server_is_up(port)
+
+
+def _report(sheet: pick_store.Sheet, up: bool, port: int) -> None:
+    print(f"[OK] {sheet.url(port)}")
+    print(f"     expires {sheet.expires_at} "
+          f"(revoke now: --revoke {sheet.order_ids[0] if sheet.order_ids else sheet.token})")
+    if not up:
+        print(f"[WARN] {pick_store.SERVE_HINT}")
+
+
+def cmd_revoke(target: str) -> int:
+    killed = pick_store.revoke(order_id=target) or pick_store.revoke(token=target)
+    if not killed:
+        print(f"nothing published for {target!r} (already expired, or never was)")
+        return 1
+    print(f"[OK] revoked {len(killed)} sheet(s) — those links are dead now")
+    return 0
+
+
+def cmd_list(port: int) -> int:
+    sheets = pick_store.list_sheets()
+    pick_store.purge_expired()
+    if not sheets:
+        print("no live pick sheets")
+        return 0
+    for s in sheets:
+        print(f"{s.url(port)}  expires {s.expires_at}  "
+              f"orders {', '.join(s.order_ids) or '?'}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("order_id", nargs="+", metavar="ORDER_ID",
+    ap.add_argument("order_id", nargs="*", metavar="ORDER_ID",
                     help="one order id. Several ids are combined onto ONE page only if they are the same buyer AND the same ship-to address (one box, one eBay label); anything else is refused - run the tool once per shipment.")
     ap.add_argument("--days", type=int, default=30, help="lookback window to find the order(s) (default 30)")
-    ap.add_argument("--out", metavar="FILE", help="output path (default pick_lists/pick_<id>.html)")
-    ap.add_argument("--pdf", action="store_true",
-                    help="also render a PDF beside the HTML (headless Chrome/Edge)")
+    ap.add_argument("--out", metavar="FILE", help="write to this local path instead of publishing a link")
+    ap.add_argument("--local-only", action="store_true",
+                    help="write pick_lists/pick_<id>.html and print the path, the pre-#151 behaviour (no link, no store)")
+    ap.add_argument("--ttl", type=float, default=pick_store.TTL_HOURS_DEFAULT,
+                    metavar="HOURS", help=f"how long the link lives (default {pick_store.TTL_HOURS_DEFAULT}h)")
+    ap.add_argument("--port", type=int, default=pick_store.DEFAULT_PORT,
+                    help=f"port the local app serves on (default {pick_store.DEFAULT_PORT})")
+    ap.add_argument("--revoke", metavar="ORDER_ID|TOKEN",
+                    help="delete a published sheet now instead of waiting for it to expire")
+    ap.add_argument("--list", action="store_true", dest="do_list",
+                    help="list the live published sheets (local only - no route does this)")
     args = ap.parse_args()
+
+    if args.revoke:
+        return cmd_revoke(args.revoke)
+    if args.do_list:
+        return cmd_list(args.port)
+    if not args.order_id:
+        ap.error("give at least one ORDER_ID (or --list / --revoke)")
 
     candidates = fetch_orders(args.days, verbose=False)
     matches, missing = [], []
@@ -450,13 +592,28 @@ def main() -> int:
     drafts, ledger = scan_drafts(), load_listings_ledger()
     out_html = render_html(matches, drafts, ledger)
 
-    out_path = Path(args.out) if args.out else OUT_DIR / _default_out_name(matches)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(out_html, encoding="utf-8")
-    print(f"[OK] wrote {out_path}")
-    if args.pdf:
-        pdf_path = to_pdf(out_path)
-        print(f"[OK] wrote {pdf_path}")
+    # A link is the deliverable (#151); a local file is what --local-only /
+    # --out ask for, and what a failed publish falls back to.
+    want_local = args.local_only or bool(args.out)
+    published = None
+    if not (args.local_only or args.out):
+        try:
+            sheet, up = publish(matches, out_html, ttl_hours=args.ttl, port=args.port)
+            published = sheet
+            _report(sheet, up, args.port)
+        except OSError as e:
+            # The store is a directory; if it can't be written the sheet still
+            # has to reach a human, so say what broke, fall back to the file,
+            # and exit non-zero rather than pretend a link exists.
+            print(f"[FAIL] could not publish the sheet ({e}); writing a local file instead")
+            want_local = True
+
+    if want_local:
+        out_path = Path(args.out) if args.out else OUT_DIR / _default_out_name(matches)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(out_html, encoding="utf-8")
+        print(f"[OK] wrote {out_path}")
+        return 0 if (published or args.local_only or args.out) else 1
     return 0
 
 
