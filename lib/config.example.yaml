@@ -214,6 +214,25 @@ easypost:
   api_key: "EZAK_REPLACE_ME"
 
 # ---------------------------------------------------------------------------
+# Vinted Pro Integrations (lib/vinted_client.py, `ebz vinted check`)
+# ---------------------------------------------------------------------------
+# Not self-serve: Vinted must allowlist the Pro business account before the
+# Integrations Portal (https://pro-portal.svc.vinted.com/) issues a token.
+# The token is ONE string, "<access_key>,<signing_key>". Sandbox and
+# production tokens are separate; environment defaults to sandbox.
+# Env overrides: VINTED_PRO_TOKEN, VINTED_ENVIRONMENT.
+vinted:
+  environment: sandbox
+  sandbox:
+    token: "ACCESS_KEY_REPLACE_ME,SIGNING_KEY_REPLACE_ME"
+  # production:
+  #   token: "..."
+  # stores:              # named stores, same shape as the block above
+  #   junk:
+  #     environment: sandbox
+  #     sandbox: {token: "..."}
+
+# ---------------------------------------------------------------------------
 # CURATE strategy profiles
 # ---------------------------------------------------------------------------
 # Profiles encode the Buy Point math used by CURATE. The active profile

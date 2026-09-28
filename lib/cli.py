@@ -85,6 +85,8 @@ COMMANDS = {
                      "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
+    "vinted":       ("tools.vinted",
+                     "Vinted Pro API: check token/signature, read ontologies/items/orders"),
 }
 
 
@@ -93,7 +95,7 @@ COMMANDS = {
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
     "sales-report", "dashboard", "report", "promote", "listing", "status",
-    "ship-quote", "ship-buy",
+    "ship-quote", "ship-buy", "vinted",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
 # spend money, so the store has to be typed, once, by name.

@@ -345,3 +345,22 @@ The modules above are the ones with setup steps. The rest, one line each:
 
 Setup for the eBay Sell API — the one thing with real prerequisites — is in
 [SETUP_EBAY_API.md](SETUP_EBAY_API.md).
+
+---
+
+## vinted_client.py — Vinted Pro Integrations API (second marketplace)
+
+Transport layer for Vinted's official seller API: HMAC-signed requests,
+per-store credentials (`vinted.*` / `vinted.stores.<name>`, same store
+resolution as eBay), and item, order, label and webhook calls. Every
+account-changing call is a DRY RUN unless `confirm=True`, and creates land
+as Vinted drafts unless `publish=True`.
+
+Access is allowlisted (Vinted Pro business accounts, EU/UK markets as
+documented). Account steps, config and the follow-ups before publishing
+are in [SETUP_VINTED_API.md](SETUP_VINTED_API.md).
+
+```bash
+python -m lib.cli vinted check        # one signed, read-only call
+python -m lib.cli vinted ontologies --out vinted_ontologies.json
+```
