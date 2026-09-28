@@ -19,6 +19,16 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 import source_report as sr  # noqa: E402
+import stores  # noqa: E402
+
+
+def _isolate(monkeypatch, root, cfg=None):
+    """Per-store paths (#156) resolve under `root`: stores.REPO patched, no
+    ambient store or ledger override, `cfg` (default {}) as the config."""
+    monkeypatch.setattr(stores, "REPO", root)
+    monkeypatch.setattr(stores, "load_config", lambda: cfg or {})
+    for var in ("EBAYBIZ_STORE", "EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG"):
+        monkeypatch.delenv(var, raising=False)
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +343,7 @@ def fixture_repo(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sr, "REPO", tmp_path)
     monkeypatch.setattr(sr, "INVENTORY", inv)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
     monkeypatch.setattr(sr._report, "REPO", tmp_path)
     monkeypatch.setattr(sr._report, "INVENTORY", inv)
     monkeypatch.setattr(sr._report, "LEDGER", tmp_path / "listings_ledger.csv")
@@ -432,7 +442,7 @@ def test_gather_reports_zero_coverage_with_columns_present_says_so(fixture_repo,
          "ad_fee": "", "actual_postage": ""},
     ]
     sales = _write_sales(fixture_repo, rows)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
 
     d = sr.gather()
     assert d["fin_covered_n"] == 0
@@ -450,7 +460,7 @@ def test_gather_reports_full_finances_coverage(fixture_repo, monkeypatch):
          "ad_fee": "0.00", "actual_postage": "3.00"},
     ]
     sales = _write_sales(fixture_repo, rows)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
 
     d = sr.gather()
     assert d["fin_covered_n"] == 2 == d["fin_total_n"]
@@ -469,7 +479,7 @@ def test_gather_reports_partial_finances_coverage_and_says_why(fixture_repo, mon
          "ad_fee": "", "actual_postage": ""},   # not read yet
     ]
     sales = _write_sales(fixture_repo, rows)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
 
     d = sr.gather()
     assert d["fin_covered_n"] == 1
@@ -538,7 +548,7 @@ def nested_fixture_repo(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sr, "REPO", tmp_path)
     monkeypatch.setattr(sr, "INVENTORY", inv)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
     monkeypatch.setattr(sr._report, "REPO", tmp_path)
     monkeypatch.setattr(sr._report, "INVENTORY", inv)
     monkeypatch.setattr(sr._report, "LEDGER", tmp_path / "listings_ledger.csv")
@@ -590,7 +600,7 @@ def spend_unit_fixture_repo(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sr, "REPO", tmp_path)
     monkeypatch.setattr(sr, "INVENTORY", inv)
-    monkeypatch.setattr(sr, "SALES_LEDGER", sales)
+    _isolate(monkeypatch, sales.parent)
     monkeypatch.setattr(sr._report, "REPO", tmp_path)
     monkeypatch.setattr(sr._report, "INVENTORY", inv)
     monkeypatch.setattr(sr._report, "LEDGER", tmp_path / "listings_ledger.csv")
@@ -606,3 +616,95 @@ def test_gather_resolves_a_per_item_spend_against_the_buckets_own_unit_count(spe
     assert b["cost_known"] is True
     assert b["gap"] is False
     assert b["roi"] == pytest.approx((17 + 16) / 10)
+
+
+# --------------------------------------------------------------------------
+# #156 — store is an axis orthogonal to bucket. One estate (SCJ, $575) sold
+# partly on the main store and partly on the junk store; a third store sold
+# from FREE. Per-store views never charge the whole basis against one
+# store's share; the combined view counts the basis once and shows the split.
+# --------------------------------------------------------------------------
+THREE_STORES = {"ebay": {"stores": {"junk": {}, "outlet": {}}}}
+
+
+def _write_store_sales(path, rows):
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=_SALES_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+@pytest.fixture
+def three_store_repo(tmp_path, monkeypatch):
+    inv = tmp_path / "inventory"
+    for d in ("ESTATES/SCJ/item-1", "ESTATES/SCJ/item-2", "FREE/mag-1"):
+        (inv / d).mkdir(parents=True)
+    (inv / "ESTATES" / "SCJ" / "context.txt").write_text("kind: event\nspend: 575\n")
+    (inv / "FREE" / "context.txt").write_text("kind: channel\n")
+    _write_store_sales(tmp_path / "sales_ledger.csv", [
+        _sale("1", "inventory/ESTATES/SCJ/item-1", gross=100, fee=13, net=87)])
+    _write_store_sales(tmp_path / "sales_ledger-junk.csv", [
+        _sale("2", "inventory/ESTATES/SCJ/item-2", gross=60, fee=10, net=50)])
+    _write_store_sales(tmp_path / "sales_ledger-outlet.csv", [
+        _sale("3", "inventory/FREE/mag-1", gross=6, fee=1, net=5)])
+    _isolate(monkeypatch, tmp_path, THREE_STORES)
+    reports = tmp_path / "reports"
+    monkeypatch.setattr(sr, "REPO", tmp_path)
+    monkeypatch.setattr(sr, "INVENTORY", inv)
+    monkeypatch.setattr(sr, "REPORTS", reports)
+    monkeypatch.setattr(sr, "OUT_HTML", reports / "source_report.html")
+    monkeypatch.setattr(sr._report, "REPO", tmp_path)
+    monkeypatch.setattr(sr._report, "INVENTORY", inv)
+    return tmp_path
+
+
+def test_a_single_store_view_reads_only_that_stores_sales(three_store_repo):
+    junk = {b["key"]: b for b in sr.gather("junk")["buckets"]}
+    assert set(junk) == {"ESTATES/SCJ"}
+    assert junk["ESTATES/SCJ"]["sold_n"] == 1
+    assert junk["ESTATES/SCJ"]["net"] == pytest.approx(50.0)
+
+
+def test_a_bucket_sold_on_two_stores_withholds_roi_in_each_single_store_view(three_store_repo):
+    for store, other in (("default", "junk"), ("junk", "default")):
+        d = sr.gather(store)
+        scj = next(b for b in d["buckets"] if b["key"] == "ESTATES/SCJ")
+        assert scj["split"] == [other]
+        # never $575 against one store's share: withheld, not wrong
+        assert scj["cost_basis"] is None and scj["roi"] is None and scj["profit"] is None
+        assert scj["gap"] is False, "withheld is not an unrecorded basis"
+        assert d["total"]["cost_bucket_n"] == 0
+        assert "ESTATES/SCJ" not in d["needs_spend"]
+        assert "split" in sr.render_table(d)
+
+
+def test_the_combined_view_counts_the_basis_once_and_shows_the_split(three_store_repo):
+    d = sr.gather(all_stores=["default", "junk", "outlet"])
+    by_key = {b["key"]: b for b in d["buckets"]}
+    scj = by_key["ESTATES/SCJ"]
+    assert scj["sold_n"] == 2 and scj["net"] == pytest.approx(137.0)
+    assert scj["cost_basis"] == pytest.approx(575.0)             # once, not twice
+    assert scj["roi"] == pytest.approx(137 / 575)
+    assert set(scj["by_store"]) == {"default", "junk"}
+    assert by_key["FREE"]["by_store"] == {"outlet": {"sold_n": 1, "gross": 6.0, "net": 5.0}}
+    table = sr.render_table(d)
+    assert table.startswith("all stores (default, junk, outlet)")
+    assert "default 1 sold" in table and "junk 1 sold" in table
+    assert "junk 1 sold" in sr.draw(d)
+
+
+def test_default_store_alone_is_unlabelled(three_store_repo):
+    assert sr.store_heading(sr.gather("default")) == ""
+    assert "junk" in sr.store_heading(sr.gather("junk"))
+
+
+def test_html_output_is_per_store(three_store_repo):
+    reports = three_store_repo / "reports"
+    assert sr.main(["--by-source", "--html"]) == 0
+    assert (reports / "source_report.html").exists()
+    assert sr.main(["--by-source", "--html", "--store", "junk"]) == 0
+    assert "junk" in (reports / "source_report-junk.html").read_text(encoding="utf-8")
+    assert sr.main(["--by-source", "--html", "--all-stores"]) == 0
+    assert (reports / "source_report-all-stores.html").exists()
+    assert "<title>Source Report</title>" in (reports / "source_report.html").read_text(
+        encoding="utf-8")

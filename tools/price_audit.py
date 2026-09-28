@@ -12,7 +12,10 @@ This finds those: live listings older than `--days` whose current ask is still
 above their own Recommended figure. It proposes the drop; it never makes it.
 Repricing is a decision, and it goes through the same review as the copy.
 
-  price_audit.py [--days 30] [--json out.json]
+  price_audit.py [--days 30] [--json out.json] [--store NAME]
+
+`--store` (#156) picks whose listings ledger dates each listing; pass the same
+store the `--audit` rows came from (`live_audit.py --store NAME --json ...`).
 
 Two honesty notes. The Recommended figure is as old as the draft — a comp read
 from June is not a comp today, and a flagged item may deserve a re-hunt rather
@@ -32,8 +35,12 @@ from decimal import Decimal
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "lib"))
+import stores  # noqa: E402
+
 INVENTORY = REPO / "inventory"
-LEDGER = REPO / "listings_ledger.csv"
+# The ledger is per store: stores.paths(store).listings_ledger, resolved in
+# scan() (#156). No module-level LEDGER.
 
 # "Recommended $76", "Recommended (median …) = $76", "Recommended/clear ref $295",
 # "Recommended $32 / ceiling $48" — take the FIRST dollar figure that follows the
@@ -67,8 +74,12 @@ def days_since(iso: str) -> int | None:
     return (datetime.now(timezone.utc) - d).days
 
 
-def scan(audit_rows: list[dict], days: int) -> list[dict]:
-    led = {r["sku"]: r for r in csv.DictReader(LEDGER.open(encoding="utf-8-sig"))}
+def scan(audit_rows: list[dict], days: int, store: str | None = None) -> list[dict]:
+    ledger = stores.paths(store).listings_ledger
+    led = {}
+    if ledger.exists():
+        with ledger.open(encoding="utf-8-sig", newline="") as f:
+            led = {r["sku"]: r for r in csv.DictReader(f)}
     out = []
     for r in audit_rows:
         if r.get("state") != "LIVE" or r.get("group") or not r.get("dir"):
@@ -103,9 +114,13 @@ def main() -> int:
     ap.add_argument("--audit", required=True, help="rows JSON from tools/live_audit.py")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--json", default=None)
+    stores.add_store_args(ap)
     a = ap.parse_args()
 
-    rows = scan(json.loads(Path(a.audit).read_text(encoding="utf-8")), a.days)
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+    rows = scan(json.loads(Path(a.audit).read_text(encoding="utf-8")), a.days, store)
     flagged = sorted((r for r in rows if r["flag"] == "above-recommended"),
                      key=lambda r: -r["days"])
     missing = [r for r in rows if r["flag"] == "no-recommended-recorded"]

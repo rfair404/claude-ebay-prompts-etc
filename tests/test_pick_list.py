@@ -30,6 +30,16 @@ pick_list = pytest.importorskip(
 from ebay_client import EbayAPIError                        # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _no_real_config(monkeypatch):
+    """Never read the operator's real config.yaml (#156): how many stores it
+    lists decides whether --record-tracking demands --store, so a test that
+    passes on a one-store machine must not fail on a two-store one."""
+    import config
+    monkeypatch.setattr(config, "load_config", lambda *a, **k: {})
+    monkeypatch.delenv("EBAYBIZ_STORE", raising=False)
+
+
 # --------------------------------------------------------------------------- #
 # fixtures (hand-built, no pytest fixture args — every test below is a plain
 # no-arg function so it also runs under tests/run_all.py)
@@ -160,8 +170,8 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
     out_dir, _ = _scratch_dirs()
     orders = [_order(oid="new-1"), _order(oid="new-2", sku="zzz999")]
     try:
-        with _Patched({(pick_list, "scan_drafts"): lambda: [],
-                          (pick_list, "load_listings_ledger"): lambda: []}):
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                          (pick_list, "load_listings_ledger"): lambda *_a: []}):
             new_ids, skipped_ids, state, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
                 fetch=lambda: orders, publish=False)
@@ -177,8 +187,8 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
 
         # Poll again with the SAME state (as a real second poll would reuse
         # it) — nothing new should render.
-        with _Patched({(pick_list, "scan_drafts"): lambda: [],
-                          (pick_list, "load_listings_ledger"): lambda: []}):
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                          (pick_list, "load_listings_ledger"): lambda *_a: []}):
             new_ids2, skipped_ids2, state2, _ = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders, publish=False)
         assert new_ids2 == []
@@ -192,8 +202,8 @@ def test_poll_and_print_reprint_forces_one_order_through():
     orders = [_order(oid="dup-1")]
     state = {"printed": {"dup-1": {"printed_at": "x", "file": "y"}}, "shipped": {}}
     try:
-        with _Patched({(pick_list, "scan_drafts"): lambda: [],
-                          (pick_list, "load_listings_ledger"): lambda: []}):
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                          (pick_list, "load_listings_ledger"): lambda *_a: []}):
             new_ids, skipped_ids, _, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders, publish=False, reprint="dup-1")
         assert new_ids == ["dup-1"]
@@ -211,8 +221,8 @@ def test_poll_and_print_do_print_failure_never_raises():
         raise OSError("no printer configured")
 
     try:
-        with _Patched({(pick_list, "scan_drafts"): lambda: [],
-                          (pick_list, "load_listings_ledger"): lambda: [],
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                          (pick_list, "load_listings_ledger"): lambda *_a: [],
                           (pick_list, "_send_to_printer"): boom}):
             new_ids, _, _, unconfirmed = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
@@ -267,7 +277,7 @@ def test_record_tracking_posts_the_built_body_and_returns_order_plus_response():
     o = _order()
     posted = {}
 
-    def fake_fetch_order(order_id):
+    def fake_fetch_order(order_id, **_k):
         assert order_id == o["orderId"]
         return o
 
@@ -286,7 +296,7 @@ def test_record_tracking_posts_the_built_body_and_returns_order_plus_response():
 
 
 def test_record_tracking_raises_on_unknown_order():
-    with _Patched({(pick_list, "fetch_order"): lambda order_id: None}):
+    with _Patched({(pick_list, "fetch_order"): lambda order_id, **_k: None}):
         try:
             pick_list.record_tracking("ghost", "USPS", "T1")
             raise AssertionError("expected ValueError")
@@ -352,9 +362,9 @@ def test_cmd_record_tracking_dry_run_never_posts_or_advances_ledger():
     advanced = []
 
     with _Patched({
-        (pick_list, "fetch_order"): lambda order_id: o,
+        (pick_list, "fetch_order"): lambda order_id, **_k: o,
         (pick_list, "api_send"): lambda *a, **k: posted.append(1) or {},
-        (pick_list, "advance_ledger_for_order"): lambda order: advanced.append(1) or 1,
+        (pick_list, "advance_ledger_for_order"): lambda order, **_k: advanced.append(1) or 1,
     }):
         rc = pick_list.cmd_record_tracking(
             _Args(record_tracking=o["orderId"], carrier="USPS",
@@ -371,9 +381,9 @@ def test_cmd_record_tracking_confirm_posts_and_advances_ledger():
     _, state_file = _scratch_dirs()
 
     with _Patched({
-        (pick_list, "fetch_order"): lambda order_id: o,
+        (pick_list, "fetch_order"): lambda order_id, **_k: o,
         (pick_list, "api_send"): lambda *a, **k: posted.append(1) or {"fulfillmentId": "f1"},
-        (pick_list, "advance_ledger_for_order"): lambda order: advanced.append(1) or 1,
+        (pick_list, "advance_ledger_for_order"): lambda order, **_k: advanced.append(1) or 1,
         (pick_list, "STATE_FILE"): state_file,
     }):
         rc = pick_list.cmd_record_tracking(
@@ -390,7 +400,7 @@ def test_cmd_record_tracking_confirm_posts_and_advances_ledger():
 
 def test_cmd_record_tracking_missing_carrier_is_rejected_before_any_call():
     calls = []
-    with _Patched({(pick_list, "fetch_order"): lambda order_id: calls.append(1)}):
+    with _Patched({(pick_list, "fetch_order"): lambda order_id, **_k: calls.append(1)}):
         rc = pick_list.cmd_record_tracking(
             _Args(record_tracking="x", carrier=None, tracking_number="T1", confirm=True))
     assert rc == 2
@@ -406,7 +416,7 @@ def test_cmd_record_tracking_confirm_reuses_record_tracking_not_a_second_post():
     fetch_calls = []
     post_calls = []
 
-    def fake_fetch_order(order_id):
+    def fake_fetch_order(order_id, **_k):
         fetch_calls.append(order_id)
         return o
 
@@ -419,7 +429,7 @@ def test_cmd_record_tracking_confirm_reuses_record_tracking_not_a_second_post():
         with _Patched({
             (pick_list, "fetch_order"): fake_fetch_order,
             (pick_list, "api_send"): fake_api_send,
-            (pick_list, "advance_ledger_for_order"): lambda order: 1,
+            (pick_list, "advance_ledger_for_order"): lambda order, **_k: 1,
             (pick_list, "STATE_FILE"): state_file,
         }):
             rc = pick_list.cmd_record_tracking(
@@ -439,7 +449,7 @@ def test_cmd_record_tracking_confirm_surfaces_api_error_instead_of_raising():
         raise EbayAPIError(400, "bad tracking number", '{"errors":[]}')
 
     with _Patched({
-        (pick_list, "fetch_order"): lambda order_id: o,
+        (pick_list, "fetch_order"): lambda order_id, **_k: o,
         (pick_list, "api_send"): raise_400,
     }):
         rc = pick_list.cmd_record_tracking(
@@ -659,8 +669,8 @@ def test_a_poll_drops_sheets_and_still_records_a_working_link():
         order = _order(oid="inv-2")
         order["lineItems"] = [_item(sku="S9", title="Jamie's other thing")]
         orders = [order]
-        with _Patched({(pick_list, "scan_drafts"): lambda: [_draft(rel, sku="S9")],
-                       (pick_list, "load_listings_ledger"): lambda: []}):
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [_draft(rel, sku="S9")],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
                 new_ids, _, state, _ = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
@@ -845,8 +855,8 @@ class _FakeHtml:
 
 def _no_inventory():
     """The two lookups poll_and_print makes into local inventory/ledger."""
-    return _Patched({(pick_list, "scan_drafts"): lambda: [],
-                     (pick_list, "load_listings_ledger"): lambda: []})
+    return _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                     (pick_list, "load_listings_ledger"): lambda *_a: []})
 
 
 def test_poll_publishes_a_link_per_new_order():
@@ -1046,3 +1056,141 @@ def test_a_later_order_from_the_same_buyer_folds_into_the_earlier_sheet():
         assert store.fetch(combined)[1] == "ok"
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- #
+# Stores (#156): one poll per store, per-store state, no cross-store boxes,
+# and --record-tracking names its account once there are two. Config and the
+# repo root are faked per test — never the real config or data files.
+# --------------------------------------------------------------------------- #
+import argparse                                                     # noqa: E402
+import contextlib                                                   # noqa: E402
+import json                                                         # noqa: E402
+
+import config as _config                                            # noqa: E402
+import stores as _stores                                            # noqa: E402
+
+THREE = {"ebay": {"stores": {"junk": {}, "outlet": {}}}, "storefronts": {}}
+
+
+@contextlib.contextmanager
+def _multi(cfg=THREE):
+    """Fake config + a throwaway repo root, so stores.paths() files land in a
+    tempdir and configured_stores() is exactly what the test says."""
+    tmp = Path(tempfile.mkdtemp(prefix="pick_list_stores_"))
+    real_load, real_repo = _config.load_config, _stores.REPO
+    saved_env = {k: os.environ.pop(k, None)
+                 for k in ("EBAYBIZ_STORE", "EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG")}
+    _config.load_config = lambda *a, **k: cfg
+    _stores.REPO = tmp
+    try:
+        with _Patched({(pick_list, "STATE_FILE"): tmp / ".pick_list_state.json",
+                       (pick_list, "OUT_DIR"): tmp / "pick_lists",
+                       (pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
+            yield tmp
+    finally:
+        _config.load_config, _stores.REPO = real_load, real_repo
+        for k, v in saved_env.items():
+            if v is not None:
+                os.environ[k] = v
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_same_buyer_same_address_on_two_stores_is_two_shipments():
+    a = _order(oid="st-a")
+    b = _order(oid="st-b")
+    pick_list.tag_orders([a], "default")
+    pick_list.tag_orders([b], "junk")
+    groups = pick_list.group_shipments([a, b])
+    assert [[o["orderId"] for o in g] for g in groups] == [["st-a"], ["st-b"]]
+    # untagged orders are the default store's — still one box with a tagged default
+    c = _order(oid="st-c")
+    assert len(pick_list.group_shipments([a, c])) == 1
+
+
+def test_each_store_keeps_its_own_pick_state_file():
+    with _multi() as tmp:
+        assert pick_list._state_file("default") == tmp / ".pick_list_state.json"
+        assert pick_list._state_file("junk") == tmp / ".pick_list_state-junk.json"
+        pick_list._save_state({"printed": {"j-1": {}}, "shipped": {}}, "junk")
+        assert pick_list._load_state("junk")["printed"] == {"j-1": {}}
+        assert pick_list._load_state("default")["printed"] == {}
+        assert pick_list._load_state("outlet")["printed"] == {}
+
+
+def test_all_stores_poll_runs_once_per_store_with_three_stores():
+    fetched = []
+
+    def fake_fetch_open(store=None):
+        fetched.append(store)
+        return [_order(oid=f"{store}-1")]
+
+    with _multi() as tmp, _Patched({(pick_list, "fetch_open"): fake_fetch_open}):
+        args = argparse.Namespace(store=None, all_stores=True, do_print=False,
+                                  reprint=None, no_links=True, ttl=None)
+        assert pick_list.cmd_poll(args) == 0
+        assert fetched == ["default", "junk", "outlet"]
+        for store, name in (("default", ".pick_list_state.json"),
+                            ("junk", ".pick_list_state-junk.json"),
+                            ("outlet", ".pick_list_state-outlet.json")):
+            state = json.loads((tmp / name).read_text(encoding="utf-8"))
+            assert list(state["printed"]) == [f"{store}-1"], name   # never pooled
+
+        # a second poll of one store skips only that store's own orders
+        fetched.clear()
+        args = argparse.Namespace(store="junk", all_stores=False, do_print=False,
+                                  reprint=None, no_links=True, ttl=None)
+        new, skipped, _, _ = pick_list.poll_and_print(
+            out_dir=tmp / "pick_lists", fetch=lambda: [_order(oid="junk-1")],
+            store="junk", publish=False)
+        assert (new, skipped) == ([], ["junk-1"])
+
+
+def test_a_named_store_places_items_against_its_own_ledger_and_drafts():
+    seen = []
+    with _multi() as tmp, _Patched({
+            (pick_list, "load_listings_ledger"): lambda *a: seen.append(("ledger", a)) or [],
+            (pick_list, "scan_drafts"): lambda *a: seen.append(("drafts", a)) or []}):
+        pick_list.poll_and_print(out_dir=tmp / "out", store="junk",
+                                 fetch=lambda: [], publish=False,
+                                 state={"printed": {}, "shipped": {}})
+    assert seen == [("ledger", ("junk",)), ("drafts", ("junk", []))]
+
+
+def test_record_tracking_needs_an_explicit_store_once_there_are_two():
+    calls = []
+    with _multi(), _Patched({(pick_list, "fetch_order"):
+                             lambda order_id, **k: calls.append(k) or _order()}):
+        with pytest.raises(SystemExit) as e:
+            pick_list.cmd_record_tracking(
+                _Args(record_tracking="x", carrier="USPS", tracking_number="T1"))
+        assert "--store" in str(e.value)
+        assert calls == []                        # refused before any eBay call
+
+        args = _Args(record_tracking="x", carrier="USPS", tracking_number="T1")
+        args.store = "junk"
+        assert pick_list.cmd_record_tracking(args) == 0     # dry run
+        assert calls == [{"store": "junk"}]
+
+
+def test_record_tracking_single_store_needs_no_flag():
+    calls = []
+    with _multi({}), _Patched({(pick_list, "fetch_order"):
+                               lambda order_id, **k: calls.append(k) or _order()}):
+        assert pick_list.cmd_record_tracking(
+            _Args(record_tracking="x", carrier="USPS", tracking_number="T1")) == 0
+    assert calls == [{"store": None}]
+
+
+def test_record_tracking_writes_the_shipped_row_to_that_stores_ledger():
+    seen = []
+    with _Patched({(pick_list, "fetch_order"): lambda order_id, **k: _order()}):
+        import list_edit
+        real = list_edit.upsert_listing
+        list_edit.upsert_listing = lambda sku, status, **k: seen.append((sku, k.get("store")))
+        try:
+            pick_list.advance_ledger_for_order(_order(sku="S1"), store="junk")
+        finally:
+            list_edit.upsert_listing = real
+    assert seen == [("S1", "junk")]

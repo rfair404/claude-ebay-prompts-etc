@@ -15,6 +15,13 @@ listing was published with, which is exactly what we need before overwriting.
     python tools/live_shipping_survey.py                 # every published offer
     python tools/live_shipping_survey.py --dead-only     # only deleted-policy ones
     python tools/live_shipping_survey.py --csv out.csv
+    python tools/live_shipping_survey.py --store junk    # a named store (#156)
+
+Per store (#156): `--store` picks the account asked, the default survey file
+(stores.paths(store).offer_policy_survey — what `policy_sweep.py` writes) and
+what counts as a LIVE policy: the store's own configured fulfillment policy
+ids. Policy ids are per account, so a literal set of the main store's ids
+made every other store's offer read as "dead".
 """
 from __future__ import annotations
 
@@ -26,9 +33,38 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 
 import ebay_client as ec  # noqa: E402
+import stores  # noqa: E402
 
 NS = "urn:ebay:apis:eBLBaseComponents"
-LIVE_POLICIES = {"296458692014", "296996597014"}
+
+# Every config field that names a fulfillment policy a listing may legitimately
+# carry (see list_edit._resolve_policies_and_location). Replaces the old
+# LIVE_POLICIES literal of main-account ids (#156 §2).
+FULFILLMENT_POLICY_FIELDS = (
+    "fulfillment_policy_id", "fulfillment_policy_id_media",
+    "fulfillment_policy_id_local_pickup", "fulfillment_policy_id_international",
+    "fulfillment_policy_id_us_only",
+)
+# The pre-#156 default input. Only read for the default store, and only when
+# the per-store survey file does not exist yet.
+LEGACY_SURVEY = ".offer_policy_survey2.json"
+
+
+def live_policies(store: str) -> set[str]:
+    """The fulfillment policy ids `store` is configured to publish with."""
+    import list_edit as le
+    return {v for f in FULFILLMENT_POLICY_FIELDS
+            if (v := le._ebay_extra(f, store=store))}
+
+
+def survey_path(store: str, explicit: str | None = None) -> Path:
+    if explicit:
+        return Path(explicit)
+    p = stores.paths(store).offer_policy_survey
+    legacy = stores.REPO / LEGACY_SURVEY
+    if stores.is_default(store) and not p.exists() and legacy.exists():
+        return legacy
+    return p
 
 
 def get_item(listing_id: str, creds) -> dict:
@@ -82,19 +118,36 @@ def get_item(listing_id: str, creds) -> dict:
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--survey", default=".offer_policy_survey2.json")
+    ap.add_argument("--survey", default=None,
+                    help="offer survey JSON (default: the store's "
+                         ".offer_policy_survey[-<store>].json from policy_sweep.py)")
     ap.add_argument("--dead-only", action="store_true",
-                    help="only offers whose fulfillment policy no longer exists")
+                    help="only offers whose fulfillment policy is not one of "
+                         "the store's configured fulfillment_policy_id* ids")
     ap.add_argument("--csv")
-    args = ap.parse_args()
+    stores.add_store_args(ap)
+    args = ap.parse_args(argv)
 
-    creds = ec.load_credentials()
-    rows = [r for r in json.load(open(args.survey))
+    store = stores.resolve_store_name(args.store)
+    if not stores.is_default(store):
+        print(f"store: {store}", file=sys.stderr)
+    creds = ec.load_credentials(store=store)
+    survey = survey_path(store, args.survey)
+    rows = [r for r in json.load(open(survey))
             if r["status"] == "PUBLISHED" and r.get("listingId")]
     if args.dead_only:
-        rows = [r for r in rows if r["fulfillmentPolicyId"] not in LIVE_POLICIES]
+        live = live_policies(store)
+        if not live:
+            print(f"[X] --dead-only: store {store!r} has no fulfillment_policy_id* "
+                  f"configured, so every offer would read as dead. Set "
+                  + ("ebay.<environment>.fulfillment_policy_id"
+                     if stores.is_default(store)
+                     else f"ebay.stores.{store}.fulfillment_policy_id")
+                  + " first.", file=sys.stderr)
+            return 2
+        rows = [r for r in rows if r["fulfillmentPolicyId"] not in live]
 
     # One listing can back many SKUs (multi-variation) — ask eBay once each.
     seen, out = {}, []

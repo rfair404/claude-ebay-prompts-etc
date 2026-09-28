@@ -45,6 +45,9 @@ listings_ledger.*.csv
 # it is the single most sensitive file the pipeline produces.
 sales_ledger.csv
 sales_ledger.*.csv
+# The per-store name lib/stores.store_file() actually writes (GH #156) —
+# sales_ledger-junk.csv. The dotted rule above did NOT match it.
+sales_ledger-*.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
 # Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
@@ -68,10 +71,12 @@ sales_ledger.*.csv
 # by lib/sync_actuals.load_hand_locations() for the pick sheet. Kept locally
 # with the ledgers it annotates. Columns: listing_id (or sku),location,note.
 hand_listed_locations.csv
+hand_listed_locations-*.csv
 *_ledger.backup*.csv
 
 # tools/ledger_reconcile.py detail dump — SKU, price, title, url for flagged rows.
 ledger_reconcile_report.json
+ledger_reconcile_report-*.json
 
 # Performance reports — REPORT-phase output. Gross, fees, net, per-category
 # medians and item-level sale prices. Regenerate with:
@@ -207,6 +212,10 @@ desktop.ini
 # ...and any per-store variant, same reasoning as listings_ledger.*.csv above.
 /inventory_sheet.*.csv
 /inventory_sheet.*.json
+# lib/stores.store_file() writes <stem>-<store><suffix> (GH #156) — the
+# dotted rules above never matched inventory_sheet-junk.csv.
+/inventory_sheet-*.csv
+/inventory_sheet-*.json
 /.inventory_live.json
 /.live_listings_consolidated.json
 

@@ -26,10 +26,26 @@ Outputs
 
 Nothing is written without --apply.
 
+One store per pass (#156)
+  Every pass is ONE store — one eBay seller account: its orders are fetched
+  with that store's credentials, and every file above is that store's own
+  (`stores.paths(store)`: sales_ledger-<store>.csv, listings_ledger-<store>.csv,
+  reports/finances_sync_status-<store>.json, hand_listed_locations-<store>.csv;
+  the default store keeps the bare historic names). An order is matched only
+  to folders that belong to the same store — `stores.draft_belongs_to_store()`:
+  the draft's `store:` names it, or its SKU / listing id is in that store's
+  own listings ledger. The shoot namespace (inventory/) and the canonical SKU
+  are both store-independent, and eBay's SKU namespace is per account, so
+  without that filter a junk-store order for a relisted item could claim, and
+  stamp, a main-store folder, and its SOLD advance would land in the main
+  ledger. `--all-stores` runs one full pass per configured store.
+
 CLI
     python lib/sync_actuals.py                     # report only, last 90 days
     python lib/sync_actuals.py --days 730          # wider window
     python lib/sync_actuals.py --apply             # write the records
+    python lib/sync_actuals.py --store junk        # a named store (#156)
+    python lib/sync_actuals.py --all-stores --apply  # every store, one pass each
     python lib/sync_actuals.py --print-js          # store-page extractor
     python lib/sync_actuals.py --store-json s.json # + active-listing audit
 """
@@ -48,17 +64,18 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ebay_client import api_send, EbayAPIError, EbayAuthError  # noqa: E402
+from ebay_client import api_send, load_credentials, EbayAPIError, EbayAuthError  # noqa: E402
 import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
+import stores  # noqa: E402  the one store model (#156)
 from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
+from stores import draft_belongs_to_store, draft_store_from_text, ledger_keys  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
-SALES_LEDGER = REPO / "sales_ledger.csv"
-LISTINGS_LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
-REPORTS = REPO / "reports"
-FINANCES_STATUS_JSON = REPORTS / "finances_sync_status.json"
-HAND_LOCATIONS = REPO / "hand_listed_locations.csv"
+# The per-store data files (sales ledger, listings ledger, finances status,
+# hand-listed locations) are NOT module constants any more: each is resolved
+# for a named store at call time through stores.paths(store) (#156). A
+# module-level path is exactly how both stores ended up in one file.
 
 SALES_FIELDS = [
     "order_id", "sold_at", "listing_id", "sku", "title", "quantity",
@@ -116,6 +133,15 @@ def _dec(obj, *path) -> Decimal:
 
 def _money(d: Decimal) -> str:
     return f"{d:.2f}"
+
+
+def _rel(p: Path) -> str:
+    """`p` relative to the repo for display, or as-is when it isn't under it
+    (a test's tmp dir, an $EBAYBIZ_LISTINGS_LEDGER override)."""
+    try:
+        return p.relative_to(stores.REPO).as_posix()
+    except ValueError:
+        return str(p)
 
 
 def _norm(s: str) -> str:
@@ -192,7 +218,7 @@ def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: d
 # --------------------------------------------------------------------------- #
 # source 1 — orders (the actuals)
 # --------------------------------------------------------------------------- #
-def _fetch_orders_window(days: int, verbose: bool) -> list[dict]:
+def _fetch_orders_window(days: int, verbose: bool, creds=None) -> list[dict]:
     # This cutoff is a rolling fetch WINDOW ("give me roughly the last N
     # days"), not a reporting BOUNDARY — it decides how far back to ask eBay
     # for orders, not which calendar day/month a fetched order is counted
@@ -209,7 +235,7 @@ def _fetch_orders_window(days: int, verbose: bool) -> list[dict]:
     while True:
         path = (f"/sell/fulfillment/v1/order?limit={limit}&offset={offset}"
                 f"&filter=creationdate:%5B{since}..%5D")
-        data = api_send("GET", path, creds=None, marketplace=None)
+        data = api_send("GET", path, creds=creds, marketplace=None)
         batch = data.get("orders") or []
         orders.extend(batch)
         total = data.get("total") or 0
@@ -221,8 +247,13 @@ def _fetch_orders_window(days: int, verbose: bool) -> list[dict]:
     return orders
 
 
-def fetch_orders(days: int, verbose: bool = True) -> list[dict]:
-    """Every order in the window, paged.
+def fetch_orders(days: int, verbose: bool = True, *, store: Optional[str] = None) -> list[dict]:
+    """Every order in the window, paged — on `store`'s account (#156).
+
+    `store=None` keeps the pre-#156 call shape (tools/pick_list.py): the
+    ambient store's credentials, via api_send's own load_credentials().
+    Pass a store wherever one is in hand; the Fulfillment API only ever
+    answers for the account whose token asked.
 
     eBay refuses a creationdate range that reaches too far back (HTTP 400 at
     ~2 years, and the exact cutoff moves). Rather than dying on a number the
@@ -234,10 +265,11 @@ def fetch_orders(days: int, verbose: bool = True) -> list[dict]:
     result is written straight into sales_ledger.csv and reads as "nothing
     sold". Exhausting the candidates raises."""
     windows = [d for d in (days, 540, 365, 180, 90) if d <= days] or [days]
+    creds = load_credentials(store) if store is not None else None
     last_err: Optional[Exception] = None
     for attempt in windows:
         try:
-            orders = _fetch_orders_window(attempt, verbose)
+            orders = _fetch_orders_window(attempt, verbose, creds)
         except Exception as e:                                  # noqa: BLE001
             if "400" not in str(e):
                 raise
@@ -357,15 +389,29 @@ def flatten_orders(orders: list[dict]) -> tuple[list[dict], dict]:
 # --------------------------------------------------------------------------- #
 # local state — ledger + draft folders
 # --------------------------------------------------------------------------- #
-def load_listings_ledger() -> list[dict]:
-    if not LISTINGS_LEDGER.exists():
+def load_listings_ledger(store: Optional[str] = None) -> list[dict]:
+    """`store`'s listings ledger rows (store=None: the active store)."""
+    path = stores.paths(store).listings_ledger
+    if not path.exists():
         return []
-    with LISTINGS_LEDGER.open(newline="", encoding="utf-8") as f:
+    with path.open(newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 
-def scan_drafts() -> list[dict]:
-    """Every local draft: its folder, title, ask, SKU and listing id."""
+def scan_drafts(store: Optional[str] = None,
+                ledger: Optional[list[dict]] = None) -> list[dict]:
+    """Local drafts: folder, title, ask, SKU, listing id and owning `store`.
+
+    `store=None` returns EVERY draft (the pre-#156 behaviour, still what
+    tools/pick_list*.py call). With a store, only that store's drafts —
+    `stores.draft_belongs_to_store()`: the draft's `store:` names it, or its
+    SKU / listing id is in that store's own listings ledger (`ledger`, read
+    here when not passed). This is the candidate set `match_sale()` sees, so
+    it is what keeps a store-B order off a store-A folder (#156 §3)."""
+    keys: set[str] = set()
+    if store is not None:
+        store = stores.resolve_store_name(store)
+        keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
     out = []
     for dr in sorted(INVENTORY.rglob("draft.md")):
         try:
@@ -375,17 +421,21 @@ def scan_drafts() -> list[dict]:
         def grab(pat):
             m = re.search(pat, t, re.M)
             return m.group(1) if m else ""
-        out.append({
+        d = {
             "dir": str(dr.parent.relative_to(REPO)).replace("\\", "/"),
             "title": grab(r'^title:\s*"(.*)"'),
             "price": grab(r'^price:\s*"(.*)"'),
             "sku": grab(r'ebay_inventory_sku:\s*"?([0-9a-zA-Z\-]{6,})"?'),
             "listing_id": grab(r'ebay_listing_id:\s*"?(\d+)"?'),
-        })
+            "store": draft_store_from_text(t),
+        }
+        if store is not None and not draft_belongs_to_store(d, store, keys):
+            continue
+        out.append(d)
     return out
 
 
-def load_hand_locations() -> dict[str, str]:
+def load_hand_locations(store: Optional[str] = None) -> dict[str, str]:
     """listing id (or SKU) -> where the thing physically sits.
 
     Items listed by hand on eBay never got a shoot folder, so `match_sale`
@@ -396,11 +446,16 @@ def load_hand_locations() -> dict[str, str]:
 
     Two columns, `listing_id,location`; a SKU in the first column also works.
     Missing file is normal and means no overrides.
+
+    Per store (#156): `hand_listed_locations-<store>.csv` for a named store.
+    Listing ids are per account, and a hand-listed junk lot's shelf has no
+    business answering for a main-store listing.
     """
     out: dict[str, str] = {}
-    if not HAND_LOCATIONS.exists():
+    path = stores.paths(store).hand_listed_locations
+    if not path.exists():
         return out
-    with HAND_LOCATIONS.open(newline="", encoding="utf-8") as fh:
+    with path.open(newline="", encoding="utf-8") as fh:
         for row in csv.DictReader(fh):
             key = (row.get("listing_id") or "").strip()
             loc = (row.get("location") or "").strip()
@@ -420,7 +475,11 @@ def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, 
     of Brother Tree), so "best match" would hand both sales to the same folder
     and the second would silently overwrite the first's record. When the top two
     candidates are effectively tied, no folder is claimed and the row is marked
-    for a human."""
+    for a human.
+
+    `drafts` and `ledger` must be the ORDER'S store's — `scan_drafts(store)`
+    and `load_listings_ledger(store)` (#156). This function trusts its
+    candidate list; the store filter lives in the list, not here."""
     if row["sku"]:
         for d in drafts:
             if d["sku"] and d["sku"] == row["sku"]:
@@ -456,22 +515,29 @@ def _sale_key(row: dict) -> tuple:
     return (row.get("order_id", ""), row.get("sku") or row.get("listing_id", ""))
 
 
-def _load_sales_ledger() -> dict:
-    """sale_key -> row, for whatever sales_ledger.csv already holds."""
-    if not SALES_LEDGER.exists():
+def _load_sales_ledger(path: Path) -> dict:
+    """sale_key -> row, for whatever the sales ledger at `path` already holds."""
+    if not path.exists():
         return {}
-    with SALES_LEDGER.open(encoding="utf-8-sig", newline="") as f:
+    with path.open(encoding="utf-8-sig", newline="") as f:
         return {_sale_key(r): r for r in csv.DictReader(f)}
 
 
-def write_sales_ledger(rows: list[dict]) -> None:
-    """Merge `rows` into sales_ledger.csv — never a wholesale overwrite.
+def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
+    """Merge `rows` into `store`'s sales ledger — never a wholesale overwrite.
 
     `rows` only covers the current `--days` window; a plain rewrite would
     drop every sale outside it. Existing rows survive untouched unless a
     fetched row shares their (order_id, sku) key, in which case the fresh
-    fetch wins (it may carry a refund the earlier write didn't know about)."""
-    merged = _load_sales_ledger()
+    fetch wins (it may carry a refund the earlier write didn't know about).
+
+    One file per store (#156): `rows` must all be `store`'s orders, and they
+    merge only into `store`'s file. The (order_id, sku) key is unique per
+    account, not across accounts — a SKU relisted main->junk keeps its value
+    — so a shared file is exactly where one store's order could replace
+    another store's sale. Returns the path written."""
+    path = stores.paths(store).sales_ledger
+    merged = _load_sales_ledger(path)
     for r in rows:
         out = dict(r)
         for k in _MONEY_FIELDS:
@@ -488,20 +554,26 @@ def write_sales_ledger(rows: list[dict]) -> None:
             v = r.get(k)
             out[k] = _money(v) if v is not None else (existing or {}).get(k, "")
         merged[key] = out
-    with SALES_LEDGER.open("w", newline="", encoding="utf-8") as f:
+    with path.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SALES_FIELDS, extrasaction="ignore")
         w.writeheader()
         for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True):
             w.writerow(r)
+    return path
 
 
-def stamp_folder(row: dict) -> bool:
+def stamp_folder(row: dict, store: Optional[str] = None) -> bool:
     """Per-item outcome stamp, so a folder tells its own story without the CSV.
 
     Never overwrites a stamp belonging to a DIFFERENT order: one folder holding
     two sales means the match was wrong (or the item genuinely sold twice), and
     silently replacing the first record would hide that. Returns False when it
-    declines, so the caller can report it."""
+    declines, so the caller can report it. That guard is also the backstop for
+    a folder two stores legitimately share (#156: relisted main->junk) — each
+    store's order is a different order id, so neither can replace the other.
+
+    A named store's stamp says which store sold it; the default store's stamp
+    is unchanged."""
     d = REPO / row["shoot_dir"]
     if not d.is_dir():
         return False
@@ -517,7 +589,8 @@ def stamp_folder(row: dict) -> bool:
     stamp.write_text(
         f"# SOLD — {row['title']}\n\n"
         f"- Sold: {row['sold_at']}  ·  order {row['order_id']}\n"
-        f"- Listing: https://www.ebay.com/itm/{row['listing_id']}\n"
+        + ("" if stores.is_default(store) else f"- Store: {store}\n")
+        + f"- Listing: https://www.ebay.com/itm/{row['listing_id']}\n"
         f"- Asked: ${ask}   →   **Actually sold for: ${_money(row['item_price'])}**"
         f"{f'  ({pct} of ask)' if pct else ''}\n"
         f"- Buyer shipping: ${_money(row['buyer_shipping'])}  ·  "
@@ -533,12 +606,19 @@ def stamp_folder(row: dict) -> bool:
     return True
 
 
-def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
-    """Fetch + parse the Finances API window and attribute it by order id.
+def sync_finances(days: int, verbose: bool = True,
+                  store: Optional[str] = None) -> tuple[dict, dict, dict]:
+    """Fetch + parse `store`'s Finances API window and attribute it by order id.
+
+    Per store (#156): sell.finances consent is per ACCOUNT, and so is the
+    transaction feed — it is read with `store`'s credentials and attributed
+    only to `store`'s orders. A store whose owner hasn't consented yet
+    degrades to empty maps here, which leaves its ad_fee/actual_postage
+    blank (= unknown), never borrowed from another store's feed.
 
     Returns (ad_fee_by_order, postage_by_order, status). `status` is a small
     PII-free dict — {"ok": bool, "reason": str|None, "other_fee_labels": {...}}
-    — written to `reports/finances_sync_status.json` by the caller so a
+    — written to `store`'s `reports/finances_sync_status*.json` by the caller so a
     reader with no direct API access (the sales dashboard) can say WHY the
     "before ads & postage" qualifier is still up, per one line, rather than
     silently keeping a caveat with no explanation (#119 acceptance).
@@ -553,7 +633,7 @@ def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
         print(f"Fetching ad-fee + postage transactions (last {days} days, "
               f"sell.finances)…")
     try:
-        txns = ebay_finances.fetch_transactions(days, verbose=verbose)
+        txns = ebay_finances.fetch_transactions(days, verbose=verbose, store=store)
     except (EbayAuthError, EbayAPIError) as e:
         reason = _one_line(e, 300)
         if verbose:
@@ -580,14 +660,18 @@ def sync_finances(days: int, verbose: bool = True) -> tuple[dict, dict, dict]:
 
 
 def write_finances_status(status: dict, *, days: int, orders_total: int,
-                          orders_covered: int) -> None:
+                          orders_covered: int, store: Optional[str] = None) -> Path:
     """Persist `sync_finances`'s outcome so a reader with no API access
     (the dashboard-building code, tests, `--no-sync` runs) can render the
     "before ads & postage" qualifier's one-line reason without re-deriving
     it. PII-free by construction — `status` already is (see `sync_finances`),
-    and the fields added here are counts and a window size only."""
+    and the fields added here are counts and a window size only.
+
+    One file per store (#156): consent is per account, so "why is ad_fee
+    blank" has a different answer per store. Returns the path written."""
     from datetime import datetime, timezone
-    REPORTS.mkdir(exist_ok=True)
+    path = stores.paths(store).finances_sync_status
+    path.parent.mkdir(parents=True, exist_ok=True)
     doc = {
         **status,
         "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -595,18 +679,26 @@ def write_finances_status(status: dict, *, days: int, orders_total: int,
         "orders_total": orders_total,
         "orders_covered": orders_covered,
     }
-    FINANCES_STATUS_JSON.write_text(json.dumps(doc, indent=1), encoding="utf-8")
+    path.write_text(json.dumps(doc, indent=1), encoding="utf-8")
+    return path
 
 
-def mark_sold_in_ledger(rows: list[dict]) -> int:
-    """Advance the listings ledger to SOLD. The `price` column is deliberately
-    left alone: it is the ASK, and sales_ledger.csv holds the actual."""
+def mark_sold_in_ledger(rows: list[dict], store: Optional[str] = None) -> int:
+    """Advance `store`'s listings ledger to SOLD. The `price` column is
+    deliberately left alone: it is the ASK, and the sales ledger holds the
+    actual.
+
+    Always `store`'s own ledger (#156): a relisted item has the same SKU in
+    both stores' ledgers, and a junk-store sale must not flip the main
+    store's row (which may itself record an earlier, different sale)."""
     from list_edit import upsert_listing
+    store = stores.resolve_store_name(store)
     n = 0
     for r in rows:
         if r["sku"]:
             upsert_listing(r["sku"], "SOLD", listing_id=r["listing_id"],
-                           url=f"https://www.ebay.com/itm/{r['listing_id']}")
+                           url=f"https://www.ebay.com/itm/{r['listing_id']}",
+                           store=store)
             n += 1
     return n
 
@@ -615,9 +707,14 @@ def mark_sold_in_ledger(rows: list[dict]) -> int:
 # report
 # --------------------------------------------------------------------------- #
 def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
-           store: Optional[dict], excluded: Optional[dict] = None,
+           store_page: Optional[dict], excluded: Optional[dict] = None,
            unwound_losses: Optional[list[dict]] = None,
-           fin_status: Optional[dict] = None) -> None:
+           fin_status: Optional[dict] = None, *,
+           store: Optional[str] = None) -> None:
+    """The reconciliation report for ONE store (#156). `store_page` is the
+    optional --store-json browser dump (the seller's public store page) —
+    renamed from `store` now that "store" means the seller account."""
+    store = stores.resolve_store_name(store)
     gross = sum((r["gross"] for r in rows), Decimal(0))
     fees = sum((r["ebay_fee"] for r in rows), Decimal(0))
     net = sum((r["net_before_postage"] for r in rows), Decimal(0))
@@ -631,7 +728,9 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
     post_total = sum((r["actual_postage"] for r in rows if r.get("actual_postage") is not None),
                      Decimal(0))
 
-    print(f"\n=== ACTUALS — {len(rows)} sold line item(s)  (sold_at dates in {REPORTING_TZ_LABEL})")
+    tag = "" if stores.is_default(store) else f" {stores.store_label(store)}"
+    print(f"\n=== ACTUALS{tag} — {len(rows)} sold line item(s)  "
+          f"(sold_at dates in {REPORTING_TZ_LABEL})")
     print(f"  gross ${_money(gross)}  ·  eBay fees ${_money(fees)} "
           f"({(fees / gross * 100) if gross else 0:.1f}%)  ·  "
           f"net before postage ${_money(net)}")
@@ -646,7 +745,7 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
                   f"not per order — NOT in the ad fees above")
     else:
         print("  ad fees / actual postage (#119): none read this run — see "
-              f"{FINANCES_STATUS_JSON.relative_to(REPO)} for why")
+              f"{_rel(stores.paths(store).finances_sync_status)} for why")
 
     if unwound_losses:
         lost = sum((u["loss"] for u in unwound_losses), Decimal(0))
@@ -698,8 +797,8 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
         for d in stale:
             print(f"  {d['dir']}  ask ${d['price']}")
 
-    if store:
-        active = store.get("active", [])
+    if store_page:
+        active = store_page.get("active", [])
         sold_ids = {r["listing_id"] for r in rows}
         led_ids = {lr.get("listing_id") for lr in ledger if lr.get("listing_id")}
         untracked = [a for a in active if a["item_id"] not in led_ids
@@ -723,7 +822,7 @@ def report(rows: list[dict], drafts: list[dict], ledger: list[dict],
 
 
 # --------------------------------------------------------------------------- #
-def main() -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         description="Sync local inventory to eBay's actual results (what it really sold for).")
     ap.add_argument("--days", type=int, default=90,
@@ -738,18 +837,31 @@ def main() -> int:
                     help="don't attempt the sell.finances ad-fee/postage read "
                          "(#119) — useful before the account owner has "
                          "re-consented, to avoid a call that's known to fail")
-    args = ap.parse_args()
+    stores.add_store_args(ap, all_stores=True)
+    args = ap.parse_args(argv)
 
     if args.print_js:
         print(STORE_JS)
         return 0
 
-    print(f"Fetching orders (last {args.days} days, UTC fetch window; "
-          f"sold_at is bucketed in {REPORTING_TZ_LABEL})…")
-    rows, excluded = flatten_orders(fetch_orders(args.days))
-    drafts = scan_drafts()
-    ledger = load_listings_ledger()
+    names = stores.stores_from_args(args)
+    if args.store_json and len(names) > 1:
+        # A store-page dump is ONE seller's page; cross-checking it against
+        # every store's ledger would report the other stores' listings as
+        # "not in the local ledger" (#156).
+        raise SystemExit("--store-json is one seller's page — use it with a "
+                         "single --store, not --all-stores")
+    worst = 0
+    for name in names:
+        if len(names) > 1:
+            print(f"\n===== store: {name} =====", flush=True)
+        worst = max(worst, sync_store(name, args))
+    return worst
 
+
+def match_rows(rows: list[dict], drafts: list[dict], ledger: list[dict]) -> None:
+    """Fill shoot_dir / listed_price / matched_by / pct_* on each order row,
+    against ONE store's drafts and ledger (see `scan_drafts(store)`)."""
     for r in rows:
         d, ask, how = match_sale(r, drafts, ledger)
         r["shoot_dir"], r["listed_price"], r["matched_by"] = d, ask, how
@@ -760,13 +872,28 @@ def main() -> int:
         r["pct_num"] = pct
         r["pct_of_ask"] = f"{pct:.0f}%" if pct else ""
 
+
+def sync_store(store: str, args) -> int:
+    """One full pass for one store (#156): that account's orders and
+    Finances feed, matched only to that store's folders, written only to
+    that store's files. `args` is main()'s namespace."""
+    store = stores.resolve_store_name(store)
+    p = stores.paths(store)
+    print(f"Fetching orders{'' if stores.is_default(store) else ' ' + stores.store_label(store)} "
+          f"(last {args.days} days, UTC fetch window; "
+          f"sold_at is bucketed in {REPORTING_TZ_LABEL})…")
+    rows, excluded = flatten_orders(fetch_orders(args.days, store=store))
+    ledger = load_listings_ledger(store)
+    drafts = scan_drafts(store, ledger)
+    match_rows(rows, drafts, ledger)
+
     # #119 (route B): real ad fee + actual postage, per order — degrades to
     # "unavailable" rather than failing the whole sync (see sync_finances).
     if args.skip_finances:
         ad_fee_by_order, postage_by_order = {}, {}
         fin_status = {"ok": False, "reason": "--skip-finances", "other_fee_labels": {}}
     else:
-        ad_fee_by_order, postage_by_order, fin_status = sync_finances(args.days)
+        ad_fee_by_order, postage_by_order, fin_status = sync_finances(args.days, store=store)
 
     # Both totals are ORDER-level (one ad fee, one shipping label, per order —
     # not per line item), but flatten_orders() produces one row per line item.
@@ -798,36 +925,37 @@ def main() -> int:
                   and lines[0]["actual_postage"] is not None)
     if args.apply:
         write_finances_status(fin_status, days=args.days, orders_total=len(order_lines),
-                              orders_covered=covered)
+                              orders_covered=covered, store=store)
 
-    store = None
+    store_page = None
     if args.store_json:
         active, sold = [], []
-        for p in args.store_json:
-            blob = json.loads(Path(p).read_text(encoding="utf-8"))
+        for f in args.store_json:
+            blob = json.loads(Path(f).read_text(encoding="utf-8"))
             rs = blob.get("rows", blob if isinstance(blob, list) else [])
-            (sold if "sold" in Path(p).name.lower() else active).extend(rs)
-        store = {"active": active, "sold": sold}
+            (sold if "sold" in Path(f).name.lower() else active).extend(rs)
+        store_page = {"active": active, "sold": sold}
 
-    report(rows, drafts, ledger, store, excluded, unwound_losses, fin_status)
+    report(rows, drafts, ledger, store_page, excluded, unwound_losses, fin_status,
+           store=store)
 
     if not args.apply:
         print("\n[DRY RUN] Nothing written. Re-run with --apply to record:")
-        print(f"  • {SALES_LEDGER.name} — {len(rows)} actuals row(s)")
+        print(f"  • {p.sales_ledger.name} — {len(rows)} actuals row(s)")
         print(f"  • SOLD.md in {len({r['shoot_dir'] for r in rows if r['shoot_dir']})} folder(s)")
-        print("  • listings_ledger.csv — advance matched SKUs to SOLD")
+        print(f"  • {p.listings_ledger.name} — advance matched SKUs to SOLD")
         return 0
 
-    write_sales_ledger(rows)
+    written = write_sales_ledger(rows, store)
     stamped = declined = 0
     for r in rows:
         if r["shoot_dir"]:
-            if stamp_folder(r):
+            if stamp_folder(r, store):
                 stamped += 1
             else:
                 declined += 1
-    marked = mark_sold_in_ledger(rows)
-    print(f"\n[OK] wrote {SALES_LEDGER}  ({len(rows)} rows)")
+    marked = mark_sold_in_ledger(rows, store)
+    print(f"\n[OK] wrote {written}  ({len(rows)} rows)")
     print(f"[OK] stamped SOLD.md in {stamped} folder(s)"
           + (f"; {declined} left alone (already record a different order)" if declined else ""))
     print(f"[OK] advanced {marked} ledger row(s) to SOLD (ask price left intact)")

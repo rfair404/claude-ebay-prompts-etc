@@ -38,6 +38,16 @@ function below reads only what is already on disk:
 
 Read-only, always: nothing here writes to `sales_ledger.csv`,
 `listings_ledger.csv`, or any file under `inventory/`.
+
+Stores (#156 §5). The drift panel is per store: store A's inventory sheet is
+compared only with store A's ledger (stores.paths(store) — the default store
+keeps the historic bare filenames). Pooling them would report every store-B
+listing as "no ledger row" drift and turn the panel all-red on day one. With
+more than one configured store the page renders one drift section per store,
+never a merged one; `--store NAME` narrows the page to one store (its drift,
+and only its drafts), `--all-stores` asks for every store explicitly. Drafts
+carry their own `store:` and show it; the backlog stays one list, because
+`inventory/` is one flat shoot namespace (#156 §3).
 """
 from __future__ import annotations
 
@@ -54,6 +64,7 @@ sys.path.insert(0, str(REPO / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling tools
 
 import list_edit as _list_edit                              # noqa: E402
+import stores as _stores                                    # noqa: E402
 import report as _report                                    # noqa: E402
 import status as _status                                    # noqa: E402
 from single_pass import STAGE_ORDER, STAGE_OUTPUT            # noqa: E402
@@ -65,6 +76,32 @@ INVENTORY = REPO / "inventory"
 LEDGER = REPO / "listings_ledger.csv"
 LIVE_SHEET = REPO / "inventory_sheet.csv"
 OUT_HTML = REPORTS / "dashboard.html"
+
+
+# ---------------------------------------------------------------------------
+# stores (#156) — which stores the page covers, and each one's two CSVs
+# ---------------------------------------------------------------------------
+
+def _store_names() -> list[str]:
+    """Every configured store, default first — what the page covers when no
+    --store narrows it. A config that can't be read is a single-store page,
+    not a crash: this dashboard reads local files only."""
+    try:
+        return _stores.configured_stores()
+    except Exception:                                        # noqa: BLE001
+        return [_stores.DEFAULT_STORE]
+
+
+def store_files(store: Optional[str]) -> tuple[Path, Path]:
+    """(listings ledger, live inventory sheet) for one store.
+
+    The default store reads the module's LEDGER / LIVE_SHEET (the historic
+    filenames, and what tests repoint); a named store reads its own
+    `listings_ledger-<store>.csv` / `inventory_sheet-<store>.csv`."""
+    if _stores.is_default(store):
+        return LEDGER, LIVE_SHEET
+    p = _stores.paths(store)
+    return p.listings_ledger, p.inventory_sheet_csv
 
 
 # ---------------------------------------------------------------------------
@@ -210,11 +247,21 @@ def _blocking_issues(row: dict) -> list[str]:
     return [_redact_issue(i, row.get("path")) for i in issues]
 
 
-def gather_drafts() -> dict:
+def gather_drafts(store_names: Optional[list[str]] = None) -> dict:
     """Drafted-only and synced-not-published rows — the same split
     `lib.report.report_pipeline()` already prints as text, kept structured
-    here so it can render as an HTML section instead."""
-    rows = [r for r in _report.collect() if not r.get("published_at")]
+    here so it can render as an HTML section instead.
+
+    Per store (#156): `lib.report.collect(store)` merges ONE store's ledger
+    with that store's drafts, so this asks once per store and tags each row
+    with the store it came from — never one pooled ledger. Default: the
+    default store only, which is what this always showed."""
+    rows = []
+    for name in (store_names or [_stores.DEFAULT_STORE]):
+        for r in _report.collect(name):
+            if not r.get("published_at"):
+                r["store"] = name
+                rows.append(r)
     for r in rows:
         r["blocking_issues"] = _blocking_issues(r)
 
@@ -235,12 +282,17 @@ def _price_drift(live_price, ledger_price) -> bool:
     return lp is not None and dp is not None and abs(lp - dp) >= 0.005
 
 
-def gather_drift() -> dict:
+def gather_drift(store: Optional[str] = None) -> dict:
     """Compare the last-synced `inventory_sheet.csv` against
     `listings_ledger.csv`. Both are local snapshots an earlier sync already
     wrote to disk (`tools/ebay_sheet.py`, `lib.list_edit`) — this makes no
-    eBay call of its own, so it is only as fresh as those snapshots are."""
-    have_live_snapshot, have_ledger = LIVE_SHEET.exists(), LEDGER.exists()
+    eBay call of its own, so it is only as fresh as those snapshots are.
+
+    `store` (#156) picks the PAIR of files: one store's sheet is only ever
+    compared with the same store's ledger (store_files())."""
+    ledger_path, live_path = store_files(store)
+    ledger_name, live_name = ledger_path.name, live_path.name  # named in issue text
+    have_live_snapshot, have_ledger = live_path.exists(), ledger_path.exists()
     if not (have_live_snapshot and have_ledger):
         # _rows() returns [] for a missing file the same as for an empty
         # one, so comparing against a genuinely missing side would flag
@@ -251,8 +303,8 @@ def gather_drift() -> dict:
         return {"rows": [], "have_live_snapshot": have_live_snapshot,
                 "have_ledger": have_ledger, "count": 0}
 
-    live = _rows(LIVE_SHEET)
-    ledger = _rows(LEDGER)
+    live = _rows(live_path)
+    ledger = _rows(ledger_path)
     ledger_by_sku = {r["sku"]: r for r in ledger if r.get("sku")}
 
     # Group live rows by listing_id first (a CHOICE listing has one row per
@@ -284,8 +336,8 @@ def gather_drift() -> dict:
         issues = []
         if led is None:
             issues.append(
-                "no listings_ledger.csv row for any sku in this listing"
-                if len(by_sku) > 1 else "no listings_ledger.csv row for this live sku")
+                f"no {ledger_name} row for any sku in this listing"
+                if len(by_sku) > 1 else f"no {ledger_name} row for this live sku")
         else:
             if _price_drift(lv_cmp.get("price"), led.get("price")):
                 issues.append(f"price: ledger {_money(_f(led.get('price')))} "
@@ -313,7 +365,7 @@ def gather_drift() -> dict:
                 "title": r.get("title", ""), "live_price": "",
                 "ledger_price": r.get("price", ""),
                 "issues": ["ledger says PUBLISHED but this sku is not in the "
-                           "current live sheet (inventory_sheet.csv)"],
+                           f"current live sheet ({live_name})"],
             })
 
     return {
@@ -328,11 +380,19 @@ def gather_drift() -> dict:
 # combined gather
 # ---------------------------------------------------------------------------
 
-def gather() -> dict:
+def gather(store_names: Optional[list[str]] = None,
+           only_store: Optional[str] = None) -> dict:
+    """Everything the page shows. `store_names` (default: every configured
+    store) gets one drift panel each, in `drift_by_store`, and contributes
+    its own drafts, each tagged with it; `drift` is the first panel, kept for
+    single-store callers. `only_store` narrows the drafts to that store."""
+    names = list(store_names) if store_names else _store_names()
+    by_store = {s: gather_drift(s) for s in names}
     return {
         "backlog": gather_backlog(),
-        "drafts": gather_drafts(),
-        "drift": gather_drift(),
+        "drafts": gather_drafts([only_store] if only_store else names),
+        "drift": by_store[names[0]],
+        "drift_by_store": by_store,
     }
 
 
@@ -396,6 +456,8 @@ def _draft_rows(rows: list[dict]) -> str:
             f'<tr><td>{_e(r.get("title") or "(untitled)")}'
             + ('<span class="pill on" style="margin-left:8px">GROUP</span>'
                if r.get("group") else "")
+            + (f'<span class="pill on" style="margin-left:8px">STORE {_e(r["store"])}</span>'
+               if r.get("store") and not _stores.is_default(r["store"]) else "")
             + f'<div class="dim" style="font-size:11.5px">{_e(r.get("path") or r.get("sku") or "")}'
               f'</div></td>'
             f'<td class="num">{_draft_price_cell(r.get("price"))}</td>'
@@ -431,7 +493,7 @@ def _drafts_section(d: dict) -> str:
         + '</div></div>')
 
 
-def _drift_section(d: dict) -> str:
+def _drift_section(d: dict, store: Optional[str] = None, titled: bool = False) -> str:
     rows = "".join(
         f'<tr><td>{_itm(r["listing_id"], r["title"][:64] or r["sku"])}'
         f'<div class="dim" style="font-size:11.5px">{_e(r["sku"])}</div></td>'
@@ -439,10 +501,13 @@ def _drift_section(d: dict) -> str:
         f'<td class="num">{_e(r["ledger_price"] or "—")}</td>'
         f'<td class="warn">{_e("; ".join(r["issues"]))}</td></tr>'
         for r in d["rows"][:100])
+    ledger_path, live_path = store_files(store)
+    ledger_name, live_name = ledger_path.name, live_path.name
+    store = store or _stores.DEFAULT_STORE
     if not d["have_live_snapshot"] or not d["have_ledger"]:
         missing = " and ".join(
-            n for n, have in (("inventory_sheet.csv", d["have_live_snapshot"]),
-                              ("listings_ledger.csv", d["have_ledger"])) if not have)
+            n for n, have in ((live_name, d["have_live_snapshot"]),
+                              (ledger_name, d["have_ledger"])) if not have)
         note = (f'<p class="note">{_e(missing)} not found — run the usual sync '
                 f'(<code>tools/ebay_sheet.py</code> / a listing sync) at least once, '
                 f'then re-run this dashboard.</p>')
@@ -451,7 +516,8 @@ def _drift_section(d: dict) -> str:
                 'this makes no eBay call, so drift here can lag the truth by however old '
                 'the last sync is.</p>')
     return (
-        '<div class="card"><div class="pad"><h2>Live listing vs. ledger drift</h2>'
+        '<div class="card"><div class="pad"><h2>Live listing vs. ledger drift'
+        + (f' — store {_e(store)}' if titled else '') + '</h2>'
         f'<p class="note" style="margin:0 0 14px;padding:0;border:0">{d["count"]} live '
         f'listing(s) disagree with the local ledger.</p>'
         '<div class="scroll"><table><tr><th>Item</th><th class="num">Live price</th>'
@@ -462,6 +528,7 @@ def _drift_section(d: dict) -> str:
 
 def draw(d: dict) -> str:
     from datetime import datetime
+    by_store = d.get("drift_by_store") or {_stores.DEFAULT_STORE: d["drift"]}
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     header = (
         '<div class="card"><div class="hdr">'
@@ -472,13 +539,18 @@ def draw(d: dict) -> str:
         '<div class="stats">'
         + _stat(str(d["backlog"]["count"]), "shoots in the pipeline")
         + _stat(str(d["drafts"]["count"]), "drafts awaiting review")
-        + _stat(str(d["drift"]["count"]), "live/ledger disagreements")
+        + _stat(str(sum(x["count"] for x in by_store.values())),
+                "live/ledger disagreements"
+                + (f" across {len(by_store)} stores" if len(by_store) > 1 else ""))
         + '</div></div>')
+    # One drift panel per store, each against its own ledger (#156) — named
+    # in its heading whenever the page covers more than the default store.
+    titled = len(by_store) > 1 or any(not _stores.is_default(s) for s in by_store)
     body = "\n".join([
         header,
         _backlog_section(d["backlog"]),
         _drafts_section(d["drafts"]),
-        _drift_section(d["drift"]),
+        *(_drift_section(x, s, titled=titled) for s, x in by_store.items()),
     ])
     return ('<meta charset="utf-8">\n<title>Dashboard</title>\n'
             '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
@@ -492,7 +564,9 @@ def _unsafe_out_reason(out: Path) -> str | None:
     mistaken for real shoot data. Returns a reason string to refuse on, or
     None if the path is fine to write."""
     resolved = out.resolve()
-    for tracked in (LEDGER, LIVE_SHEET, _report.SALES):
+    per_store = [p for s in _store_names() if not _stores.is_default(s)
+                 for p in store_files(s)]
+    for tracked in (LEDGER, LIVE_SHEET, _report.SALES, *per_store):
         if resolved == tracked.resolve():
             return f"refusing to overwrite tracked data file {tracked}"
     inv = INVENTORY.resolve()
@@ -504,7 +578,17 @@ def _unsafe_out_reason(out: Path) -> str | None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default=str(OUT_HTML))
+    _stores.add_store_args(ap, all_stores=True,
+                           help_extra="Default: every configured store, one drift "
+                                      "panel each.")
     a = ap.parse_args()
+    try:
+        names = (_stores.stores_from_args(a) if (a.store or a.all_stores)
+                 else _store_names())
+    except ValueError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
+        return 1
+    only = names[0] if a.store else None
 
     out = Path(a.out)
     reason = _unsafe_out_reason(out)
@@ -512,12 +596,14 @@ def main() -> int:
         print(f"[ERROR] {reason}", file=sys.stderr)
         return 1
 
-    d = gather()
+    d = gather(names, only_store=only)
     out.parent.mkdir(parents=True, exist_ok=True)  # still creates reports/ for the default
     out.write_text(draw(d), encoding="utf-8")
 
     print(f"{d['backlog']['count']} shoot(s) · {d['drafts']['count']} draft(s) awaiting "
-          f"review · {d['drift']['count']} live/ledger disagreement(s)")
+          f"review · {sum(x['count'] for x in d['drift_by_store'].values())} "
+          f"live/ledger disagreement(s)"
+          + (f" across {len(names)} stores" if len(names) > 1 else ""))
     print(f"[OK] {out}")
     return 0
 

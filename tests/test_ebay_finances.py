@@ -273,7 +273,7 @@ def test_feeline_and_postageline_have_no_pii_shaped_fields():
 def test_fetch_transactions_narrows_window_on_400(monkeypatch):
     calls = []
 
-    def fake(start, end, verbose):
+    def fake(start, end, verbose, creds=None):
         calls.append((start, end))
         if len(calls) < 2:
             raise RuntimeError("GET /sell/finances/v1/transaction → HTTP 400")
@@ -285,8 +285,49 @@ def test_fetch_transactions_narrows_window_on_400(monkeypatch):
     assert len(calls) == 2  # 730 rejected, next candidate (540) accepted
 
 
+def test_fetch_transactions_reads_with_the_named_stores_credentials(monkeypatch):
+    # #156: sell.finances consent and the transaction feed are per ACCOUNT —
+    # a named store's read must carry that store's creds all the way down.
+    loaded, used = [], []
+    monkeypatch.setattr(EF, "load_credentials", lambda store=None: loaded.append(store) or
+                        f"creds:{store}")
+
+    def fake(start, end, verbose, creds=None):
+        used.append(creds)
+        return []
+
+    monkeypatch.setattr(EF, "_fetch_transactions_window", fake)
+    EF.fetch_transactions(90, verbose=False, store="outlet")
+    assert loaded == ["outlet"] and used == ["creds:outlet"]
+
+
+def test_fetch_transactions_without_a_store_keeps_the_ambient_call_shape(monkeypatch):
+    used = []
+    monkeypatch.setattr(EF, "load_credentials",
+                        lambda store=None: pytest.fail("no store -> api_send resolves it"))
+    monkeypatch.setattr(EF, "_fetch_transactions_window",
+                        lambda start, end, verbose, creds=None: used.append(creds) or [])
+    EF.fetch_transactions(90, verbose=False)
+    assert used == [None]
+
+
+def test_fetch_transactions_window_passes_creds_to_api_send(monkeypatch):
+    seen = []
+
+    def fake_api_send(method, path, creds=None, marketplace=None):
+        seen.append(creds)
+        return {"transactions": [], "total": 0}
+
+    monkeypatch.setattr(EF, "api_send", fake_api_send)
+    from datetime import datetime, timezone
+    EF._fetch_transactions_window(datetime(2026, 1, 1, tzinfo=timezone.utc),
+                                  datetime(2026, 6, 1, tzinfo=timezone.utc),
+                                  False, "creds:junk")
+    assert seen == ["creds:junk"]
+
+
 def test_fetch_transactions_exhausted_windows_raise(monkeypatch):
-    def always_400(start, end, verbose):
+    def always_400(start, end, verbose, creds=None):
         raise RuntimeError("GET /sell/finances/v1/transaction → HTTP 400")
 
     monkeypatch.setattr(EF, "_fetch_transactions_window", always_400)
@@ -295,7 +336,7 @@ def test_fetch_transactions_exhausted_windows_raise(monkeypatch):
 
 
 def test_fetch_transactions_non_400_error_propagates_immediately(monkeypatch):
-    def boom(start, end, verbose):
+    def boom(start, end, verbose, creds=None):
         raise RuntimeError("HTTP 403 forbidden — insufficient scope")
 
     monkeypatch.setattr(EF, "_fetch_transactions_window", boom)
@@ -368,7 +409,7 @@ def test_fetch_transactions_narrows_on_a_typed_ebayapierror_400(monkeypatch):
     from ebay_client import EbayAPIError
     calls = []
 
-    def fake(start, end, verbose):
+    def fake(start, end, verbose, creds=None):
         calls.append((start, end))
         if len(calls) < 2:
             raise EbayAPIError(400, "GET /sell/finances/v1/transaction → HTTP 400")
@@ -386,7 +427,7 @@ def test_fetch_transactions_does_not_retry_the_same_window_twice(monkeypatch):
     # request before actually narrowing to 180.
     calls = []
 
-    def always_400(start, end, verbose):
+    def always_400(start, end, verbose, creds=None):
         calls.append(start)
         raise RuntimeError("GET /sell/finances/v1/transaction → HTTP 400")
 

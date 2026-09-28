@@ -15,6 +15,12 @@ a printed summary by category.
 
     python tools/inventory_sync.py                    # pull + summarise
     python tools/inventory_sync.py --json out.json
+    python tools/inventory_sync.py --store junk       # -> .inventory_live-junk.json
+
+Per store (#156): `--store` picks the account, the default output file
+(stores.store_file) and which local drafts can own a SKU — a draft's own
+`store:` field or its SKU in the store's ledger (stores.draft_belongs_to_store),
+so another store's draft never claims this account's SKU.
 """
 from __future__ import annotations
 import argparse, json, re, sys
@@ -23,11 +29,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
+import stores                                                          # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,      # noqa: E402
                          get_offers_for_sku, EbayAPIError)
 
 SKU_RE = re.compile(r'ebay_inventory_sku:\s*"?([0-9a-fA-F]{6,})')
 PATH_RE = re.compile(r'category_path:\s*"([^"]*)"')
+DEFAULT_OUT = ".inventory_live.json"
 
 # Printed paper. These are the shoots the asshot rule in prompts/prep.md covers,
 # and the class where the crop detector also misbehaves (it locks onto whatever
@@ -36,8 +44,21 @@ MEDIA_WORDS = re.compile(r"book|magazine|catalog|paper|comic|newspaper|"
                          r"periodical|brochure|pamphlet|manual|zine", re.I)
 
 
-def local_index() -> dict:
-    """sku -> {shoot, preset, category_path, photos} from every draft.md on disk."""
+def local_index(store: str | None = None) -> dict:
+    """sku -> {shoot, preset, category_path, photos} from every draft.md on disk.
+
+    With `store`, only drafts belonging to that store are indexed — lib/report.py's
+    draft_belongs_to_store: the draft's `store:` field, or its SKU in that
+    store's own ledger (#156).
+    """
+    want = stores.resolve_store_name(store) if store is not None else None
+    keys = set()
+    if want is not None:
+        led = stores.paths(want).listings_ledger
+        if led.exists():
+            import csv
+            with led.open(encoding="utf-8-sig", newline="") as f:
+                keys = stores.ledger_keys(list(csv.DictReader(f)))
     idx = {}
     for dm in (REPO / "inventory").rglob("draft.md"):
         try:
@@ -46,6 +67,9 @@ def local_index() -> dict:
             continue
         m = SKU_RE.search(t)
         if not m:
+            continue
+        if want is not None and not stores.draft_belongs_to_store(
+                {"store": stores.draft_store_from_text(t), "sku": m.group(1)}, want, keys):
             continue
         shoot = dm.parent
         preset = None
@@ -66,13 +90,21 @@ def local_index() -> dict:
     return idx
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--json", default=".inventory_live.json")
-    a = ap.parse_args()
+    ap.add_argument("--json", default=None,
+                    help=f"default: {DEFAULT_OUT} (per store: .inventory_live-<store>.json)")
+    stores.add_store_args(ap)
+    a = ap.parse_args(argv)
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+    # Relative to the cwd, as before, for the default store's historic name.
+    a.json = a.json or (DEFAULT_OUT if stores.is_default(store)
+                        else str(stores.store_file(DEFAULT_OUT, store)))
 
-    creds = load_credentials()
-    loc = local_index()
+    creds = load_credentials(store=store)
+    loc = local_index(store)
     print(f"local drafts with a SKU: {len(loc)}")
 
     rows = []

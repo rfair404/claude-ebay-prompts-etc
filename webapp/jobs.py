@@ -12,6 +12,14 @@ chat-only until Phase 3's secrets story lands (see the module-mapping table
 in the architecture doc) — adding a job type here is exactly the line where
 that boundary would be crossed, so review any addition against that table
 first.
+
+A job that touches eBay must name its store (#156). There is more than one
+seller account now, and a job has no terminal to check `--store` against —
+so such a handler takes the store from its `params`, validates it with
+lib/stores.validate_store_name(), and refuses to run without one rather than
+inherit $EBAYBIZ_STORE / ebay.active_store from whatever launched the server.
+Today's two handlers are local-only and store-neutral, which is why
+webapp/server.py's EnqueueRequest has no store field.
 """
 from __future__ import annotations
 

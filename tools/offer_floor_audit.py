@@ -26,6 +26,12 @@ Four findings, worst first:
 
     python tools/offer_floor_audit.py                 # report
     python tools/offer_floor_audit.py --csv out.csv
+    python tools/offer_floor_audit.py --store junk    # a named store (#156)
+
+Per store (#156): `--store` picks the account whose offers are read, the
+inventory sheet that says what is live (stores.paths(store).inventory_sheet_csv,
+written by `ebay_sheet.py --store`), and which drafts can own a SKU
+(stores.draft_belongs_to_store).
 
 It only READS. Repairing an offer is a PUT against the Sell Inventory API and is
 deliberately not automated here — see the note the report prints.
@@ -44,6 +50,7 @@ sys.path.insert(0, str(REPO / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import price_vs_actual as pva                                     # noqa: E402
+import stores                                                     # noqa: E402
 
 SKU_RE = re.compile(r'^\s*ebay_inventory_sku:\s*"?([^"\n]+)"?', re.M)
 
@@ -68,18 +75,27 @@ def verdict_for(enabled: bool, dv, price, floor, rec) -> str:
     return "ok"
 
 
-def shoot_by_sku() -> dict:
+def shoot_by_sku(store: str | None = None, keys: set | None = None) -> dict:
     """sku -> shoot directory, read from every draft.md on disk.
 
     Drafts are the only place the SKU and the shoot meet. A shoot can own
     several drafts (item-1/ … item-5/), and each draft has its own SKU, so this
     maps per draft rather than per shoot.
+
+    With `store`, only that store's drafts (draft_belongs_to_store; `keys` is
+    its ledger membership) — the same SKU can be live on two stores (#156).
     """
     out = {}
     for d in (REPO / "inventory").rglob("draft.md"):
-        m = SKU_RE.search(d.read_text(encoding="utf-8", errors="replace"))
-        if m:
-            out[m.group(1).strip()] = d.parent
+        t = d.read_text(encoding="utf-8", errors="replace")
+        m = SKU_RE.search(t)
+        if not m:
+            continue
+        sku = m.group(1).strip()
+        if store is not None and not stores.draft_belongs_to_store(
+                {"store": stores.draft_store_from_text(t), "sku": sku}, store, keys or set()):
+            continue
+        out[sku] = d.parent
     return out
 
 
@@ -87,17 +103,33 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--csv")
     ap.add_argument("--limit", type=int, default=0, help="stop after N offers (debug)")
+    stores.add_store_args(ap)
     a = ap.parse_args()
 
-    from ebay_client import get_offers_for_sku
+    from ebay_client import get_offers_for_sku, load_credentials
+
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+    creds = load_credentials(store=store)
+    sp = stores.paths(store)
+    if not sp.inventory_sheet_csv.exists():
+        print(f"[X] no inventory sheet at {sp.inventory_sheet_csv} — run "
+              f"`python tools/ebay_sheet.py"
+              + ("" if stores.is_default(store) else f" --store {store}") + "` first")
+        return 1
 
     sheet = []
-    with (REPO / "inventory_sheet.csv").open(newline="", encoding="utf-8-sig") as fh:
+    with sp.inventory_sheet_csv.open(newline="", encoding="utf-8-sig") as fh:
         for r in csv.DictReader(fh):
             if (r.get("live") or "").lower() == "yes":
                 sheet.append(r)
 
-    by_sku = shoot_by_sku()
+    keys = set()
+    if sp.listings_ledger.exists():
+        with sp.listings_ledger.open(newline="", encoding="utf-8-sig") as fh:
+            keys = stores.ledger_keys(list(csv.DictReader(fh)))
+    by_sku = shoot_by_sku(store, keys)
     rows, checked, missing_band = [], 0, 0
     for r in sheet:
         sku = r.get("sku") or ""
@@ -109,7 +141,7 @@ def main() -> int:
             missing_band += 1
             continue
         try:
-            offers = get_offers_for_sku(sku)
+            offers = get_offers_for_sku(sku, creds=creds)
         except Exception as e:                                    # noqa: BLE001
             print(f"  ! {sku}: {str(e)[:90]}")
             continue

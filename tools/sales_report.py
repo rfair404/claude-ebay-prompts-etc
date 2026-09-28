@@ -15,6 +15,19 @@ Run it periodically. It does three things, in order:
     python tools/sales_report.py                 # sync, then draw
     python tools/sales_report.py --no-sync       # redraw from local data
     python tools/sales_report.py --days 365      # order window (default 365)
+    python tools/sales_report.py --store junk    # a named store (#156)
+    python tools/sales_report.py --all-stores    # one dashboard per store
+
+ONE STORE PER DASHBOARD (#156)
+
+Every file this reads and writes is one store's (`stores.paths(store)`):
+sales_ledger-<store>.csv, inventory_sheet-<store>.csv,
+reports/ebay_ads-<store>.json, reports/sales_dashboard-<store>.html — the
+default store keeps the bare historic names, so its dashboard is unchanged.
+`--all-stores` draws one dashboard per store rather than one merged P&L: two
+seller accounts are two 1099-Ks, two ad bills and two Finances consents, and a
+pooled page could be reconciled against none of them. A named store's page
+says which store it is in its header.
 
 WHY PROMOTED LISTINGS GET THEIR OWN PANEL
 
@@ -57,11 +70,12 @@ sys.path.insert(0, str(REPO / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling tools
 
 from report import REPORTING_TZ, REPORTING_TZ_LABEL  # noqa: E402
+import stores  # noqa: E402  the one store model (#156)
 
-REPORTS = REPO / "reports"
-ADS_JSON = REPORTS / "ebay_ads.json"
-FINANCES_STATUS_JSON = REPORTS / "finances_sync_status.json"
-OUT_HTML = REPORTS / "sales_dashboard.html"
+# Every per-store input/output (ads JSON, finances status, the dashboard
+# itself, the ledgers and the live sheet) is resolved per call through
+# stores.paths(store) — no module-level path, so no way to write one store's
+# numbers into another's file (#156).
 
 
 # ---------------------------------------------------------------------------
@@ -79,17 +93,19 @@ def _run(label: str, args: list[str]) -> bool:
     return True
 
 
-def pull_ads() -> dict:
-    """Campaigns + every ad in them. Written to reports/ebay_ads.json.
+def pull_ads(store: Optional[str] = None) -> dict:
+    """Campaigns + every ad in them, on `store`'s account. Written to that
+    store's reports/ebay_ads*.json (#156 — campaigns are per account).
 
     Ads are fetched per campaign and paged. A campaign whose channel is
     OFF_SITE answers HTTP 400 to the ad endpoint — those campaigns have no
     per-listing ads to enumerate — so the error is recorded on the campaign
     rather than aborting the pull.
     """
-    from ebay_client import api_send
+    from ebay_client import api_send, load_credentials
 
-    camps = api_send("GET", "/sell/marketing/v1/ad_campaign?limit=100")
+    creds = load_credentials(store)
+    camps = api_send("GET", "/sell/marketing/v1/ad_campaign?limit=100", creds=creds)
     out = {"pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
            "campaigns": [], "ads": []}
     for c in camps.get("campaigns", []):
@@ -106,7 +122,8 @@ def pull_ads() -> dict:
         while True:
             try:
                 page = api_send("GET", f"/sell/marketing/v1/ad_campaign/"
-                                       f"{c['campaignId']}/ad?limit=200&offset={offset}")
+                                       f"{c['campaignId']}/ad?limit=200&offset={offset}",
+                                creds=creds)
             except Exception as e:                                   # noqa: BLE001
                 rec["adError"] = str(e)[:200]
                 break
@@ -129,20 +146,34 @@ def pull_ads() -> dict:
                 break
         rec["adCount"] = n
         out["campaigns"].append(rec)
-    REPORTS.mkdir(exist_ok=True)
-    ADS_JSON.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    path = stores.paths(store).ebay_ads_json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1), encoding="utf-8")
     return out
 
 
-def sync(days: int) -> None:
-    print("SYNC")
-    _run("orders -> sales_ledger.csv", ["lib/sync_actuals.py", "--days", str(days), "--apply"])
-    _run("live listings -> inventory_sheet.csv",
-         ["tools/ebay_sheet.py", "--csv", "inventory_sheet.csv",
-          "--json", "inventory_sheet.json"])
-    print("  promoted listings -> reports/ebay_ads.json …", flush=True)
+def _rel(path: Path) -> str:
     try:
-        a = pull_ads()
+        return path.relative_to(stores.REPO).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def sync(days: int, store: Optional[str] = None) -> None:
+    """Refresh `store`'s local data from `store`'s account (#156)."""
+    store = stores.resolve_store_name(store)
+    p = stores.paths(store)
+    print("SYNC" + ("" if stores.is_default(store) else f" {stores.store_label(store)}"))
+    _run(f"orders -> {p.sales_ledger.name}",
+         ["lib/sync_actuals.py", "--days", str(days), "--apply", "--store", store])
+    # --store picks the account ebay_sheet.py reads; the output paths are
+    # spelled out too so this call never depends on the child's defaults.
+    _run(f"live listings -> {p.inventory_sheet_csv.name}",
+         ["tools/ebay_sheet.py", "--csv", _rel(p.inventory_sheet_csv),
+          "--json", _rel(p.inventory_sheet_json), "--store", store])
+    print(f"  promoted listings -> {_rel(p.ebay_ads_json)} …", flush=True)
+    try:
+        a = pull_ads(store)
         print(f"    {len(a['campaigns'])} campaign(s), {len(a['ads'])} ad(s)")
     except Exception as e:                                           # noqa: BLE001
         print(f"    FAILED: {str(e)[:200]}")
@@ -204,14 +235,17 @@ def _date(v: str):
     return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
 
 
-def gather(days: int) -> dict:
-    sales = _rows(REPO / "sales_ledger.csv")
-    live = _rows(REPO / "inventory_sheet.csv")
-    ledger = _rows(REPO / "listings_ledger.csv")
-    ads_doc = json.loads(ADS_JSON.read_text(encoding="utf-8")) if ADS_JSON.exists() else \
-        {"campaigns": [], "ads": [], "pulled_at": None}
-    fin_status = json.loads(FINANCES_STATUS_JSON.read_text(encoding="utf-8")) \
-        if FINANCES_STATUS_JSON.exists() else None
+def gather(days: int, store: Optional[str] = None) -> dict:
+    """Everything the dashboard shows, for ONE store, from its local files."""
+    store = stores.resolve_store_name(store)
+    p = stores.paths(store)
+    sales = _rows(p.sales_ledger)
+    live = _rows(p.inventory_sheet_csv)
+    ledger = _rows(p.listings_ledger)
+    ads_doc = json.loads(p.ebay_ads_json.read_text(encoding="utf-8")) \
+        if p.ebay_ads_json.exists() else {"campaigns": [], "ads": [], "pulled_at": None}
+    fin_status = json.loads(p.finances_sync_status.read_text(encoding="utf-8")) \
+        if p.finances_sync_status.exists() else None
 
     # listing_id -> when we published it, for days-to-sale
     published = {r["listing_id"]: _date(r.get("published_at") or r.get("created_at") or "")
@@ -222,7 +256,7 @@ def gather(days: int) -> dict:
         if a["listingId"]:
             ad_by_listing.setdefault(a["listingId"], a)
 
-    out = {"ads": ads_doc, "ad_by_listing": ad_by_listing, "live": live}
+    out = {"ads": ads_doc, "ad_by_listing": ad_by_listing, "live": live, "store": store}
 
     rows = []
     for r in sales:
@@ -282,7 +316,7 @@ def gather(days: int) -> dict:
         if fin_status and fin_status.get("reason"):
             why = str(fin_status["reason"])[:140]
         elif fin_status is None:
-            if _ledger_has_finance_columns(REPO / "sales_ledger.csv"):
+            if _ledger_has_finance_columns(p.sales_ledger):
                 why = "sync_actuals.py --apply has not read the Finances API yet"
             else:
                 why = ("sales_ledger.csv predates #119 (no ad_fee/actual_postage "
@@ -395,12 +429,12 @@ def gather(days: int) -> dict:
     out["sell_through"] = sold_n / (sold_n + len(live_rows)) * 100 if (sold_n + len(live_rows)) else 0
 
     # ---- did the PRICE stage's justified band hold? -------------------------
-    out["bands"] = band_stats()
+    out["bands"] = band_stats(store)
     out["days"] = days
     return out
 
 
-def band_stats() -> dict:
+def band_stats(store: Optional[str] = None) -> dict:
     """Ask/realised against the Conservative-Recommended-Push-high band.
 
     Delegated to price_vs_actual so there is ONE parser for price.txt. That file
@@ -413,7 +447,7 @@ def band_stats() -> dict:
     except Exception:                                                # noqa: BLE001
         return {"n": 0, "rows": [], "breaches": [], "cohorts": []}
 
-    rows = pva.gather()
+    rows = pva.gather(store)
     for r in rows:
         r["where"] = pva.classify(r)
     withceil = [r for r in rows if r["ask"] and r["ceiling"]]
@@ -570,8 +604,14 @@ def draw(d: dict) -> str:
                          (f'gross minus final value fee only — {qualifier}' if qualifier
                           else 'gross minus final value fee only (#115)'))
 
+    # A named store says so in the header (#156); the default store's page is
+    # byte-for-byte what it always was.
+    store = d.get("store") or stores.DEFAULT_STORE
+    tag = "" if stores.is_default(store) else f" · {_e(store)}"
+    h1_tag = "" if stores.is_default(store) else f" — {_e(store)} store"
     P.append(f'<div class="card"><div class="hdr">'
-             f'<p class="eyebrow">ebaybiz · sales</p><h1>Sales &amp; promotion dashboard</h1>'
+             f'<p class="eyebrow">ebaybiz · sales{tag}</p>'
+             f'<h1>Sales &amp; promotion dashboard{h1_tag}</h1>'
              f'<div class="ct">built {_e(now)} {_e(REPORTING_TZ_LABEL)} · '
              f'order window {d["days"]} days (UTC fetch; dates shown in '
              f'{_e(REPORTING_TZ_LABEL)}) · ads pulled {_e(pulled)}</div></div>'
@@ -756,23 +796,40 @@ def draw(d: dict) -> str:
              '<th class="num">Gross</th><th class="num">Fee</th>'
              f'<th class="num">Net</th></tr>{rows}</table></div></div></div>')
 
-    return ('<meta charset="utf-8">\n<title>Sales Dashboard</title>\n'
+    title = "Sales Dashboard" + ("" if stores.is_default(store) else f" [{_e(store)}]")
+    return ('<meta charset="utf-8">\n' f'<title>{title}</title>\n'
             '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
             f'<style>{STYLE}</style>\n<div class="wrap">\n' + "\n".join(P) + "\n</div>\n")
 
 
-def main() -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--days", type=int, default=365, help="order window (default 365)")
     ap.add_argument("--no-sync", action="store_true", help="draw from local data only")
-    ap.add_argument("--out", default=str(OUT_HTML))
-    a = ap.parse_args()
+    ap.add_argument("--out", default=None,
+                    help="output HTML (default: the store's reports/sales_dashboard*.html; "
+                         "with --all-stores, each store gets its own -<store> variant)")
+    stores.add_store_args(ap, all_stores=True)
+    a = ap.parse_args(argv)
+    names = stores.stores_from_args(a)
+    for i, store in enumerate(names):
+        if len(names) > 1:
+            print(("\n" if i else "") + f"===== store: {store} =====")
+        _one_store(a, store, multi=len(names) > 1)
+    return 0
 
-    REPORTS.mkdir(exist_ok=True)
+
+def _one_store(a, store: str, *, multi: bool) -> None:
+    """Sync (unless --no-sync), gather and draw ONE store's dashboard."""
+    if a.out is None:
+        out = stores.paths(store).sales_dashboard_html
+    else:
+        # An explicit --out is one file; several stores must not share it.
+        out = stores.store_file(Path(a.out).resolve(), store) if multi else Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     if not a.no_sync:
-        sync(a.days)
-    d = gather(a.days)
-    out = Path(a.out)
+        sync(a.days, store)
+    d = gather(a.days, store)
     out.write_text(draw(d), encoding="utf-8")
 
     if d["net_after_ads_postage"] is not None:
@@ -787,7 +844,6 @@ def main() -> int:
     print(f"promoted: {d['running_campaigns']} running campaign(s), "
           f"{d['live_with_running_ad']}/{d['live_count']} live listings actively promoted")
     print(f"[OK] {out}")
-    return 0
 
 
 if __name__ == "__main__":

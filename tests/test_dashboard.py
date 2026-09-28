@@ -70,12 +70,19 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(dash, "INVENTORY", inv)
     monkeypatch.setattr(dash, "LEDGER", ledger)
     monkeypatch.setattr(dash, "LIVE_SHEET", live)
-    monkeypatch.setattr(_status, "LEDGER", ledger)
+    # lib/status.py resolves each shoot's ledger through stores.paths() now
+    # (#156) — point the store model's repo root at the synthetic repo.
+    import stores as _stores
+    monkeypatch.setattr(_stores, "REPO", tmp_path)
+    for var in ("EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG", "EBAYBIZ_STORE"):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(_report, "REPO", tmp_path)
     monkeypatch.setattr(_report, "INVENTORY", inv)
     monkeypatch.setattr(_report, "LEDGER", ledger)
     monkeypatch.setattr(_sr, "REPO", tmp_path)
     monkeypatch.setattr(_sr, "INVENTORY", inv)
+    # One store unless a test says otherwise (#156) — never the real config's.
+    monkeypatch.setattr(dash, "_store_names", lambda: ["default"])
     return tmp_path
 
 
@@ -200,9 +207,9 @@ def test_gather_backlog_preloads_the_ledger_once_not_once_per_shoot(repo, monkey
     calls = []
     real_ledger_row = _status._ledger_row
 
-    def _spy(sku, ledger_by_sku=None):
+    def _spy(sku, ledger_by_sku=None, *rest, **kw):
         calls.append(ledger_by_sku)
-        return real_ledger_row(sku, ledger_by_sku)
+        return real_ledger_row(sku, ledger_by_sku, *rest, **kw)
 
     monkeypatch.setattr(_status, "_ledger_row", _spy)
     d = dash.gather_backlog()
@@ -669,3 +676,93 @@ def test_main_normal_out_path_is_unaffected_by_the_guard(repo, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(out)])
     assert dash.main() == 0
     assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Stores (#156 §5): drift is per store, never pooled
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def three_stores(repo, monkeypatch):
+    """default + junk + outlet, per-store files under the synthetic repo."""
+    import stores as _stores
+    monkeypatch.setattr(_stores, "REPO", repo)
+    monkeypatch.delenv("EBAYBIZ_LISTINGS_LEDGER", raising=False)
+    monkeypatch.delenv("EBAYBIZ_LISTINGS_LOG", raising=False)
+    monkeypatch.delenv("EBAYBIZ_STORE", raising=False)
+    monkeypatch.setattr(dash, "_store_names", lambda: ["default", "junk", "outlet"])
+    return repo
+
+
+def test_store_b_listings_are_not_drift_against_store_a(three_stores):
+    repo = three_stores
+    # default store: one live listing, in its ledger
+    _write_live_sheet(repo / "inventory_sheet.csv", [
+        {"sku": "main0001", "title": "Main", "listing_id": "1", "live": "yes", "price": "10"}])
+    _write_ledger(repo / "listings_ledger.csv", [
+        {"sku": "main0001", "title": "Main", "price": "10", "status": "PUBLISHED"}])
+    # junk store: its own live listing, in ITS ledger only
+    _write_live_sheet(repo / "inventory_sheet-junk.csv", [
+        {"sku": "junk0001", "title": "Junk", "listing_id": "2", "live": "yes", "price": "5"}])
+    _write_ledger(repo / "listings_ledger-junk.csv", [
+        {"sku": "junk0001", "title": "Junk", "price": "5", "status": "PUBLISHED"}])
+
+    d = dash.gather()
+    assert list(d["drift_by_store"]) == ["default", "junk", "outlet"]
+    assert d["drift_by_store"]["default"]["count"] == 0
+    assert d["drift_by_store"]["junk"]["count"] == 0
+    # outlet has never synced: "not found", not a wall of false drift
+    assert d["drift_by_store"]["outlet"]["have_ledger"] is False
+
+
+def test_drift_in_one_store_names_that_stores_files(three_stores):
+    repo = three_stores
+    _write_live_sheet(repo / "inventory_sheet-junk.csv", [
+        {"sku": "junk0002", "title": "Orphan", "listing_id": "3", "live": "yes", "price": "5"}])
+    _write_ledger(repo / "listings_ledger-junk.csv", [])
+    d = dash.gather_drift("junk")
+    assert d["count"] == 1
+    assert "listings_ledger-junk.csv" in d["rows"][0]["issues"][0]
+
+
+def test_draw_renders_one_drift_section_per_store(three_stores):
+    html = dash.draw(dash.gather())
+    for store in ("default", "junk", "outlet"):
+        assert f"Live listing vs. ledger drift — store {store}" in html
+    assert "across 3 stores" in html
+
+
+def test_single_store_page_keeps_its_old_heading(repo):
+    html = dash.draw(dash.gather())
+    assert "Live listing vs. ledger drift</h2>" in html
+
+
+def test_drafts_carry_their_store_and_filter_by_it(three_stores):
+    inv = three_stores / "inventory"
+    for name, store_line in (("a", "store: junk\n"), ("b", "")):
+        d = _shoot(inv, name)
+        (d / "draft.md").write_text(
+            f'---\ntitle: "Item {name}"\n{store_line}price: "10.00"\n---\nbody\n',
+            encoding="utf-8")
+    both = dash.gather_drafts(["default", "junk"])
+    rows = both["drafted"] + both["synced"]
+    by_title = {r["title"]: r["store"] for r in rows}
+    assert by_title == {"Item a": "junk", "Item b": "default"}
+    only = dash.gather_drafts(["junk"])
+    assert [r["title"] for r in only["drafted"] + only["synced"]] == ["Item a"]
+    assert "STORE junk" in dash._draft_rows(rows)
+
+
+def test_main_store_flag_narrows_to_one_store(three_stores, monkeypatch):
+    out = three_stores / "reports" / "d.html"
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--store", "junk", "--out", str(out)])
+    assert dash.main() == 0
+    html = out.read_text(encoding="utf-8")
+    assert "drift — store junk" in html and "store outlet" not in html
+
+
+def test_out_may_not_overwrite_a_named_stores_ledger(three_stores, monkeypatch):
+    target = three_stores / "listings_ledger-junk.csv"
+    _write_ledger(target, [])
+    monkeypatch.setattr(sys, "argv", ["dashboard", "--out", str(target)])
+    assert dash.main() == 1

@@ -567,12 +567,18 @@ def _turn_context(usage: dict) -> int:
             + (usage.get("cache_read_input_tokens") or 0))
 
 
-def _ledger_path() -> Path:
-    """Same resolution order as lib/list_edit.py's _ledger_path(): explicit
-    env override first (also how tests point this at a synthetic ledger),
-    else <repo>/listings_ledger.csv."""
-    env = os.environ.get("EBAYBIZ_LISTINGS_LEDGER") or os.environ.get("EBAYBIZ_LISTINGS_LOG")
-    return Path(env) if env else REPO / "listings_ledger.csv"
+def _ledger_path(store: str = "default") -> Path:
+    """stores.paths(store).listings_ledger (#156): explicit env override first
+    (also how tests point this at a synthetic ledger), else the store's own
+    ledger — <repo>/listings_ledger.csv for the default store.
+
+    Defaults to the literal "default" store, not the ambient one: `observe` is
+    store-neutral, and an explicit name also means no config.yaml read, so it
+    keeps working in a worktree that has none."""
+    if str(REPO / "lib") not in sys.path:
+        sys.path.insert(0, str(REPO / "lib"))
+    import stores
+    return stores.paths(store).listings_ledger
 
 
 def _ledger_rows() -> list:

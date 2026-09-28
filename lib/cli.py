@@ -12,6 +12,19 @@ config and credentials keep loading lazily inside the tools themselves.
 Adding a command is one registry line; the module just has to be runnable
 as a script (a __main__ guard or top-level CLI both work — dispatch is
 runpy, not an import contract).
+
+Stores (GH #156). Every command that touches an eBay account or per-store
+data takes `--store NAME` itself (lib/stores.add_store_args). The dispatcher
+also accepts it BEFORE the command, and adds a loop:
+
+    python -m lib.cli --store junk reconcile      # == reconcile --store junk
+    python -m lib.cli --all-stores pick-list --poll   # once per store
+
+The flag is forwarded as a real `--store` argument, never smuggled through
+$EBAYBIZ_STORE, so it shows in the tool's own argv and in scrollback. A
+store-neutral command (voice, prep, ...) refuses a store rather than
+silently ignoring it; `--all-stores` is refused on commands that bulk-write
+to eBay, where "every store at once" should never be one keystroke.
 """
 from __future__ import annotations
 
@@ -75,22 +88,88 @@ COMMANDS = {
 }
 
 
+# Commands that take --store (GH #156). Everything else is store-neutral:
+# it reads photos, text or comps and never an account or a per-store file.
+STORE_AWARE = {
+    "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
+    "sales-report", "dashboard", "report", "promote", "listing", "status",
+    "ship-quote", "ship-buy",
+}
+# Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
+# spend money, so the store has to be typed, once, by name.
+SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote"}
+
+
+def _pop_store_flags(args: list[str]) -> tuple[str | None, bool, list[str]]:
+    """Strip leading `--store NAME` / `--store=NAME` / `--all-stores`."""
+    store, all_stores = None, False
+    while args:
+        a = args[0]
+        if a == "--all-stores":
+            all_stores, args = True, args[1:]
+        elif a == "--store" and len(args) > 1:
+            store, args = args[1], args[2:]
+        elif a.startswith("--store="):
+            store, args = a.split("=", 1)[1], args[1:]
+        else:
+            break
+    return store, all_stores, args
+
+
+def _run(name: str, rest: list[str]) -> int:
+    sys.argv = [f"ebz {name}"] + rest
+    try:
+        runpy.run_module(COMMANDS[name][0], run_name="__main__")
+    except SystemExit as e:
+        code = e.code
+        if code is None:
+            return 0
+        if isinstance(code, int):
+            return code
+        print(code, file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    store, all_stores, args = _pop_store_flags(args)
     if not args or args[0] in ("help", "-h", "--help"):
         width = max(len(n) for n in COMMANDS)
-        print("ebz — python -m lib.cli <command> [args...]")
+        print("ebz — python -m lib.cli [--store NAME | --all-stores] <command> [args...]")
         for name, (_, desc) in COMMANDS.items():
-            print(f"  {name:<{width}}  {desc}")
+            tag = "  [store]" if name in STORE_AWARE else ""
+            print(f"  {name:<{width}}  {desc}{tag}")
         return 0
     name, rest = args[0], args[1:]
     if name not in COMMANDS:
         print(f"ebz: unknown command {name!r} — one of: {', '.join(COMMANDS)}")
         return 2
-    mod = COMMANDS[name][0]
-    sys.argv = [f"ebz {name}"] + rest
-    runpy.run_module(mod, run_name="__main__")
-    return 0
+    if store is None and not all_stores:
+        return _run(name, rest)
+
+    if name not in STORE_AWARE:
+        print(f"ebz: {name!r} is store-neutral — it takes no --store/--all-stores")
+        return 2
+    if "--store" in rest or any(a.startswith("--store=") for a in rest):
+        print("ebz: give --store once — before the command or after it, not both")
+        return 2
+    if store is not None and all_stores:
+        print("ebz: --store and --all-stores are mutually exclusive")
+        return 2
+    if store is not None:
+        return _run(name, rest + ["--store", store])
+
+    if name in SINGLE_STORE_ONLY:
+        print(f"ebz: {name!r} writes to eBay per store — name one with --store, "
+              f"not --all-stores")
+        return 2
+    from stores import configured_stores
+    worst = 0
+    for s in configured_stores():
+        print(f"\n===== ebz {name} --store {s} =====", flush=True)
+        worst = max(worst, _run(name, rest + ["--store", s]))
+    return worst
 
 
 if __name__ == "__main__":

@@ -27,6 +27,17 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 SA = pytest.importorskip(
     "sync_actuals", reason="sync_actuals imports ebay_client (config module)")
+import stores  # noqa: E402
+
+
+def _isolate(monkeypatch, root, cfg=None):
+    """Point every per-store path at `root` (#156): stores.REPO patched, no
+    ambient store, no ledger override, and `cfg` (default {}) as the config —
+    so a test can never read or write the real ledgers."""
+    monkeypatch.setattr(stores, "REPO", root)
+    monkeypatch.setattr(stores, "load_config", lambda: cfg or {})
+    for var in ("EBAYBIZ_STORE", "EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _money(v):
@@ -167,7 +178,7 @@ def test_fee_is_split_across_lines_and_sums_back_to_the_whole():
 # a failed fetch must never look like an empty window
 # --------------------------------------------------------------------------
 def test_exhausted_windows_raise_rather_than_reporting_no_sales(monkeypatch):
-    def always_400(days, verbose):
+    def always_400(days, verbose, creds=None):
         raise RuntimeError("GET /sell/fulfillment/v1/order → HTTP 400")
     monkeypatch.setattr(SA, "_fetch_orders_window", always_400)
     # 30 is below every fallback rung, so the candidate list is a single entry —
@@ -177,7 +188,7 @@ def test_exhausted_windows_raise_rather_than_reporting_no_sales(monkeypatch):
 
 
 def test_non_400_errors_propagate_immediately(monkeypatch):
-    def boom(days, verbose):
+    def boom(days, verbose, creds=None):
         raise RuntimeError("HTTP 401 unauthorized")
     monkeypatch.setattr(SA, "_fetch_orders_window", boom)
     with pytest.raises(RuntimeError, match="401"):
@@ -227,7 +238,7 @@ def _sale_row(order_id, sku, sold_at, item_price="10.00"):
 
 def test_write_sales_ledger_preserves_rows_outside_the_fetch_window(tmp_path, monkeypatch):
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     # An old sale, written in a prior --apply, is already on disk...
     SA.write_sales_ledger([_sale_row("1-000", "old-sku", "2025-01-01T00:00:00Z")])
@@ -242,7 +253,7 @@ def test_write_sales_ledger_preserves_rows_outside_the_fetch_window(tmp_path, mo
 
 def test_write_sales_ledger_updates_a_row_thats_refetched(tmp_path, monkeypatch):
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z", "10.00")])
     # Same order+sku re-fetched later (e.g. a refund posted since) — must
@@ -264,7 +275,7 @@ def test_write_sales_ledger_updates_a_row_thats_refetched(tmp_path, monkeypatch)
 # --------------------------------------------------------------------------
 def test_write_sales_ledger_leaves_ad_fee_and_postage_blank_when_absent(tmp_path, monkeypatch):
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     # _sale_row (existing fixture, predates #119) carries no ad_fee/
     # actual_postage keys at all — the exact shape sync_actuals produces
@@ -279,7 +290,7 @@ def test_write_sales_ledger_leaves_ad_fee_and_postage_blank_when_absent(tmp_path
 
 def test_write_sales_ledger_formats_known_ad_fee_and_postage(tmp_path, monkeypatch):
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
     row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
@@ -295,7 +306,7 @@ def test_write_sales_ledger_treats_zero_ad_fee_as_a_real_known_value(tmp_path, m
     # Decimal("0") is a legitimate READ result (an order with no ad spend at
     # all) and must be written as "0.00", distinct from None -> "".
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
     row["ad_fee"], row["actual_postage"] = Decimal("0"), Decimal("6.85")
@@ -309,7 +320,7 @@ def test_write_sales_ledger_treats_zero_ad_fee_as_a_real_known_value(tmp_path, m
 def test_write_sales_ledger_does_not_erase_known_finances_data_on_rerun(tmp_path, monkeypatch):
     # A prior --apply recorded real ad_fee/actual_postage for this order...
     ledger = tmp_path / "sales_ledger.csv"
-    monkeypatch.setattr(SA, "SALES_LEDGER", ledger)
+    _isolate(monkeypatch, tmp_path)
 
     row = _sale_row("1-000", "sku-a", "2026-08-01T00:00:00Z")
     row["ad_fee"], row["actual_postage"] = Decimal("2.50"), Decimal("6.85")
@@ -445,7 +456,7 @@ def test_sync_finances_degrades_on_auth_error(monkeypatch):
     import ebay_finances
     from ebay_client import EbayAuthError
 
-    def boom(days, verbose=True):
+    def boom(days, verbose=True, **kw):
         raise EbayAuthError("sell.finances not yet re-consented")
 
     monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
@@ -459,7 +470,7 @@ def test_sync_finances_collapses_a_multiline_error_into_one_line(monkeypatch):
     import ebay_finances
     from ebay_client import EbayAPIError
 
-    def boom(days, verbose=True):
+    def boom(days, verbose=True, **kw):
         raise EbayAPIError(401, "unauthorized\n  reason: invalid_scope\n  hint: re-consent")
 
     monkeypatch.setattr(ebay_finances, "fetch_transactions", boom)
@@ -471,7 +482,7 @@ def test_sync_finances_collapses_a_multiline_error_into_one_line(monkeypatch):
 def test_sync_finances_returns_attribution_on_success(monkeypatch):
     import ebay_finances
 
-    def fake(days, verbose=True):
+    def fake(days, verbose=True, **kw):
         return [{
             "transactionType": "NON_SALE_CHARGE",
             "transactionDate": "2026-06-08T19:00:00.000Z",
@@ -496,12 +507,216 @@ def test_load_hand_locations_maps_listing_id_or_sku_to_shelf(tmp_path, monkeypat
                  "206301883472,cats-mens-4,Brooks Brothers 1981\n"
                  "some-sku,bin-2,\n"
                  "206300000000,,no shelf recorded\n", encoding="utf-8")
-    monkeypatch.setattr(sa, "HAND_LOCATIONS", f)
+    _isolate(monkeypatch, tmp_path)
     assert sa.load_hand_locations() == {"206301883472": "cats-mens-4",
                                         "some-sku": "bin-2"}
 
 
 def test_load_hand_locations_missing_file_means_no_overrides(tmp_path, monkeypatch):
     import sync_actuals as sa
-    monkeypatch.setattr(sa, "HAND_LOCATIONS", tmp_path / "nope.csv")
+    _isolate(monkeypatch, tmp_path)
     assert sa.load_hand_locations() == {}
+
+
+# --------------------------------------------------------------------------
+# #156 — one store per pass. The canonical SKU and the inventory/ tree are
+# both store-independent, so without a store filter a store-B order can
+# claim (and stamp) a store-A folder and flip a store-A ledger row to SOLD.
+# --------------------------------------------------------------------------
+from types import SimpleNamespace  # noqa: E402
+
+THREE_STORES = {"ebay": {"stores": {"junk": {}, "outlet": {}}}}
+TITLE_A = "McCoy Beehive Mixing Bowls Set of 4"
+
+
+def _write_draft(root, rel, *, title, sku, store=None, price="80.00"):
+    d = root / "inventory" / rel
+    d.mkdir(parents=True)
+    fm = [f'title: "{title}"', f'price: "{price}"', f'ebay_inventory_sku: "{sku}"']
+    if store is not None:
+        fm.append(f'store: "{store}"')
+    (d / "draft.md").write_text("---\n" + "\n".join(fm) + "\n---\n\nbody\n", encoding="utf-8")
+    return d
+
+
+def _write_ledger(path, rows):
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["sku", "status", "title", "price", "listing_id"])
+        w.writeheader()
+        w.writerows(rows)
+
+
+@pytest.fixture
+def shop(tmp_path, monkeypatch):
+    """Three configured stores, one inventory/ tree:
+
+      a  main-store item (no `store:`)             sku aaaa1111
+      b  junk-store item (`store: junk`)           sku bbbb2222
+      c  started on main, RELISTED on junk: no `store:`, sku cccc3333,
+         present in BOTH listings ledgers
+    """
+    _isolate(monkeypatch, tmp_path, THREE_STORES)
+    monkeypatch.setattr(SA, "REPO", tmp_path)
+    monkeypatch.setattr(SA, "INVENTORY", tmp_path / "inventory")
+    _write_draft(tmp_path, "shootA/a", title=TITLE_A, sku="aaaa1111")
+    _write_draft(tmp_path, "shootB/b", title="Box of Assorted Junk Drawer Keys",
+                 sku="bbbb2222", store="junk")
+    _write_draft(tmp_path, "shootC/c", title="Fenton Hobnail Milk Glass Vase", sku="cccc3333")
+    _write_ledger(tmp_path / "listings_ledger.csv",
+                  [{"sku": "aaaa1111", "status": "PUBLISHED", "title": TITLE_A, "price": "80.00"},
+                   {"sku": "cccc3333", "status": "ENDED", "title": "Fenton", "price": "40.00"}])
+    _write_ledger(tmp_path / "listings_ledger-junk.csv",
+                  [{"sku": "bbbb2222", "status": "PUBLISHED", "title": "Box", "price": "9.00"},
+                   {"sku": "cccc3333", "status": "PUBLISHED", "title": "Fenton", "price": "15.00"}])
+    return tmp_path
+
+
+def _dirs(drafts):
+    return sorted(d["dir"] for d in drafts)
+
+
+def test_default_store_keeps_the_historic_filenames(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    assert SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01")]) \
+        == tmp_path / "sales_ledger.csv"
+    assert SA.write_finances_status({"ok": True}, days=90, orders_total=0, orders_covered=0) \
+        == tmp_path / "reports" / "finances_sync_status.json"
+    (tmp_path / "hand_listed_locations.csv").write_text(
+        "listing_id,location\n206000000001,bin-1\n", encoding="utf-8")
+    assert SA.load_hand_locations() == {"206000000001": "bin-1"}
+
+
+def test_a_named_store_reads_and_writes_only_its_own_files(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path, THREE_STORES)
+    (tmp_path / "hand_listed_locations.csv").write_text(
+        "listing_id,location\n206000000001,main-shelf\n", encoding="utf-8")
+    (tmp_path / "hand_listed_locations-junk.csv").write_text(
+        "listing_id,location\n206000000002,junk-bin\n", encoding="utf-8")
+
+    assert SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01")], "junk") \
+        == tmp_path / "sales_ledger-junk.csv"
+    SA.write_finances_status({"ok": False, "reason": "no consent"}, days=90,
+                             orders_total=1, orders_covered=0, store="junk")
+    assert not (tmp_path / "sales_ledger.csv").exists()
+    assert not (tmp_path / "reports" / "finances_sync_status.json").exists()
+    assert (tmp_path / "reports" / "finances_sync_status-junk.json").exists()
+    assert SA.load_hand_locations("junk") == {"206000000002": "junk-bin"}
+    assert SA.load_hand_locations("default") == {"206000000001": "main-shelf"}
+
+
+def test_scan_drafts_filters_by_store_field_or_ledger_membership(shop):
+    # No store: every draft (tools/pick_list*.py's pre-#156 call).
+    assert _dirs(SA.scan_drafts()) == ["inventory/shootA/a", "inventory/shootB/b",
+                                       "inventory/shootC/c"]
+    # default: its unlabelled drafts (c has no `store:` either).
+    assert _dirs(SA.scan_drafts("default")) == ["inventory/shootA/a", "inventory/shootC/c"]
+    # junk: its `store: junk` draft, plus c by junk-ledger membership (relisted).
+    assert _dirs(SA.scan_drafts("junk")) == ["inventory/shootB/b", "inventory/shootC/c"]
+    # outlet: nothing is its own — not even as a title-fallback candidate.
+    assert SA.scan_drafts("outlet") == []
+
+
+def test_ambient_store_does_not_move_drafts_between_stores(shop, monkeypatch):
+    # EBAYBIZ_STORE=junk must not make an unlabelled draft a junk draft.
+    monkeypatch.setenv("EBAYBIZ_STORE", "junk")
+    assert "inventory/shootA/a" not in _dirs(SA.scan_drafts("junk"))
+    assert "inventory/shootA/a" in _dirs(SA.scan_drafts("default"))
+
+
+def _store_order(sku, title, oid):
+    o = _order(oid=oid, sku=sku)
+    o["lineItems"][0]["title"] = title
+    return o
+
+
+def _args(**kw):
+    base = dict(days=90, apply=True, skip_finances=True, store_json=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_a_store_b_order_never_claims_or_overwrites_a_store_a_row(shop, monkeypatch):
+    # The junk store sells something whose SKU AND title are the main store's
+    # item "a" — the collision #156 §3 names. Nothing of a's may change.
+    seen_store = []
+
+    def fake_fetch(days, verbose=True, *, store=None):
+        seen_store.append(store)
+        return [_store_order("aaaa1111", TITLE_A, "J-1")]
+
+    monkeypatch.setattr(SA, "fetch_orders", fake_fetch)
+    (shop / "sales_ledger.csv").write_text("order_id,sku\nMAIN-1,aaaa1111\n", encoding="utf-8")
+    main_ledger_before = (shop / "listings_ledger.csv").read_bytes()
+    main_sales_before = (shop / "sales_ledger.csv").read_bytes()
+
+    assert SA.sync_store("junk", _args()) == 0
+
+    assert seen_store == ["junk"], "orders must be fetched with the junk store's credentials"
+    with (shop / "sales_ledger-junk.csv").open(encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["shoot_dir"] == "", "a store-B order must not claim a store-A folder"
+    assert rows[0]["matched_by"] == "unmatched"
+    assert not (shop / "inventory" / "shootA" / "a" / "SOLD.md").exists()
+    # the main store's ledgers are byte-for-byte untouched...
+    assert (shop / "listings_ledger.csv").read_bytes() == main_ledger_before
+    assert (shop / "sales_ledger.csv").read_bytes() == main_sales_before
+    # ...and the SOLD advance landed in the junk store's own ledger
+    with (shop / "listings_ledger-junk.csv").open(encoding="utf-8") as f:
+        junk = {r["sku"]: r for r in csv.DictReader(f)}
+    assert junk["aaaa1111"]["status"] == "SOLD"
+
+
+def test_a_relisted_item_matches_its_folder_on_the_store_that_sold_it(shop, monkeypatch):
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [_store_order("cccc3333", "Fenton Hobnail Milk Glass Vase", "J-2")])
+    SA.sync_store("junk", _args())
+    with (shop / "sales_ledger-junk.csv").open(encoding="utf-8") as f:
+        row = next(csv.DictReader(f))
+    assert row["shoot_dir"] == "inventory/shootC/c" and row["matched_by"] == "sku"
+    stamp = (shop / "inventory" / "shootC" / "c" / "SOLD.md").read_text(encoding="utf-8")
+    assert "- Store: junk" in stamp
+    # the main ledger's row for the same SKU keeps its own status
+    with (shop / "listings_ledger.csv").open(encoding="utf-8") as f:
+        main = {r["sku"]: r for r in csv.DictReader(f)}
+    assert main["cccc3333"]["status"] == "ENDED"
+
+
+def test_all_stores_runs_one_isolated_pass_per_store_three_stores(shop, monkeypatch):
+    # Three stores, not two: nothing may assume a pair.
+    orders = {"default": _store_order("aaaa1111", TITLE_A, "D-1"),
+              "junk": _store_order("bbbb2222", "Box of Assorted Junk Drawer Keys", "J-1"),
+              "outlet": _store_order("dddd4444", "Outlet Only Item", "O-1")}
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [orders[store]])
+    assert SA.main(["--all-stores", "--apply", "--skip-finances"]) == 0
+
+    for store, suffix in (("default", ""), ("junk", "-junk"), ("outlet", "-outlet")):
+        with (shop / f"sales_ledger{suffix}.csv").open(encoding="utf-8") as f:
+            ids = [r["order_id"] for r in csv.DictReader(f)]
+        assert ids == [orders[store]["orderId"]], store
+        assert (shop / "reports" / f"finances_sync_status{suffix}.json").exists(), store
+    # each store's order found its own folder, and only its own
+    assert "D-1" in (shop / "inventory" / "shootA" / "a" / "SOLD.md").read_text(encoding="utf-8")
+    assert "J-1" in (shop / "inventory" / "shootB" / "b" / "SOLD.md").read_text(encoding="utf-8")
+
+
+def test_fetch_orders_and_finances_use_the_named_stores_account(monkeypatch):
+    import ebay_finances
+    monkeypatch.setattr(SA, "load_credentials", lambda store=None: f"creds:{store}")
+    used = []
+    monkeypatch.setattr(SA, "_fetch_orders_window",
+                        lambda days, verbose, creds=None: used.append(creds) or [])
+    SA.fetch_orders(90, verbose=False, store="outlet")
+    assert used == ["creds:outlet"]
+
+    asked = []
+    monkeypatch.setattr(ebay_finances, "fetch_transactions",
+                        lambda days, verbose=True, store=None: asked.append(store) or [])
+    SA.sync_finances(90, verbose=False, store="outlet")
+    assert asked == ["outlet"]
+
+
+def test_store_json_is_refused_with_all_stores(shop):
+    with pytest.raises(SystemExit):
+        SA.main(["--all-stores", "--store-json", "x.json"])

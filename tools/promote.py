@@ -59,6 +59,21 @@ sys.path.insert(0, str(REPO / "lib"))
 
 REPORTS = REPO / "reports"
 
+import stores  # noqa: E402
+
+
+def _api(creds):
+    """api_send bound to one store's credentials (#156).
+
+    Every Marketing API call here used to go out with no creds, i.e. to
+    whatever load_credentials() resolved — the AMBIENT store — so `--store
+    junk` could plan against junk's sheet and then create the campaign on the
+    main account. Looked up at call time so tests can patch
+    ebay_client.api_send.
+    """
+    from ebay_client import api_send
+    return lambda *a, **k: api_send(*a, creds=creds, **k)
+
 
 def _f(v, d=0.0):
     try:
@@ -67,15 +82,17 @@ def _f(v, d=0.0):
         return d
 
 
-def live_listings() -> dict:
+def live_listings(store: str | None = None) -> dict:
     """listing_id -> {title, ask, category} for everything currently live.
 
     Distinct listing ids: a CHOICE listing is one ad, not one per variation.
+    Read from `store`'s own inventory sheet (stores.paths, #156).
     """
     out = {}
-    p = REPO / "inventory_sheet.csv"
+    p = stores.paths(store).inventory_sheet_csv
     if not p.exists():
-        raise SystemExit("inventory_sheet.csv missing — run tools/sales_report.py first")
+        raise SystemExit(f"{p.name} missing — run tools/sales_report.py (or "
+                         f"tools/ebay_sheet.py) for this store first")
     with p.open(newline="", encoding="utf-8-sig") as fh:
         for r in csv.DictReader(fh):
             lid = r.get("listing_id") or ""
@@ -87,8 +104,8 @@ def live_listings() -> dict:
     return out
 
 
-def campaigns_and_ads() -> tuple[list, dict]:
-    from ebay_client import api_send
+def campaigns_and_ads(creds=None) -> tuple[list, dict]:
+    api_send = _api(creds)
 
     camps = api_send("GET", "/sell/marketing/v1/ad_campaign?limit=100").get("campaigns", [])
     ads: dict[str, dict] = {}
@@ -111,9 +128,9 @@ def campaigns_and_ads() -> tuple[list, dict]:
     return camps, ads
 
 
-def suggestions(campaign_id: str) -> dict:
+def suggestions(campaign_id: str, creds=None) -> dict:
     """listing_id -> estimated search impressions, from eBay's own suggestion set."""
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     out, offset = {}, 0
     while True:
@@ -133,7 +150,7 @@ def suggestions(campaign_id: str) -> dict:
 
 
 def create_campaign(name: str, budget: float, confirm: bool,
-                    min_price=None, ad_rate: float = 10.0) -> str:
+                    min_price=None, ad_rate: float = 10.0, creds=None) -> str:
     """Create a CPC (Priority) campaign. Returns its id.
 
     `min_price` switches on `campaignCriterion`: eBay then re-checks the
@@ -146,7 +163,7 @@ def create_campaign(name: str, budget: float, confirm: bool,
     """
     from datetime import datetime, timedelta, timezone
 
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     # THE TWO MODELS ARE NOT INTERCHANGEABLE, AND THE RULE DECIDES THE MODEL.
     #
@@ -189,14 +206,13 @@ def create_campaign(name: str, budget: float, confirm: bool,
     r = api_send("POST", "/sell/marketing/v1/ad_campaign", body)
     cid = str(r.get("campaignId") or "")
     if not cid:                       # eBay answers 201 with a Location header
-        from ebay_client import api_send as _s
-        found = _s("GET", f"/sell/marketing/v1/ad_campaign/get_campaign_by_name"
+        found = api_send("GET", f"/sell/marketing/v1/ad_campaign/get_campaign_by_name"
                           f"?campaign_name={name.replace(' ', '%20')}")
         cid = str(found.get("campaignId") or "")
     return cid
 
 
-def ensure_ad_group(campaign_id: str, bid: float, confirm: bool) -> str:
+def ensure_ad_group(campaign_id: str, bid: float, confirm: bool, creds=None) -> str:
     """A CPC campaign holds its ads in an AD GROUP, and needs one before any ad.
 
     Found the hard way: bulk_create_ads_by_listing_id answers
@@ -206,7 +222,7 @@ def ensure_ad_group(campaign_id: str, bid: float, confirm: bool) -> str:
     The group carries the default bid — what a click may cost — so this is the
     number that decides spend, not the daily budget, which only caps it.
     """
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     try:
         got = api_send("GET", f"/sell/marketing/v1/ad_campaign/{campaign_id}"
@@ -230,9 +246,9 @@ def ensure_ad_group(campaign_id: str, bid: float, confirm: bool) -> str:
 
 
 def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
-            ad_group_id: str = "") -> dict:
+            ad_group_id: str = "", creds=None) -> dict:
     """Bulk-create ads by listing id. Up to 500 per call; we send far fewer."""
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     body = {"requests": [
         ({"listingId": str(l), "adGroupId": ad_group_id} if ad_group_id
@@ -245,14 +261,14 @@ def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
                             f"/bulk_create_ads_by_listing_id", body)
 
 
-def set_bidding(campaign_id: str, strategy: str, confirm: bool) -> None:
+def set_bidding(campaign_id: str, strategy: str, confirm: bool, creds=None) -> None:
     """FIXED -> DYNAMIC: eBay manages the bids and updates them daily.
 
     The one bid automation the API has. Note what it costs: under DYNAMIC you
     can still add keywords but can no longer set their bid values, so the ad
     group's default bid stops being the ceiling you chose.
     """
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     body = {"biddingStrategy": strategy}
     if not confirm:
@@ -263,14 +279,14 @@ def set_bidding(campaign_id: str, strategy: str, confirm: bool) -> None:
     print(f"  bidding strategy -> {strategy}")
 
 
-def delete_campaign(campaign_id: str, confirm: bool) -> None:
+def delete_campaign(campaign_id: str, confirm: bool, creds=None) -> None:
     """Remove a campaign. Only ever for one just created and mis-shaped.
 
     A campaign that has run is history, not scratch: END it and the record
     survives. Deleting is for the case where the shape was wrong from the first
     minute — which happens because `campaignCriterion` is create-time only.
     """
-    from ebay_client import api_send
+    api_send = _api(creds)
 
     if not confirm:
         print(f"DRY — would DELETE /sell/marketing/v1/ad_campaign/{campaign_id}")
@@ -307,20 +323,35 @@ def main() -> int:
                     help="set the bidding strategy (needs --confirm)")
     ap.add_argument("--confirm", action="store_true",
                     help="actually write to eBay. Without it every write is a dry run.")
+    stores.add_store_args(
+        ap, help_extra="With --confirm and more than one store configured, "
+                       "--store must be given explicitly.")
     a = ap.parse_args()
 
+    # A --confirm run spends money on one account. With 2+ stores configured,
+    # ambient state ($EBAYBIZ_STORE / ebay.active_store) must not pick which
+    # (#156 §4). A single-store config is unambiguous and keeps working as-is.
+    if a.confirm and len(stores.configured_stores()) > 1:
+        store = stores.require_explicit_store(a, "promote --confirm")
+    else:
+        store = stores.resolve_store_name(a.store)
+    from ebay_client import load_credentials
+    creds = load_credentials(store=store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+
     if a.delete:
-        delete_campaign(a.delete, a.confirm)
+        delete_campaign(a.delete, a.confirm, creds=creds)
 
     if a.create:
         cid = create_campaign(a.create, a.budget, a.confirm,
-                              a.auto_add_min, a.ad_rate)
+                              a.auto_add_min, a.ad_rate, creds=creds)
         print(f"campaign: {cid or '(dry run)'}")
         if cid:
             a.campaign = cid
 
-    live = live_listings()
-    camps, ads = campaigns_and_ads()
+    live = live_listings(store)
+    camps, ads = campaigns_and_ads(creds)
     running = [c for c in camps if c.get("campaignStatus") == "RUNNING"]
     onsite = [c for c in camps if "ON_SITE" in (c.get("channels") or [])]
     paused_onsite = [c for c in onsite
@@ -352,7 +383,7 @@ def main() -> int:
                     if v["campaign"].get("campaignStatus") == "RUNNING"
                     and v["ad"].get("adStatus") == "ACTIVE"}
 
-    sug = suggestions(host["campaignId"]) if host else {}
+    sug = suggestions(host["campaignId"], creds) if host else {}
     rows = []
     for lid, rec in live.items():
         if lid in promoted_now:
@@ -403,13 +434,13 @@ def main() -> int:
         print("  POST /sell/marketing/v1/ad_campaign   (create one first)")
 
     if a.bidding and a.campaign:
-        set_bidding(a.campaign, a.bidding, a.confirm)
+        set_bidding(a.campaign, a.bidding, a.confirm, creds=creds)
 
     if a.add_ads and host:
-        gid = ensure_ad_group(host["campaignId"], a.bid, a.confirm)
+        gid = ensure_ad_group(host["campaignId"], a.bid, a.confirm, creds=creds)
         print(f"  ad group: {gid or '(dry run)'} · default bid ${a.bid:.2f}/click")
         res = add_ads(host["campaignId"], [r["listing_id"] for r in pick],
-                      a.confirm, gid)
+                      a.confirm, gid, creds=creds)
         if a.confirm:
             resp = res.get("responses") or []
             ok = [x for x in resp if str(x.get("statusCode", "")).startswith("2")]

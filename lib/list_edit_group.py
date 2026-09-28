@@ -72,6 +72,17 @@ def _resolve_group_path(target: str | Path) -> Path:
     return p
 
 
+def _group_store(group_path: Path, cli_store: Optional[str]) -> str:
+    """--store wins, else the group draft's own `store:` (stores.draft_store —
+    blank means "default", never the ambient store). Mirrors list_edit's
+    _resolve_store() for single drafts (#147): before this, a group draft
+    saying `store: junk` published to whatever $EBAYBIZ_STORE said (#156)."""
+    import stores
+    if cli_store:
+        return stores.resolve_store_name(cli_store)
+    return stores.draft_store(parse_draft(group_path).frontmatter)
+
+
 def _variations(draft) -> list[dict]:
     return list(draft.frontmatter.get("variations") or [])
 
@@ -419,16 +430,19 @@ def main() -> None:
             print("[OK] group draft is sync-ready.")
         elif args.dry_run:
             import json
-            built = sync_group(_resolve_group_path(args.dry_run), dry_run=True,
-                               creds=load_credentials(store=args.store))
+            gp = _resolve_group_path(args.dry_run)
+            built = sync_group(gp, dry_run=True,
+                               creds=load_credentials(store=_group_store(gp, args.store)))
             print(json.dumps(built, indent=2, default=str))
         elif args.sync:
-            built = sync_group(_resolve_group_path(args.sync), creds=load_credentials(store=args.store))
+            gp = _resolve_group_path(args.sync)
+            built = sync_group(gp, creds=load_credentials(store=_group_store(gp, args.store)))
             print(f"[OK] synced group '{built['group_key']}' with "
                   f"{len(built['variant_skus'])} variations (UNPUBLISHED): {', '.join(built['variant_skus'])}")
             print("  Review, then: python list_edit_group.py --publish <group> --confirm")
         elif args.publish:
-            res = publish_group(_resolve_group_path(args.publish), creds=load_credentials(store=args.store),
+            gp = _resolve_group_path(args.publish)
+            res = publish_group(gp, creds=load_credentials(store=_group_store(gp, args.store)),
                                 confirm=args.confirm)
             if res.get("dry_run"):
                 print("DRY RUN — would publish group:", res["group_key"])

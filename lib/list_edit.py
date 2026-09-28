@@ -95,6 +95,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import ConfigError, config_path, load_config, get_storefront
+from stores import paths as store_paths, resolve_store_name
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
@@ -290,43 +291,19 @@ _LEDGER_TS_FOR = {"DRAFTED": "drafted_at", "SYNCED": "synced_at",
                   "SHIPPED": "shipped_at"}
 
 
-_STORE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _ledger_store_fallback() -> str:
-    """Store to use for the ledger when the caller has no resolved
-    `creds.store` to hand in (GH #158) — the --record/--normalize path is
-    deliberately credential-free, so this mirrors load_credentials()'s own
-    fallback (env var > config active_store > "default") without loading
-    any credentials."""
-    return (os.environ.get("EBAYBIZ_STORE")
-            or (load_config().get("ebay") or {}).get("active_store")
-            or DEFAULT_STORE)
 
 
 def _ledger_path(store: Optional[str] = None) -> Path:
-    """Ledger location: $EBAYBIZ_LISTINGS_LEDGER (or legacy $EBAYBIZ_LISTINGS_LOG)
-    always wins — an explicit single-file override, same regardless of store.
+    """This store's listings ledger — see lib/stores.paths() (GH #156).
 
-    Otherwise each store gets its own file (GH #158, Option B — see the issue
-    for why B over a shared file with a store column): the default store is
-    <repo>/listings_ledger.csv, unchanged, so the existing rows need no
-    migration; any other store is <repo>/listings_ledger-<store>.csv, kept
-    entirely separate so a reader that hasn't been taught about stores reads
-    a complete, correct (if incomplete) file rather than a blended one.
+    $EBAYBIZ_LISTINGS_LEDGER (or legacy $EBAYBIZ_LISTINGS_LOG) always wins.
+    Otherwise the default store is <repo>/listings_ledger.csv, unchanged, and
+    any other store is <repo>/listings_ledger-<store>.csv (GH #158, Option B:
+    a reader not taught about stores reads a complete file, never a blend).
     Pass `creds.store` when credentials are already resolved; leave `store`
-    unset only where there are no credentials to read it from."""
-    env = os.environ.get("EBAYBIZ_LISTINGS_LEDGER") or os.environ.get("EBAYBIZ_LISTINGS_LOG")
-    if env:
-        return Path(env)
-    resolved = store or _ledger_store_fallback()
-    if not _STORE_NAME_RE.match(resolved):
-        raise ValueError(
-            f"invalid store name {resolved!r} — use only letters, digits, '-' and '_'")
-    if resolved == DEFAULT_STORE:
-        return _REPO_ROOT / "listings_ledger.csv"
-    return _REPO_ROOT / f"listings_ledger-{resolved}.csv"
+    unset only where there are no credentials to read it from — it then
+    resolves exactly like load_credentials() would."""
+    return store_paths(store).listings_ledger
 
 
 def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",

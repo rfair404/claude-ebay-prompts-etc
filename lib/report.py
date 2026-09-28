@@ -40,6 +40,16 @@ report's day/month buckets could disagree with both the API and with eBay's
 own downloads. `REPORTING_TZ` / `to_report_date()` / `to_report_month()`
 below are the one conversion point: call them wherever a stored UTC
 timestamp becomes a reporting day, never truncate a timestamp by hand.
+
+## One store at a time (#156)
+
+Every read here is for ONE store: its own `listings_ledger*.csv` and
+`sales_ledger*.csv` (resolved through `stores.paths()` at call time), and only
+the drafts that belong to it — see `draft_belongs_to_store()`, which
+`lib/sync_actuals.py` uses for the same question when it matches an order to
+a folder. Two stores are two seller accounts and two 1099-Ks; a report that
+quietly summed them could be reconciled against neither. `--store NAME`
+picks the store; the default store's output is unchanged and unlabelled.
 """
 
 from __future__ import annotations
@@ -53,7 +63,14 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import stores  # noqa: E402  the one store model (#156)
+
 REPO = Path(__file__).resolve().parent.parent
+# The DEFAULT store's listings ledger. Still a module attribute because
+# tests/test_dashboard.py patches it; the real lookup is `_ledger_path(store)`,
+# which resolves through stores.paths() for every store and honours a patched
+# LEDGER only for the default one (see `_patched_or`).
 LEDGER = REPO / "listings_ledger.csv"
 INVENTORY = REPO / "inventory"
 
@@ -123,7 +140,42 @@ def _yaml_scalar(text: str, key: str) -> str:
     return "" if val in ("null", "~") else val
 
 
-def _scan_drafts() -> list[dict]:
+def _patched_or(const: Path, original: Path, store: Optional[str], field: str) -> Path:
+    """`stores.paths(store).<field>`, unless this is the default store and a
+    caller has patched the legacy module constant (`const` is no longer its
+    import-time `original`) — then that. Keeps tests/test_dashboard.py's
+    patch points meaningful without letting them leak into a named store."""
+    name = stores.resolve_store_name(store)
+    if stores.is_default(name) and const != original:
+        return const
+    return getattr(stores.paths(name), field)
+
+
+def _ledger_path(store: Optional[str] = None) -> Path:
+    """`store`'s listings ledger, resolved now (#156)."""
+    return _patched_or(LEDGER, _LEDGER_AT_IMPORT, store, "listings_ledger")
+
+
+def _frontmatter(text: str) -> str:
+    """A draft's YAML frontmatter (between the first two `---` lines), or "" —
+    so `store:` is only ever read from the header, never from body text that
+    happens to start a line with it."""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    return text[3:end] if end != -1 else ""
+
+
+# The ownership rule lives in lib/stores.py (#156); these names stay importable
+# from here for existing callers.
+draft_store_field = stores.draft_store_from_text
+ledger_keys = stores.ledger_keys
+draft_belongs_to_store = stores.draft_belongs_to_store
+
+
+def _scan_drafts(store: Optional[str] = None, keys: Optional[set[str]] = None) -> list[dict]:
+    """Every draft on disk, or only `store`'s when one is given (see
+    `draft_belongs_to_store`; `keys` is that store's ledger membership)."""
     rows = []
     for path in sorted(INVENTORY.rglob("draft*.md")):
         if path.name not in ("draft.md", "draft_group.md"):
@@ -133,8 +185,14 @@ def _scan_drafts() -> list[dict]:
         except OSError:
             continue
         listing_id = _yaml_scalar(t, "ebay_listing_id")
+        sku = _yaml_scalar(t, "ebay_inventory_sku")
+        dstore = draft_store_field(t)
+        if store is not None and not draft_belongs_to_store(
+                {"store": dstore, "sku": sku, "listing_id": listing_id},
+                store, keys or set()):
+            continue
         rows.append({
-            "sku": _yaml_scalar(t, "ebay_inventory_sku"),
+            "sku": sku,
             "title": _yaml_scalar(t, "title"),
             "price": _yaml_scalar(t, "price"),
             "listing_id": listing_id,
@@ -145,15 +203,17 @@ def _scan_drafts() -> list[dict]:
             "path": path.relative_to(REPO).as_posix(),
             "group": path.name == "draft_group.md",
             "src": "disk",
+            "store": dstore,
         })
     return rows
 
 
-def _read_ledger() -> list[dict]:
-    if not LEDGER.exists():
+def _read_ledger(store: Optional[str] = None) -> list[dict]:
+    path = _ledger_path(store)
+    if not path.exists():
         return []
     out = []
-    with LEDGER.open(encoding="utf-8", newline="") as fh:
+    with path.open(encoding="utf-8", newline="") as fh:
         for r in csv.DictReader(fh):
             out.append({
                 "sku": (r.get("sku") or "").strip(),
@@ -170,10 +230,16 @@ def _read_ledger() -> list[dict]:
     return out
 
 
-def collect() -> list[dict]:
-    """Merge ledger + disk. Disk wins; key on listing_id, else sku, else path."""
+def collect(store: Optional[str] = None) -> list[dict]:
+    """Merge ONE store's ledger with that store's drafts on disk (#156). Disk
+    wins; key on listing_id, else sku, else path. `store=None` is the active
+    store (stores.resolve_store_name) — for the default store, what this
+    always returned, minus drafts whose `store:` names another store and
+    which aren't in this store's ledger."""
+    name = stores.resolve_store_name(store)
+    ledger = _read_ledger(name)
     merged: dict[str, dict] = {}
-    for row in _read_ledger() + _scan_drafts():          # disk second => wins
+    for row in ledger + _scan_drafts(name, ledger_keys(ledger)):  # disk second => wins
         key = row["listing_id"] or row["sku"] or row["path"]
         if not key:
             continue
@@ -266,7 +332,16 @@ def report_pipeline(rows: list[dict]) -> str:
 # --------------------------------------------------------------------------- #
 # PERFORMANCE — what it actually made (reads sales_ledger.csv)
 # --------------------------------------------------------------------------- #
+# The DEFAULT store's sales ledger — a module attribute for the same reason
+# as LEDGER (tools/dashboard.py's --out guard and its test read it). Look a
+# store's up with `sales_path(store)`.
 SALES = REPO / "sales_ledger.csv"
+_LEDGER_AT_IMPORT, _SALES_AT_IMPORT = LEDGER, SALES
+
+
+def sales_path(store: Optional[str] = None) -> Path:
+    """`store`'s sales ledger, resolved now (#156)."""
+    return _patched_or(SALES, _SALES_AT_IMPORT, store, "sales_ledger")
 
 # Bands are for reading the market, not for accounting: eBay's fee is
 # effectively regressive (a flat per-order component weighs far more on a $15
@@ -302,15 +377,18 @@ def categorize(title: str) -> str:
     return "other"
 
 
-def load_sales(days: Optional[int] = None) -> list[dict]:
-    if not SALES.exists():
+def load_sales(days: Optional[int] = None, store: Optional[str] = None) -> list[dict]:
+    """`store`'s sold line items — never another store's (#156) — optionally
+    limited to the last `days` Pacific days."""
+    path = sales_path(store)
+    if not path.exists():
         return []
     # "Today" for a --days window is Pacific's today (#122), matching the
     # Pacific calendar day sold_at is now bucketed into — a host running in a
     # different zone must not shift which sales fall inside the window.
     cutoff = (datetime.now(REPORTING_TZ).date() - timedelta(days=days)) if days else None
     out = []
-    with SALES.open(encoding="utf-8", newline="") as fh:
+    with path.open(encoding="utf-8", newline="") as fh:
         for r in csv.DictReader(fh):
             try:
                 sold = date.fromisoformat(r.get("sold_at", ""))
@@ -489,7 +567,21 @@ def _cli() -> None:
                     help="Restrict --performance to one category (see BY CATEGORY).")
     ap.add_argument("-v", "--verbose", action="store_true",
                     help="Show listing URLs and shoot paths.")
+    stores.add_store_args(ap, all_stores=True)
     args = ap.parse_args()
+    # --all-stores is one report PER store, never a merged one: two stores
+    # are two accounts and two 1099-Ks (#156 §3).
+    for i, store in enumerate(stores.stores_from_args(args)):
+        if i:
+            print()
+        _report_one(args, store)
+
+
+def _report_one(args, store: str) -> None:
+    """One store's report. A named store gets a `[name]` header line and
+    label; the default store prints exactly what it always did."""
+    if not stores.is_default(store):
+        print(f"{stores.store_label(store)} store: {store}")
 
     today = datetime.now(REPORTING_TZ).date()
     if args.yesterday:
@@ -503,18 +595,19 @@ def _cli() -> None:
     else:
         start = end = today
 
-    rows = collect()
+    rows = collect(store)
 
     if args.performance:
         # A performance window is "sales in the last N days", not "listed on
         # date X" — an item listed in June and sold in August belongs in
         # August's numbers.
         days = args.days if args.days else None
-        sales = load_sales(days)
+        sales = load_sales(days, store)
         if args.category:
             sales = [s for s in sales if s["_cat"] == args.category]
         label = (f" · last {days} days" if days else " · all time") + \
-                (f" · {args.category}" if args.category else "")
+                (f" · {args.category}" if args.category else "") + \
+                ("" if stores.is_default(store) else f" · {stores.store_label(store)}")
         print(report_performance(sales, rows, label=label))
         return
 

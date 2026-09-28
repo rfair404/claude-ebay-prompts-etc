@@ -56,3 +56,24 @@ def test_pick_list_sibling_imports_resolve_under_dispatch():
     r = subprocess.run([sys.executable, "-c", code], cwd=ROOT.parent,
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
+
+
+def test_every_store_aware_command_accepts_store():
+    # `ebz --store X cmd` forwards a literal `--store X` (GH #156). A command
+    # listed as store-aware whose parser lacks the flag would die on argparse
+    # — or worse, a hand-rolled argv parser would ignore it and run against
+    # the default store. `--help` is the cheap, side-effect-free probe.
+    from lib.cli import STORE_AWARE
+    for name in sorted(STORE_AWARE):
+        r = subprocess.run([sys.executable, "-m", "lib.cli", name, "--help"],
+                           cwd=ROOT, capture_output=True, text=True, timeout=120)
+        assert "--store" in (r.stdout + r.stderr), f"{name} has no --store"
+
+
+def test_store_neutral_commands_refuse_a_store():
+    from lib.cli import STORE_AWARE
+    neutral = sorted(set(COMMANDS) - STORE_AWARE)
+    assert neutral, "expected some store-neutral commands"
+    r = subprocess.run([sys.executable, "-m", "lib.cli", "--store", "x", neutral[0]],
+                       cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2 and "store-neutral" in r.stdout

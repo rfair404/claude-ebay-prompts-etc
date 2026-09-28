@@ -11,6 +11,10 @@ crop fix changes framing and can change frame COUNT, so a positional pairing
 would line up unrelated images and quietly misrepresent the change.
 
     python tools/media_review_card.py --shoots .media_shoots_final.txt
+
+Each shoot's BEFORE is read from the account its draft belongs to (the draft's
+`store:` field, #156) unless `--store` forces one account for all of them — a
+SKU asked of the wrong account 404s and the card shows no "before".
 """
 from __future__ import annotations
 import argparse, base64, io, json, re, sys, urllib.request
@@ -19,6 +23,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 from PIL import Image                                             # noqa: E402
+import stores                                                     # noqa: E402
 from ebay_client import load_credentials, get_user_access_token   # noqa: E402
 
 SKU = re.compile(r'ebay_inventory_sku:\s*"?([0-9a-fA-F]{6,})')
@@ -35,22 +40,33 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shoots", default=".media_shoots_final.txt")
     ap.add_argument("-o", "--out", default="media_crop_review.html")
+    stores.add_store_args(ap, help_extra="Default here: each draft's own store: field.")
     a = ap.parse_args()
 
-    tok = get_user_access_token(load_credentials())
+    toks: dict[str, str] = {}
+
+    def token_for(store: str) -> str:
+        if store not in toks:
+            toks[store] = get_user_access_token(load_credentials(store=store))
+        return toks[store]
+
     shoots = [l.strip() for l in Path(a.shoots).read_text(encoding="utf-8").splitlines() if l.strip()]
 
     cards = []
     for n, sh in enumerate(shoots, 1):
         d = REPO / sh
         dm = d / "draft.md"
-        sku = None
+        sku, store = None, stores.resolve_store_name(a.store) if a.store else "default"
         if dm.exists():
-            m = SKU.search(dm.read_text(encoding="utf-8", errors="replace"))
+            dt = dm.read_text(encoding="utf-8", errors="replace")
+            m = SKU.search(dt)
             sku = m.group(1) if m else None
+            if not a.store:
+                store = stores.draft_store_from_text(dt)
         title, live_imgs, lid = sh, [], None
         if sku:
             try:
+                tok = token_for(store)
                 req = urllib.request.Request(
                     f"https://api.ebay.com/sell/inventory/v1/inventory_item/{sku}",
                     headers={"Authorization": f"Bearer {tok}", "Accept": "application/json"})

@@ -6,7 +6,7 @@ paper trimmer lands on the cut lines. Mirrors the off-register design
 (black type with a red plate struck a hair out of alignment) on bare white,
 which is what the color laser wants: two inks, no flood coverage.
 
-  python make_cards.py --store ebay.com/usr/popsgames
+  python make_cards.py --storefront-url ebay.com/usr/popsgames
 """
 import argparse
 import os
@@ -153,10 +153,15 @@ def single(path, name, tag, store):
 
 
 def main():
-    p = argparse.ArgumentParser(description=__doc__)
+    # allow_abbrev=False: otherwise argparse would still accept `--store X` as
+    # an abbreviation of --storefront-url, and `--store` would keep meaning two
+    # things repo-wide — the collision #156 §6 renamed this flag to remove.
+    # Repo-wide, `--store` is the seller account (lib/stores.py).
+    p = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     p.add_argument("--name", default="POP'S GAMES")
     p.add_argument("--tag", default="BUY \u00b7 SELL \u00b7 TRADE")
-    p.add_argument("--store", default="ebay.com/usr/popsgames")
+    p.add_argument("--storefront-url", default="ebay.com/usr/popsgames",
+                   help="storefront URL printed on the card (was --store before #156)")
     p.add_argument("--outdir", default=os.path.dirname(os.path.abspath(__file__)))
     args = p.parse_args()
 
@@ -164,11 +169,11 @@ def main():
     out = args.outdir
     made = [
         sheet(os.path.join(out, "thankyou-offregister-20up.pdf"),
-              args.name, args.tag, args.store, "crop"),
+              args.name, args.tag, args.storefront_url, "crop"),
         sheet(os.path.join(out, "thankyou-offregister-20up-noguides.pdf"),
-              args.name, args.tag, args.store, "none"),
+              args.name, args.tag, args.storefront_url, "none"),
         single(os.path.join(out, "thankyou-offregister-card.pdf"),
-               args.name, args.tag, args.store),
+               args.name, args.tag, args.storefront_url),
     ]
     for f in made:
         print(os.path.basename(f), os.path.getsize(f), "bytes")

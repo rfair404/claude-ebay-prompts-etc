@@ -29,6 +29,13 @@ and the store behind them, live in lib/pick_store.py. Localhost-only is
 what currently keeps this honest — the link is clickable from this
 machine's browser and nowhere else.
 
+Stores (#156 §5). `GET /` covers every configured store — one drift panel
+per store, each against its own ledger, never pooled — and `GET /?store=NAME`
+narrows it to one (a malformed name is a 400, an unconfigured one a 404).
+`/review/{shoot}` shows which store the draft will publish to, because since
+#150 that is a property the reviewer is approving. `/api/jobs` stays
+store-free: every whitelisted job is local and eBay-free (webapp/jobs.py).
+
     python -m lib.cli serve                 # -> http://127.0.0.1:8770
     python -m lib.cli serve --port 8080
 """
@@ -49,6 +56,7 @@ from fastapi.responses import HTMLResponse          # noqa: E402
 from pydantic import BaseModel                       # noqa: E402
 
 import pick_store as _pick_store                     # noqa: E402
+import stores as _stores                             # noqa: E402
 import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
 from webapp.jobs import JOB_HANDLERS, _resolve_shoot_dir  # noqa: E402
@@ -97,6 +105,8 @@ def set_queue(queue: Optional[JobQueue]) -> None:
 
 
 class EnqueueRequest(BaseModel):
+    # Deliberately store-free (#156): no job handler touches eBay. The day
+    # one does, it names its store in `params` — see webapp/jobs.py.
     type: str
     params: dict = {}
 
@@ -111,8 +121,23 @@ def _job_dict(job: Job) -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard() -> str:
-    return _dashboard.draw(_dashboard.gather())
+def dashboard(store: Optional[str] = None) -> str:
+    """The dashboard, live. No `store`: every configured store, a drift panel
+    each. `?store=NAME`: that store's drift and drafts only. The name is
+    validated before it goes anywhere near a filename (stores.paths builds
+    `listings_ledger-<store>.csv` from it)."""
+    if store is None:
+        return _dashboard.draw(_dashboard.gather())
+    try:
+        _stores.validate_store_name(store)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    known = _dashboard._store_names()
+    if store not in known:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no store {store!r} configured (known: {', '.join(known)})")
+    return _dashboard.draw(_dashboard.gather([store], only_store=store))
 
 
 @app.get("/review/{shoot}", response_class=HTMLResponse)

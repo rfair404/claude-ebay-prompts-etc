@@ -347,11 +347,37 @@ def get_ebay_credentials() -> dict:
     }
 
 
-def get_profile(name: Optional[str] = None) -> dict:
+def get_store(name: Optional[str] = None) -> dict:
+    """Return a store's customer-facing branding strings.
+
+    A flat, all-strings view of get_storefront(name) for printed output (the
+    pick-list letterhead, thank-you cards): every key defaults to "" so a
+    caller can `or` it with its own fallback. Identity keys follow
+    get_storefront()'s rule — a named store that omits display_name gets "",
+    never the default store's name.
+
+    Args:
+        name: store to read (GH #156). None resolves the active store the same
+            way load_credentials() does (lib/stores.resolve_store_name).
+
+    Returns:
+        Dict with keys: display_name, tagline, storefront_url, closing_block.
+    """
+    section = get_storefront(name)
+    return {
+        "display_name":   section.get("display_name") or "",
+        "tagline":        section.get("tagline") or "",
+        "storefront_url": section.get("storefront_url") or "",
+        "closing_block":  section.get("closing_block") or "",
+    }
+
+
+def get_profile(name: Optional[str] = None, store: Optional[str] = None) -> dict:
     """Return a CURATE strategy profile by name.
 
-    If name is None, uses the `active_profile` value from the config
-    (or "default" if not set). Returns built-in DEFAULT_PROFILE if the
+    If name is None, uses the store's own `profile:` (storefronts.<name>.profile,
+    GH #156 — a junk store's buy math is not the main store's), then the
+    `active_profile` value from the config (or "default" if not set). Returns built-in DEFAULT_PROFILE if the
     config file doesn't exist or the requested profile isn't found in
     a config file but the name is "default".
 
@@ -369,7 +395,7 @@ def get_profile(name: Optional[str] = None) -> dict:
     config = load_config()
 
     if name is None:
-        name = _nested(config, "active_profile") or "default"
+        name = _store_profile_name(store) or _nested(config, "active_profile") or "default"
 
     profile = _nested(config, "profiles", name)
 
@@ -395,6 +421,25 @@ def get_profile(name: Optional[str] = None) -> dict:
     return merged
 
 
+def _store_profile_name(store: Optional[str]) -> Optional[str]:
+    """`storefronts.<store>.profile` for the resolved store, or None.
+
+    Never raises: get_profile() is called from store-blind code, and an
+    unconfigured $EBAYBIZ_STORE must not break buy-point math — it just
+    falls back to active_profile.
+    """
+    try:
+        from stores import resolve_store_name  # local: stores imports config
+        resolved = resolve_store_name(store)
+    except ValueError:
+        return None
+    if resolved == "default":
+        v = _nested(load_config(), "store", "profile")
+    else:
+        v = _nested(load_config(), "storefronts", resolved, "profile")
+    return str(v) if v else None
+
+
 # ---------------------------------------------------------------------------
 # Storefronts (GH #147) — the BUSINESS behind a seller account
 # ---------------------------------------------------------------------------
@@ -413,10 +458,8 @@ def get_profile(name: Optional[str] = None) -> dict:
 # store's IDENTITY is the bug this whole mechanism exists to fix — a junk
 # listing that omits display_name must ship the unnamed thank-you, never
 # sign off as the main storefront. Policy keys inherit; these do not.
-# tagline and storefront_url are identity too: they print on the pick sheet
-# letterhead, and a junk box carrying "ebay.com/usr/popsgames" names the
-# wrong shop just as surely as the wrong display_name would.
-STOREFRONT_IDENTITY_KEYS = ("display_name", "tagline", "storefront_url", "closing_block")
+STOREFRONT_IDENTITY_KEYS = ("display_name", "closing_block", "tagline",
+                            "storefront_url", "seller_username")
 
 
 def list_storefronts() -> list[str]:
@@ -430,15 +473,11 @@ def list_storefronts() -> list[str]:
 
 
 def active_store() -> str:
-    """Name of the store this process acts for when none is passed explicitly:
-    EBAYBIZ_STORE env var > ebay.active_store in config > "default". Same
-    precedence as ebay_client.load_credentials(), so the account an API call
-    goes to and the storefront a page is branded as can't disagree."""
-    return (
-        os.environ.get("EBAYBIZ_STORE")
-        or _nested(load_config(), "ebay", "active_store")
-        or "default"
-    )
+    """Name of the store this process acts for when none is passed explicitly
+    (#178). Kept as a name for callers; the precedence rule itself lives once,
+    in lib/stores.resolve_store_name (#156), shared with load_credentials()."""
+    from stores import resolve_store_name  # local: stores imports config
+    return resolve_store_name()
 
 
 def get_storefront(name: Optional[str] = None) -> dict:
@@ -463,8 +502,8 @@ def get_storefront(name: Optional[str] = None) -> dict:
     """
     config = load_config()
 
-    if name is None:
-        name = active_store()
+    from stores import resolve_store_name  # local: stores imports config
+    name = resolve_store_name(name)
 
     base = dict(_nested(config, "store") or {})
 

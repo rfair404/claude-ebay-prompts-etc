@@ -44,15 +44,26 @@ def fixture_repo(tmp_path, monkeypatch):
     reports = tmp_path / "reports"
     reports.mkdir()
     monkeypatch.setattr(sr, "REPO", tmp_path)
-    monkeypatch.setattr(sr, "REPORTS", reports)
-    monkeypatch.setattr(sr, "ADS_JSON", reports / "ebay_ads.json")
-    monkeypatch.setattr(sr, "FINANCES_STATUS_JSON", reports / "finances_sync_status.json")
+    # Every per-store file (sales ledger, live sheet, ads JSON, finances
+    # status, dashboard) resolves through stores.paths() at call time (#156).
+    _isolate(monkeypatch, tmp_path)
     # gather() -> band_stats() -> price_vs_actual.gather(), a sibling tool
-    # with its own REPO-derived sales_ledger.csv path; not #119's concern,
-    # but it must not blow up gather() in an empty tmp_path.
+    # that reads price.txt under its own REPO; not #119's concern, but it
+    # must not blow up gather() in an empty tmp_path.
     import price_vs_actual as pva
     monkeypatch.setattr(pva, "REPO", tmp_path)
     return tmp_path
+
+
+THREE_STORES = {"ebay": {"stores": {"junk": {}, "outlet": {}}}}
+
+
+def _isolate(monkeypatch, root, cfg=None):
+    import stores
+    monkeypatch.setattr(stores, "REPO", root)
+    monkeypatch.setattr(stores, "load_config", lambda: cfg or {})
+    for var in ("EBAYBIZ_STORE", "EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _write_sales(tmp_path, rows):
@@ -118,7 +129,7 @@ def test_partial_finances_coverage_keeps_qualifier_and_says_how_many(fixture_rep
 
 def test_finances_status_reason_surfaces_in_the_qualifier(fixture_repo):
     _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])
-    sr.FINANCES_STATUS_JSON.write_text(json.dumps({
+    (fixture_repo / "reports" / "finances_sync_status.json").write_text(json.dumps({
         "ok": False,
         "reason": "sell.finances not yet re-consented",
         "other_fee_labels": {},
@@ -164,7 +175,7 @@ def test_ad_fee_only_coverage_not_gated_on_postage(fixture_repo):
 # --------------------------------------------------------------------------
 def test_draw_escapes_the_qualifier_reason_in_the_promoted_panel_note(fixture_repo):
     _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])  # no #119 coverage
-    sr.FINANCES_STATUS_JSON.write_text(json.dumps({
+    (fixture_repo / "reports" / "finances_sync_status.json").write_text(json.dumps({
         "ok": False,
         "reason": '<script>alert(1)</script> & "quoted"',
         "other_fee_labels": {},
@@ -178,7 +189,7 @@ def test_draw_escapes_the_qualifier_reason_in_the_promoted_panel_note(fixture_re
 
 def test_draw_escapes_the_qualifier_in_the_headline_net_stat_too(fixture_repo):
     _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])
-    sr.FINANCES_STATUS_JSON.write_text(json.dumps({
+    (fixture_repo / "reports" / "finances_sync_status.json").write_text(json.dumps({
         "ok": False,
         "reason": "<b>unsafe</b>",
         "other_fee_labels": {},
@@ -201,3 +212,78 @@ def test_ad_fee_attribution_does_not_look_at_ad_campaign_flag(fixture_repo):
     row = d["sales"][0]
     assert row["ad"] is None            # no ad-campaign match at all
     assert row["ad_fee"] == pytest.approx(4.00)   # ad fee still known and counted
+
+
+# --------------------------------------------------------------------------
+# #156 — one dashboard per store; the default store's page is unchanged.
+# --------------------------------------------------------------------------
+def _write_store_sales(root, store, rows):
+    name = "sales_ledger.csv" if store == "default" else f"sales_ledger-{store}.csv"
+    with (root / name).open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+
+
+def test_default_store_dashboard_keeps_its_name_and_header(fixture_repo):
+    _write_sales(fixture_repo, [_sale("1", gross=100, fee=13, net=87)])
+    assert sr.main(["--no-sync"]) == 0
+    page = (fixture_repo / "reports" / "sales_dashboard.html").read_text(encoding="utf-8")
+    assert "<title>Sales Dashboard</title>" in page
+    assert '<p class="eyebrow">ebaybiz · sales</p>' in page
+
+
+def test_a_named_store_dashboard_reads_only_its_own_ledger(fixture_repo, monkeypatch):
+    _isolate(monkeypatch, fixture_repo, THREE_STORES)
+    _write_store_sales(fixture_repo, "default", [_sale("1", gross=100, fee=13, net=87)])
+    _write_store_sales(fixture_repo, "junk", [_sale("2", gross=9, fee=1, net=8)])
+    d = sr.gather(365, "junk")
+    assert d["count"] == 1 and d["gross"] == pytest.approx(9.0)
+    assert d["store"] == "junk"
+    page = sr.draw(d)
+    assert "<title>Sales Dashboard [junk]</title>" in page and "junk store" in page
+
+
+def test_all_stores_draws_one_dashboard_per_store_three_stores(fixture_repo, monkeypatch):
+    _isolate(monkeypatch, fixture_repo, THREE_STORES)
+    for i, store in enumerate(("default", "junk", "outlet"), start=1):
+        _write_store_sales(fixture_repo, store, [_sale(str(i), gross=10 * i, fee=1, net=9)] * i)
+    assert sr.main(["--no-sync", "--all-stores"]) == 0
+    reports = fixture_repo / "reports"
+    for i, (store, fname) in enumerate((("default", "sales_dashboard.html"),
+                                        ("junk", "sales_dashboard-junk.html"),
+                                        ("outlet", "sales_dashboard-outlet.html")), start=1):
+        page = (reports / fname).read_text(encoding="utf-8")
+        assert f"{i} sold line items" in page, store     # its own sales, never pooled
+
+
+def test_sync_fetches_every_input_from_the_named_store(fixture_repo, monkeypatch):
+    calls, pulled = [], []
+    monkeypatch.setattr(sr, "_run", lambda label, args: calls.append(args) or True)
+    monkeypatch.setattr(sr, "pull_ads", lambda store=None: pulled.append(store) or
+                        {"campaigns": [], "ads": []})
+    sr.sync(365, "outlet")
+    assert calls[0] == ["lib/sync_actuals.py", "--days", "365", "--apply", "--store", "outlet"]
+    assert calls[1] == ["tools/ebay_sheet.py", "--csv", "inventory_sheet-outlet.csv",
+                        "--json", "inventory_sheet-outlet.json", "--store", "outlet"]
+    assert pulled == ["outlet"]
+
+    calls.clear()
+    sr.sync(365, "default")
+    # the default store keeps the historic file names
+    assert calls[1] == ["tools/ebay_sheet.py", "--csv", "inventory_sheet.csv",
+                        "--json", "inventory_sheet.json", "--store", "default"]
+
+
+def test_price_vs_actual_reads_one_stores_sales(fixture_repo, monkeypatch):
+    import price_vs_actual as pva
+    _isolate(monkeypatch, fixture_repo, THREE_STORES)
+    shoot = fixture_repo / "inventory" / "lot-1"
+    shoot.mkdir(parents=True)
+    (shoot / "price.txt").write_text("Conservative: $10\nRecommended: $20\nPush-high: $30\n",
+                                     encoding="utf-8")
+    row = {**_sale("9", gross=25, fee=3, net=22), "shoot_dir": "inventory/lot-1"}
+    _write_store_sales(fixture_repo, "junk", [row])
+    assert [r["sold"] for r in pva.gather("junk")] == [25.0]
+    assert pva.gather("default") == []            # no default ledger: nothing, no crash
+    assert pva.gather("outlet") == []

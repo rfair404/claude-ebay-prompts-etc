@@ -29,6 +29,13 @@ eBay -> disk.
 
 Backups go to `<shoot>/.history/draft-<timestamp>.md`, and every rewritten
 draft gets `meta.notes` stamped with what changed and when.
+
+One store per run (#156 §4): `--store` picks the Sell API account, the seller
+username the Browse half searches (storefront `seller_username`), the ledger
+(stores.paths), and which drafts are in scope (a draft's own `store:` field,
+stores.draft_store). All four come from the same store, so the two live halves
+can no longer silently audit different accounts and `--apply` only ever rewrites
+that store's drafts and ledger.
 """
 from __future__ import annotations
 
@@ -46,8 +53,18 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "lib"))
 
+import stores  # noqa: E402
+
 INVENTORY = REPO / "inventory"
-LEDGER = REPO / "listings_ledger.csv"
+# The ledger is per store — stores.paths(store).listings_ledger, resolved at
+# call time — so there is no module-level LEDGER any more (#156).
+
+# The pre-#156 hard-coded `--seller` default. Kept ONLY as the default store's
+# fallback when its storefront has no `seller_username`, so an existing
+# single-store config audits exactly what it always did. A named store never
+# falls back to it — that would search the main store's listings with the
+# named store's credentials, the very mismatch #156 §4 describes.
+LEGACY_DEFAULT_SELLER = "popsgames"
 
 # Top-level categories to sweep for our own active listings. Browse rejects a
 # bare seller filter and takes one category per call, so "the whole store" is a
@@ -80,10 +97,33 @@ def _stamp() -> str:
 # --------------------------------------------------------------------------
 # live
 # --------------------------------------------------------------------------
-def fetch_offers(verbose=True) -> list[dict]:
-    import list_edit as L
+def seller_for_store(store: str) -> str:
+    """The eBay username whose actives the Browse half searches, for `store`.
 
-    offers = L.list_account_offers()
+    storefront `seller_username` first. The default store falls back to the
+    legacy literal (see LEGACY_DEFAULT_SELLER); a named store without one is an
+    error, not a guess (#156 §4).
+    """
+    from config import get_storefront, ConfigError
+    try:
+        v = (get_storefront(store) or {}).get("seller_username")
+    except ConfigError:
+        v = None
+    if v:
+        return str(v)
+    if stores.is_default(store):
+        return LEGACY_DEFAULT_SELLER
+    raise SystemExit(
+        f"[X] store {store!r} has no storefronts.{store}.seller_username — the "
+        f"Browse half needs the store's own eBay username (or pass --seller / "
+        f"--actives). Refusing to fall back to the main store's seller (#156).")
+
+
+def fetch_offers(verbose=True, store: str | None = None) -> list[dict]:
+    import list_edit as L
+    from ebay_client import load_credentials
+
+    offers = L.list_account_offers(creds=load_credentials(store=store))
     if verbose:
         print(f"  Sell API: {len(offers)} offers")
     return offers
@@ -112,7 +152,18 @@ def fetch_actives(seller: str, verbose=True) -> dict[str, dict]:
 # --------------------------------------------------------------------------
 # local
 # --------------------------------------------------------------------------
-def scan_drafts() -> list[dict]:
+def scan_drafts(store: str | None = None,
+                ledger: list[dict] | None = None) -> list[dict]:
+    """Every local draft; with `store`, only the drafts that belong to it.
+
+    Belonging is stores.draft_belongs_to_store — the draft's own
+    `store:` field (blank = default, never the ambient store) OR its SKU /
+    listing id in that store's own ledger (`ledger`) — the same rule the
+    sales matcher uses, so an audit of one account can neither match nor
+    rewrite a draft that lives only on another (#156).
+    """
+    keys = stores.ledger_keys(ledger or []) if store is not None else set()
+    want = stores.resolve_store_name(store) if store is not None else None
     out = []
     # Recurse: drafts sit at any depth (inventory/more-mags-444/j-crew/3/draft.md
     # is three levels down, and a two-level glob silently misses every one of
@@ -137,13 +188,23 @@ def scan_drafts() -> list[dict]:
             "sku": grab(r'ebay_inventory_sku:\s*"?([0-9a-zA-Z\-]{6,})"?'),
             "listing_id": grab(r'ebay_listing_id:\s*"?(\d+)"?'),
         })
+        if want is not None and not stores.draft_belongs_to_store(
+                {"store": stores.draft_store_from_text(t), "sku": out[-1]["sku"],
+                 "listing_id": out[-1]["listing_id"]}, want, keys):
+            out.pop()
     return out
 
 
-def load_ledger() -> list[dict]:
-    if not LEDGER.exists():
+def ledger_path(store: str | None = None) -> Path:
+    """`store`'s listings ledger (default store: listings_ledger.csv) — #156."""
+    return stores.paths(store).listings_ledger
+
+
+def load_ledger(store: str | None = None) -> list[dict]:
+    path = ledger_path(store)
+    if not path.exists():
         return []
-    with LEDGER.open(newline="", encoding="utf-8-sig") as f:
+    with path.open(newline="", encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
 
 
@@ -316,8 +377,9 @@ def apply_row(row: dict, verbose=True) -> list[str]:
     return changed
 
 
-def apply_ledger(rows: list[dict], verbose=True) -> int:
-    ledger = load_ledger()
+def apply_ledger(rows: list[dict], verbose=True, store: str | None = None) -> int:
+    path = ledger_path(store)
+    ledger = load_ledger(store)
     if not ledger:
         return 0
     by_sku = {r["sku"]: r for r in rows if r.get("sku")}
@@ -341,9 +403,9 @@ def apply_ledger(rows: list[dict], verbose=True) -> int:
             r["updated_at"] = _now()
             n += 1
     if n:
-        backup = LEDGER.with_suffix(f".backup-{_stamp()}.csv")
-        shutil.copyfile(LEDGER, backup)
-        with LEDGER.open("w", newline="", encoding="utf-8") as f:
+        backup = path.with_suffix(f".backup-{_stamp()}.csv")
+        shutil.copyfile(path, backup)
+        with path.open("w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(ledger[0]))
             w.writeheader()
             w.writerows(ledger)
@@ -352,22 +414,29 @@ def apply_ledger(rows: list[dict], verbose=True) -> int:
     return n
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--seller", default="popsgames")
+    ap.add_argument("--seller", default=None,
+                    help="eBay username the Browse half searches (default: the "
+                         "store's storefront seller_username; the default store "
+                         f"falls back to {LEGACY_DEFAULT_SELLER!r})")
     ap.add_argument("--apply", action="store_true", help="write the local updates")
     ap.add_argument("--json", default=None, help="dump the reconciliation rows")
     ap.add_argument("--offers", default=None, help="use a cached offers JSON instead of the API")
     ap.add_argument("--actives", default=None, help="use a cached Browse JSON instead of the API")
-    a = ap.parse_args()
+    stores.add_store_args(ap)
+    a = ap.parse_args(argv)
 
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
     print("live:")
     if a.offers:
         offers = json.loads(Path(a.offers).read_text(encoding="utf-8"))
         print(f"  Sell API: {len(offers)} offers (cached)")
     else:
-        offers = fetch_offers()
+        offers = fetch_offers(store=store)
     if a.actives:
         recs = json.loads(Path(a.actives).read_text(encoding="utf-8"))
         actives = {}
@@ -377,9 +446,12 @@ def main() -> int:
             actives[lid] = r
         print(f"  Browse:   {len(actives)} active listings (cached)")
     else:
-        actives = fetch_actives(a.seller)
+        seller = a.seller or seller_for_store(store)
+        print(f"  Browse seller: {seller}")
+        actives = fetch_actives(seller)
 
-    drafts, ledger = scan_drafts(), load_ledger()
+    ledger = load_ledger(store)
+    drafts = scan_drafts(store, ledger)
     print(f"local: {len(drafts)} drafts, {len(ledger)} ledger rows\n")
 
     rows = reconcile(offers, actives, drafts, ledger)
@@ -420,7 +492,7 @@ def main() -> int:
         print("\napplying (live wins):")
         n = sum(bool(apply_row(r)) for r in rows if r["state"] in ("LIVE", "GONE"))
         print(f"  drafts: {n} rewritten (backups in each <shoot>/.history/)")
-        apply_ledger(rows)
+        apply_ledger(rows, store=store)
     else:
         print("\n(report only — re-run with --apply to update the local files)")
     return 0

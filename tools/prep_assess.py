@@ -7,32 +7,64 @@ Answers two questions that must not be answered from the local ledger:
     back to listings_ledger.csv, so the ledger lies by omission)
   * have its photos been orientation-checked, rendered, and pushed?
 
-Writes nothing, anywhere. Every eBay call is a GET.
+Writes nothing but its own .prep_assess[-<store>].json. Every eBay call is a GET.
+
+    python tools/prep_assess.py [--all] [--store NAME]
+
+Per store (#156): one account, its own listings/sales ledgers (stores.paths),
+and only the drafts that belong to it (stores.draft_belongs_to_store) —
+so a SKU relisted on another store is neither double-counted nor checked
+against the wrong account.
 """
 from __future__ import annotations
-import csv, json, re, sys, time
+import argparse, csv, json, re, sys, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "lib"))
 import list_edit as L                                        # noqa: E402
+import stores                                                # noqa: E402
+
+
+def _read_csv(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
 
 
 def main() -> int:
     try: sys.stdout.reconfigure(encoding="utf-8")
     except Exception: pass
-    live_only = "--all" not in sys.argv
-    creds = L.load_credentials()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--all", action="store_true",
+                    help="every drafted SKU, not just those the ledger calls PUBLISHED")
+    stores.add_store_args(ap)
+    a = ap.parse_args()
+    live_only = not a.all
+    store = stores.resolve_store_name(a.store)
+    if not stores.is_default(store):
+        print(f"store: {store}")
+    creds = L.load_credentials(store=store)
+    sp = stores.paths(store)
 
-    led = {r["sku"]: r for r in csv.DictReader(open(ROOT / "listings_ledger.csv", encoding="utf-8"))}
-    sold = {r["sku"] for r in csv.DictReader(open(ROOT / "sales_ledger.csv", encoding="utf-8")) if r.get("sku")}
+    led_rows = _read_csv(sp.listings_ledger)
+    led = {r["sku"]: r for r in led_rows}
+    sold = {r["sku"] for r in _read_csv(sp.sales_ledger) if r.get("sku")}
+    keys = stores.ledger_keys(led_rows)
+    out_path = stores.store_file(".prep_assess.json", store)
 
     rows = []
     for d in sorted(ROOT.joinpath("inventory").rglob("draft.md")):
         s = d.parent
-        m = re.search(r'ebay_inventory_sku:\s*"?([0-9a-f]{8})"?', d.read_text(encoding="utf-8", errors="ignore"))
+        t = d.read_text(encoding="utf-8", errors="ignore")
+        m = re.search(r'ebay_inventory_sku:\s*"?([0-9a-f]{8})"?', t)
         if not m: continue
         sku = m.group(1); r = led.get(sku, {})
+        if not stores.draft_belongs_to_store({"store": stores.draft_store_from_text(t), "sku": sku},
+                                        store, keys):
+            continue
         if live_only and r.get("status") not in ("PUBLISHED",): continue
         mf = s / ".prep" / "prep.json"
         pm = json.loads(mf.read_text(encoding="utf-8")) if mf.exists() else {}
@@ -59,7 +91,7 @@ def main() -> int:
             print(f"   ...{i}/{len(rows)}"); sys.stdout.flush()
         time.sleep(0.05)
 
-    json.dump(rows, open(ROOT / ".prep_assess.json", "w"), indent=1)
+    json.dump(rows, open(out_path, "w"), indent=1)
 
     sell   = [r for r in rows if r["sellable"] is True]
     nosell = [r for r in rows if r["sellable"] is False]
@@ -94,7 +126,7 @@ def main() -> int:
     for r in norend:  print(f"     {r['shoot']:46} {r['title'][:34]}")
     print(f"  rendered but NOT pushed        : {len(nopush)}")
     for r in nopush:  print(f"     {r['shoot']:46} {r['title'][:34]}")
-    print(f"\nwrote .prep_assess.json")
+    print(f"\nwrote {out_path.name}")
     return 0
 
 

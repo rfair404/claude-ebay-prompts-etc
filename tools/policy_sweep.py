@@ -8,14 +8,20 @@ policy (and optionally the handling-time-failing fulfillment policy) to the
 configured default, republishing PUBLISHED offers so the change goes live.
 
 See docs/top-rated-plus.md.
+
+Per store (#156): the survey cache is stores.paths(store).offer_policy_survey
+(default store: .offer_policy_survey.json; named: .offer_policy_survey-<store>.json),
+and every call — including the republish — carries the named store's creds.
 """
 import argparse, json, sys, collections, time
-sys.path.insert(0, "lib")
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 
 from ebay_client import (iter_inventory_items, get_offers_for_sku, api_send,
                          load_credentials, get_return_policies, EbayAPIError)
 from config import get_storefront, ConfigError
 import list_edit as le
+import stores
 
 # Offer fields eBay accepts back on an updateOffer PUT. Anything else in the
 # GET payload (listing, status, ...) is read-only and 400s if echoed.
@@ -72,8 +78,10 @@ def repair(row, want_return, dry=True, creds=None):
         # Transient 400s on republish are a known eBay flake — retry once.
         for attempt in range(2):
             try:
+                # creds=creds: without it the republish fell back to
+                # load_credentials() — the AMBIENT store, not --store (#156).
                 api_send("POST", f"/sell/inventory/v1/offer/{oid}/publish", body={},
-                         marketplace=None)
+                         marketplace=None, creds=creds)
                 break
             except EbayAPIError:
                 if attempt:
@@ -151,10 +159,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true",
                     help="actually rewrite offers (default is a dry report)")
-    ap.add_argument("--store", metavar="NAME",
-                    help="which eBay seller account to sweep. REQUIRED with "
-                         "--apply: this rewrites and republishes every live "
-                         "offer, so the target is named, never inferred.")
+    stores.add_store_args(
+        ap, help_extra="REQUIRED with --apply: this rewrites and republishes "
+                       "every live offer, so the target is named, never inferred.")
     ap.add_argument("--cache", default=None,
                     help="survey cache (default: per-store, so one account's "
                          "survey is never replayed against another)")
@@ -167,7 +174,10 @@ def main():
     creds = load_credentials(store=args.store)
     _guard(args, creds)
     if not args.cache:
-        args.cache = f".offer_policy_survey-{creds.store}.json"
+        # One table for per-store files (#156). Named stores keep the
+        # .offer_policy_survey-<store>.json name this tool already used; the
+        # default store moves from -default.json to the historic bare name.
+        args.cache = str(stores.paths(creds.store).offer_policy_survey)
 
     policies, _ = le._resolve_policies_and_location(creds)
     want = policies["return"]

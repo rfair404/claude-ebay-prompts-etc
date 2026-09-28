@@ -11,6 +11,8 @@ in the house UI, following the `tools/sales_report.py` -> dashboard pattern:
 
     python -m lib.cli report --by-source              # terminal table
     python -m lib.cli report --by-source --html       # reports/source_report.html
+    python -m lib.cli --store junk report --by-source # one named store (#156)
+    python -m lib.cli report --by-source --all-stores # every store, ONE table, split
 
 WHAT A "BUCKET" IS
 
@@ -55,6 +57,27 @@ actually kept, by postage AND by the whole ad bill — on one measured month the
 latter ran ~8% of item sales, about half the size of the final value fee. The
 page says so plainly rather than printing a number that quietly isn't a
 profit.
+
+STORE IS AN ORTHOGONAL AXIS (#156 §3)
+
+A bucket is an ACQUISITION; a store is a SELLER ACCOUNT. #147's workflow
+sells one estate's items on both (the unsold remainder moves to the junk
+store), so the two axes cross, and each way of collapsing one is wrong:
+
+  * one store's revenue against the bucket's WHOLE spend understates ROI —
+    the cost is charged in full against part of the proceeds;
+  * a merged ledger overstates nothing but can't be reconciled to either
+    account's 1099-K, and hides which store made the money.
+
+So: `--store NAME` (and `ebz --all-stores report`, one run per store) reports
+one store's sales, and a bucket that ALSO sold on another store is marked
+`split` — its cost, profit and ROI are withheld there (never a
+full-cost-against-partial-revenue number) and excluded from the cost totals.
+`--all-stores` given to this tool itself is the one place ROI across stores
+is computed: every store's sales in ONE table, the cost basis counted once
+per bucket, and each bucket's per-store split printed beside it — pooled,
+but never silently. The default store alone, with no other store configured,
+reads exactly as it always did.
 """
 from __future__ import annotations
 
@@ -69,12 +92,17 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))       # sibling lib/ modules
 import report as _report                                        # noqa: E402  lib/report.py
+import stores                                                   # noqa: E402  store model (#156)
 
 REPO = Path(__file__).resolve().parent.parent
 INVENTORY = REPO / "inventory"
-SALES_LEDGER = REPO / "sales_ledger.csv"
 REPORTS = REPO / "reports"
+# The default store's page; a named store's is stores.store_file() of it and
+# the combined --all-stores page is `source_report-all-stores.html` (#156).
+# (The per-store SALES ledger is no longer a module constant — see
+# `_sales_path()`.)
 OUT_HTML = REPORTS / "source_report.html"
+ALL_STORES_TAG = "all-stores"
 
 # Directories that exist only as a copy of something already counted elsewhere
 # — a pre-touch backup or a prior run's leftovers, never a source of new items.
@@ -286,26 +314,43 @@ def sell_through(sold_n: int, live_n: int) -> Optional[float]:
 # gather — read-only over sales_ledger.csv + local drafts/ledger
 # --------------------------------------------------------------------------- #
 
-def _sales_rows() -> list[dict]:
-    if not SALES_LEDGER.exists():
+def _sales_path(store: Optional[str] = None) -> Path:
+    """`store`'s sales ledger — lib/report.py's resolver, so the two reports
+    can never read different files for the same store (#156)."""
+    return _report.sales_path(store)
+
+
+def _sales_rows(store: Optional[str] = None) -> list[dict]:
+    path = _sales_path(store)
+    if not path.exists():
         return []
-    with SALES_LEDGER.open(newline="", encoding="utf-8-sig") as fh:
+    with path.open(newline="", encoding="utf-8-sig") as fh:
         return list(csv.DictReader(fh))
 
 
-def _ledger_has_finance_columns() -> bool:
-    """Whether sales_ledger.csv's header carries the #119 ad_fee/actual_postage
+def _ledger_has_finance_columns(store: Optional[str] = None) -> bool:
+    """Whether `store`'s sales ledger header carries the #119 ad_fee/actual_postage
     columns at all — distinct from `fin_covered_n == 0`, which is also true
     for a ledger that HAS the columns but hasn't been matched for any row
     yet (see `_fin_note`: those are different situations to explain)."""
-    if not SALES_LEDGER.exists():
+    path = _sales_path(store)
+    if not path.exists():
         return False
-    with SALES_LEDGER.open(newline="", encoding="utf-8-sig") as fh:
+    with path.open(newline="", encoding="utf-8-sig") as fh:
         header = next(csv.reader(fh), [])
     return "ad_fee" in header and "actual_postage" in header
 
 
-def _collect_listings() -> list[dict]:
+def _other_stores(store: str) -> list[str]:
+    """Every configured store but `store`. Config trouble is not this read-only
+    report's to raise — it just can't see the others then."""
+    try:
+        return [s for s in stores.configured_stores() if s != store]
+    except Exception:                                            # noqa: BLE001
+        return []
+
+
+def _collect_listings(store: Optional[str] = None) -> list[dict]:
     """Local drafts + listings_ledger.csv, merged (disk wins) — see lib/report.py.
 
     Best-effort for LIVE/ask/pending: a CHOICE group listing (`draft_group.md`)
@@ -318,7 +363,7 @@ def _collect_listings() -> list[dict]:
     for comparing buckets against each other, not as a replacement for it.
     """
     try:
-        return _report.collect()
+        return _report.collect(store)
     except Exception:                                            # noqa: BLE001
         return []
 
@@ -331,10 +376,28 @@ def _new_bucket(bucket_dir: Path) -> dict:
         "acquired": ctx["acquired"],
         "sold_n": 0, "gross": 0.0, "fee": 0.0, "net": 0.0,
         "ask_total": 0.0, "live_n": 0, "pending_n": 0,
+        # #156: {store: {"sold_n", "gross", "net"}} — who sold this bucket's
+        # items, and `split`: other stores that ALSO sold from it, outside
+        # this view (single-store view only).
+        "by_store": {}, "split": [],
     }
 
 
-def gather() -> dict:
+def _bucket_of_sale(r: dict) -> Optional[Path]:
+    """The bucket a sales row lands in, or None (unattributed or backup)."""
+    shoot = _norm(r.get("shoot_dir") or "")
+    if not shoot or _is_backup_path(shoot):
+        return None
+    return bucket_for(REPO / shoot)
+
+
+def gather(store: Optional[str] = None, *, all_stores: Optional[list[str]] = None) -> dict:
+    """Bucket ROI for ONE store (`store`, default: the active one), or — with
+    `all_stores=[...]` — every listed store in one table with the cost basis
+    counted once per bucket and a per-store split on each (#156; see the
+    module docstring's "STORE IS AN ORTHOGONAL AXIS")."""
+    names = list(all_stores) if all_stores else [stores.resolve_store_name(store)]
+    combined = bool(all_stores)
     buckets: dict[Path, dict] = {}
     unattributed = {"key": "— unattributed (no matching folder) —",
                      "sold_n": 0, "gross": 0.0, "fee": 0.0, "net": 0.0}
@@ -346,7 +409,7 @@ def gather() -> dict:
             buckets[bdir] = b
         return b
 
-    sales = _sales_rows()
+    sales = [dict(r, _store=n) for n in names for r in _sales_rows(n)]
     sold_listing_ids = {r.get("listing_id") for r in sales if r.get("listing_id")}
 
     # #119 (route B, sell.finances): how much of this report's sold rows carry
@@ -358,7 +421,7 @@ def gather() -> dict:
     def _known(v) -> bool:
         return bool((v or "").strip())
 
-    fin_columns_present = _ledger_has_finance_columns()
+    fin_columns_present = any(_ledger_has_finance_columns(n) for n in names)
     fin_covered = [r for r in sales
                    if _known(r.get("ad_fee")) and _known(r.get("actual_postage"))]
     fin_ad_fee_total = (sum(_to_float(r.get("ad_fee"), 0.0) for r in fin_covered)
@@ -386,9 +449,34 @@ def gather() -> dict:
         b["gross"] += gross
         b["fee"] += fee
         b["net"] += net
+        per = b["by_store"].setdefault(r["_store"], {"sold_n": 0, "gross": 0.0, "net": 0.0})
+        per["sold_n"] += 1
+        per["gross"] += gross
+        per["net"] += net
+
+    # ---- single-store view: which buckets ALSO sold on another store ----
+    # Their spend bought items that were partly sold elsewhere, so this
+    # store's revenue against the whole basis would understate ROI. Marked,
+    # and the cost/profit/ROI withheld below — never a wrong number (#156).
+    if not combined:
+        for other in _other_stores(names[0]):
+            for r in _sales_rows(other):
+                bdir = _bucket_of_sale(r)
+                if bdir is not None and bdir in buckets and other not in buckets[bdir]["split"]:
+                    buckets[bdir]["split"].append(other)
 
     # ---- live + drafted/synced pending, from local drafts/ledger -------
-    for r in _collect_listings():
+    # Per store, then de-duplicated by path: a relisted draft belongs to both
+    # stores (stores.draft_belongs_to_store) but is one item on the shelf.
+    listings, seen_paths = [], set()
+    for n in names:
+        for r in _collect_listings(n):
+            key = _norm(r.get("path") or "") or ("id:" + (r.get("listing_id") or r.get("sku") or ""))
+            if key in seen_paths:
+                continue
+            seen_paths.add(key)
+            listings.append(r)
+    for r in listings:
         path = _norm(r.get("path") or "")
         if not path or _is_backup_path(path):
             continue
@@ -411,10 +499,16 @@ def gather() -> dict:
         # `spend_unit: item`/`pair` rate resolves against (#118).
         b["unit_count"] = b["sold_n"] + b["live_n"] + b["pending_n"]
         b["cost_basis"] = resolve_cost_basis(b["spend"], b["spend_unit"], b["unit_count"])
+        if b["split"]:
+            # Sold on another store too (single-store view): the basis can't
+            # be charged against this store's share alone. Withheld, like a
+            # missing basis — excluded from totals, never shown as profit.
+            b["cost_basis"] = None
         b["cost_known"] = b["cost_basis"] is not None
         b["profit"] = (b["net"] - b["cost_basis"]) if b["cost_known"] else None
         b["roi"] = roi_for(b["net"], b["cost_basis"], b["kind"])
-        b["gap"] = is_basis_gap(b["kind"], b["cost_basis"])
+        # A split bucket's missing basis is withheld, not unrecorded — no GAP.
+        b["gap"] = False if b["split"] else is_basis_gap(b["kind"], b["cost_basis"])
         b["sell_through"] = sell_through(b["sold_n"], b["live_n"])
 
     known = [b for b in rows if b["cost_known"]]
@@ -437,6 +531,10 @@ def gather() -> dict:
     total["sell_through"] = sell_through(total["sold_n"], total["live_n"])
 
     return {
+        # #156: which store(s) this is, for the header and the notes.
+        "stores": names,
+        "combined": combined,
+        "split": [b["key"] for b in rows if b["split"]],
         "buckets": rows,
         "unattributed": unattributed,
         "total": total,
@@ -449,8 +547,23 @@ def gather() -> dict:
         "fin_covered_n": fin_covered_n,
         "fin_total_n": fin_total_n,
         "fin_columns_present": fin_columns_present,
-        "needs_spend": missing_spend_with_sales(rows),
+        "needs_spend": missing_spend_with_sales([b for b in rows if not b["split"]]),
     }
+
+
+def store_heading(d: dict) -> str:
+    """"" for the default store alone (output unchanged), else which store(s)."""
+    names = d.get("stores") or [stores.DEFAULT_STORE]
+    if d.get("combined"):
+        return f"all stores ({', '.join(names)}) — cost counted once per bucket"
+    return "" if stores.is_default(names[0]) else f"store {names[0]} {stores.store_label(names[0])}"
+
+
+def _status_path(store: str) -> Path:
+    """`store`'s finances_sync_status json — under this module's REPORTS for
+    the default store (the existing test fixtures point it at a tmp tree),
+    else the per-store name from stores.store_file()."""
+    return stores.store_file(REPORTS / "finances_sync_status.json", store)
 
 
 # --------------------------------------------------------------------------- #
@@ -469,19 +582,25 @@ def _fmt_pct(v) -> str:
     return f"{v:.0f}%" if v is not None else "—"
 
 
-def _unattributed_ad_note() -> str:
+def _unattributed_ad_note(names: Optional[list[str]] = None) -> str:
     """Per-click ad spend sync_actuals could not tie to any order (see
-    ebay_finances.unattributed_ad_spend), from its status file. "" if none."""
-    p = REPORTS / "finances_sync_status.json"
-    try:
-        st = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    except (OSError, ValueError):
-        return ""
-    if not st.get("ad_spend_unattributed_n"):
-        return ""
-    return (f" The ad fee excludes ${st['ad_spend_unattributed']} of per-click ad "
-            f"spend billed per listing, not per order, over the last "
-            f"{st.get('days', '?')} days.")
+    ebay_finances.unattributed_ad_spend), from each store's status file —
+    one clause per store that has any, named when it isn't the default
+    alone (#156). "" if none."""
+    names = names or [stores.DEFAULT_STORE]
+    parts = []
+    for n in names:
+        p = _status_path(n)
+        try:
+            st = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except (OSError, ValueError):
+            continue
+        if not st.get("ad_spend_unattributed_n"):
+            continue
+        who = "" if names == [stores.DEFAULT_STORE] else f" ({n})"
+        parts.append(f"${st['ad_spend_unattributed']}{who} of per-click ad spend billed "
+                     f"per listing, not per order, over the last {st.get('days', '?')} days")
+    return (" The ad fee excludes " + "; ".join(parts) + ".") if parts else ""
 
 
 def _fin_note(d: dict) -> str:
@@ -500,7 +619,7 @@ def _fin_note(d: dict) -> str:
                 f"— {_fmt_money(d['fin_ad_fee_total'])} ad fee, "
                 f"{_fmt_money(d['fin_postage_total'])} postage (#119, sell.finances) — "
                 f"not yet folded into this table's NET/PROFIT columns, but no longer "
-                f"missing data." + _unattributed_ad_note())
+                f"missing data." + _unattributed_ad_note(d.get("stores")))
     if covered_n:
         return (f"NET is net_before_postage — before postage AND before advertising. "
                 f"#119 (sell.finances) has real figures for {covered_n} of {total_n} "
@@ -524,6 +643,11 @@ def _fin_note(d: dict) -> str:
 
 
 def render_table(d: dict) -> str:
+    heading = store_heading(d)
+    return (f"{heading}\n" if heading else "") + _render_table(d)
+
+
+def _render_table(d: dict) -> str:
     cols = ("BUCKET", "LIVE", "ASK $", "SOLD", "GROSS $", "FEES", "NET $",
             "COST", "PROFIT", "ROI", "SELL-THR", "PENDING")
     widths = [22, 4, 8, 4, 9, 7, 9, 8, 9, 6, 8, 7]
@@ -564,6 +688,16 @@ def render_table(d: dict) -> str:
                "a `channel` bucket (an ongoing habit, not a single purchase) has no ROI "
                "by design, not a missing one.")
     out.append(_fin_note(d))
+    if d.get("split"):
+        out.append(f"split: {', '.join(d['split'])} also sold on another store — cost, "
+                   f"profit and ROI withheld here (this store's share alone can't carry the "
+                   f"whole basis); see `--all-stores` for the acquisition's ROI (#156).")
+    if d.get("combined"):
+        for b in d["buckets"]:
+            if len(b.get("by_store") or {}) > 1:
+                out.append(f"  {b['key']}: " + " · ".join(
+                    f"{s} {v['sold_n']} sold {_fmt_money(v['net'])} net"
+                    for s, v in sorted(b["by_store"].items())))
     if u["sold_n"]:
         out.append(f"{u['sold_n']} sale(s) have no matching local folder — reported as "
                    f"their own line, not dropped.")
@@ -657,8 +791,17 @@ def _stat(amt: str, lbl: str, sub: str = "") -> str:
 def _bucket_row(key: str, b: dict, *, total: bool = False, is_bucket: bool = True) -> str:
     kind = b.get("kind") or "unspecified"
     gap_pill = ' <span class="pill warn">GAP</span>' if b.get("gap") else ""
-    cost = f'{_money(b.get("cost_basis"))}' if b.get("cost_known") else \
-        '<span class="dim">basis not recorded</span>'
+    if b.get("split"):
+        gap_pill += (' <span class="pill">SPLIT</span>'
+                     f'<div class="dim" style="font-size:11.5px">also sold on '
+                     f'{_e(", ".join(b["split"]))}</div>')
+    elif len(b.get("by_store") or {}) > 1:
+        gap_pill += ('<div class="dim" style="font-size:11.5px">' + _e(" · ".join(
+            f"{s} {v['sold_n']} sold {_money(v['net'])} net"
+            for s, v in sorted(b["by_store"].items()))) + '</div>')
+    cost = f'{_money(b.get("cost_basis"))}' if b.get("cost_known") else (
+        '<span class="dim">withheld — split across stores</span>' if b.get("split") else
+        '<span class="dim">basis not recorded</span>')
     rate_note = ""
     if is_bucket and not total and b.get("spend") is not None and b.get("spend_unit") not in (None, "lot"):
         rate_note = f' · {_money(b["spend"])}/{_e(b["spend_unit"])} × {b.get("unit_count", 0)}'
@@ -720,7 +863,8 @@ def draw(d: dict) -> str:
 
     body = (
         f'<div class="card"><div class="hdr">'
-        f'<p class="eyebrow">ebaybiz · source</p>'
+        f'<p class="eyebrow">ebaybiz · source'
+        + (f' · {_e(store_heading(d))}' if store_heading(d) else '') + '</p>'
         f'<h1>Bucket ROI — realised by acquisition</h1>'
         f'<div class="ct">built {_e(now)} {_e(_report.REPORTING_TZ_LABEL)} · '
         f'read-only, local files only</div>'
@@ -763,7 +907,9 @@ def draw(d: dict) -> str:
         + '</p></div></div>'
     )
 
-    return ('<meta charset="utf-8">\n<title>Source Report</title>\n'
+    title = "Source Report" + (f" [{_e(', '.join(d['stores']))}]"
+                               if store_heading(d) else "")
+    return ('<meta charset="utf-8">\n' f'<title>{title}</title>\n'
             '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
             f'<style>{STYLE}</style>\n<div class="wrap">\n{body}\n</div>\n')
 
@@ -779,18 +925,36 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="bucket ROI by context.txt-owning directory (the only report today)")
     ap.add_argument("--html", action="store_true",
                     help=f"also write {OUT_HTML.relative_to(REPO)} in the house style")
-    ap.add_argument("--out", default=str(OUT_HTML), help="HTML output path (with --html)")
+    ap.add_argument("--out", default=None,
+                    help="HTML output path (with --html; default: the store's "
+                         "reports/source_report*.html)")
+    stores.add_store_args(
+        ap, all_stores=True,
+        help_extra="--all-stores here is ONE combined table (cost counted once per "
+                   "bucket, per-store split shown); `ebz --all-stores report` instead "
+                   "runs one single-store report per store.")
     args = ap.parse_args(argv)
 
     if not args.by_source:
         ap.error("choose a report: --by-source")
 
-    d = gather()
+    if args.all_stores:
+        names = stores.stores_from_args(args)
+        d = gather(all_stores=names)
+        tag = ALL_STORES_TAG
+    else:
+        tag = stores.resolve_store_name(args.store)
+        d = gather(tag)
     print(render_table(d))
 
     if args.html:
-        REPORTS.mkdir(exist_ok=True)
-        out = Path(args.out)
+        if args.out:
+            out = Path(args.out)
+        elif args.all_stores:
+            out = OUT_HTML.with_name(f"{OUT_HTML.stem}-{ALL_STORES_TAG}{OUT_HTML.suffix}")
+        else:
+            out = stores.store_file(OUT_HTML, tag)
+        out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(draw(d), encoding="utf-8")
         print(f"\n[OK] {out}")
     return 0

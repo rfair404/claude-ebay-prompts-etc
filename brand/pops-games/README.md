@@ -71,8 +71,8 @@ stops being comfortable to read.
 
 To change the eBay URL, the tagline, or the shop name:
 
-    python make_cards.py --store ebay.com/usr/yourstore
-    python make_mini_cards.py --store ebay.com/usr/yourstore
+    python make_cards.py --storefront-url ebay.com/usr/yourstore
+    python make_mini_cards.py --storefront-url ebay.com/usr/yourstore
 
 Requires `reportlab` and the Windows copies of Georgia and Courier New.
 

@@ -17,6 +17,22 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 
 import status as st  # noqa: E402
+import stores  # noqa: E402
+
+
+def _point_stores_at(monkeypatch, root: Path) -> None:
+    """Per-store ledgers resolve under `root` (stores.REPO), with no env
+    override leaking in from the machine running the tests (#156)."""
+    monkeypatch.setattr(stores, "REPO", root)
+    monkeypatch.delenv("EBAYBIZ_LISTINGS_LEDGER", raising=False)
+    monkeypatch.delenv("EBAYBIZ_LISTINGS_LOG", raising=False)
+
+
+def _write_ledger(path: Path, rows) -> None:
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["sku", "status", "listing_id"])
+        w.writerows(rows)
 
 
 def _clean_prep_manifest(names=("a.jpg",)) -> dict:
@@ -27,8 +43,9 @@ def _clean_prep_manifest(names=("a.jpg",)) -> dict:
     return {"version": 1, "photos": photos, "approved": True, "auto": {"guessed": []}}
 
 
-def _clean_shoot(tmp_path: Path, sku: str = "") -> Path:
-    shoot = tmp_path / "item"
+def _clean_shoot(tmp_path: Path, sku: str = "", store: str = "",
+                 name: str = "item") -> Path:
+    shoot = tmp_path / name
     shoot.mkdir()
     (shoot / "identify.txt").write_text("SHOOT SUMMARY\n", encoding="utf-8")
     prep_dir = shoot / ".prep"
@@ -37,8 +54,9 @@ def _clean_shoot(tmp_path: Path, sku: str = "") -> Path:
     (shoot / "price.txt").write_text("Max supported price: $40\n", encoding="utf-8")
     (shoot / "investigate.txt").write_text("fine.\n", encoding="utf-8")
     sku_line = f'  ebay_inventory_sku: "{sku}"\n' if sku else ""
+    store_line = f'store: "{store}"\n' if store else ""
     (shoot / "draft.md").write_text(
-        f'---\ntitle: "x"\nmeta:\n{sku_line}---\nbody\n', encoding="utf-8")
+        f'---\ntitle: "x"\n{store_line}meta:\n{sku_line}---\nbody\n', encoding="utf-8")
     (shoot / "a.jpg").write_bytes(b"\xff\xd8")
     (shoot / "b.JPG").write_bytes(b"\xff\xd8")
     (shoot / "notes.txt").write_text("not a frame\n", encoding="utf-8")
@@ -95,12 +113,8 @@ def test_next_action_stops_at_the_first_unresolved_stage(tmp_path):
 # sku / ledger lookup
 # --------------------------------------------------------------------------
 def test_sku_and_ledger_row_are_read_when_present(tmp_path, monkeypatch):
-    ledger = tmp_path / "listings_ledger.csv"
-    with ledger.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["sku", "status", "listing_id"])
-        w.writerow(["SKU-999", "SYNCED", "L12345"])
-    monkeypatch.setattr(st, "LEDGER", ledger)
+    _point_stores_at(monkeypatch, tmp_path)
+    _write_ledger(tmp_path / "listings_ledger.csv", [["SKU-999", "SYNCED", "L12345"]])
 
     shoot = _clean_shoot(tmp_path, sku="SKU-999")
     state = st.gather(shoot)
@@ -110,11 +124,48 @@ def test_sku_and_ledger_row_are_read_when_present(tmp_path, monkeypatch):
 
 
 def test_no_sku_means_no_ledger_lookup(tmp_path, monkeypatch):
-    monkeypatch.setattr(st, "LEDGER", tmp_path / "listings_ledger.csv")
+    _point_stores_at(monkeypatch, tmp_path)
     shoot = _clean_shoot(tmp_path)  # no sku in draft.md
     state = st.gather(shoot)
     assert state["sku"] is None
     assert state["ledger_status"] is None
+
+
+def test_named_store_draft_reads_its_own_ledger(tmp_path, monkeypatch):
+    """#156: a draft with `store: junk` is looked up in listings_ledger-junk.csv,
+    never the default ledger — even when the same SKU sits in both."""
+    _point_stores_at(monkeypatch, tmp_path)
+    monkeypatch.setenv(stores.STORE_ENV_VAR, "outlet")   # ambient store is ignored
+    _write_ledger(tmp_path / "listings_ledger.csv", [["abc12345", "ENDED", "111"]])
+    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "PUBLISHED", "222"]])
+
+    junk = st.gather(_clean_shoot(tmp_path, sku="abc12345", store="junk", name="j"))
+    assert (junk["store"], junk["ledger_status"], junk["listing_id"]) == ("junk", "PUBLISHED", "222")
+    assert "store junk" in st.summary(junk)
+
+    main = st.gather(_clean_shoot(tmp_path, sku="abc12345", name="m"))
+    assert (main["store"], main["ledger_status"]) == ("default", "ENDED")
+    assert "store " not in st.summary(main)
+
+
+def test_preloaded_ledger_is_only_used_for_its_own_store(tmp_path, monkeypatch):
+    """The dashboard preloads the default ledger; a junk shoot must not be
+    looked up in it (#156)."""
+    _point_stores_at(monkeypatch, tmp_path)
+    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "SOLD", "9"]])
+    preload = {"abc12345": {"sku": "abc12345", "status": "ENDED", "listing_id": "1"}}
+    junk = _clean_shoot(tmp_path, sku="abc12345", store="junk", name="j")
+    assert st.gather(junk, ledger_by_sku=preload)["ledger_status"] == "SOLD"
+    main = _clean_shoot(tmp_path, sku="abc12345", name="m")
+    assert st.gather(main, ledger_by_sku=preload)["ledger_status"] == "ENDED"
+
+
+def test_three_stores_each_resolve_their_own_ledger(tmp_path, monkeypatch):
+    _point_stores_at(monkeypatch, tmp_path)
+    for name, status in (("junk", "SYNCED"), ("outlet", "SOLD"), ("records", "ENDED")):
+        _write_ledger(tmp_path / f"listings_ledger-{name}.csv", [["deadbeef", status, ""]])
+        state = st.gather(_clean_shoot(tmp_path, sku="deadbeef", store=name, name=name))
+        assert (state["store"], state["ledger_status"]) == (name, status)
 
 
 # --------------------------------------------------------------------------

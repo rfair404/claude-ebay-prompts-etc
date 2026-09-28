@@ -21,6 +21,13 @@ Three questions this answers that no single ledger can:
 
     python tools/price_vs_actual.py            # table + summary
     python tools/price_vs_actual.py --csv out.csv
+    python tools/price_vs_actual.py --store junk   # a named store's sales (#156)
+
+One store per run (#156): the band is a property of the shoot, but the SOLD
+side comes from one store's sales ledger. A junk-store as-is lot clearing
+below its main-store floor is the junk store working, not the model failing,
+so the two are never pooled into one "sold below the floor" count.
+`--all-stores` prints one table per store.
 """
 from __future__ import annotations
 
@@ -29,8 +36,11 @@ import csv
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "lib"))
+import stores  # noqa: E402  the one store model (#156)
 
 # The price files are written by a prompt, not a serialiser, so the tier lines
 # come in several shapes. Seen in the wild:
@@ -73,9 +83,15 @@ def read_price(shoot: Path) -> dict:
     return out
 
 
-def gather() -> list[dict]:
+def gather(store: Optional[str] = None) -> list[dict]:
+    """Tracked sales with a PRICE band — `store`'s sales only (#156).
+    A missing ledger is no rows, not a crash: a store that hasn't synced yet
+    has nothing to compare."""
     rows = []
-    with (REPO / "sales_ledger.csv").open(newline="", encoding="utf-8-sig") as fh:
+    path = stores.paths(store).sales_ledger
+    if not path.exists():
+        return rows
+    with path.open(newline="", encoding="utf-8-sig") as fh:
         for r in csv.DictReader(fh):
             shoot_rel = (r.get("shoot_dir") or "").strip()
             if not shoot_rel:
@@ -113,12 +129,27 @@ def classify(r: dict) -> str:
     return "no band"
 
 
-def main() -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--csv", help="also write the rows to this file")
-    a = ap.parse_args()
+    ap.add_argument("--csv", help="also write the rows to this file (with "
+                                  "--all-stores, one file per store: <stem>-<store>)")
+    stores.add_store_args(ap, all_stores=True)
+    a = ap.parse_args(argv)
+    names = stores.stores_from_args(a)
+    worst = 0
+    for i, store in enumerate(names):
+        if i:
+            print()
+        worst = max(worst, _one_store(a, store, multi=len(names) > 1))
+    return worst
 
-    rows = gather()
+
+def _one_store(a, store: str, *, multi: bool) -> int:
+    """One store's table. A named store gets a header line; the default
+    store's output is unchanged."""
+    if not stores.is_default(store):
+        print(f"{stores.store_label(store)} store: {store}")
+    rows = gather(store)
     if not rows:
         print("no tracked sale has a price.txt with tiers")
         return 1
@@ -159,12 +190,15 @@ def main() -> int:
         print(f"  median realised / Push-high  : {ceil_ratio[len(ceil_ratio) // 2] * 100:.0f}%")
 
     if a.csv:
-        with open(a.csv, "w", newline="", encoding="utf-8") as fh:
+        # --csv names ONE file; a multi-store run gives each store its own
+        # variant so the second store never overwrites the first's rows.
+        out = stores.store_file(Path(a.csv).resolve(), store) if multi else Path(a.csv)
+        with open(out, "w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=list(rows[0]) + ["where"])
             w.writeheader()
             for r in rows:
                 w.writerow({**r, "where": classify(r)})
-        print(f"[OK] wrote {a.csv}")
+        print(f"[OK] wrote {out}")
     return 0
 
 

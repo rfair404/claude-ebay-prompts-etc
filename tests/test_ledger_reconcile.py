@@ -110,14 +110,12 @@ def test_sold_skus_reads_the_sales_ledger(tmp_path, monkeypatch):
     import tools.ledger_reconcile as LR
     sales = tmp_path / "sales_ledger.csv"
     sales.write_text("order_id,sku\n1-000,sku-a\n2-000,sku-b\n", encoding="utf-8")
-    monkeypatch.setattr(LR, "SALES", sales)
-    assert LR._sold_skus() == {"sku-a", "sku-b"}
+    assert LR._sold_skus(sales) == {"sku-a", "sku-b"}
 
 
 def test_sold_skus_empty_when_no_sales_ledger(tmp_path, monkeypatch):
     import tools.ledger_reconcile as LR
-    monkeypatch.setattr(LR, "SALES", tmp_path / "does_not_exist.csv")
-    assert LR._sold_skus() == set()
+    assert LR._sold_skus(tmp_path / "does_not_exist.csv") == set()
 
 # --------------------------------------------------------------------------
 # compute_drift — the reconciliation decisions, off the network
@@ -314,5 +312,4 @@ def test_sold_on_reads_sku_and_listing_id_pairs(tmp_path, monkeypatch):
     sales = tmp_path / "sales_ledger.csv"
     sales.write_text("order_id,listing_id,sku\n1-000,111,sku-a\n2-000,,sku-b\n",
                      encoding="utf-8")
-    monkeypatch.setattr(LR, "SALES", sales)
-    assert LR._sold_on() == {("sku-a", "111")}
+    assert LR._sold_on(sales) == {("sku-a", "111")}

@@ -13,6 +13,10 @@ so it honours config.yaml's `ebay.environment` and needs no extra credentials.
     python tools/search_count.py "marbles" --category 220
     python tools/search_count.py "vintage pyrex" --filter "buyingOptions:{FIXED_PRICE}"
     python tools/search_count.py "akro agate" --json
+
+Market-wide, so the result does not depend on the store; `--store` only picks
+whose app keyset makes the call (#156 — every tool that loads credentials
+takes the flag, so none silently falls back to the ambient store).
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 import ebay_client as ec  # noqa: E402
+import stores  # noqa: E402
 
 BROWSE_SEARCH = "/buy/browse/v1/item_summary/search"
 
@@ -65,9 +70,12 @@ def main() -> None:
     p.add_argument("--marketplace", default="EBAY_US")
     p.add_argument("--json", action="store_true")
     p.add_argument("--sample", action="store_true", help="also show one matching item")
+    stores.add_store_args(p)
     a = p.parse_args()
 
-    creds = ec.load_credentials()
+    creds = ec.load_credentials(store=a.store)
+    if not stores.is_default(creds.store):
+        print(f"store: {creds.store}", file=sys.stderr)
     total, item = count(a.query, category_ids=a.category, filter_=a.filter_,
                         marketplace=a.marketplace, creds=creds)
 

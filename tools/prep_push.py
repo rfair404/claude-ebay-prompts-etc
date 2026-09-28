@@ -32,12 +32,29 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-def ledger() -> dict:
+sys.path.insert(0, str(ROOT / "lib"))
+import stores  # noqa: E402
+
+
+def ledger(store: str = stores.DEFAULT_STORE) -> dict:
+    """`store`'s listings ledger by SKU. The `--update` step below already
+    follows the draft's own `store:` (list_edit._resolve_store); the listing
+    id this reports against must come from the same store's ledger (#156)."""
     out = {}
-    with open(ROOT / "listings_ledger.csv", encoding="utf-8") as f:
+    path = stores.paths(store).listings_ledger
+    if not path.exists():
+        return out
+    with open(path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
             out[r["sku"]] = r
     return out
+
+
+def store_of(shoot: Path) -> str:
+    try:
+        return stores.draft_store_from_text((shoot / "draft.md").read_text(encoding="utf-8"))
+    except OSError:
+        return stores.DEFAULT_STORE
 
 
 def sku_of(shoot: Path) -> str | None:
@@ -156,13 +173,16 @@ def main() -> int:
     if not (args.go or args.dry):
         ap.error("pass --dry or --go")
 
-    led = ledger()
+    ledgers: dict[str, dict] = {}
     shoots = [Path(l.strip()) for l in open(ROOT / args.queue, encoding="utf-8") if l.strip()]
     results = []
     for i, s in enumerate(shoots, 1):
         t0 = time.monotonic()
         sku = sku_of(s)
-        row = led.get(sku or "", {})
+        st = store_of(s)
+        if st not in ledgers:
+            ledgers[st] = ledger(st)
+        row = ledgers[st].get(sku or "", {})
         r = push_one(s, go=args.go, listing_id=row.get("listing_id", ""))
         r.update(sku=sku, title=row.get("title", ""), url=row.get("url", ""),
                  secs=round(time.monotonic() - t0, 1))

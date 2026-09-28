@@ -1,5 +1,12 @@
 # Top Rated Plus — what our listing policies must carry
 
+> **Scope: the default (main) store only.** TRS+ is judged per eBay ACCOUNT.
+> A named store under `ebay.stores.<name>` / `storefronts.<name>` — e.g. the
+> as-is junk store (`returns: none_as_is`) — deliberately cannot qualify,
+> because free 30-day returns are the reason it does not exist. Do not
+> "fix" a no-returns store into compliance with this document; that deletes
+> the reason the store was opened (#147, #156 §2).
+
 Source: eBay [Seller standards policy](https://www.ebay.com/help/policies/selling-policies/seller-standards-policy?id=4347).
 
 Most of that policy is **behavioral**, not something a listing can encode:
@@ -25,10 +32,10 @@ buyer-pays deliberately — it has no bearing on TRS+ here.
 
 ## Current wiring
 
-- `config.yaml` → `ebay.production.return_policy_id: 296995924014`
+- Default store: `config.yaml` → `ebay.production.return_policy_id: 296995924014`
   ("30-Day Free Returns - Seller Pays", created via
   `ebay_client.create_free_return_policy()`).
-- `config.yaml` → `ebay.production.fulfillment_policy_id: 296458692014`
+- Default store: `config.yaml` → `ebay.production.fulfillment_policy_id: 296458692014`
   ("Free USPS Ground + eBay International Shipping (1 day)"). As of 2026-08-25
   this is the **only** fulfillment policy any item uses — there is no per-item
   shipping choice. `fulfillment_policy_id_international` points at the same id,

@@ -79,6 +79,93 @@ def test_different_addresses_are_still_refused():
         pick_list_html.assert_one_shipment([a, b])
 
 
+# --------------------------------------------------------------------------- #
+# Stores (#156 §1): the letterhead is the store's identity, and a named store
+# never falls back to Pop's Games. Config is faked per test — never the real one.
+# --------------------------------------------------------------------------- #
+import contextlib                                                   # noqa: E402
+import os                                                           # noqa: E402
+
+import config as _config                                            # noqa: E402
+
+MULTI = {
+    "ebay": {"stores": {"junk": {}, "outlet": {}}},
+    "store": {},                       # default store: nothing configured
+    "storefronts": {
+        "junk": {},                    # identity unset -> neutral sheet
+        "outlet": {"display_name": "Outlet Bin", "tagline": "AS IS",
+                   "storefront_url": "ebay.com/usr/outletbin"},
+    },
+}
+
+
+@contextlib.contextmanager
+def _cfg(cfg):
+    real, saved_env = _config.load_config, os.environ.pop("EBAYBIZ_STORE", None)
+    _config.load_config = lambda *a, **k: cfg
+    try:
+        yield
+    finally:
+        _config.load_config = real
+        if saved_env is not None:
+            os.environ["EBAYBIZ_STORE"] = saved_env
+
+
+# Any trace of the default store's brand, in visible text OR page source.
+_POPS = __import__("re").compile(r"pop(?:'|&#x27;|&#39;)?s[ -]?games", __import__("re").I)
+
+
+def _tagged(store, **kw):
+    o = _order(**kw)
+    o["_store"] = store
+    return o
+
+
+def test_default_store_unconfigured_keeps_the_pops_games_letterhead():
+    with _cfg(MULTI):
+        out = pick_list_html.render_html([_order()], [], [], store="default")
+    assert "POP&#x27;S GAMES" in out or "POP'S GAMES" in out
+    assert "ebay.com/usr/popsgames" in out
+    assert 'class="acct"' not in out          # no account notice for the default store
+
+
+def test_named_store_with_no_identity_gets_a_neutral_sheet_never_pops_games():
+    with _cfg(MULTI):
+        out = pick_list_html.render_html([_tagged("junk")], [], [])
+    assert not _POPS.search(out), _POPS.search(out)
+    assert 'class="brand"' not in out         # no masthead at all
+    # ...but the packer is told which account the label links need
+    assert 'class="acct"' in out and "junk" in out
+
+
+def test_named_store_prints_its_own_configured_letterhead():
+    with _cfg(MULTI):
+        out = pick_list_html.render_html([_tagged("outlet")], [], [])
+    assert "Outlet Bin" in out and "ebay.com/usr/outletbin" in out
+    assert not _POPS.search(out), _POPS.search(out)
+    assert "the &#x27;outlet&#x27; store&#x27;s eBay account" in out         or "the 'outlet' store's eBay account" in out
+
+
+def test_account_notice_is_screen_only_so_the_store_name_never_goes_in_the_box():
+    with _cfg(MULTI):
+        out = pick_list_html.render_html([_tagged("junk")], [], [])
+    assert ".acct {{ display: none; }}".replace("{{", "{").replace("}}", "}") in out
+
+
+def test_orders_from_two_stores_never_share_a_sheet():
+    a = _tagged("default", oid="03-11111-22222")
+    b = _tagged("junk", oid="03-33333-44444")      # same buyer, same address
+    with pytest.raises(SystemExit):
+        pick_list_html.assert_one_shipment([a, b])
+    with _cfg(MULTI), pytest.raises(ValueError):
+        pick_list_html.render_html([a, b], [], [])
+
+
+def test_an_explicit_store_that_contradicts_the_orders_tag_is_refused():
+    with _cfg(MULTI), pytest.raises(ValueError):
+        pick_list_html.render_html([_tagged("junk")], [], [], store="outlet")
+
+
 if __name__ == "__main__":
     import inspect
 
