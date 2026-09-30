@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -210,6 +211,25 @@ def main() -> int:
     else:
         print(f"campaign {cid} '{a.name}' {camp.get('campaignStatus')}")
 
+    # END BEFORE ADD. A listing can sit in only ONE cost-per-sale campaign: with
+    # the old campaign still running, every add came back "An ad for listing Id
+    # … already exists" (149/149 refused, 2026-09-29). So the old campaign is
+    # ended first and we wait for eBay to report it ENDED before adding.
+    if a.end:
+        if a.confirm:
+            api_send("POST", f"/sell/marketing/v1/ad_campaign/{a.end}/end")
+            status = ""
+            for _ in range(24):
+                status = api_send("GET", f"/sell/marketing/v1/ad_campaign/{a.end}"
+                                  ).get("campaignStatus", "")
+                if status == "ENDED":
+                    break
+                time.sleep(5)
+            print(f"ended campaign {a.end} (status {status})")
+        else:
+            print(f"DRY — would POST /sell/marketing/v1/ad_campaign/{a.end}/end "
+                  "(before adding)")
+
     already = campaign_listing_ids(api_send, cid) if cid else set()
     adds = to_add(seasoned, already)
     print(f"already in campaign: {len(already)} · to add: {len(adds)}")
@@ -233,13 +253,6 @@ def main() -> int:
         else:
             print(f"DRY — would add {len(adds)} ad(s)"
                   + ("" if cid else " once the campaign exists"))
-
-    if a.end:
-        if a.confirm:
-            api_send("POST", f"/sell/marketing/v1/ad_campaign/{a.end}/end")
-            print(f"ended campaign {a.end}")
-        else:
-            print(f"DRY — would POST /sell/marketing/v1/ad_campaign/{a.end}/end")
 
     if a.json:
         Path(a.json).write_text(json.dumps({
