@@ -153,9 +153,26 @@ _COMPANION_ITEM_WORDS = {
     "tray", "plate", "platter", "bowl", "vase", "mirror", "lamp", "clock",
 }
 # Lot-ish words that defeat a pair even though "set"/"complete" do not
-# ("Earrings Set" is still one pair of earrings).
+# ("Earrings Set" is still one pair of earrings — but "Sets" is several).
 _PAIR_LOT_WORDS = {"lot", "lots", "bundle", "bundles", "collection",
-                   "group", "grouping", "joblot"}
+                   "group", "grouping", "joblot", "sets"}
+# "2 Pair Sets", "3 pairs", "two pr": a count of pairs is several pairs.
+_MULTI_PAIR_RE = re.compile(
+    r"\b(?:[2-9]|\d{2,}|two|three|four|five|six|seven|eight|nine|ten|twelve)"
+    r"\s*-?\s*(?:pairs?|prs?)\b",
+    re.IGNORECASE,
+)
+# Less than a pair: "Single ... Stud Earring", "1 Earring", "Half Pair".
+_HALF_PAIR_RE = re.compile(
+    r"\bsingle\b|\bhalf\s*-?\s*pair\b"
+    r"|\b(?:one|1)\s+(?:earring|stud|cufflink|cuff link|bookend|candlestick)\b",
+    re.IGNORECASE,
+)
+# Sold-search captures can arrive with titles cut short (a 2026-09-29 Stage B
+# capture capped every title at 70 chars: "...Solitaire Hook Ea"). A title at
+# least this long whose LAST token is the start of a paired noun is read as
+# naming that noun; a shorter title ending mid-word was not truncated.
+_TRUNCATED_TITLE_MIN = 60
 
 # unit_type → does this unit WANT multi-item listings? `pair` is listed for
 # completeness but never reaches this branch: filter_unit handles it off the
@@ -332,9 +349,22 @@ def names_paired_item(title: str) -> bool:
     True
     >>> names_paired_item('Vintage Sterling Silver Brooch')
     False
+
+    A title truncated mid-noun still names it (see _TRUNCATED_TITLE_MIN):
+
+    >>> names_paired_item('10K Solid Yellow Gold 6mm Round Cut Clear Crystal CZ Solitaire Hook Ea')
+    True
+    >>> names_paired_item('Vintage Ear')
+    False
     """
     t = title.lower()
-    if set(re.findall(r"[a-z]+", t)) & _PAIRED_ITEM_WORDS:
+    tokens = re.findall(r"[a-z]+", t)
+    if set(tokens) & _PAIRED_ITEM_WORDS:
+        return True
+    if (len(title.rstrip()) >= _TRUNCATED_TITLE_MIN and tokens
+            and re.search(r"[a-z]$", t.rstrip())
+            and len(tokens[-1]) >= 2
+            and any(w.startswith(tokens[-1]) for w in _PAIRED_ITEM_WORDS)):
         return True
     flat = re.sub(r"\s+", " ", t.replace("&", " and "))
     return any(p in flat for p in _PAIRED_ITEM_PHRASES)
@@ -356,6 +386,10 @@ def looks_pair_unit(title: str) -> bool:
     True
     >>> looks_pair_unit('Vintage Sterling Brooch')
     False
+    >>> looks_pair_unit('New 10K 3 Pair Sets Solid White Gold 5mm Round Clear Crystal CZ Earrings')
+    False
+    >>> looks_pair_unit('Single 14K SOLID GOLD Solitaire Stud Earring 10K Back Round CZ')
+    False
     """
     t = title.lower()
     words = set(re.findall(r"[a-z]+", t))
@@ -363,6 +397,8 @@ def looks_pair_unit(title: str) -> bool:
     if not paired:
         return False
     if words & _PAIR_LOT_WORDS:
+        return False
+    if _MULTI_PAIR_RE.search(title) or _HALF_PAIR_RE.search(title):
         return False
     if words & _COMPANION_ITEM_WORDS:
         return False
