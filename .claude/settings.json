@@ -12,6 +12,30 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/worktree_link.py\"",
+            "timeout": 15,
+            "statusMessage": "link worktree inventory/"
+          }
+        ]
+      }
+    ],
+    "CwdChanged": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/tools/worktree_link.py\"",
+            "timeout": 15,
+            "statusMessage": "link worktree inventory/"
+          }
+        ]
+      }
     ]
   },
   "permissions": {
@@ -45,6 +69,11 @@
       "Bash(gh pr list:*)",
       "Bash(gh pr diff:*)",
       "Bash(gh pr checks:*)"
+    ]
+  },
+  "worktree": {
+    "symlinkDirectories": [
+      "inventory"
     ]
   }
 }

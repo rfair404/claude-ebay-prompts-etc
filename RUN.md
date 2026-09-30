@@ -25,6 +25,14 @@ default content store ("our" data: photos + per-item phase outputs; gitignored,
 never version-controlled). Only treat `<name>` as a different location if it
 isn't found under `inventory/`, or the user gives an explicit path.
 
+**There is one `inventory/`, and it is the main checkout's.** Pipeline output
+always goes there, even from a session in a worktree. A worktree's
+`inventory/` is a junction to `<main>/inventory/`, created by
+`tools/worktree_link.py` when the session starts. So write through the
+worktree path (`<worktree>/inventory/<name>/draft.md`). The desktop app's
+worktree write guard refuses the spelled-out `<main>/inventory/...` path and
+every other base-checkout path. See CLAUDE.md, "Pipeline data".
+
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
     list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish
     full  <photos-dir>   → all in order, ending at the REVIEW gate
