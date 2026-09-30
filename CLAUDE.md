@@ -22,6 +22,33 @@ This rule exists because a session once ran `git checkout main` →
 `git checkout -b <feature>` directly in the shared directory, silently
 switching the working tree under every other concurrent session.
 
+### Pipeline data always goes to the main checkout's `inventory/`
+
+`inventory/` (photos plus per-item phase output: identify.txt, price.txt,
+draft.md, NEEDS_REVIEW.md, review_card.*, listing/, .prep/) is gitignored and
+exists only in the main checkout. That is where pipeline output always goes,
+including from worktree sessions (user decision, 2026-09-29).
+
+To make that work, `.claude/settings.json` runs `tools/worktree_link.py` on
+SessionStart and CwdChanged. It makes the worktree's `inventory` a directory
+junction (a symlink off Windows) to `<main>/inventory/`. Then:
+
+- Write/Edit to `<worktree>/inventory/...` lands in main. Tools that resolve
+  `REPO / "inventory"` read the real store from a worktree.
+- Write/Edit to `<main>/...` is still refused by the desktop app's built-in
+  worktree write guard, `<main>/inventory/...` included. The guard compares
+  paths lexically and has no exemption setting. That is why the carve-out is
+  a link, and why it covers exactly `inventory/` and nothing else. Code and
+  tracked files in the base checkout stay protected.
+- Only `inventory/` is linked. `config.yaml` and the ledgers are not, so the
+  "run ledger/sync tools from the main checkout" rule (GH #103) still holds.
+- If a worktree already has a real `inventory/` directory, the script leaves
+  it alone and warns. Move its contents into main and delete it to get the
+  link. `python tools/worktree_link.py --check` reports the state.
+- Removing a worktree (`git worktree remove`, `rmtree`, `Remove-Item
+  -Recurse`) unlinks the junction and does not touch main's data. This was
+  tested. `git worktree remove` can leave the emptied folder behind.
+
 ## Concurrent sessions duplicate work — check before you start
 
 The same fact that makes the worktree rule necessary — many sessions open on
