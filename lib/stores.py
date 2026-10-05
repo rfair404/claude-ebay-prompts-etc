@@ -144,6 +144,7 @@ class StorePaths:
     offer_policy_survey: Path
     finances_sync_status: Path
     ebay_ads_json: Path
+    ad_report_json: Path
     sales_dashboard_html: Path
     price_vs_actual_csv: Path
     reconcile_report_json: Path
@@ -170,6 +171,7 @@ def paths(store: Optional[str] = None) -> StorePaths:
         offer_policy_survey=f(".offer_policy_survey.json"),
         finances_sync_status=f("reports/finances_sync_status.json"),
         ebay_ads_json=f("reports/ebay_ads.json"),
+        ad_report_json=f("reports/ad_report.json"),
         sales_dashboard_html=f("reports/sales_dashboard.html"),
         price_vs_actual_csv=f("reports/price_vs_actual.csv"),
         reconcile_report_json=f("ledger_reconcile_report.json"),

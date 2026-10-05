@@ -56,6 +56,8 @@ COMMANDS = {
                      "comp JSON -> the thumbnail board (_shared.md hard rule)"),
     "sales-report": ("tools.sales_report",
                      "sales / fees / promotion dashboard"),
+    "ad-report":    ("tools.ad_report",
+                     "eBay's attributed ad numbers per campaign/listing + what to change"),
     "dashboard":    ("tools.dashboard",
                      "backlog by stage, drafts awaiting review, live/ledger drift (#31 Phase 1)"),
     "serve":        ("webapp.server",
@@ -92,7 +94,7 @@ COMMANDS = {
 # it reads photos, text or comps and never an account or a per-store file.
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
-    "sales-report", "dashboard", "report", "promote", "listing", "status",
+    "sales-report", "ad-report", "dashboard", "report", "promote", "listing", "status",
     "ship-quote", "ship-buy",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or

@@ -48,7 +48,8 @@ That join answers a narrower question than eBay's own ad report, and says so on
 the page: an ad on the listing at report time is not proof the sale came through
 the ad. eBay's attributed numbers live behind an async report task
 (`/sell/marketing/v1/ad_report_task`, a POST) which this tool deliberately does
-not create — it writes nothing to the account.
+not create — it writes nothing to the account. `tools/ad_report.py`
+(`ebz ad-report`) is the tool that does, and it advises from them.
 """
 from __future__ import annotations
 
