@@ -402,6 +402,7 @@ Orders are the only source that sees every sale and the price actually paid.
 |---|---|---|---|
 | LIST/EDIT (**primary**) | `python lib/list_edit.py --list <shoot-dir> --confirm` | `draft.md` | sync + **publish LIVE** via Sell API |
 | Sync-only (no publish) | `python lib/list_edit.py --sync <shoot-dir>` | `draft.md` | eBay UNPUBLISHED offer only |
+| LIST (Whatnot) | `python -m lib.cli publish <shoot-dir> --to whatnot\|both --confirm` | `draft.md` | Whatnot product + publish; see [docs/whatnot.md](docs/whatnot.md) |
 | LIST/EDIT (fallback) | [prompts/list_edit_chrome.md](prompts/list_edit_chrome.md) | `draft.md`+`price.txt` | eBay **DRAFT** via Chrome UI |
 
 REVIEW (Function 5.5) is the gate that authorizes Function 6. The publish

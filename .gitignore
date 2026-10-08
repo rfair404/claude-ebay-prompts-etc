@@ -40,6 +40,14 @@ listings_ledger-*.csv
 # (e.g. listings_ledger.junk.csv) — kept too so neither shape can leak (#156).
 listings_ledger.*.csv
 
+# Whatnot listings ledger (lib/whatnot_list.py) — same class as the eBay
+# ledger above. Both separator shapes, per the #156/#158 lesson.
+whatnot_ledger.csv
+whatnot_ledger-*.csv
+whatnot_ledger.*.csv
+# Cached copy of Whatnot's public taxonomy (lib/whatnot_client.fetch_taxonomy).
+.whatnot_taxonomy_US.txt
+
 # Sales ledger — what each item ACTUALLY sold for, plus eBay's fee and our net.
 # Written by lib/sync_actuals.py from the Fulfillment API. This is revenue data;
 # it is the single most sensitive file the pipeline produces.

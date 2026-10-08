@@ -214,6 +214,53 @@ easypost:
   api_key: "EZAK_REPLACE_ME"
 
 # ---------------------------------------------------------------------------
+# Whatnot — second sales channel (lib/whatnot_client.py, lib/whatnot_list.py)
+# ---------------------------------------------------------------------------
+# Used by `ebz whatnot ...` and `ebz publish --to whatnot|both`. Every
+# publish/end is a DRY RUN unless --confirm, same as the eBay path.
+#
+# Whatnot's Seller API is a gated Developer Preview: the account must be
+# granted access by Whatnot before its seller dashboard will issue a token.
+# Use a staging token (wn_access_tk_test_...) until a draft round-trips
+# cleanly; the loader refuses a token that doesn't match `environment`.
+# WHATNOT_ACCESS_TOKEN / WHATNOT_ENVIRONMENT env vars override these.
+whatnot:
+  environment: "stage"                # stage | production
+  stage:
+    access_token: "wn_access_tk_test_REPLACE_ME"
+  production:
+    access_token: "wn_access_tk_REPLACE_ME"
+
+  # Category used when a draft has no whatnot.taxonomy_id of its own.
+  # Find ids with: python -m lib.cli whatnot --taxonomy vintage toys
+  # default_taxonomy_id: 574
+
+  # Shipping profile for every product (ebz whatnot --shipping-profiles).
+  # Unset: Whatnot auto-creates/matches one from the draft's shipping.weight.
+  # shipping_profile_id: "..."
+
+  # Attribute ids for condition and brand (ebz whatnot --attributes <taxonomy_id>).
+  # Without a condition id, the condition is still stated in the description.
+  # attributes:
+  #   condition: "..."
+  #   brand: "..."
+  # Override the eBay-condition -> Whatnot option text where a category differs:
+  # condition_values:
+  #   USED_GOOD: "Used - Good"
+
+  # Whatnot takes photos by URL only. `eps` re-uses eBay Picture Services
+  # (the draft's eBay store credentials, PREP gate enforced); `base_url`
+  # points at a static host you sync listing/ photos to:
+  #   <base_url>/<shoot folder>/listing/<file>
+  media:
+    source: "eps"                     # eps | base_url
+    # base_url: "https://photos.example.com"
+
+# Channels `ebz publish <item>` uses when --to is not given.
+publish:
+  default_channels: ["ebay"]          # ["ebay"], ["whatnot"], or ["ebay", "whatnot"]
+
+# ---------------------------------------------------------------------------
 # CURATE strategy profiles
 # ---------------------------------------------------------------------------
 # Profiles encode the Buy Point math used by CURATE. The active profile
