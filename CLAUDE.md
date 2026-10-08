@@ -100,3 +100,11 @@ Merging #147/#156/#158 produced, all without a single conflict marker: two
 functions with one name, two APIs for creating a no-returns policy, two
 `Store:` lines on one card, and the ignore-pattern gap above. Only one of the
 five collisions that day was a conflict git would show you.
+
+## Pick list requests → links to the local server
+
+When asked for the pick list (to print, for today, what to ship), follow
+[`prompts/pick_list.md`](prompts/pick_list.md). In short: start the app on
+127.0.0.1:8770, run `tools/pick_list.py --poll --all-stores` from the main
+checkout, and reply with one hyperlink per shipment. Don't reply with the
+terminal report or a file path.
