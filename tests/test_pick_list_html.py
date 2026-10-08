@@ -72,6 +72,41 @@ def test_same_buyer_orders_render_onto_one_page():
     assert "Aristo Darmstadt Slide Rule" in out
 
 
+def _photo(dir_: Path, listing_id: str) -> None:
+    from PIL import Image
+    dir_.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (40, 30), (200, 120, 60)).save(dir_ / f"{listing_id}.jpg")
+
+
+def test_no_local_folder_uses_the_cached_ebay_photo(tmp_path, monkeypatch):
+    _photo(tmp_path, "206000000001")
+    monkeypatch.setattr(pick_list_html, "EBAY_PHOTO_DIR", tmp_path)
+    monkeypatch.setattr(pick_list_html, "EBAY_PHOTOS", True)
+    out = pick_list_html.render_html([_order()], [], [])
+    assert "data:image/jpeg;base64," in out
+    assert "no photo" not in out
+
+
+def test_ebay_photos_are_off_by_default_so_tests_stay_offline(tmp_path, monkeypatch):
+    _photo(tmp_path, "206000000001")
+    monkeypatch.setattr(pick_list_html, "EBAY_PHOTO_DIR", tmp_path)
+    out = pick_list_html.render_html([_order()], [], [])
+    assert "no photo" in out
+
+
+def test_a_failed_ebay_lookup_still_renders_the_sheet(tmp_path, monkeypatch):
+    import ebay_client
+
+    def boom(*_a, **_k):
+        raise OSError("offline")
+    monkeypatch.setattr(ebay_client, "api_get", boom)
+    monkeypatch.setattr(pick_list_html, "EBAY_PHOTO_DIR", tmp_path)
+    monkeypatch.setattr(pick_list_html, "EBAY_PHOTOS", True)
+    out = pick_list_html.render_html([_order()], [], [])
+    assert "no photo" in out
+    assert not any(tmp_path.iterdir())
+
+
 def test_different_addresses_are_still_refused():
     a = _order(oid="03-11111-22222")
     b = _order(oid="03-33333-44444", city="Dayton")

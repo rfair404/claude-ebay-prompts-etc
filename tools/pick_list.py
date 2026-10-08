@@ -430,6 +430,7 @@ def publish_sheet(orders: dict | list[dict], drafts: list[dict], ledger: list[di
     try:
         import pick_store                                 # noqa: PLC0415
         import pick_list_html                             # noqa: PLC0415
+        pick_list_html.EBAY_PHOTOS = True     # no local photo -> the listing's own
 
         # The letterhead follows the orders' own store tag (#156) — the
         # group is single-store by construction (shipment_key leads with it).
