@@ -73,6 +73,10 @@ COMMANDS = {
                      "in-hand voice linter (draft or --audit tree) — GH #40"),
     "listing":      ("lib.list_edit",
                      "LIST/EDIT: --validate --status --review --sync --publish ..."),
+    "publish":      ("lib.publish",
+                     "LIST a reviewed draft to eBay, Whatnot, or both (--to) — DRY RUN unless --confirm"),
+    "whatnot":      ("lib.whatnot_list",
+                     "Whatnot channel: --sync --publish --end --taxonomy --attributes --setup-check"),
     "observe":      ("tools.session_observer",
                      "session transcripts -> friction report (#36, read-only)"),
     "prep":         ("lib.photo_prep.prep",
@@ -95,11 +99,11 @@ COMMANDS = {
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
     "sales-report", "ad-report", "dashboard", "report", "promote", "listing", "status",
-    "ship-quote", "ship-buy",
+    "ship-quote", "ship-buy", "publish",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
 # spend money, so the store has to be typed, once, by name.
-SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote"}
+SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote", "publish"}
 
 
 def _pop_store_flags(args: list[str]) -> tuple[str | None, bool, list[str]]:
