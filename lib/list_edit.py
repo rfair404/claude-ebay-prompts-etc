@@ -2029,6 +2029,7 @@ class PublishResult:
     status_before: str
     listing_id: Optional[str] = None   # set only when actually published
     listing_url: Optional[str] = None
+    promotion: Optional[str] = None    # lib/auto_promote outcome, set on a real publish
 
 
 def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
@@ -2096,9 +2097,18 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         upsert_listing(sku, "PUBLISHED", title=title, offer_id=offer_id,
                        listing_id=listing_id, price=price,
                        url=f"https://www.ebay.com/itm/{listing_id}", store=creds.store)
+    # Promotion is part of LIST: a new listing goes into the cost-per-sale
+    # campaign the moment it is live. Best-effort by construction: the listing
+    # is already public, so this returns a message and never raises.
+    promotion = None
+    if listing_id:
+        from auto_promote import promote_new_listing
+        # this module's api_send, so a test that fakes publish fakes this too
+        promotion = promote_new_listing(listing_id, price, creds, api_send=api_send)
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
-                         listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None))
+                         listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None),
+                         promotion=promotion)
 
 
 # ---------------------------------------------------------------------------
@@ -2561,6 +2571,7 @@ def _cli() -> None:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
+                if res.promotion: print(f"  Promoted Listings: {res.promotion}")
             return
         if args.list_target:
             # One-step LIST = sync (create/update the offer) then publish it.
@@ -2583,6 +2594,7 @@ def _cli() -> None:
                 print(f"[LIVE] Published offer {res.offer_id} -> listing {res.listing_id}")
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
+                if res.promotion: print(f"  Promoted Listings: {res.promotion}")
             return
         if args.update:
             if not args.fields:

@@ -398,6 +398,44 @@ def test_publish_offer_golden_publish_body_is_empty_and_updates_ledger():
             assert rows[0]["listing_id"] == "999888777"
 
 
+def test_publish_offer_promotes_the_new_listing():
+    """LIST includes promotion: the new listing id goes to the cost-per-sale
+    campaign right after publish (lib/auto_promote)."""
+    send, calls = _fake_api({
+        "/offer/OFFER-1/publish": {"listingId": "999888777"},
+        "/offer/OFFER-1": {"status": "UNPUBLISHED", "sku": "abc12300",
+                           "pricingSummary": {"price": {"value": "49.99"}}},
+        "get_campaign_by_name": {"campaignId": "C1", "campaignStatus": "RUNNING",
+                                 "fundingStrategy": {"fundingModel": "COST_PER_SALE"}},
+        "bulk_create_ads_by_listing_id": {"responses": [{"statusCode": 201}]},
+    })
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
+        with _patched(L, api_send=send), _ledger_at(Path(td)):
+            res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+    adds = [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
+    assert adds and adds[0][2] == {"requests": [{"listingId": "999888777"}]}
+    assert res.promotion and res.promotion.startswith("promoted")
+
+
+def test_publish_succeeds_when_promotion_fails():
+    """The listing is live before promotion runs; an ad error must not turn a
+    successful publish into a failure."""
+    send, calls = _fake_api({
+        "/offer/OFFER-1/publish": {"listingId": "999888777"},
+        "/offer/OFFER-1": {"status": "UNPUBLISHED", "sku": "abc12300",
+                           "pricingSummary": {"price": {"value": "49.99"}}},
+        "get_campaign_by_name": RuntimeError("HTTP 500"),
+    })
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
+        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+            res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+            assert _ledger_rows(ledger)[0]["status"] == "PUBLISHED"
+    assert res.listing_id == "999888777"
+    assert res.promotion.startswith("not promoted:")
+
+
 def test_publish_offer_is_idempotent_second_call_does_not_republish():
     """Calling publish twice on an offer that is already PUBLISHED must not
     fire a second publishOffer call, and must not duplicate the ledger row."""
