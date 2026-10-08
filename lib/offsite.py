@@ -321,9 +321,16 @@ class Md5Cache:
         return self.data[rel][1]
 
     def save(self) -> None:
+        """Best effort: the cache only saves re-hashing, so a read-only root
+        (a sandboxed session, a restore onto a mounted copy) must not stop a
+        backup."""
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data), encoding="utf-8")
-        os.replace(tmp, self.path)
+        try:
+            tmp.write_text(json.dumps(self.data), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError as e:
+            print(f"offsite: md5 cache not saved ({e}); next run re-hashes",
+                  file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
