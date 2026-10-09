@@ -940,6 +940,47 @@ def test_build_review_card_withholds_all_clear_when_something_is_flagged():
 
 
 # ---------------------------------------------------------------------------
+# build_review_card() — International block follows the router, not the flag
+# ---------------------------------------------------------------------------
+
+def _intl_card(td: Path, intl_policy_id):
+    """Card for a clean draft with `shipping.international: true`, on a store
+    whose international fulfillment policy id is `intl_policy_id`."""
+    draft_path = _write_single_draft(td)
+    draft_path.write_text(draft_path.read_text(encoding="utf-8").replace(
+        "  fulfillment_mode: SHIP\n", "  fulfillment_mode: SHIP\n  international: true\n"),
+        encoding="utf-8")
+    extra = {"fulfillment_policy_id_international": intl_policy_id}
+    with _patched(L, preflight_listing=lambda *a, **kw: ["category: 12345"],
+                 resolve_draft_state=lambda *a, **kw:
+                     {"stale": False, "offer_id": "", "meta_offer_id": ""},
+                 _ebay_extra=lambda field, store="default": extra.get(field)), \
+         _ledger_at(td):
+        card, _path = L.build_review_card(draft_path, creds=_Creds())
+    return card
+
+
+def test_review_card_intl_block_reports_domestic_fallback_when_policy_unset():
+    """2026-10-08, junk store: the draft asked for international, preflight
+    fell back to domestic-only because the store has no international policy,
+    and the card still said "✓ ENABLED — ships worldwide". The card must
+    report the routing decision, not the raw draft flag."""
+    with tempfile.TemporaryDirectory() as td:
+        card = _intl_card(Path(td), None)
+    assert "ENABLED" not in card
+    assert ("✖ requested but listing domestic-only — "
+            "ebay.fulfillment_policy_id_international is unset") in card
+    assert "ALL CLEAR" not in card
+
+
+def test_review_card_intl_block_says_enabled_when_policy_is_configured():
+    with tempfile.TemporaryDirectory() as td:
+        card = _intl_card(Path(td), "INTL-1")
+    assert "✓ ENABLED — ships worldwide" in card
+    assert "domestic-only" not in card
+
+
+# ---------------------------------------------------------------------------
 # Best Offer gate cross-field checks (#140)
 # ---------------------------------------------------------------------------
 

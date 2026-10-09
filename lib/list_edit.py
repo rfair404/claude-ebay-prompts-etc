@@ -1193,6 +1193,65 @@ def _international_warnings(draft: Draft) -> list[str]:
     return out
 
 
+def _international_routing(draft: Draft, intl_fid: str) -> tuple[bool, str, list[str]]:
+    """Decide whether THIS item actually goes out on the international policy.
+
+    Returns (wants_intl, reason, messages). `wants_intl` is the final call
+    after every override: a LOCAL_PICKUP item, a US-export restriction, an
+    eIS blocker, or a store with no international policy configured each
+    turn an international request into a domestic listing. `reason` is a
+    short why when a request was turned down ("" otherwise), and `messages`
+    are the preflight lines explaining it.
+
+    _resolve_shipping_policy routes on this, and the review card's
+    International section reports it, so the card can never say "ENABLED"
+    for an item the router is listing domestic-only.
+    """
+    wants_intl = str(draft.get("shipping.international") or "").strip().lower() in (
+        "true", "yes", "1", "on")
+    mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
+    us_reasons = us_only_reasons(draft)
+    reason = ""
+    msgs: list[str] = []
+
+    # LOCAL_PICKUP is checked first: a pickup-only item ships nowhere, so that
+    # is the real reason international is moot — regardless of US-export
+    # status — and it must not be masked by the US-only message below.
+    if wants_intl and mode == "LOCAL_PICKUP":
+        wants_intl = False
+        reason = "item is LOCAL_PICKUP (nothing to ship)"
+        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
+                    "ignored (a pickup-only item has nothing to ship).")
+    # A US export restriction is not a preference — it overrides an
+    # international request rather than negotiating with it.
+    if us_reasons and wants_intl:
+        wants_intl = False
+        reason = "US-export-restricted (" + "; ".join(us_reasons) + ")"
+        msgs.append("shipping: INTERNATIONAL REFUSED — US-export-restricted ("
+                    + "; ".join(us_reasons) + "). eBay will not publish this "
+                    "listing at all while it is reachable by eBay International "
+                    "Shipping. See the routing message below for the policy "
+                    "actually chosen.")
+    if wants_intl:
+        blockers = _international_blockers(draft)
+        if blockers:
+            wants_intl = False
+            reason = "; ".join(blockers)
+            msgs.append("shipping: INTERNATIONAL REFUSED — " + "; ".join(blockers) +
+                        ". eBay International Shipping rejects these at the US hub, "
+                        "which cancels the order and books a seller defect. Listing "
+                        "domestic-only. Override by clearing the matched wording or "
+                        "setting the policy id by hand if you know it's safe.")
+        elif not intl_fid:
+            wants_intl = False
+            reason = ("ebay.fulfillment_policy_id_international is unset for "
+                      "this store")
+            msgs.append("shipping: international requested but "
+                        "ebay.fulfillment_policy_id_international is unset — "
+                        "listing domestic-only.")
+    return wants_intl, reason, msgs
+
+
 def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials,
                              strict: bool = False) -> tuple[str, list[str]]:
@@ -1237,40 +1296,7 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     us_reasons = us_only_reasons(draft)
     mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
-    wants_intl = str(draft.get("shipping.international") or "").strip().lower() in (
-        "true", "yes", "1", "on")
-    msgs: list[str] = []
-
-    # LOCAL_PICKUP is checked first: a pickup-only item ships nowhere, so that
-    # is the real reason international is moot — regardless of US-export
-    # status — and it must not be masked by the US-only message below.
-    if wants_intl and mode == "LOCAL_PICKUP":
-        wants_intl = False
-        msgs.append("shipping: international requested but item is LOCAL_PICKUP — "
-                    "ignored (a pickup-only item has nothing to ship).")
-    # A US export restriction is not a preference — it overrides an
-    # international request rather than negotiating with it.
-    if us_reasons and wants_intl:
-        wants_intl = False
-        msgs.append("shipping: INTERNATIONAL REFUSED — US-export-restricted ("
-                    + "; ".join(us_reasons) + "). eBay will not publish this "
-                    "listing at all while it is reachable by eBay International "
-                    "Shipping. See the routing message below for the policy "
-                    "actually chosen.")
-    if wants_intl:
-        blockers = _international_blockers(draft)
-        if blockers:
-            wants_intl = False
-            msgs.append("shipping: INTERNATIONAL REFUSED — " + "; ".join(blockers) +
-                        ". eBay International Shipping rejects these at the US hub, "
-                        "which cancels the order and books a seller defect. Listing "
-                        "domestic-only. Override by clearing the matched wording or "
-                        "setting the policy id by hand if you know it's safe.")
-        elif not intl_fid:
-            wants_intl = False
-            msgs.append("shipping: international requested but "
-                        "ebay.fulfillment_policy_id_international is unset — "
-                        "listing domestic-only.")
+    wants_intl, _intl_reason, msgs = _international_routing(draft, intl_fid)
 
     if mode == "LOCAL_PICKUP":
         if pickup_fid:
@@ -1485,13 +1511,21 @@ def build_review_card(draft_path: Path,
     # opted in. The point is that a reviewer sees "this can never go abroad"
     # BEFORE approving, so a gun-shaped butane lighter is caught at the gate
     # rather than after an international buyer's order is cancelled at the hub.
-    intl_on = str(draft.get("shipping.international") or "").strip().lower() in (
+    # "Requested" is the draft flag; "on" is what the router will actually do
+    # with it (see _international_routing) — the card reports the latter, so it
+    # can't say ENABLED while preflight says domestic-only.
+    intl_requested = str(draft.get("shipping.international") or "").strip().lower() in (
         "true", "yes", "1", "on")
+    intl_on, intl_reason, _ = _international_routing(
+        draft, str(_ebay_extra("fulfillment_policy_id_international",
+                               store=creds.store) or ""))
     intl_blockers = _international_blockers(draft)
     intl_warnings = _international_warnings(draft)
-    if intl_blockers:
+    if intl_requested and not intl_on and not intl_blockers:
+        intl_lines = [f"  ✖ requested but listing domestic-only — {intl_reason}"]
+    elif intl_blockers:
         intl_lines = [f"  ✖ CANNOT SHIP INTERNATIONALLY — {'; '.join(intl_blockers)}"]
-        if intl_on:
+        if intl_requested:
             intl_lines.append("  ✖ draft asks for international but it will be "
                               "REFUSED and listed domestic-only — fix the draft.")
         else:
