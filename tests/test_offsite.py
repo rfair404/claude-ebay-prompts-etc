@@ -104,7 +104,7 @@ def test_share_uploads_as_html_keeps_history_and_links():
     assert remote.objs[DP + "inventory/s/review_card.html"] == b"<p>v1</p>"
     assert remote.types[DP + "inventory/s/review_card.html"] == "text/html; charset=utf-8"
     assert url == (f"https://bucket/{DP}inventory/s/review_card.html"
-                   "?expires=3600&type=text/html; charset=utf-8")
+                   "?expires=3600&type=text/html")
     page.write_bytes(b"<p>v2</p>")
     offsite.share(remote, root, page, offsite.DEFAULT_INCLUDE, DP, "history/T2/", 3600)
     assert remote.objs["history/T2/inventory/s/review_card.html"] == b"<p>v1</p>"

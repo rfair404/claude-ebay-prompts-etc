@@ -477,12 +477,14 @@ def share(remote, root: Path, path: Path, include: Iterable[str], data_prefix: s
     current = remote.list(key).get(key)
     if current is not None and current.etag != md5:
         remote.copy(key, history_prefix + rel)
-    ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    if ctype.startswith("text/"):
-        ctype += "; charset=utf-8"
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     if current is None or current.etag != md5:
-        remote.put(key, data, md5, content_type=ctype)
-    return remote.presign_get(key, expires, content_type=ctype)
+        remote.put(key, data, md5, content_type=(
+            mime + "; charset=utf-8" if mime.startswith("text/") else mime))
+    # The link's override is the bare type: "; charset=utf-8" encodes to
+    # %3B%20, and chat/markdown linkifiers cut the URL there, dropping
+    # X-Amz-Signature (R2: "Required search parameter X-Amz-Signature missing").
+    return remote.presign_get(key, expires, content_type=mime)
 
 
 def pull(remote, root: Path, plan: Plan, data_prefix: str, overwrite: bool) -> list[str]:
