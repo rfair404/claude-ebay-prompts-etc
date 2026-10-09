@@ -59,6 +59,25 @@ Nightly, via crontab (`crontab -e`):
 30 2 * * * cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli offsite push --apply >> .offsite.log 2>&1
 ```
 
+## Review pages: uploaded on build, linked by URL
+
+`tools/review_card_html.py` uploads each `review_card.html` it writes and
+prints `share: <url>`. That URL is the review link the operator gets (see
+`prompts/review.md`). Under the hood:
+
+```
+python -m lib.cli offsite share <file> [--expires-days N]
+```
+
+- Uploads one file now, with its real content type so the browser renders it.
+  A changed bucket copy goes to `history/` first, as with `push`.
+- Prints a **presigned** GET link, 7 days at most (the SigV4 limit). The bucket
+  stays private. Anyone holding the link can open that one object until it
+  expires, so forward it only to people who should see the listing.
+- Refuses files outside the include list, so `config.yaml` can never be shared.
+- `--no-share` on `review_card_html.py` skips the upload. A failed upload
+  prints `share: skipped — …` and the local page is still written.
+
 ## Restore
 
 ```

@@ -11,6 +11,8 @@ then $0.015/GB-month, no egress fees — Backblaze B2 works the same way).
     python -m lib.cli offsite push --apply     # upload new + changed files
     python -m lib.cli offsite pull --apply     # restore files missing locally
     python -m lib.cli offsite pull --apply --overwrite   # bucket wins on diffs
+    python -m lib.cli offsite share <file>     # upload one file now, print a
+                                               # 7-day presigned link to it
 
 Safety rules, because the thing this guards against is a local deletion:
 
@@ -50,6 +52,7 @@ import datetime as dt
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -87,6 +90,7 @@ EXCLUDE_SUFFIXES = (".pyc", ".part", ".tmp")
 STATE_FILE = ".offsite_state.json"     # md5 cache; /.*.json is gitignored
 CONFLICT_DIR = ".offsite_conflicts"
 MAX_SINGLE_PUT = 5 * 1024**3 - 1       # S3 single-PUT ceiling
+MAX_PRESIGN_SECONDS = 7 * 24 * 3600    # SigV4 presigned-URL ceiling
 WORKERS = 8
 
 
@@ -189,6 +193,37 @@ def sigv4_headers(method: str, host: str, path: str, query: dict[str, str],
     return out
 
 
+def presign_url(method: str, scheme: str, host: str, path: str, *,
+                access_key_id: str, secret_access_key: str, region: str,
+                now: dt.datetime, expires: int, service: str = "s3",
+                extra_query: Optional[dict[str, str]] = None) -> str:
+    """SigV4 query-string signing ("presigned URL"). `path` is already
+    URI-encoded. Only Host is signed, so any client can open the URL.
+    `extra_query` (e.g. response-content-type) is signed in too."""
+    if not 1 <= expires <= MAX_PRESIGN_SECONDS:
+        raise OffsiteError(f"presign expiry must be 1..{MAX_PRESIGN_SECONDS}s, got {expires}")
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    day = amz_date[:8]
+    scope = f"{day}/{region}/{service}/aws4_request"
+    query = {
+        "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+        "X-Amz-Credential": f"{access_key_id}/{scope}",
+        "X-Amz-Date": amz_date,
+        "X-Amz-Expires": str(expires),
+        "X-Amz-SignedHeaders": "host",
+        **(extra_query or {}),
+    }
+    qs = "&".join(f"{_q(k)}={_q(v)}" for k, v in sorted(query.items()))
+    canonical = "\n".join([method, path, qs, f"host:{host}\n", "host", "UNSIGNED-PAYLOAD"])
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope,
+                         hashlib.sha256(canonical.encode()).hexdigest()])
+    k = _hmac(("AWS4" + secret_access_key).encode(), day)
+    for part in (region, service, "aws4_request"):
+        k = _hmac(k, part)
+    sig = hmac.new(k, to_sign.encode(), hashlib.sha256).hexdigest()
+    return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
+
+
 @dataclass
 class RemoteObject:
     size: int
@@ -247,10 +282,28 @@ class S3Remote:
                 return out
             token = root.findtext(f"{ns}NextContinuationToken")
 
-    def put(self, key: str, data: bytes, md5_hex: str) -> None:
+    def put(self, key: str, data: bytes, md5_hex: str,
+            content_type: str = "application/octet-stream") -> None:
         md5_b64 = base64.b64encode(bytes.fromhex(md5_hex)).decode()
         self._request("PUT", key, body=data, headers={
-            "content-md5": md5_b64, "content-type": "application/octet-stream"}).close()
+            "content-md5": md5_b64, "content-type": content_type}).close()
+
+    def presign_get(self, key: str, expires: int = MAX_PRESIGN_SECONDS,
+                    now: Optional[dt.datetime] = None,
+                    content_type: Optional[str] = None) -> str:
+        """A GET URL anyone holding it can open until it expires. The bucket
+        stays private: this is a bearer link to ONE object, not public access.
+        `content_type` overrides the stored type on the response, so an object
+        pushed earlier as octet-stream still renders as a page."""
+        path = f"{self.base}/{_q(self.cfg.bucket)}/{_q(key, safe='/-_.~')}"
+        return presign_url("GET", self.scheme, self.host, path,
+                           access_key_id=self.cfg.access_key_id,
+                           secret_access_key=self.cfg.secret_access_key,
+                           region=self.cfg.region,
+                           now=now or dt.datetime.now(dt.timezone.utc),
+                           expires=expires,
+                           extra_query=({"response-content-type": content_type}
+                                        if content_type else None))
 
     def copy(self, src_key: str, dst_key: str) -> None:
         src = "/" + _q(self.cfg.bucket) + "/" + _q(src_key, safe="/-_.~")
@@ -403,6 +456,37 @@ def push(remote, root: Path, plan: Plan, data_prefix: str,
     return _parallel(up, plan.local_only + plan.changed, "pushed")
 
 
+def share(remote, root: Path, path: Path, include: Iterable[str], data_prefix: str,
+          history_prefix: str, expires: int = MAX_PRESIGN_SECONDS) -> str:
+    """Push ONE file now and return a presigned link to it.
+
+    Same safety rules as push (a changed remote copy goes to history/ first),
+    and only a file push would back up anyway — never config.yaml or anything
+    else outside the include globs. Uploaded with its real content type so a
+    browser renders an .html page instead of downloading it."""
+    path = path.resolve()
+    try:
+        rel = path.relative_to(root.resolve()).as_posix()
+    except ValueError:
+        raise OffsiteError(f"{path} is not under the data root {root}") from None
+    if not path.is_file() or rel not in set(local_files(root, include)):
+        raise OffsiteError(f"{rel} is not listing data the offsite copy covers")
+    data = path.read_bytes()
+    md5 = hashlib.md5(data).hexdigest()
+    key = data_prefix + rel
+    current = remote.list(key).get(key)
+    if current is not None and current.etag != md5:
+        remote.copy(key, history_prefix + rel)
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    if current is None or current.etag != md5:
+        remote.put(key, data, md5, content_type=(
+            mime + "; charset=utf-8" if mime.startswith("text/") else mime))
+    # The link's override is the bare type: "; charset=utf-8" encodes to
+    # %3B%20, and chat/markdown linkifiers cut the URL there, dropping
+    # X-Amz-Signature (R2: "Required search parameter X-Amz-Signature missing").
+    return remote.presign_get(key, expires, content_type=mime)
+
+
 def pull(remote, root: Path, plan: Plan, data_prefix: str, overwrite: bool) -> list[str]:
     conflicts = root / CONFLICT_DIR / _stamp()
 
@@ -444,20 +528,42 @@ def _show(plan: Plan, limit: int = 20) -> None:
     block("too big for a single PUT (skipped)", plan.too_big)
 
 
+def share_file(path: Path, expires: int = MAX_PRESIGN_SECONDS,
+               root: Optional[Path] = None) -> str:
+    """Upload one listing-data file now and return a presigned link to it.
+    What tools/review_card_html.py calls after writing the review page."""
+    cfg = load_offsite_config()
+    root = (root or data_root()).resolve()
+    return share(S3Remote(cfg), root, Path(path), cfg.include, cfg.prefix + "data/",
+                 f"{cfg.prefix}history/{_stamp()}/", expires)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="ebz offsite", description=__doc__.split("\n\n")[0])
-    ap.add_argument("action", choices=("check", "status", "push", "pull"))
+    ap.add_argument("action", choices=("check", "status", "push", "pull", "share"))
+    ap.add_argument("files", nargs="*", type=Path,
+                    help="share: the file(s) to upload now and link to")
     ap.add_argument("--apply", action="store_true", help="actually transfer (default: dry run)")
     ap.add_argument("--overwrite", action="store_true",
                     help="pull: replace differing local files (local copy kept in "
                          f"{CONFLICT_DIR}/)")
+    ap.add_argument("--expires-days", type=float, default=7,
+                    help="share: link lifetime in days (max 7)")
     ap.add_argument("--root", type=Path, help="data root (default: the main checkout)")
     a = ap.parse_args(argv)
+    if (a.action == "share") != bool(a.files):
+        ap.error("share takes one or more files; the other actions take none")
 
     try:
         cfg = load_offsite_config()
         remote = S3Remote(cfg)
         root = (a.root or data_root()).resolve()
+        if a.action == "share":
+            # Uploading is the point of the command, so no --apply dry run.
+            expires = int(a.expires_days * 86400)
+            for f in a.files:
+                print(share_file(f, expires, root))
+            return 0
         if a.action == "check":
             n = remote.check()
             print(f"ok — {cfg.endpoint}/{cfg.bucket}: write/read round-trip passed, "

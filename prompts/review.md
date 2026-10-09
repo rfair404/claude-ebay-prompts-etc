@@ -60,9 +60,15 @@ second. So REVIEW always also builds the page:
 
     python tools/review_card_html.py <shoot-dir>    # -> <shoot-dir>/review_card.html
 
-Deliver it (send the file, or publish it as an artifact and link it) and
-present the text card in chat beside it. Republish the SAME path so the link
-never moves. This is the official review surface — not a 4,000px JPEG, not a
+By default that also uploads the page to the offsite bucket
+(`ebz offsite share`, [docs/offsite-storage.md](../docs/offsite-storage.md))
+and prints `share: <url>` — a presigned link, good for 7 days, that opens the
+page from any device. The sandbox needs the bucket's endpoint host in
+`allowed_domains`. **That URL is the link you give the operator**, beside the
+text card in chat. If the upload is skipped (`share: skipped — …`: no
+`offsite:` config, no network), say so and fall back to sending the file.
+Re-running the command re-uploads the page and prints a fresh link; give the
+new one. This is the official review surface — not a 4,000px JPEG, not a
 prose summary, not the text card alone.
 
 What the page must carry (the generator does this; don't strip it):
@@ -164,6 +170,6 @@ user, and only pass `--confirm` on an explicit yes.
 ## Closing
 
 Per _shared: lead with the result.
-- Awaiting decision: the review page (delivered/linked), `review_card.md`
+- Awaiting decision: the review page (its `share:` link), `review_card.md`
   path + the headline (title + price) + the count of ⚠ lines. Then stop.
 - After publish: the live listing URL + price. Nothing further runs.

@@ -28,9 +28,13 @@ class FakeRemote:
         return {k: RemoteObject(len(v), hashlib.md5(v).hexdigest())
                 for k, v in self.objs.items() if k.startswith(prefix)}
 
-    def put(self, key, data, md5_hex):
+    def put(self, key, data, md5_hex, content_type="application/octet-stream"):
         assert hashlib.md5(data).hexdigest() == md5_hex
         self.objs[key] = data
+        self.types = {**getattr(self, "types", {}), key: content_type}
+
+    def presign_get(self, key, expires, content_type=None):
+        return f"https://bucket/{key}?expires={expires}&type={content_type}"
 
     def copy(self, src, dst):
         self.objs[dst] = self.objs[src]
@@ -64,6 +68,57 @@ def test_sigv4_matches_aws_published_example():
     assert h["authorization"].endswith(
         "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
     assert "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date" in h["authorization"]
+
+
+def test_presign_matches_aws_published_example():
+    # "Authenticating Requests: Using Query Parameters" — GET /test.txt, 24h.
+    url = offsite.presign_url(
+        "GET", "https", "examplebucket.s3.amazonaws.com", "/test.txt",
+        access_key_id="AKIAIOSFODNN7EXAMPLE",
+        secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        region="us-east-1", now=dt.datetime(2013, 5, 24, tzinfo=dt.timezone.utc),
+        expires=86400)
+    assert url.startswith("https://examplebucket.s3.amazonaws.com/test.txt?"
+                          "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential="
+                          "AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request")
+    assert url.endswith(
+        "X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404")
+
+
+def test_presign_refuses_expiry_past_seven_days():
+    try:
+        offsite.presign_url("GET", "https", "h", "/k", access_key_id="a",
+                            secret_access_key="s", region="auto",
+                            now=dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc),
+                            expires=offsite.MAX_PRESIGN_SECONDS + 1)
+    except offsite.OffsiteError:
+        return
+    raise AssertionError("an 8-day presign was accepted")
+
+
+def test_share_uploads_as_html_keeps_history_and_links():
+    root = _tree({"inventory/s/review_card.html": b"<p>v1</p>", "config.yaml": b"SECRET"})
+    remote = FakeRemote()
+    page = root / "inventory/s/review_card.html"
+    url = offsite.share(remote, root, page, offsite.DEFAULT_INCLUDE, DP, "history/T/", 3600)
+    assert remote.objs[DP + "inventory/s/review_card.html"] == b"<p>v1</p>"
+    assert remote.types[DP + "inventory/s/review_card.html"] == "text/html; charset=utf-8"
+    assert url == (f"https://bucket/{DP}inventory/s/review_card.html"
+                   "?expires=3600&type=text/html")
+    page.write_bytes(b"<p>v2</p>")
+    offsite.share(remote, root, page, offsite.DEFAULT_INCLUDE, DP, "history/T2/", 3600)
+    assert remote.objs["history/T2/inventory/s/review_card.html"] == b"<p>v1</p>"
+    assert remote.objs[DP + "inventory/s/review_card.html"] == b"<p>v2</p>"
+
+
+def test_share_refuses_files_outside_listing_data():
+    root = _tree({"config.yaml": b"SECRET", "inventory/s/a.html": b"x"})
+    for bad in (root / "config.yaml", Path(tempfile.mkdtemp()) / "elsewhere.html"):
+        try:
+            offsite.share(FakeRemote(), root, bad, offsite.DEFAULT_INCLUDE, DP, "h/", 60)
+        except offsite.OffsiteError:
+            continue
+        raise AssertionError(f"shared {bad}")
 
 
 def test_selects_listing_data_only():

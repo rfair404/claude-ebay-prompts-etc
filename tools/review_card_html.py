@@ -234,7 +234,11 @@ def render(shoot: Path) -> str:
                  if warn else '<li class="clear">Nothing flagged.</li>')
     pre_html = "".join(f"<li>{html.escape(x)}</li>" for x in pre)
 
-    page = f"""<title>{html.escape(_page_name(title))}</title>
+    # The charset must be declared IN the page: opened from disk or from an
+    # offsite link with a bare text/html type, a browser otherwise falls back
+    # to windows-1252 and every em dash shows up as "â€”".
+    page = f"""<meta charset="utf-8">
+<title>{html.escape(_page_name(title))}</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
 <style>
@@ -467,6 +471,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Render the REVIEW card as a page.")
     ap.add_argument("shoot_dir")
     ap.add_argument("-o", "--out", default=None)
+    ap.add_argument("--no-share", action="store_true",
+                    help="skip uploading the page to the offsite bucket")
     a = ap.parse_args(argv)
 
     shoot = Path(a.shoot_dir)
@@ -474,6 +480,15 @@ def main(argv=None) -> int:
         ap.error(f"no draft.md in {shoot} — run DRAFT first")
     p = build(shoot, Path(a.out) if a.out else None)
     print(f"{p}  ({p.stat().st_size / 1e6:.1f} MB)")
+    if not a.no_share:
+        # The link handed to the operator is the offsite copy, so the page
+        # opens from any device. A failed upload never fails the build: the
+        # local file above is still the review page.
+        import offsite
+        try:
+            print(f"share: {offsite.share_file(p)}")
+        except offsite.OffsiteError as e:
+            print(f"share: skipped — {e}", file=sys.stderr)
     return 0
 
 

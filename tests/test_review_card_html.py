@@ -87,6 +87,13 @@ def test_render_returns_exactly_what_build_writes(tmp_path):
     assert from_render == from_build
 
 
+def test_page_declares_utf8_first(tmp_path):
+    # Served as bare text/html (the offsite link) or opened from disk, a page
+    # without this renders "—" as "â€”". Browsers only honour it near the top.
+    page = R.render(_shoot(tmp_path))
+    assert page.startswith('<meta charset="utf-8">')
+
+
 def test_render_does_not_write_a_file(tmp_path):
     s = _shoot(tmp_path)
     assert not (s / "review_card.html").exists()
