@@ -1877,7 +1877,8 @@ def run_stage(shoot: Path, stage: str, quiet: bool = False) -> dict:
 
     if stage == "color" and not any((r.get("presets") or {})
                                     for r in m["photos"].values()):
-        raise SystemExit("colour has not been rendered yet — run --apply-color first")
+        raise SystemExit("colour has not been rendered yet — run --apply first "
+                         "(renders crisp; --filters for every look)")
 
     out = shoot / ".prep" / f"stage_{stagemod.STAGES.index(stage) + 1}_{stage}.jpg"
     stagemod.SHEET_BUILDERS[stage](shoot, m, out)
@@ -2590,12 +2591,8 @@ def _positive_int(s: str) -> int:
     return n
 
 
-def main(argv=None) -> int:
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI. Split out of main() so tests can check what it accepts."""
     ap = argparse.ArgumentParser(description="PREP — orientation, crop and colour for one shoot.")
     ap.add_argument("shoot_dir")
     ap.add_argument("--check", action="store_true", help="analyse + plan; render nothing")
@@ -2688,6 +2685,16 @@ def main(argv=None) -> int:
                          "up, so every frame with no recorded --rotate answer "
                          "is assumed upright and no OSD pass runs at all)")
     ap.add_argument("--quiet", action="store_true")
+    return ap
+
+
+def main(argv=None) -> int:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+    ap = build_parser()
     args = ap.parse_args(argv)
 
     shoot = Path(args.shoot_dir)

@@ -2395,3 +2395,27 @@ def test_apply_run_records_the_jobs_value():
         P.run_approve_auto(shoot)
         P.run_apply(shoot, quiet=True, jobs=1)
         assert P.load_manifest(shoot)["apply_run"]["jobs"] == 1
+
+
+def test_every_flag_named_in_a_systemexit_is_a_real_option():
+    """An error that tells the operator to run a flag argparse rejects is a
+    dead end. `--stage color` once said "run --apply-color first", and there
+    has never been an `--apply-color` (colour is rendered by `--apply`)."""
+    import ast
+    import re
+
+    src = Path(P.__file__).read_text(encoding="utf-8")
+    known = {opt for a in P.build_parser()._actions for opt in a.option_strings}
+    named = {}
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
+                and getattr(node.exc.func, "id", None) == "SystemExit"):
+            continue
+        text = " ".join(c.value for arg in node.exc.args for c in ast.walk(arg)
+                        if isinstance(c, ast.Constant) and isinstance(c.value, str))
+        for flag in re.findall(r"(?<![\w-])--[a-z][a-z-]*", text):
+            named.setdefault(flag, node.lineno)
+
+    assert named, "no flags found — the scan itself is broken"
+    bad = {f: ln for f, ln in named.items() if f not in known}
+    assert not bad, f"SystemExit names unregistered flags: {bad}"
