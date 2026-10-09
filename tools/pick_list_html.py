@@ -208,6 +208,44 @@ def _thumb_uri(path: Path) -> str | None:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+# The listing's own photo, for an item with no local shoot folder: hand listed,
+# or its inventory/ folder is gone (the 2026-10 Linux rebuild left none). Off by
+# default so render_html() stays offline under test; the real callers (main()
+# here, the --poll publisher in pick_list.py) switch it on.
+EBAY_PHOTOS = False
+EBAY_PHOTO_DIR = ROOT / "inventory" / "_ebay_photos"
+_BROWSE_BY_LEGACY_ID = "/buy/browse/v1/item/get_item_by_legacy_id"
+
+
+def _ebay_photo_path(listing_id: str) -> Path | None:
+    """The listing's main photo, fetched from eBay's Browse API once and kept
+    as inventory/_ebay_photos/<listing id>.jpg. Browse still answers for an
+    item that has just sold. Never raises: a sheet without a photo still
+    ships, so a failed lookup is a warning and a "no photo" box."""
+    if not (EBAY_PHOTOS and listing_id and str(listing_id).isdigit()):
+        return None
+    path = EBAY_PHOTO_DIR / f"{listing_id}.jpg"
+    if path.exists():
+        return path
+    try:
+        import urllib.request                             # noqa: PLC0415
+        import ebay_client as ec                          # noqa: PLC0415
+        item = ec.api_get(_BROWSE_BY_LEGACY_ID, query={"legacy_item_id": listing_id})
+        url = (item.get("image") or {}).get("imageUrl")
+        if not url:
+            return None
+        with urllib.request.urlopen(url, timeout=20) as resp:
+            data = resp.read()
+        EBAY_PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+        part = path.with_suffix(".part")
+        part.write_bytes(data)
+        part.replace(path)
+        return path
+    except Exception as e:                                # noqa: BLE001
+        print(f"  ! no eBay photo for item {listing_id} ({e})", file=sys.stderr)
+        return None
+
+
 def _hero_path(folder: str) -> Path | None:
     """The item's cover shot: review_card.md's recorded `hero` line if the item
     went through REVIEW, else the first frame in listing/ as a fallback."""
@@ -320,7 +358,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
             row = {"sku": li.get("sku") or "", "listing_id": li.get("legacyItemId", ""),
                    "title": li.get("title", "")}
             folder, _ask, _how = match_sale(row, drafts, ledger)
-            thumb = _thumb_uri(_hero_path(folder)) if folder else None
+            hero = _hero_path(folder) if folder else None
+            thumb = _thumb_uri(hero or _ebay_photo_path(row["listing_id"]))
             pic = f'<img src="{thumb}" alt="">' if thumb else '<div class="noimg">no photo</div>'
             sku_bit = f" &middot; sku {html.escape(row['sku'])}" if row["sku"] else ""
             order_bit = (f" &middot; order {html.escape(o.get('orderId', ''))}"
@@ -617,6 +656,9 @@ def main() -> int:
         # both read EBAYBIZ_STORE — so the account the orders came from and
         # the name printed above them can't disagree.
         os.environ["EBAYBIZ_STORE"] = args.store
+
+    global EBAY_PHOTOS
+    EBAY_PHOTOS = True
 
     if args.revoke:
         return cmd_revoke(args.revoke)
