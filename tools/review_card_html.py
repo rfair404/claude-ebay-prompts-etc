@@ -234,7 +234,11 @@ def render(shoot: Path) -> str:
                  if warn else '<li class="clear">Nothing flagged.</li>')
     pre_html = "".join(f"<li>{html.escape(x)}</li>" for x in pre)
 
-    page = f"""<title>{html.escape(_page_name(title))}</title>
+    # The charset must be declared IN the page: opened from disk or from an
+    # offsite link with a bare text/html type, a browser otherwise falls back
+    # to windows-1252 and every em dash shows up as "â€”".
+    page = f"""<meta charset="utf-8">
+<title>{html.escape(_page_name(title))}</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
 <style>
