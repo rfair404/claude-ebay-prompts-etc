@@ -214,6 +214,24 @@ easypost:
   api_key: "EZAK_REPLACE_ME"
 
 # ---------------------------------------------------------------------------
+# Offsite storage — lib/offsite.py (`ebz offsite`)
+# ---------------------------------------------------------------------------
+# A second copy of the ledgers, inventory/ (photos, drafts, phase output) and
+# reports/ in an S3-compatible bucket. Push never deletes remotely and keeps
+# superseded versions under history/. config.yaml itself is NOT backed up.
+# Setup steps: docs/offsite-storage.md. Env vars win for the two keys:
+#   EBAYBIZ_OFFSITE_ACCESS_KEY_ID / EBAYBIZ_OFFSITE_SECRET_ACCESS_KEY
+offsite:
+  endpoint: "https://ACCOUNT_ID.r2.cloudflarestorage.com"   # R2
+  # endpoint: "https://s3.us-west-004.backblazeb2.com"      # Backblaze B2
+  bucket: "ebaybiz-data"
+  region: "auto"            # R2: auto.  B2: the region in the endpoint
+  access_key_id: "REPLACE_ME"
+  secret_access_key: "REPLACE_ME"
+  # prefix: ""              # optional key prefix inside the bucket
+  # include: []             # extra globs, e.g. ["letters/**"]
+
+# ---------------------------------------------------------------------------
 # CURATE strategy profiles
 # ---------------------------------------------------------------------------
 # Profiles encode the Buy Point math used by CURATE. The active profile

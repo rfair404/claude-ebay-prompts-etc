@@ -85,6 +85,9 @@ COMMANDS = {
                      "EasyPost shipping-rate quotes (#80) — free, no confirm needed"),
     "ship-buy":     ("tools.ship_buy",
                      "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
+    "offsite":      ("lib.offsite",
+                     "back up / restore ledgers + inventory/ to an S3-compatible "
+                     "bucket (R2) — dry run unless --apply, never deletes remotely"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }

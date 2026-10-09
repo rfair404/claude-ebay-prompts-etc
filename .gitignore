@@ -243,6 +243,10 @@ desktop.ini
 # fetchable from old commit SHAs — untracking did not remove it. See #104.
 /todo.md
 
+# lib/offsite.py: local files a `pull --overwrite` displaced. Business data
+# (class 2) — copies of ledgers and inventory/ files.
+/.offsite_conflicts/
+
 # local working backups (ledger/sales/config) — never committed
 backups/
 session_friction.json
