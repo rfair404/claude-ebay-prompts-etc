@@ -467,6 +467,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Render the REVIEW card as a page.")
     ap.add_argument("shoot_dir")
     ap.add_argument("-o", "--out", default=None)
+    ap.add_argument("--no-share", action="store_true",
+                    help="skip uploading the page to the offsite bucket")
     a = ap.parse_args(argv)
 
     shoot = Path(a.shoot_dir)
@@ -474,6 +476,15 @@ def main(argv=None) -> int:
         ap.error(f"no draft.md in {shoot} — run DRAFT first")
     p = build(shoot, Path(a.out) if a.out else None)
     print(f"{p}  ({p.stat().st_size / 1e6:.1f} MB)")
+    if not a.no_share:
+        # The link handed to the operator is the offsite copy, so the page
+        # opens from any device. A failed upload never fails the build: the
+        # local file above is still the review page.
+        import offsite
+        try:
+            print(f"share: {offsite.share_file(p)}")
+        except offsite.OffsiteError as e:
+            print(f"share: skipped — {e}", file=sys.stderr)
     return 0
 
 
