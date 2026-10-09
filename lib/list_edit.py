@@ -147,6 +147,7 @@ _VALID_CONDITIONS = {
     "MANUFACTURER_REFURBISHED", "CERTIFIED_REFURBISHED", "EXCELLENT_REFURBISHED",
     "VERY_GOOD_REFURBISHED", "GOOD_REFURBISHED", "SELLER_REFURBISHED",
     "USED_EXCELLENT", "USED_VERY_GOOD", "USED_GOOD", "USED_ACCEPTABLE",
+    "PRE_OWNED_EXCELLENT", "PRE_OWNED_FAIR",
     "FOR_PARTS_OR_NOT_WORKING",
 }
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tiff", ".bmp"}
@@ -1011,6 +1012,7 @@ _COND_ENUM_TO_ID = {
     "GOOD_REFURBISHED": 2030, "SELLER_REFURBISHED": 2500,
     "USED_EXCELLENT": 3000, "USED_VERY_GOOD": 4000, "USED_GOOD": 5000,
     "USED_ACCEPTABLE": 6000, "FOR_PARTS_OR_NOT_WORKING": 7000,
+    "PRE_OWNED_EXCELLENT": 2990, "PRE_OWNED_FAIR": 3010,
 }
 _COND_ID_TO_ENUM = {
     1000: "NEW", 1500: "NEW_OTHER", 1750: "NEW_WITH_DEFECTS", 2750: "LIKE_NEW",
@@ -1018,30 +1020,30 @@ _COND_ID_TO_ENUM = {
     2020: "VERY_GOOD_REFURBISHED", 2030: "GOOD_REFURBISHED", 2500: "SELLER_REFURBISHED",
     3000: "USED_EXCELLENT", 4000: "USED_VERY_GOOD", 5000: "USED_GOOD",
     6000: "USED_ACCEPTABLE", 7000: "FOR_PARTS_OR_NOT_WORKING",
+    2990: "PRE_OWNED_EXCELLENT", 3010: "PRE_OWNED_FAIR",
 }
-# The new-ladder rungs resolve to a name only via the per-category lookup
-# (ebay_client.get_condition_names); 2990/3010 are deliberately NOT added to the
-# global table above, because their meaning is category-dependent.
 # eBay's NEWER three-rung used ladder, used by jewelry and a growing set of
-# categories. Our enum ids (3000/4000/5000/6000) predate it and do not line up:
-# on this ladder id 3000 is "Pre-owned - Good", so an item we grade
-# USED_EXCELLENT is ADVERTISED as "Pre-owned - Good" — a rung below what it is —
-# and 2990 ("Pre-owned - Excellent") cannot be reached at all, because the Sell
-# API takes an enum NAME (see the payload build) and we have no name for 2990.
-# Measured live on categories 262008 and 262011.
+# categories: 2990 "Pre-owned - Excellent", 3000 "Pre-owned - Good", 3010
+# "Pre-owned - Fair". Our older enum ids (3000/4000/5000/6000) do not line up
+# with it: on this ladder id 3000 is "Pre-owned - Good", so an item we grade
+# USED_EXCELLENT is ADVERTISED as "Pre-owned - Good". Measured live on
+# categories 262008 and 262011. Human-facing labels still come from the
+# per-category lookup (ebay_client.get_condition_names), never this table.
 #
-# NOT fixed here on purpose. Reaching 2990 needs the Sell API's own enum for it
-# (likely PRE_OWNED_EXCELLENT) verified against eBay's current enum list, not
-# guessed — a wrong enum fails the publish outright, and these run against LIVE
-# listings. Until then the reporting is at least honest: the preflight prints
-# the label the BUYER sees, from the per-category lookup, so nobody reads
-# "USED_EXCELLENT" and assumes that is what is on the page.
+# The Sell API names for the outer rungs are PRE_OWNED_EXCELLENT (2990) and
+# PRE_OWNED_FAIR (3010) — Inventory API ConditionEnum, added in v1.18.2
+# (2025-01-22), verified against eBay's docs 2026-10-08. A draft can set them
+# directly; the remap below sends an older grade to its ladder rung when the
+# category is on the ladder (_LADDER_REMAP).
 _NEW_USED_LADDER = {2990, 3000, 3010}
+# Older used grade -> its rung on the three-rung ladder. USED_EXCELLENT (3000)
+# is left alone: it is accepted as-is wherever the ladder is.
+_LADDER_REMAP = {4000: 3000, 5000: 3000, 6000: 3010}
 
 _COND_FAMILIES = (
     [1000, 1500, 1750, 2750],          # new-ish
     [2000, 2010, 2020, 2030, 2500],    # refurbished
-    [3000, 4000, 5000, 6000],          # used grades
+    [2990, 3000, 3010, 4000, 5000, 6000],  # used grades (incl. the jewelry/apparel ladder)
     [7000],                            # for parts
 )
 
@@ -1065,9 +1067,16 @@ def _remap_condition_for_category(enum: str, allowed_ids: set[int]) -> tuple[str
             0, f"condition {enum} is invalid for this category and no same-grade "
                f"alternative is accepted. Category accepts: {allowed_names}. "
                f"Fix the draft's condition or category_id.", None)
-    # Prefer generic "Used" (3000) for used items; else the nearest accepted id.
-    target = 3000 if (3000 in candidates and cid in _COND_FAMILIES[2]) else \
-        min(candidates, key=lambda i: abs(i - cid))
+    # On the three-rung ladder, an older grade goes to its own rung, so
+    # USED_ACCEPTABLE lands on "Pre-owned - Fair" rather than being promoted to
+    # "Pre-owned - Good". Otherwise prefer generic "Used" (3000) for used
+    # items; else the nearest accepted id.
+    if _LADDER_REMAP.get(cid) in candidates:
+        target = _LADDER_REMAP[cid]
+    elif 3000 in candidates and cid in _COND_FAMILIES[2]:
+        target = 3000
+    else:
+        target = min(candidates, key=lambda i: abs(i - cid))
     new_enum = _COND_ID_TO_ENUM[target]
     return new_enum, (f"condition {enum} not accepted by category "
                       f"(accepts {sorted(allowed_ids)}) -> remapped to {new_enum}")

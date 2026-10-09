@@ -58,6 +58,8 @@ category_path:          ""        # human-readable breadcrumb, for the user's re
 #   EXCELLENT_REFURBISHED | VERY_GOOD_REFURBISHED | GOOD_REFURBISHED |
 #   SELLER_REFURBISHED |
 #   USED_EXCELLENT | USED_VERY_GOOD | USED_GOOD | USED_ACCEPTABLE |
+#   PRE_OWNED_EXCELLENT (2990) | PRE_OWNED_FAIR (3010) — the three-rung
+#   used ladder (jewelry, apparel), where 3000 is "Pre-owned - Good" |
 #   FOR_PARTS_OR_NOT_WORKING
 # Note: condition is selected in eBay's pre-list dialog, not on the main
 # form — but the Sell API accepts it as a field on the inventory item.
