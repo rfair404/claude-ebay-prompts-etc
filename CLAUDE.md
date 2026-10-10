@@ -101,10 +101,11 @@ functions with one name, two APIs for creating a no-returns policy, two
 `Store:` lines on one card, and the ignore-pattern gap above. Only one of the
 five collisions that day was a conflict git would show you.
 
-## Pick list requests → links to the local server
+## Pick list requests → R2 links
 
 When asked for the pick list (to print, for today, what to ship), follow
-[`prompts/pick_list.md`](prompts/pick_list.md). In short: start the app on
-127.0.0.1:8770, run `tools/pick_list.py --poll --all-stores` from the main
-checkout, and reply with one hyperlink per shipment. Don't reply with the
-terminal report or a file path.
+[`prompts/pick_list.md`](prompts/pick_list.md). In short: from the main
+checkout, run `tools/pick_list.py --poll --all-stores`. Copy each sheet into
+`inventory/_pick_lists/`, upload them with `lib.cli offsite share`, and reply
+with one presigned R2 link per order. Don't reply with `127.0.0.1` links, the
+terminal report, or a file path.
