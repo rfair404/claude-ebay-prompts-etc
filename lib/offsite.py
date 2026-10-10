@@ -52,13 +52,11 @@ Config (config.yaml; env vars win for the two secrets):
       include: []                    # extra globs, e.g. ["letters/**"]
       ipv4_only: false               # true: never try the endpoint's IPv6
 
-Connections: every request has a connect timeout (CONNECT_TIMEOUT) separate
-from its I/O timeout, and each resolved address is tried in turn. R2's
-endpoint resolves to IPv6 first; on a host whose IPv6 route is broken the
-connect used to hang until the kernel gave up, so check/share/push looked
-frozen. Now an IPv6 attempt that fails falls through to IPv4, and the host is
-remembered so the rest of the run goes straight to IPv4. `ipv4_only: true`
-skips IPv6 altogether.
+Connections: IPv4 addresses are tried first, each with a connect timeout
+(CONNECT_TIMEOUT) separate from the request's I/O timeout. R2's endpoint
+resolves to IPv6 first, and on a host whose IPv6 route is dead urllib's
+default connect hung for minutes, so check/share/push looked frozen. IPv6 is
+still the fallback if IPv4 fails; `ipv4_only: true` never tries it.
 
 Stdlib only (SigV4 over urllib), like the rest of lib/ outside the CLIP deps.
 """
@@ -79,7 +77,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -271,51 +268,40 @@ def presign_url(method: str, scheme: str, host: str, path: str, *,
     return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
 
 
-# Hosts whose IPv6 connect failed while IPv4 worked, this process. Later
-# connections to them try IPv4 first instead of paying CONNECT_TIMEOUT again
-# on every request of a push.
-_V6_BROKEN: set[str] = set()
-_V6_LOCK = threading.Lock()
+def _ipv4_first(infos: list) -> list:
+    return sorted(infos, key=lambda i: i[0] != socket.AF_INET)
 
 
 def connect(address: tuple[str, int], timeout: Optional[float] = None,
             source_address=None, *, ipv4_only: bool = False,
             connect_timeout: float = CONNECT_TIMEOUT) -> socket.socket:
-    """socket.create_connection with a bounded connect per address and an
-    IPv6 -> IPv4 fallback. `timeout` is the I/O timeout set once connected."""
+    """socket.create_connection, but IPv4 addresses first and a bounded
+    connect per address. Stock urllib tries the host's IPv6 address first and
+    waits the whole request timeout on it: on a box whose IPv6 route is dead
+    (2026-10, this one) every request stalled minutes before falling back.
+    IPv6 is still tried if every IPv4 address fails, unless `ipv4_only`.
+    `timeout` is the I/O timeout set once connected."""
     host, port = address
+    if not isinstance(timeout, (int, float)):
+        timeout = None                     # socket._GLOBAL_DEFAULT_TIMEOUT
     family = socket.AF_INET if ipv4_only else socket.AF_UNSPEC
-    infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+    infos = _ipv4_first(socket.getaddrinfo(host, port, family, socket.SOCK_STREAM))
     if not infos:
         raise OSError(f"getaddrinfo returned no addresses for {host}")
-    infos = list(infos)
-    if host in _V6_BROKEN:
-        infos.sort(key=lambda i: i[0] == socket.AF_INET6)
     step = connect_timeout if timeout is None else min(connect_timeout, timeout)
-    v6_failed, errors = False, []
-    while infos:
-        af, socktype, proto, _, sa = infos.pop(0)
-        sock = None
+    errors = []
+    for af, socktype, proto, _, sa in infos:
+        sock = socket.socket(af, socktype, proto)
         try:
-            sock = socket.socket(af, socktype, proto)
             sock.settimeout(step)
             if source_address:
                 sock.bind(source_address)
             sock.connect(sa)
         except OSError as e:
             errors.append(f"{sa[0]}: {e or type(e).__name__}")
-            if af == socket.AF_INET6 and not v6_failed:
-                # One dead IPv6 address usually means a dead IPv6 route:
-                # try IPv4 before the endpoint's other IPv6 addresses.
-                v6_failed = True
-                infos.sort(key=lambda i: i[0] == socket.AF_INET6)
-            if sock is not None:
-                sock.close()
+            sock.close()
             continue
         sock.settimeout(timeout)
-        if v6_failed and af == socket.AF_INET:
-            with _V6_LOCK:
-                _V6_BROKEN.add(host)
         return sock
     raise OSError(f"could not connect to {host}:{port} ({'; '.join(errors)})")
 

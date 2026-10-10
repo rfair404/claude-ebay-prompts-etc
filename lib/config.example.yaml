@@ -232,7 +232,7 @@ offsite:
   # include: []             # extra globs, e.g. ["letters/**"]; photos/video
   #                         # are never synced (MEDIA_SUFFIXES in lib/offsite.py)
   # ipv4_only: false        # true if the IPv6 route to the endpoint is broken
-  #                         # (connects fall back to IPv4 on their own anyway)
+  #                         # (IPv4 is tried first either way)
 
 # ---------------------------------------------------------------------------
 # CURATE strategy profiles

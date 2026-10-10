@@ -122,8 +122,8 @@ An older version of an overwritten file is under
 
 ## Broken IPv6
 
-The R2 endpoint resolves to IPv6 and IPv4 addresses, and IPv6 is tried first.
-On a network where IPv6 doesn't reach Cloudflare (`curl -6` to the endpoint
-times out, `curl -4` answers), the first IPv6 connect is cut off after 10 s and
-falls back to IPv4. The rest of the run then uses IPv4 directly. To skip
-IPv6 entirely, set `ipv4_only: true` under `offsite:` in `config.yaml`.
+The R2 endpoint resolves to IPv6 and IPv4 addresses. On some networks IPv6
+doesn't reach Cloudflare: `curl -6` to the endpoint times out while `curl -4`
+answers. So connections try IPv4 first, with a 10 s connect timeout per
+address, and fall back to IPv6 only if IPv4 fails. To never try IPv6, set
+`ipv4_only: true` under `offsite:` in `config.yaml`.

@@ -246,6 +246,13 @@ def test_missing_config_names_the_fields():
         raise AssertionError("expected OffsiteError")
 
 
+def test_connect_tries_ipv4_before_ipv6():
+    import socket
+    v6 = (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:4700::1", 443, 0, 0))
+    v4 = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.0.1", 443))
+    assert offsite._ipv4_first([v6, v4]) == [v4, v6]
+
+
 def test_s3remote_against_local_stub_server():
     """The real HTTP client: path-style keys with spaces, Content-MD5,
     copy-source, and a paginated ListObjectsV2 response."""
@@ -347,8 +354,9 @@ V4 = (offsite.socket.AF_INET, offsite.socket.SOCK_STREAM, 6, "", ("192.0.2.1", 4
 
 
 class FakeSock:
-    """Records settimeout/connect; AF_INET6 connects time out (a dead route)."""
+    """Records settimeout/connect; connects to a family in DEAD time out."""
     made: list = []
+    DEAD: set = {offsite.socket.AF_INET6}
 
     def __init__(self, af, *_):
         self.af, self.timeouts, self.closed = af, [], False
@@ -362,17 +370,16 @@ class FakeSock:
 
     def connect(self, sa):
         self.sa = sa
-        if self.af == offsite.socket.AF_INET6:
+        if self.af in FakeSock.DEAD:
             raise TimeoutError("timed out")
 
     def close(self):
         self.closed = True
 
 
-def _fake_net(infos):
+def _fake_net(infos, dead=(offsite.socket.AF_INET6,)):
     from unittest import mock
-    FakeSock.made = []
-    offsite._V6_BROKEN.clear()
+    FakeSock.made, FakeSock.DEAD = [], set(dead)
     calls = []
 
     def gai(host, port, family=0, type=0, *a):
@@ -382,31 +389,22 @@ def _fake_net(infos):
     return calls, mock.patch.multiple(offsite.socket, getaddrinfo=gai, socket=FakeSock)
 
 
-def test_connect_falls_back_to_ipv4_and_remembers_the_host():
-    calls, patch = _fake_net([V6, V4])
+def test_connect_never_waits_on_ipv6_when_ipv4_works():
+    calls, patch = _fake_net([V6, V4])               # resolver lists IPv6 first
     with patch:
         s = offsite.connect(("r2.test", 443), 30, connect_timeout=5)
-        assert s.af == offsite.socket.AF_INET and s.sa == V4[4]
-        v6 = FakeSock.made[0]
-        assert v6.af == offsite.socket.AF_INET6 and v6.closed
-        assert v6.timeouts == [5]                   # connect bounded, not 30
-        assert s.timeouts == [5, 30]                # then the I/O timeout
-        assert "r2.test" in offsite._V6_BROKEN
-        FakeSock.made = []
-        s2 = offsite.connect(("r2.test", 443), 30)  # IPv4 first this time
-        assert [m.af for m in FakeSock.made] == [offsite.socket.AF_INET]
-        assert s2.sa == V4[4]
-    offsite._V6_BROKEN.clear()
-
-
-def test_connect_tries_ipv4_after_the_first_dead_ipv6_address():
-    v6b = V6[:4] + (("2001:db8::2", 443, 0, 0),)
-    calls, patch = _fake_net([V6, v6b, V4])
-    with patch:
-        s = offsite.connect(("r2.test", 443), 30)
-    assert [m.sa[0] for m in FakeSock.made] == ["2001:db8::1", "192.0.2.1"]
+    assert [m.af for m in FakeSock.made] == [offsite.socket.AF_INET]
     assert s.sa == V4[4]
-    offsite._V6_BROKEN.clear()
+    assert s.timeouts == [5, 30]                      # bounded connect, then I/O
+
+
+def test_connect_falls_back_to_ipv6_when_ipv4_is_dead():
+    calls, patch = _fake_net([V6, V4], dead=(offsite.socket.AF_INET,))
+    with patch:
+        s = offsite.connect(("r2.test", 443), 30, connect_timeout=5)
+    v4 = FakeSock.made[0]
+    assert v4.af == offsite.socket.AF_INET and v4.closed and v4.timeouts == [5]
+    assert s.af == offsite.socket.AF_INET6 and s.sa == V6[4]
 
 
 def test_connect_ipv4_only_never_resolves_ipv6():
@@ -418,15 +416,16 @@ def test_connect_ipv4_only_never_resolves_ipv6():
 
 
 def test_connect_failure_names_every_address():
-    calls, patch = _fake_net([V6])
+    calls, patch = _fake_net([V6, V4], dead=(offsite.socket.AF_INET, offsite.socket.AF_INET6))
     with patch:
         try:
             offsite.connect(("r2.test", 443), 30)
         except OSError as e:
-            assert "2001:db8::1" in str(e) and "timed out" in str(e)
+            assert "192.0.2.1" in str(e) and "2001:db8::1" in str(e)
+            assert "timed out" in str(e)
         else:
             raise AssertionError("expected OSError")
-    assert "r2.test" not in offsite._V6_BROKEN      # nothing worked, nothing learned
+    assert all(m.closed for m in FakeSock.made)
 
 
 def test_ipv4_only_config_option():
@@ -438,7 +437,7 @@ def test_ipv4_only_config_option():
 
 def test_s3remote_requests_survive_a_dead_ipv6_route():
     """Through urllib: the endpoint 'resolves' to a dead IPv6 address first,
-    then to a local stub server. The GET must arrive over IPv4, promptly."""
+    then to a local stub server. The GET must go over IPv4, promptly."""
     import socket
     import threading
     import time
@@ -473,7 +472,6 @@ def test_s3remote_requests_survive_a_dead_ipv6_route():
             return FakeSock(af)
         return real_socket(af, *a, **kw)
 
-    offsite._V6_BROKEN.clear()
     try:
         cfg = offsite.load_offsite_config({"offsite": {
             "endpoint": f"http://r2.test:{port}", "bucket": "b",
@@ -484,7 +482,6 @@ def test_s3remote_requests_survive_a_dead_ipv6_route():
             t0 = time.monotonic()
             assert offsite.S3Remote(cfg).get("x") == b"ok"
             assert time.monotonic() - t0 < 5
-        assert dead_v6 and "r2.test" in offsite._V6_BROKEN
+        assert not dead_v6                       # IPv4 first: never dialled
     finally:
         srv.shutdown()
-        offsite._V6_BROKEN.clear()
