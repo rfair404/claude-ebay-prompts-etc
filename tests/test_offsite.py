@@ -42,6 +42,9 @@ class FakeRemote:
     def get(self, key):
         return self.objs[key]
 
+    def delete(self, key):
+        del self.objs[key]
+
 
 def _tree(files: dict[str, bytes]) -> Path:
     root = Path(tempfile.mkdtemp(prefix="offsite_test_"))
@@ -124,15 +127,37 @@ def test_share_refuses_files_outside_listing_data():
 def test_selects_listing_data_only():
     root = _tree({
         "listings_ledger.csv": b"a", "listings_ledger-junk.csv": b"b",
+        "listings_ledger.csv.backup-20261008-232617": b"b2",
         "sales_ledger.csv": b"c", "inventory/shoot1/IMG_1.jpg": b"d",
-        "inventory/shoot1/draft.md": b"e", "reports/x.json": b"f",
+        "inventory/shoot1/IMG_2.JPG": b"d", "inventory/shoot1/clip.mov": b"v",
+        "inventory/_ebay_photos/206566144144.jpg": b"p",
+        "inventory/shoot1/draft.md": b"e", "inventory/shoot1/review_card.html": b"r",
+        "inventory/shoot1/.prep/notes.json": b"n", "inventory/shoot1/.picasa.ini": b"i",
+        "reports/x.json": b"f", "reports/chart.png": b"img",
+        "pick_lists/pick_06-1.html": b"pk", "pick_lists/picks_2026-10-05.pdf": b"pdf",
+        "inventory_sheet-junk.csv": b"s", ".inventory_live.json": b"l",
+        "ledger_reconcile_report-junk.json": b"rr",
         "config.yaml": b"SECRET", "lib/offsite.py": b"code",
         "inventory/shoot1/__pycache__/x.pyc": b"g", ".offsite_conflicts/old.csv": b"h",
     })
     got = offsite.local_files(root, offsite.DEFAULT_INCLUDE)
-    assert got == ["inventory/shoot1/IMG_1.jpg", "inventory/shoot1/draft.md",
+    assert got == [".inventory_live.json",
+                   "inventory/shoot1/.prep/notes.json", "inventory/shoot1/draft.md",
+                   "inventory/shoot1/review_card.html", "inventory_sheet-junk.csv",
+                   "ledger_reconcile_report-junk.json",
                    "listings_ledger-junk.csv", "listings_ledger.csv",
+                   "listings_ledger.csv.backup-20261008-232617",
+                   "pick_lists/pick_06-1.html", "pick_lists/picks_2026-10-05.pdf",
                    "reports/x.json", "sales_ledger.csv"]
+
+
+def test_selected_is_per_level_and_skips_media():
+    inc = offsite.DEFAULT_INCLUDE
+    assert offsite.selected("inventory/a/b/draft.md", inc)
+    assert not offsite.selected("inventory/a/IMG.HEIC", inc)
+    assert not offsite.selected("old/listings_ledger.csv", inc)   # root-level glob only
+    assert not offsite.selected("config.yaml", inc)
+    assert offsite.selected("letters/a.txt", inc + ("letters/**",))
 
 
 def test_push_uploads_then_is_in_sync():
@@ -158,16 +183,44 @@ def test_push_keeps_old_version_in_history():
 
 
 def test_local_deletion_never_deletes_remote_and_pull_restores():
-    root = _tree({"sales_ledger.csv": b"revenue", "inventory/s/IMG.jpg": b"px"})
+    root = _tree({"sales_ledger.csv": b"revenue", "inventory/s/draft.md": b"dd"})
     r = FakeRemote()
     offsite.push(r, root, _plan(root, r), DP, "history/T/")
-    (root / "inventory/s/IMG.jpg").unlink()
+    (root / "inventory/s/draft.md").unlink()
     plan = _plan(root, r)
-    assert plan.remote_only == ["inventory/s/IMG.jpg"]
+    assert plan.remote_only == ["inventory/s/draft.md"]
     offsite.push(r, root, plan, DP, "history/T2/")
-    assert "data/inventory/s/IMG.jpg" in r.objs
+    assert "data/inventory/s/draft.md" in r.objs
+    assert offsite.prunable(r, "", offsite.DEFAULT_INCLUDE) == []
     offsite.pull(r, root, plan, DP, overwrite=False)
-    assert (root / "inventory/s/IMG.jpg").read_bytes() == b"px"
+    assert (root / "inventory/s/draft.md").read_bytes() == b"dd"
+
+
+def test_photos_already_in_bucket_are_not_restored_and_prune_removes_them():
+    root = _tree({"inventory/s/draft.md": b"d", "inventory/s/IMG.jpg": b"px"})
+    r = FakeRemote()
+    r.objs.update({"data/inventory/s/IMG.jpg": b"px",
+                   "history/T0/inventory/s/IMG.jpg": b"old px",
+                   "history/T0/listings_ledger.csv": b"old ledger"})
+    plan = _plan(root, r)
+    assert plan.local_only == ["inventory/s/draft.md"]
+    assert plan.unselected == ["inventory/s/IMG.jpg"] and plan.remote_only == []
+    offsite.push(r, root, plan, DP, "history/T/")
+    keys = offsite.prunable(r, "", offsite.DEFAULT_INCLUDE)
+    assert keys == ["data/inventory/s/IMG.jpg", "history/T0/inventory/s/IMG.jpg"]
+    assert offsite.prune(r, keys) == []
+    assert sorted(r.objs) == ["data/inventory/s/draft.md", "history/T0/listings_ledger.csv"]
+    assert (root / "inventory/s/IMG.jpg").exists()                 # local untouched
+
+
+def test_share_refuses_photos():
+    root = _tree({"inventory/s/IMG.jpg": b"px"})
+    try:
+        offsite.share(FakeRemote(), root, root / "inventory/s/IMG.jpg",
+                      offsite.DEFAULT_INCLUDE, DP, "h/", 60)
+    except offsite.OffsiteError:
+        return
+    raise AssertionError("shared a photo")
 
 
 def test_pull_leaves_differing_local_file_unless_overwrite():
@@ -224,6 +277,11 @@ def test_s3remote_against_local_stub_server():
             self.send_response(200)
             self.end_headers()
 
+        def do_DELETE(self):
+            store.pop(self._key(), None)
+            self.send_response(204)
+            self.end_headers()
+
         def do_GET(self):
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             if "list-type" in q:
@@ -252,12 +310,13 @@ def test_s3remote_against_local_stub_server():
             "endpoint": f"http://127.0.0.1:{srv.server_port}", "bucket": "bkt",
             "access_key_id": "k", "secret_access_key": "s"}})
         remote = offsite.S3Remote(cfg)
-        root = _tree({"inventory/Estate Lot 3/IMG 1.jpg": b"a", "listings_ledger.csv": b"bb",
-                      "sales_ledger.csv": b"ccc"})
+        root = _tree({"inventory/Estate Lot 3/draft 1.md": b"a", "listings_ledger.csv": b"bb",
+                      "sales_ledger.csv": b"ccc", "inventory/Estate Lot 3/IMG 1.jpg": b"px"})
         plan = offsite.make_plan(root, cfg.include, remote.list(DP), DP,
                                  offsite.Md5Cache(root / offsite.STATE_FILE))
         assert offsite.push(remote, root, plan, DP, "history/T/") == []
-        assert "data/inventory/Estate Lot 3/IMG 1.jpg" in store
+        assert "data/inventory/Estate Lot 3/draft 1.md" in store
+        assert "data/inventory/Estate Lot 3/IMG 1.jpg" not in store
         listed = remote.list(DP)                     # 3 keys over 2 pages
         assert len(listed) == 3
         assert listed["data/sales_ledger.csv"].etag == hashlib.md5(b"ccc").hexdigest()
@@ -268,5 +327,10 @@ def test_s3remote_against_local_stub_server():
                                  offsite.Md5Cache(root / offsite.STATE_FILE))
         offsite.push(remote, root, plan, DP, "history/T2/")
         assert store["history/T2/listings_ledger.csv"] == b"bb"
+        store["data/inventory/Estate Lot 3/IMG 1.jpg"] = b"px"      # an old push
+        keys = offsite.prunable(remote, "", cfg.include)
+        assert keys == ["data/inventory/Estate Lot 3/IMG 1.jpg"]
+        assert offsite.prune(remote, keys) == []
+        assert "data/inventory/Estate Lot 3/IMG 1.jpg" not in store
     finally:
         srv.shutdown()

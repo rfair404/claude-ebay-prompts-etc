@@ -1,4 +1,4 @@
-"""Offsite copy of the listing data — ledgers, inventory/ shoots, reports.
+"""Offsite copy of the listing data — ledgers, per-item text, reports.
 
 The Windows box this pipeline ran on was wiped in 2026-10 and took every
 ledger, photo and draft.md with it; there was no second copy. This module
@@ -13,11 +13,20 @@ then $0.015/GB-month, no egress fees — Backblaze B2 works the same way).
     python -m lib.cli offsite pull --apply --overwrite   # bucket wins on diffs
     python -m lib.cli offsite share <file>     # upload one file now, print a
                                                # 7-day presigned link to it
+    python -m lib.cli offsite prune --apply    # delete bucket objects the
+                                               # rules no longer select (photos)
+
+Shoot photos and video are NOT copied: they made up nearly all of the bucket
+(1.5 GB of jpgs against a few MB of text) and can be re-shot or pulled back
+from the eBay listing. Everything else under the selected paths is.
 
 Safety rules, because the thing this guards against is a local deletion:
 
   * push NEVER deletes a remote object. A file gone locally is reported as
     "remote only" and left alone in the bucket.
+  * prune deletes only objects the rules no longer select (a photo pushed
+    before images were excluded). A selected file deleted locally is never
+    pruned, so prune can't undo the rule above.
   * push overwriting a changed remote object first server-side copies the
     old one to history/<UTC stamp>/<path>, so a corrupted or truncated
     ledger can't silently replace the good one.
@@ -49,6 +58,7 @@ from __future__ import annotations
 import argparse
 import base64
 import datetime as dt
+import fnmatch
 import hashlib
 import hmac
 import json
@@ -70,22 +80,42 @@ from typing import Callable, Iterable, Optional
 REPO = Path(__file__).resolve().parent.parent
 
 # What counts as listing data, relative to the main checkout. Directory
-# entries ending "/**" take everything under them. Matches .gitignore's
-# class-2 (business data) list; the regenerable class-3 caches are left out.
+# entries ending "/**" take everything under them except the exclusions
+# below (so images never go up). Other entries match one path level each,
+# "*" never crossing a "/". Matches .gitignore's class-2 (business data)
+# list; the regenerable class-3 caches are left out.
 DEFAULT_INCLUDE = (
-    "listings_ledger*.csv",           # incl. -<store> and .backup-* variants
-    "sales_ledger*.csv",
+    # ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies
+    "listings_ledger*.csv*",
+    "sales_ledger*.csv*",
     "listings_log.txt",
     "hand_listed_locations*.csv",
+    "ledger_reconcile_report*.json",
+    # eBay exports: the live-listing sheets built from the eBay APIs
+    "inventory_sheet*.csv",
+    "inventory_sheet*.json",
+    ".inventory_live*.json",
+    # pick lists and their state
     ".pick_list_state*.json",
-    "inventory/**",                   # photos, draft.md, phase output
+    "pick_lists/**",
+    # per-item draft.md, identify.txt, price.txt, review cards, comps ...
+    "inventory/**",
     "reports/**",
     "share-inventory/**",
 )
 # Never uploaded, even when an include glob matches. config.yaml is not in
 # the include list at all: it holds the eBay tokens AND this bucket's keys.
-EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "Thumbs.db", "desktop.ini"}
+EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "Thumbs.db", "desktop.ini", ".picasa.ini"}
 EXCLUDE_SUFFIXES = (".pyc", ".part", ".tmp")
+# Shoot photos and video: the bulk of inventory/ by size. Matched without
+# regard to case (IMG_0001.JPG). review_card.html is a page, not an image,
+# so it still goes up and `share` still links it.
+MEDIA_SUFFIXES = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".tif", ".tiff",
+    ".heic", ".heif", ".dng", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".orf",
+    ".rw2", ".raf", ".psd",
+    ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp",
+)
 
 STATE_FILE = ".offsite_state.json"     # md5 cache; /.*.json is gitignored
 CONFLICT_DIR = ".offsite_conflicts"
@@ -231,7 +261,7 @@ class RemoteObject:
 
 
 class S3Remote:
-    """The five calls this module needs, path-style, against any S3 API."""
+    """The calls this module needs, path-style, against any S3 API."""
 
     def __init__(self, cfg: OffsiteConfig):
         self.cfg = cfg
@@ -313,6 +343,9 @@ class S3Remote:
         with self._request("GET", key) as r:
             return r.read()
 
+    def delete(self, key: str) -> None:
+        self._request("DELETE", key).close()
+
     def check(self) -> int:
         """Round-trip a probe object; returns the object count under prefix."""
         probe = self.cfg.prefix + ".offsite_probe"
@@ -330,24 +363,38 @@ class S3Remote:
 def _excluded(rel: str) -> bool:
     parts = rel.split("/")
     return (any(p in EXCLUDE_NAMES or p == CONFLICT_DIR for p in parts)
-            or rel.endswith(EXCLUDE_SUFFIXES))
+            or rel.endswith(EXCLUDE_SUFFIXES)
+            or rel.lower().endswith(MEDIA_SUFFIXES))
+
+
+def _matches(rel: str, pat: str) -> bool:
+    if pat.endswith("/**"):
+        return rel.startswith(pat[:-2])
+    want, got = pat.split("/"), rel.split("/")
+    return len(want) == len(got) and all(
+        fnmatch.fnmatchcase(g, w) for g, w in zip(got, want))
+
+
+def selected(rel: str, include: Iterable[str]) -> bool:
+    """Whether the sync covers this relative path — a local file or a key
+    already in the bucket. The single rule push, pull and prune share."""
+    return not _excluded(rel) and any(_matches(rel, p) for p in include)
 
 
 def local_files(root: Path, include: Iterable[str]) -> list[str]:
     """Relative POSIX paths of every file the include globs select."""
+    include = tuple(include)
     found: set[str] = set()
     for pat in include:
         if pat.endswith("/**"):
             base = root / pat[:-3]
-            if base.is_dir():
-                for p in base.rglob("*"):
-                    if p.is_file():
-                        found.add(p.relative_to(root).as_posix())
+            candidates = base.rglob("*") if base.is_dir() else ()
         else:
-            for p in root.glob(pat):
-                if p.is_file():
-                    found.add(p.relative_to(root).as_posix())
-    return sorted(r for r in found if not _excluded(r))
+            candidates = root.glob(pat)
+        for p in candidates:
+            if p.is_file():
+                found.add(p.relative_to(root).as_posix())
+    return sorted(r for r in found if selected(r, include))
 
 
 class Md5Cache:
@@ -397,13 +444,24 @@ class Plan:
     remote_only: list[str] = field(default_factory=list)   # pull restores
     same: int = 0
     too_big: list[str] = field(default_factory=list)
+    unselected: list[str] = field(default_factory=list)  # prune deletes
 
 
 def make_plan(root: Path, include: Iterable[str], remote: dict[str, RemoteObject],
               data_prefix: str, cache: Md5Cache) -> Plan:
+    include = tuple(include)
     plan = Plan()
-    rel_remote = {k[len(data_prefix):]: v for k, v in remote.items()
-                  if k.startswith(data_prefix)}
+    rel_remote = {}
+    for k, v in remote.items():
+        if not k.startswith(data_prefix):
+            continue
+        rel = k[len(data_prefix):]
+        if selected(rel, include):
+            rel_remote[rel] = v
+        else:
+            # Pushed before the rules changed (photos). Not restored by pull.
+            plan.unselected.append(rel)
+    plan.unselected.sort()
     for rel in local_files(root, include):
         size = (root / rel).stat().st_size
         if size > MAX_SINGLE_PUT:
@@ -456,6 +514,25 @@ def push(remote, root: Path, plan: Plan, data_prefix: str,
     return _parallel(up, plan.local_only + plan.changed, "pushed")
 
 
+def prunable(remote, prefix: str, include: Iterable[str]) -> list[str]:
+    """Bucket keys under data/ and history/ that the rules no longer select."""
+    include = tuple(include)
+    out = []
+    for key in remote.list(prefix + "data/"):
+        if not selected(key[len(prefix) + 5:], include):
+            out.append(key)
+    for key in remote.list(prefix + "history/"):
+        stamp_rel = key[len(prefix) + 8:]          # <stamp>/<relpath>
+        rel = stamp_rel.split("/", 1)[1] if "/" in stamp_rel else ""
+        if rel and not selected(rel, include):
+            out.append(key)
+    return sorted(out)
+
+
+def prune(remote, keys: list[str]) -> list[str]:
+    return _parallel(remote.delete, keys, "deleted")
+
+
 def share(remote, root: Path, path: Path, include: Iterable[str], data_prefix: str,
           history_prefix: str, expires: int = MAX_PRESIGN_SECONDS) -> str:
     """Push ONE file now and return a presigned link to it.
@@ -469,7 +546,7 @@ def share(remote, root: Path, path: Path, include: Iterable[str], data_prefix: s
         rel = path.relative_to(root.resolve()).as_posix()
     except ValueError:
         raise OffsiteError(f"{path} is not under the data root {root}") from None
-    if not path.is_file() or rel not in set(local_files(root, include)):
+    if not path.is_file() or not selected(rel, include):
         raise OffsiteError(f"{rel} is not listing data the offsite copy covers")
     data = path.read_bytes()
     md5 = hashlib.md5(data).hexdigest()
@@ -526,6 +603,8 @@ def _show(plan: Plan, limit: int = 20) -> None:
           "pull --overwrite takes the bucket's)", plan.changed)
     block("remote only (pull restores; push never deletes)", plan.remote_only)
     block("too big for a single PUT (skipped)", plan.too_big)
+    block("in bucket but no longer synced, e.g. photos (`offsite prune` deletes)",
+          plan.unselected)
 
 
 def share_file(path: Path, expires: int = MAX_PRESIGN_SECONDS,
@@ -540,7 +619,7 @@ def share_file(path: Path, expires: int = MAX_PRESIGN_SECONDS,
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="ebz offsite", description=__doc__.split("\n\n")[0])
-    ap.add_argument("action", choices=("check", "status", "push", "pull", "share"))
+    ap.add_argument("action", choices=("check", "status", "push", "pull", "share", "prune"))
     ap.add_argument("files", nargs="*", type=Path,
                     help="share: the file(s) to upload now and link to")
     ap.add_argument("--apply", action="store_true", help="actually transfer (default: dry run)")
@@ -568,6 +647,25 @@ def main(argv: Optional[list[str]] = None) -> int:
             n = remote.check()
             print(f"ok — {cfg.endpoint}/{cfg.bucket}: write/read round-trip passed, "
                   f"{n} data object(s) stored")
+            return 0
+
+        if a.action == "prune":
+            keys = prunable(remote, cfg.prefix, cfg.include)
+            print(f"bucket: {cfg.bucket} ({cfg.endpoint})\n"
+                  f"objects the rules no longer select: {len(keys)}")
+            for k in keys[:20]:
+                print(f"    {k}")
+            if len(keys) > 20:
+                print(f"    ... {len(keys) - 20} more")
+            if not keys:
+                return 0
+            if not a.apply:
+                print("\ndry run — re-run with --apply to delete them")
+                return 0
+            failed = prune(remote, keys)
+            if failed:
+                print(f"\n{len(failed)} object(s) failed — re-run to retry", file=sys.stderr)
+                return 1
             return 0
 
         data_prefix = cfg.prefix + "data/"
