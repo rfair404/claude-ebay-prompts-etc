@@ -25,6 +25,9 @@
 # as the template for new setups.
 /config.yaml
 /config.*.yaml
+# ...and any copy of it made before an edit (config.yaml.backup-20261008-142142,
+# config.yaml.bak) — same tokens, same rule.
+/config.yaml.*
 *.token
 *.credentials.json
 
@@ -60,6 +63,8 @@ sales_ledger-*.csv
 
 # Any dated backup of the above (e.g. listings_ledger.backup-20260815.csv).
 *.backup-*.csv
+# ...or with the stamp after the extension (listings_ledger.csv.backup-20261008-232617).
+*.csv.backup-*
 # ...and the ad-hoc ones sessions make by hand before a risky rewrite
 # (listings_ledger.csv.bak, .bak-20260831-115855, .bak-checkers-20260901,
 # .scratch_ledger_backup_20260918_necklaces.csv).
