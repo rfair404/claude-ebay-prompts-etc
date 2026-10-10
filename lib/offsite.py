@@ -50,6 +50,15 @@ Config (config.yaml; env vars win for the two secrets):
       secret_access_key: ""          # or $EBAYBIZ_OFFSITE_SECRET_ACCESS_KEY
       prefix: ""                     # optional, e.g. "ebaybiz/"
       include: []                    # extra globs, e.g. ["letters/**"]
+      ipv4_only: false               # true: never try the endpoint's IPv6
+
+Connections: every request has a connect timeout (CONNECT_TIMEOUT) separate
+from its I/O timeout, and each resolved address is tried in turn. R2's
+endpoint resolves to IPv6 first; on a host whose IPv6 route is broken the
+connect used to hang until the kernel gave up, so check/share/push looked
+frozen. Now an IPv6 attempt that fails falls through to IPv4, and the host is
+remembered so the rest of the run goes straight to IPv4. `ipv4_only: true`
+skips IPv6 altogether.
 
 Stdlib only (SigV4 over urllib), like the rest of lib/ outside the CLIP deps.
 """
@@ -61,13 +70,16 @@ import datetime as dt
 import fnmatch
 import hashlib
 import hmac
+import http.client
 import json
 import mimetypes
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -122,6 +134,9 @@ CONFLICT_DIR = ".offsite_conflicts"
 MAX_SINGLE_PUT = 5 * 1024**3 - 1       # S3 single-PUT ceiling
 MAX_PRESIGN_SECONDS = 7 * 24 * 3600    # SigV4 presigned-URL ceiling
 WORKERS = 8
+CONNECT_TIMEOUT = 10                   # per resolved address, seconds
+IO_TIMEOUT = 30                        # per request, before body allowance
+MIN_UPLOAD_BPS = 64 * 1024             # a PUT body gets len/this extra seconds
 
 
 class OffsiteError(RuntimeError):
@@ -141,6 +156,7 @@ class OffsiteConfig:
     secret_access_key: str
     prefix: str = ""
     include: tuple[str, ...] = DEFAULT_INCLUDE
+    ipv4_only: bool = False
 
 
 def load_offsite_config(cfg: Optional[dict] = None) -> OffsiteConfig:
@@ -166,7 +182,8 @@ def load_offsite_config(cfg: Optional[dict] = None) -> OffsiteConfig:
         endpoint=str(o["endpoint"]).rstrip("/"), bucket=str(o["bucket"]),
         region=str(o.get("region") or "auto"),
         access_key_id=str(key_id), secret_access_key=str(secret), prefix=prefix,
-        include=DEFAULT_INCLUDE + tuple(o.get("include") or ()))
+        include=DEFAULT_INCLUDE + tuple(o.get("include") or ()),
+        ipv4_only=bool(o.get("ipv4_only")))
 
 
 def data_root(start: Path = REPO) -> Path:
@@ -254,6 +271,79 @@ def presign_url(method: str, scheme: str, host: str, path: str, *,
     return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
 
 
+# Hosts whose IPv6 connect failed while IPv4 worked, this process. Later
+# connections to them try IPv4 first instead of paying CONNECT_TIMEOUT again
+# on every request of a push.
+_V6_BROKEN: set[str] = set()
+_V6_LOCK = threading.Lock()
+
+
+def connect(address: tuple[str, int], timeout: Optional[float] = None,
+            source_address=None, *, ipv4_only: bool = False,
+            connect_timeout: float = CONNECT_TIMEOUT) -> socket.socket:
+    """socket.create_connection with a bounded connect per address and an
+    IPv6 -> IPv4 fallback. `timeout` is the I/O timeout set once connected."""
+    host, port = address
+    family = socket.AF_INET if ipv4_only else socket.AF_UNSPEC
+    infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+    if not infos:
+        raise OSError(f"getaddrinfo returned no addresses for {host}")
+    infos = list(infos)
+    if host in _V6_BROKEN:
+        infos.sort(key=lambda i: i[0] == socket.AF_INET6)
+    step = connect_timeout if timeout is None else min(connect_timeout, timeout)
+    v6_failed, errors = False, []
+    while infos:
+        af, socktype, proto, _, sa = infos.pop(0)
+        sock = None
+        try:
+            sock = socket.socket(af, socktype, proto)
+            sock.settimeout(step)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sa)
+        except OSError as e:
+            errors.append(f"{sa[0]}: {e or type(e).__name__}")
+            if af == socket.AF_INET6 and not v6_failed:
+                # One dead IPv6 address usually means a dead IPv6 route:
+                # try IPv4 before the endpoint's other IPv6 addresses.
+                v6_failed = True
+                infos.sort(key=lambda i: i[0] == socket.AF_INET6)
+            if sock is not None:
+                sock.close()
+            continue
+        sock.settimeout(timeout)
+        if v6_failed and af == socket.AF_INET:
+            with _V6_LOCK:
+                _V6_BROKEN.add(host)
+        return sock
+    raise OSError(f"could not connect to {host}:{port} ({'; '.join(errors)})")
+
+
+def _opener(ipv4_only: bool) -> urllib.request.OpenerDirector:
+    """A urllib opener whose HTTP(S) connections go through connect()."""
+    def dial(address, timeout=None, source_address=None):
+        return connect(address, timeout, source_address, ipv4_only=ipv4_only)
+
+    def wrap(cls):
+        def make(host, **kw):
+            conn = cls(host, **kw)
+            conn._create_connection = dial    # what HTTPConnection.connect dials with
+            return conn
+        return make
+
+    class HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(wrap(http.client.HTTPConnection), req)
+
+    class HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(wrap(http.client.HTTPSConnection), req,
+                                context=self._context)
+
+    return urllib.request.build_opener(HTTPHandler, HTTPSHandler)
+
+
 @dataclass
 class RemoteObject:
     size: int
@@ -268,6 +358,7 @@ class S3Remote:
         u = urllib.parse.urlsplit(cfg.endpoint)
         self.scheme, self.host = u.scheme or "https", u.netloc
         self.base = u.path.rstrip("/")
+        self._open = _opener(cfg.ipv4_only).open
 
     def _request(self, method: str, key: str = "", query: Optional[dict] = None,
                  body: bytes = b"", headers: Optional[dict] = None):
@@ -288,12 +379,15 @@ class S3Remote:
         req = urllib.request.Request(url, data=body if method in ("PUT", "POST") else None,
                                      method=method, headers=h)
         try:
-            return urllib.request.urlopen(req, timeout=300)
+            return self._open(req, timeout=IO_TIMEOUT + len(body) / MIN_UPLOAD_BPS)
         except urllib.error.HTTPError as e:
             detail = e.read()[:500].decode("utf-8", "replace")
             raise OffsiteError(f"{method} {key or self.cfg.bucket}: HTTP {e.code} {detail}") from e
         except urllib.error.URLError as e:
             raise OffsiteError(f"{method} {self.cfg.endpoint}: {e.reason}") from e
+        except OSError as e:
+            # A read that times out after connecting isn't wrapped in URLError.
+            raise OffsiteError(f"{method} {key or self.cfg.endpoint}: {e}") from e
 
     def list(self, prefix: str) -> dict[str, RemoteObject]:
         out, token = {}, None

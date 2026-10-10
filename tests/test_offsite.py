@@ -334,3 +334,157 @@ def test_s3remote_against_local_stub_server():
         assert "data/inventory/Estate Lot 3/IMG 1.jpg" not in store
     finally:
         srv.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# Connecting: bounded connect per address, IPv6 -> IPv4 fallback. No network:
+# getaddrinfo and the sockets are faked.
+# ---------------------------------------------------------------------------
+
+V6 = (offsite.socket.AF_INET6, offsite.socket.SOCK_STREAM, 6, "",
+      ("2001:db8::1", 443, 0, 0))
+V4 = (offsite.socket.AF_INET, offsite.socket.SOCK_STREAM, 6, "", ("192.0.2.1", 443))
+
+
+class FakeSock:
+    """Records settimeout/connect; AF_INET6 connects time out (a dead route)."""
+    made: list = []
+
+    def __init__(self, af, *_):
+        self.af, self.timeouts, self.closed = af, [], False
+        FakeSock.made.append(self)
+
+    def settimeout(self, t):
+        self.timeouts.append(t)
+
+    def bind(self, addr):
+        pass
+
+    def connect(self, sa):
+        self.sa = sa
+        if self.af == offsite.socket.AF_INET6:
+            raise TimeoutError("timed out")
+
+    def close(self):
+        self.closed = True
+
+
+def _fake_net(infos):
+    from unittest import mock
+    FakeSock.made = []
+    offsite._V6_BROKEN.clear()
+    calls = []
+
+    def gai(host, port, family=0, type=0, *a):
+        calls.append(family)
+        return [i for i in infos if family in (0, i[0])]
+
+    return calls, mock.patch.multiple(offsite.socket, getaddrinfo=gai, socket=FakeSock)
+
+
+def test_connect_falls_back_to_ipv4_and_remembers_the_host():
+    calls, patch = _fake_net([V6, V4])
+    with patch:
+        s = offsite.connect(("r2.test", 443), 30, connect_timeout=5)
+        assert s.af == offsite.socket.AF_INET and s.sa == V4[4]
+        v6 = FakeSock.made[0]
+        assert v6.af == offsite.socket.AF_INET6 and v6.closed
+        assert v6.timeouts == [5]                   # connect bounded, not 30
+        assert s.timeouts == [5, 30]                # then the I/O timeout
+        assert "r2.test" in offsite._V6_BROKEN
+        FakeSock.made = []
+        s2 = offsite.connect(("r2.test", 443), 30)  # IPv4 first this time
+        assert [m.af for m in FakeSock.made] == [offsite.socket.AF_INET]
+        assert s2.sa == V4[4]
+    offsite._V6_BROKEN.clear()
+
+
+def test_connect_tries_ipv4_after_the_first_dead_ipv6_address():
+    v6b = V6[:4] + (("2001:db8::2", 443, 0, 0),)
+    calls, patch = _fake_net([V6, v6b, V4])
+    with patch:
+        s = offsite.connect(("r2.test", 443), 30)
+    assert [m.sa[0] for m in FakeSock.made] == ["2001:db8::1", "192.0.2.1"]
+    assert s.sa == V4[4]
+    offsite._V6_BROKEN.clear()
+
+
+def test_connect_ipv4_only_never_resolves_ipv6():
+    calls, patch = _fake_net([V6, V4])
+    with patch:
+        s = offsite.connect(("r2.test", 443), 30, ipv4_only=True)
+    assert calls == [offsite.socket.AF_INET]
+    assert [m.af for m in FakeSock.made] == [offsite.socket.AF_INET] and s.sa == V4[4]
+
+
+def test_connect_failure_names_every_address():
+    calls, patch = _fake_net([V6])
+    with patch:
+        try:
+            offsite.connect(("r2.test", 443), 30)
+        except OSError as e:
+            assert "2001:db8::1" in str(e) and "timed out" in str(e)
+        else:
+            raise AssertionError("expected OSError")
+    assert "r2.test" not in offsite._V6_BROKEN      # nothing worked, nothing learned
+
+
+def test_ipv4_only_config_option():
+    base = {"endpoint": "https://x", "bucket": "b",
+            "access_key_id": "k", "secret_access_key": "s"}
+    assert not offsite.load_offsite_config({"offsite": base}).ipv4_only
+    assert offsite.load_offsite_config({"offsite": {**base, "ipv4_only": True}}).ipv4_only
+
+
+def test_s3remote_requests_survive_a_dead_ipv6_route():
+    """Through urllib: the endpoint 'resolves' to a dead IPv6 address first,
+    then to a local stub server. The GET must arrive over IPv4, promptly."""
+    import socket
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from unittest import mock
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    real_socket = socket.socket
+    dead_v6 = []
+
+    def gai(host, p, family=0, type=0, *a):
+        assert host == "r2.test"
+        infos = [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", p, 0, 0)),
+                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", p))]
+        return [i for i in infos if family in (0, i[0])]
+
+    def make_socket(af=socket.AF_INET, *a, **kw):
+        if af == socket.AF_INET6:
+            dead_v6.append(af)
+            return FakeSock(af)
+        return real_socket(af, *a, **kw)
+
+    offsite._V6_BROKEN.clear()
+    try:
+        cfg = offsite.load_offsite_config({"offsite": {
+            "endpoint": f"http://r2.test:{port}", "bucket": "b",
+            "access_key_id": "k", "secret_access_key": "s"}})
+        with mock.patch.object(socket, "getaddrinfo", gai), \
+                mock.patch.object(socket, "socket", make_socket), \
+                mock.patch.dict("os.environ", {"no_proxy": "*", "NO_PROXY": "*"}):
+            t0 = time.monotonic()
+            assert offsite.S3Remote(cfg).get("x") == b"ok"
+            assert time.monotonic() - t0 < 5
+        assert dead_v6 and "r2.test" in offsite._V6_BROKEN
+    finally:
+        srv.shutdown()
+        offsite._V6_BROKEN.clear()
