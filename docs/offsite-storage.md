@@ -11,15 +11,38 @@ command runs from a worktree.
 
 | Path | Why |
 |---|---|
-| `listings_ledger*.csv`, `sales_ledger*.csv`, `listings_log.txt` | ledgers, per-store variants and `.backup-*` copies included |
-| `hand_listed_locations*.csv`, `.pick_list_state*.json` | small state files that can't be rebuilt from eBay |
-| `inventory/**` | photos, `draft.md`, phase output, pick sheets |
-| `reports/**`, `share-inventory/**` | reports and photos staged for sharing |
+| `listings_ledger*.csv*`, `sales_ledger*.csv*`, `listings_log.txt` | ledgers, per-store variants and `.backup-*` copies included |
+| `hand_listed_locations*.csv`, `ledger_reconcile_report*.json` | small state files that can't be rebuilt from eBay |
+| `inventory_sheet*.csv`, `inventory_sheet*.json`, `.inventory_live*.json` | eBay exports (live-listing sheets built from the eBay APIs) |
+| `pick_lists/**`, `.pick_list_state*.json` | pick lists and their state |
+| `inventory/**` | per-item `draft.md`, `identify.txt`, `price.txt`, `NEEDS_REVIEW.md`, review cards, comps, phase output |
+| `reports/**`, `share-inventory/**` | reports and files staged for sharing |
 
-These are **not** copied: `config.yaml` (it holds eBay tokens and this
+**Photos and video are not copied**, wherever they sit (`.jpg`, `.png`,
+`.heic`, raw formats, `.mov`, `.mp4` …; the full list is `MEDIA_SUFFIXES` in
+`lib/offsite.py`). They were ~1.5 GB of the bucket against a few MB of text.
+The review page `review_card.html` is still copied and can still be shared.
+
+These are also **not** copied: `config.yaml` (it holds eBay tokens and this
 bucket's keys, so back it up separately, e.g. in a password manager),
 caches, `kb/index/` and other output that can be regenerated. Add extra
-globs with `offsite.include`.
+globs with `offsite.include`. A `dir/**` glob takes everything under the
+directory except photos. Any other glob matches one path level, and `*`
+never crosses a `/`.
+
+### Removing photos pushed before the change
+
+Photos uploaded by older versions stay in the bucket, because `push` never
+deletes. `status` lists them under "no longer synced". `pull` does not
+restore them. To delete them and their `history/` copies:
+
+```
+python -m lib.cli offsite prune            # dry run: lists what would go
+python -m lib.cli offsite prune --apply
+```
+
+`prune` deletes only objects the rules no longer select. It never deletes a
+ledger or `draft.md` that is missing locally.
 
 The bucket holds revenue data and buyer addresses (pick sheets inside
 `inventory/`). **Keep it private**: no public access and no r2.dev URL.
@@ -92,6 +115,7 @@ An older version of an overwritten file is under
 ## Safety rules
 
 - `push` never deletes a remote object. If a file is deleted locally, the bucket copy stays.
+- `prune` deletes only objects the include/exclude rules no longer select, such as old photos.
 - When `push` overwrites a changed object, it first copies the old one to `history/`.
 - `pull` never replaces a differing local file without `--overwrite`.
 - Nothing transfers without `--apply`.

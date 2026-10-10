@@ -229,7 +229,8 @@ offsite:
   access_key_id: "REPLACE_ME"
   secret_access_key: "REPLACE_ME"
   # prefix: ""              # optional key prefix inside the bucket
-  # include: []             # extra globs, e.g. ["letters/**"]
+  # include: []             # extra globs, e.g. ["letters/**"]; photos/video
+  #                         # are never synced (MEDIA_SUFFIXES in lib/offsite.py)
 
 # ---------------------------------------------------------------------------
 # CURATE strategy profiles
