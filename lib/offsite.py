@@ -61,10 +61,13 @@ import datetime as dt
 import fnmatch
 import hashlib
 import hmac
+import http.client
 import json
 import mimetypes
 import os
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -121,6 +124,8 @@ STATE_FILE = ".offsite_state.json"     # md5 cache; /.*.json is gitignored
 CONFLICT_DIR = ".offsite_conflicts"
 MAX_SINGLE_PUT = 5 * 1024**3 - 1       # S3 single-PUT ceiling
 MAX_PRESIGN_SECONDS = 7 * 24 * 3600    # SigV4 presigned-URL ceiling
+CONNECT_TIMEOUT = 10                   # per address; reads keep REQUEST_TIMEOUT
+REQUEST_TIMEOUT = 300
 WORKERS = 8
 
 
@@ -254,6 +259,64 @@ def presign_url(method: str, scheme: str, host: str, path: str, *,
     return f"{scheme}://{host}{path}?{qs}&X-Amz-Signature={sig}"
 
 
+def _ipv4_first(infos: list) -> list:
+    return sorted(infos, key=lambda i: i[0] != socket.AF_INET)
+
+
+def _connect(address, timeout=REQUEST_TIMEOUT, source_address=None, **_):
+    """socket.create_connection, but IPv4 addresses first and a short connect
+    timeout per address. Stock urllib tries the host's IPv6 address first and
+    waits the full request timeout on it: on a box whose IPv6 route is dead
+    (2026-10, this one) every request stalled ~2 minutes before falling back."""
+    host, port = address
+    if not isinstance(timeout, (int, float)):
+        timeout = None                     # socket._GLOBAL_DEFAULT_TIMEOUT
+    err: Optional[OSError] = None
+    for family, type_, proto, _, sa in _ipv4_first(
+            socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)):
+        sock = socket.socket(family, type_, proto)
+        try:
+            sock.settimeout(CONNECT_TIMEOUT if timeout is None else min(CONNECT_TIMEOUT, timeout))
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sa)
+            sock.settimeout(timeout)
+            return sock
+        except OSError as e:
+            err = e
+            sock.close()
+    raise err or OSError(f"no address for {host}")
+
+
+class _HTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._create_connection = _connect
+
+
+class _HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._create_connection = _connect
+
+
+class _HTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_HTTPConnection, req)
+
+
+class _HTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self):
+        self._ctx = ssl.create_default_context()
+        super().__init__(context=self._ctx)
+
+    def https_open(self, req):
+        return self.do_open(_HTTPSConnection, req, context=self._ctx)
+
+
+_OPENER = urllib.request.build_opener(_HTTPHandler, _HTTPSHandler)
+
+
 @dataclass
 class RemoteObject:
     size: int
@@ -288,7 +351,7 @@ class S3Remote:
         req = urllib.request.Request(url, data=body if method in ("PUT", "POST") else None,
                                      method=method, headers=h)
         try:
-            return urllib.request.urlopen(req, timeout=300)
+            return _OPENER.open(req, timeout=REQUEST_TIMEOUT)
         except urllib.error.HTTPError as e:
             detail = e.read()[:500].decode("utf-8", "replace")
             raise OffsiteError(f"{method} {key or self.cfg.bucket}: HTTP {e.code} {detail}") from e

@@ -246,6 +246,13 @@ def test_missing_config_names_the_fields():
         raise AssertionError("expected OffsiteError")
 
 
+def test_connect_tries_ipv4_before_ipv6():
+    import socket
+    v6 = (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2606:4700::1", 443, 0, 0))
+    v4 = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.0.1", 443))
+    assert offsite._ipv4_first([v6, v4]) == [v4, v6]
+
+
 def test_s3remote_against_local_stub_server():
     """The real HTTP client: path-style keys with spaces, Content-MD5,
     copy-source, and a paginated ListObjectsV2 response."""
