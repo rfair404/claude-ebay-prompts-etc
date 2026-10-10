@@ -119,3 +119,11 @@ An older version of an overwritten file is under
 - When `push` overwrites a changed object, it first copies the old one to `history/`.
 - `pull` never replaces a differing local file without `--overwrite`.
 - Nothing transfers without `--apply`.
+
+## Broken IPv6
+
+The R2 endpoint resolves to IPv6 and IPv4 addresses. On some networks IPv6
+doesn't reach Cloudflare: `curl -6` to the endpoint times out while `curl -4`
+answers. So connections try IPv4 first, with a 10 s connect timeout per
+address, and fall back to IPv6 only if IPv4 fails. To never try IPv6, set
+`ipv4_only: true` under `offsite:` in `config.yaml`.
