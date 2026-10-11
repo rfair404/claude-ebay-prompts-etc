@@ -22,6 +22,12 @@ built their DOM in JavaScript, rendered perfectly, and did not respond to a
 single click in the viewer the operator actually uses.
 
     python tools/review_card_html.py <shoot-dir>     # -> <shoot-dir>/review_card.html
+                                                     #    review: http://127.0.0.1:8770/review/<shoot>
+
+The printed `review:` link is the local app's live render of the same page
+(`python -m lib.cli serve`, webapp/server.py). That link, not an offsite
+copy, is what the operator gets: review pages carry every photo inline
+(~6 MB for a quilt) and are no longer uploaded to the bucket.
 """
 from __future__ import annotations
 
@@ -31,7 +37,9 @@ import html
 import io
 import re
 import sys
+import urllib.parse
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -39,6 +47,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from PIL import Image                                          # noqa: E402
 
+import pick_store                                              # noqa: E402
 import stores                                                  # noqa: E402
 from draft_io import parse_draft                               # noqa: E402
 
@@ -234,8 +243,8 @@ def render(shoot: Path) -> str:
                  if warn else '<li class="clear">Nothing flagged.</li>')
     pre_html = "".join(f"<li>{html.escape(x)}</li>" for x in pre)
 
-    # The charset must be declared IN the page: opened from disk or from an
-    # offsite link with a bare text/html type, a browser otherwise falls back
+    # The charset must be declared IN the page: opened from disk or from a
+    # link that serves it with a bare text/html type, a browser falls back
     # to windows-1252 and every em dash shows up as "â€”".
     page = f"""<meta charset="utf-8">
 <title>{html.escape(_page_name(title))}</title>
@@ -463,6 +472,21 @@ def _page_name(title: str) -> str:
     return " ".join(words[:5]) if words else "Listing review"
 
 
+def review_url(shoot: Path, inventory: Path = ROOT / "inventory",
+               port: int = pick_store.DEFAULT_PORT,
+               host: str = pick_store.DEFAULT_HOST) -> Optional[str]:
+    """The local app's link to this shoot's review page, or None when the
+    shoot isn't under inventory/ (the app serves nothing else). Resolving
+    both sides follows a worktree's inventory link to the main checkout's."""
+    try:
+        rel = shoot.resolve().relative_to(inventory.resolve())
+    except ValueError:
+        return None
+    if not rel.parts:
+        return None
+    return f"http://{host}:{port}/review/{urllib.parse.quote(rel.as_posix())}"
+
+
 def main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -471,8 +495,6 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Render the REVIEW card as a page.")
     ap.add_argument("shoot_dir")
     ap.add_argument("-o", "--out", default=None)
-    ap.add_argument("--no-share", action="store_true",
-                    help="skip uploading the page to the offsite bucket")
     a = ap.parse_args(argv)
 
     shoot = Path(a.shoot_dir)
@@ -480,15 +502,15 @@ def main(argv=None) -> int:
         ap.error(f"no draft.md in {shoot} — run DRAFT first")
     p = build(shoot, Path(a.out) if a.out else None)
     print(f"{p}  ({p.stat().st_size / 1e6:.1f} MB)")
-    if not a.no_share:
-        # The link handed to the operator is the offsite copy, so the page
-        # opens from any device. A failed upload never fails the build: the
-        # local file above is still the review page.
-        import offsite
-        try:
-            print(f"share: {offsite.share_file(p)}")
-        except offsite.OffsiteError as e:
-            print(f"share: skipped — {e}", file=sys.stderr)
+    # The link handed to the operator is the local app's live render. The
+    # file above is the fallback when there is no link to give.
+    url = review_url(shoot)
+    if url is None:
+        print(f"review: no link — {shoot} is not under inventory/", file=sys.stderr)
+    else:
+        print(f"review: {url}")
+        if not pick_store.server_is_up():
+            print(f"review: {pick_store.SERVE_HINT}", file=sys.stderr)
     return 0
 
 

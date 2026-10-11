@@ -15,7 +15,10 @@ Apify comp pulls stay chat-only until Phase 3's secrets story lands.
 
 The review page (`/review/{shoot}`) is read-only — it renders the same
 secret-free page `tools/review_card_html.py` always has, live, from a
-shoot's already-written `draft.md`/`price.txt`/`review_card.md`. It calls
+shoot's already-written `draft.md`/`price.txt`/`review_card.md`. It is the
+default review link: `review_card_html.py` prints it, and review pages are
+no longer uploaded to the offsite bucket. `{shoot}` is the shoot's path
+under inventory/, nested or not (`fr/arquilt`, `estate-lots/lot-3`). It calls
 no eBay/Apify API (those live behind `preflight_listing()`, which this
 route never touches). Review-queue *writes* (approve a PREP stage, edit a
 draft field — the third bullet of Phase 2's "What") are still left for a
@@ -59,7 +62,8 @@ import pick_store as _pick_store                     # noqa: E402
 import stores as _stores                             # noqa: E402
 import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
-from webapp.jobs import JOB_HANDLERS, _resolve_shoot_dir  # noqa: E402
+import webapp.jobs as _jobs                            # noqa: E402
+from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
 
 DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
@@ -140,7 +144,22 @@ def dashboard(store: Optional[str] = None) -> str:
     return _dashboard.draw(_dashboard.gather([store], only_store=store))
 
 
-@app.get("/review/{shoot}", response_class=HTMLResponse)
+def _resolve_review_dir(shoot: str) -> Path:
+    """A shoot path relative to inventory/, at any depth. Each segment must be
+    a plain name, and the result must still sit under inventory/ once
+    resolved — the same guard `_resolve_shoot_dir` keeps for jobs, widened
+    from one level to many because shoots nest (`fr/arquilt`)."""
+    parts = shoot.split("/") if shoot else []
+    if not parts or "\\" in shoot or any(p in ("", ".", "..") for p in parts):
+        raise ValueError(f"invalid shoot path: {shoot!r}")
+    inventory = _jobs.INVENTORY.resolve()
+    shoot_dir = inventory.joinpath(*parts).resolve()
+    if inventory not in shoot_dir.parents or not shoot_dir.is_dir():
+        raise ValueError(f"unknown shoot: {shoot!r}")
+    return shoot_dir
+
+
+@app.get("/review/{shoot:path}", response_class=HTMLResponse)
 def review(shoot: str) -> str:
     """The REVIEW gate page, live — same secret-free render
     tools/review_card_html.py has always produced, from a shoot's own
@@ -149,7 +168,7 @@ def review(shoot: str) -> str:
     produced, not a new way to decide anything (see _shared.md's Publish
     firewall — nothing here approves or publishes)."""
     try:
-        shoot_dir = _resolve_shoot_dir(shoot)
+        shoot_dir = _resolve_review_dir(shoot)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not (shoot_dir / "draft.md").exists():

@@ -100,18 +100,30 @@ def test_presign_refuses_expiry_past_seven_days():
 
 
 def test_share_uploads_as_html_keeps_history_and_links():
-    root = _tree({"inventory/s/review_card.html": b"<p>v1</p>", "config.yaml": b"SECRET"})
+    sheet = "inventory/_pick_lists/pick_06-1.html"
+    root = _tree({sheet: b"<p>v1</p>", "config.yaml": b"SECRET"})
     remote = FakeRemote()
-    page = root / "inventory/s/review_card.html"
+    page = root / sheet
     url = offsite.share(remote, root, page, offsite.DEFAULT_INCLUDE, DP, "history/T/", 3600)
-    assert remote.objs[DP + "inventory/s/review_card.html"] == b"<p>v1</p>"
-    assert remote.types[DP + "inventory/s/review_card.html"] == "text/html; charset=utf-8"
-    assert url == (f"https://bucket/{DP}inventory/s/review_card.html"
-                   "?expires=3600&type=text/html")
+    assert remote.objs[DP + sheet] == b"<p>v1</p>"
+    assert remote.types[DP + sheet] == "text/html; charset=utf-8"
+    assert url == f"https://bucket/{DP}{sheet}?expires=3600&type=text/html"
     page.write_bytes(b"<p>v2</p>")
     offsite.share(remote, root, page, offsite.DEFAULT_INCLUDE, DP, "history/T2/", 3600)
-    assert remote.objs["history/T2/inventory/s/review_card.html"] == b"<p>v1</p>"
-    assert remote.objs[DP + "inventory/s/review_card.html"] == b"<p>v2</p>"
+    assert remote.objs["history/T2/" + sheet] == b"<p>v1</p>"
+    assert remote.objs[DP + sheet] == b"<p>v2</p>"
+
+
+def test_share_refuses_review_pages():
+    # Review pages are served by the local app (/review/<shoot>); the bucket
+    # never holds one, so it can never hand out a link to one either.
+    root = _tree({"inventory/s/review_card.html": b"<p>v1</p>"})
+    try:
+        offsite.share(FakeRemote(), root, root / "inventory/s/review_card.html",
+                      offsite.DEFAULT_INCLUDE, DP, "h/", 60)
+    except offsite.OffsiteError:
+        return
+    raise AssertionError("shared a review page")
 
 
 def test_share_refuses_files_outside_listing_data():
@@ -142,13 +154,50 @@ def test_selects_listing_data_only():
     })
     got = offsite.local_files(root, offsite.DEFAULT_INCLUDE)
     assert got == [".inventory_live.json",
-                   "inventory/shoot1/.prep/notes.json", "inventory/shoot1/draft.md",
-                   "inventory/shoot1/review_card.html", "inventory_sheet-junk.csv",
+                   "inventory/shoot1/draft.md", "inventory_sheet-junk.csv",
                    "ledger_reconcile_report-junk.json",
                    "listings_ledger-junk.csv", "listings_ledger.csv",
                    "listings_ledger.csv.backup-20261008-232617",
                    "pick_lists/pick_06-1.html", "pick_lists/picks_2026-10-05.pdf",
                    "reports/x.json", "sales_ledger.csv"]
+
+
+def test_inventory_keeps_only_draft_identify_and_pick_sheets():
+    inc = offsite.DEFAULT_INCLUDE
+    for rel in ("inventory/a/draft.md", "inventory/a/b/c/draft.md",
+                "inventory/a/identify.txt", "inventory/fr/arquilt/identify.txt",
+                "inventory/_pick_lists/pick_06-1.html"):
+        assert offsite.selected(rel, inc), rel
+    for rel in ("inventory/a/review_card.html", "inventory/a/.prep/review.html",
+                "inventory/a/review_card.md", "inventory/a/price.txt",
+                "inventory/a/comps.csv", "inventory/a/comps_board.html",
+                "inventory/a/investigate.txt", "inventory/a/NEEDS_REVIEW.md",
+                "inventory/a/.prep/prep.json", "inventory/a/draft.md.bak",
+                "inventory/a/olddraft.md"):
+        assert not offsite.selected(rel, inc), rel
+
+
+def test_nested_shoot_files_are_found_locally():
+    root = _tree({"inventory/fr/arquilt/draft.md": b"d",
+                  "inventory/fr/arquilt/identify.txt": b"i",
+                  "inventory/fr/arquilt/review_card.html": b"r",
+                  "inventory/lot/.prep/identify.txt": b"p"})
+    assert offsite.local_files(root, offsite.DEFAULT_INCLUDE) == [
+        "inventory/fr/arquilt/draft.md", "inventory/fr/arquilt/identify.txt",
+        "inventory/lot/.prep/identify.txt"]
+
+
+def test_review_pages_already_in_bucket_are_pruned_not_restored():
+    root = _tree({"inventory/s/draft.md": b"d", "inventory/s/review_card.html": b"r"})
+    r = FakeRemote()
+    r.objs.update({"data/inventory/s/draft.md": b"d",
+                   "data/inventory/s/review_card.html": b"r",
+                   "history/T0/inventory/s/review_card.html": b"old r"})
+    plan = _plan(root, r)
+    assert plan.unselected == ["inventory/s/review_card.html"] and plan.remote_only == []
+    keys = offsite.prunable(r, "", offsite.DEFAULT_INCLUDE)
+    assert keys == ["data/inventory/s/review_card.html",
+                    "history/T0/inventory/s/review_card.html"]
 
 
 def test_selected_is_per_level_and_skips_media():
@@ -317,12 +366,12 @@ def test_s3remote_against_local_stub_server():
             "endpoint": f"http://127.0.0.1:{srv.server_port}", "bucket": "bkt",
             "access_key_id": "k", "secret_access_key": "s"}})
         remote = offsite.S3Remote(cfg)
-        root = _tree({"inventory/Estate Lot 3/draft 1.md": b"a", "listings_ledger.csv": b"bb",
+        root = _tree({"inventory/Estate Lot 3/draft.md": b"a", "listings_ledger.csv": b"bb",
                       "sales_ledger.csv": b"ccc", "inventory/Estate Lot 3/IMG 1.jpg": b"px"})
         plan = offsite.make_plan(root, cfg.include, remote.list(DP), DP,
                                  offsite.Md5Cache(root / offsite.STATE_FILE))
         assert offsite.push(remote, root, plan, DP, "history/T/") == []
-        assert "data/inventory/Estate Lot 3/draft 1.md" in store
+        assert "data/inventory/Estate Lot 3/draft.md" in store
         assert "data/inventory/Estate Lot 3/IMG 1.jpg" not in store
         listed = remote.list(DP)                     # 3 keys over 2 pages
         assert len(listed) == 3

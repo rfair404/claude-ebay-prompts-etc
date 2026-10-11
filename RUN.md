@@ -500,8 +500,9 @@ fetch, photo prep) is shared from `lib/` — no phase duplicates it.
    record (status DRAFTED). Do this for EVERY draft, and again after any edit.
 7. REVIEW (list mode) → `python lib/list_edit.py --review <shoot-dir>` — one
    command that records (if needed) + preflights + builds `review_card.md` —
-   then `python tools/review_card_html.py <shoot-dir>` and deliver
-   `review_card.html`. That page IS the review surface: the listing as a buyer
+   then `python tools/review_card_html.py <shoot-dir>` and deliver the
+   `review:` link it prints (the local app's `/review/<shoot>`; start it with
+   `python -m lib.cli serve`). That page IS the review surface: the listing as a buyer
    meets it, the hero picker, and every ⚠ line — not the text card alone and
    never a prose summary. Present it with the card and STOP (HARD gate).
    Surface title + price + the ⚠ count.
