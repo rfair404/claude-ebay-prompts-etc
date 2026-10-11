@@ -84,9 +84,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 # What counts as listing data, relative to the main checkout. Directory
 # entries ending "/**" take everything under them except the exclusions
-# below (so images never go up). Other entries match one path level each,
-# "*" never crossing a "/". Matches .gitignore's class-2 (business data)
-# list; the regenerable class-3 caches are left out.
+# below (so images never go up). "dir/**/name" takes files called `name`
+# at any depth under dir/. Other entries match one path level each, "*"
+# never crossing a "/". The regenerable class-3 caches are left out.
 DEFAULT_INCLUDE = (
     # ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies
     "listings_ledger*.csv*",
@@ -101,8 +101,14 @@ DEFAULT_INCLUDE = (
     # pick lists and their state
     ".pick_list_state*.json",
     "pick_lists/**",
-    # per-item draft.md, identify.txt, price.txt, review cards, comps ...
-    "inventory/**",
+    # per item: the draft and the identification only. Everything else in a
+    # shoot (review pages, comps, price.txt, .prep/) is rebuilt from these
+    # or re-run, and review pages are served by the local app
+    # (`ebz serve` -> /review/<shoot>), not from the bucket.
+    "inventory/**/draft.md",
+    "inventory/**/identify.txt",
+    # pick sheets staged for `offsite share` (prompts/pick_list.md)
+    "inventory/_pick_lists/**",
     "reports/**",
     "share-inventory/**",
 )
@@ -111,8 +117,7 @@ DEFAULT_INCLUDE = (
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store", "Thumbs.db", "desktop.ini", ".picasa.ini"}
 EXCLUDE_SUFFIXES = (".pyc", ".part", ".tmp")
 # Shoot photos and video: the bulk of inventory/ by size. Matched without
-# regard to case (IMG_0001.JPG). review_card.html is a page, not an image,
-# so it still goes up and `share` still links it.
+# regard to case (IMG_0001.JPG).
 MEDIA_SUFFIXES = (
     ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif", ".bmp", ".tif", ".tiff",
     ".heic", ".heif", ".dng", ".raw", ".cr2", ".cr3", ".nef", ".arw", ".orf",
@@ -433,6 +438,10 @@ def _excluded(rel: str) -> bool:
 def _matches(rel: str, pat: str) -> bool:
     if pat.endswith("/**"):
         return rel.startswith(pat[:-2])
+    if "/**/" in pat:
+        base, leaf = pat.split("/**/", 1)
+        return (rel.startswith(base + "/")
+                and _matches(rel.rsplit("/", 1)[-1], leaf))
     want, got = pat.split("/"), rel.split("/")
     return len(want) == len(got) and all(
         fnmatch.fnmatchcase(g, w) for g, w in zip(got, want))
@@ -452,6 +461,10 @@ def local_files(root: Path, include: Iterable[str]) -> list[str]:
         if pat.endswith("/**"):
             base = root / pat[:-3]
             candidates = base.rglob("*") if base.is_dir() else ()
+        elif "/**/" in pat:
+            base_rel, leaf = pat.split("/**/", 1)
+            base = root / base_rel
+            candidates = base.rglob(leaf) if base.is_dir() else ()
         else:
             candidates = root.glob(pat)
         for p in candidates:
@@ -673,7 +686,7 @@ def _show(plan: Plan, limit: int = 20) -> None:
 def share_file(path: Path, expires: int = MAX_PRESIGN_SECONDS,
                root: Optional[Path] = None) -> str:
     """Upload one listing-data file now and return a presigned link to it.
-    What tools/review_card_html.py calls after writing the review page."""
+    What the pick-list flow calls on its staged sheets (prompts/pick_list.md)."""
     cfg = load_offsite_config()
     root = (root or data_root()).resolve()
     return share(S3Remote(cfg), root, Path(path), cfg.include, cfg.prefix + "data/",

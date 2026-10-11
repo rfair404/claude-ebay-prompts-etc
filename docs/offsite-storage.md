@@ -15,26 +15,35 @@ command runs from a worktree.
 | `hand_listed_locations*.csv`, `ledger_reconcile_report*.json` | small state files that can't be rebuilt from eBay |
 | `inventory_sheet*.csv`, `inventory_sheet*.json`, `.inventory_live*.json` | eBay exports (live-listing sheets built from the eBay APIs) |
 | `pick_lists/**`, `.pick_list_state*.json` | pick lists and their state |
-| `inventory/**` | per-item `draft.md`, `identify.txt`, `price.txt`, `NEEDS_REVIEW.md`, review cards, comps, phase output |
+| `inventory/**/draft.md`, `inventory/**/identify.txt` | each item's draft and identification, at any depth (`fr/arquilt/draft.md`) |
+| `inventory/_pick_lists/**` | pick sheets staged for `offsite share` (`prompts/pick_list.md`) |
 | `reports/**`, `share-inventory/**` | reports and files staged for sharing |
 
 **Photos and video are not copied**, wherever they sit (`.jpg`, `.png`,
 `.heic`, raw formats, `.mov`, `.mp4` …; the full list is `MEDIA_SUFFIXES` in
 `lib/offsite.py`). They were ~1.5 GB of the bucket against a few MB of text.
-The review page `review_card.html` is still copied and can still be shared.
+
+**Nothing else in a shoot folder is copied either**: not `review_card.html`
+or `.prep/review.html` (they carry every photo inline, ~6 MB for a quilt),
+and not `price.txt`, comps, `investigate.txt`, `NEEDS_REVIEW.md`,
+`review_card.md` or `.prep/`. Those are rebuilt from `draft.md` and
+`identify.txt` or by re-running their phase. Review pages are served by the
+local app instead; see below.
 
 These are also **not** copied: `config.yaml` (it holds eBay tokens and this
 bucket's keys, so back it up separately, e.g. in a password manager),
 caches, `kb/index/` and other output that can be regenerated. Add extra
 globs with `offsite.include`. A `dir/**` glob takes everything under the
-directory except photos. Any other glob matches one path level, and `*`
-never crosses a `/`.
+directory except photos. `dir/**/name` takes files called `name` at any
+depth under it. Any other glob matches one path level, and `*` never
+crosses a `/`.
 
-### Removing photos pushed before the change
+### Removing files pushed before a rule change
 
-Photos uploaded by older versions stay in the bucket, because `push` never
-deletes. `status` lists them under "no longer synced". `pull` does not
-restore them. To delete them and their `history/` copies:
+Photos, review pages and other shoot files uploaded by older versions stay
+in the bucket, because `push` never deletes. `status` lists them under "no
+longer synced". `pull` does not restore them. To delete them and their
+`history/` copies:
 
 ```
 python -m lib.cli offsite prune            # dry run: lists what would go
@@ -82,11 +91,16 @@ Nightly, via crontab (`crontab -e`):
 30 2 * * * cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli offsite push --apply >> .offsite.log 2>&1
 ```
 
-## Review pages: uploaded on build, linked by URL
+## Review pages: served by the local app, not uploaded
 
-`tools/review_card_html.py` uploads each `review_card.html` it writes and
-prints `share: <url>`. That URL is the review link the operator gets (see
-`prompts/review.md`). Under the hood:
+`tools/review_card_html.py` writes `review_card.html` and prints
+`review: http://127.0.0.1:8770/review/<shoot>`, the local app's live render of
+the same page (`python -m lib.cli serve`, `webapp/server.py`). That is the
+review link the operator gets (see `prompts/review.md`). Nothing is
+uploaded, and `offsite share` refuses a review page. The link opens on this
+machine only.
+
+## Sharing one file: pick sheets
 
 ```
 python -m lib.cli offsite share <file> [--expires-days N]
@@ -98,8 +112,6 @@ python -m lib.cli offsite share <file> [--expires-days N]
   stays private. Anyone holding the link can open that one object until it
   expires, so forward it only to people who should see the listing.
 - Refuses files outside the include list, so `config.yaml` can never be shared.
-- `--no-share` on `review_card_html.py` skips the upload. A failed upload
-  prints `share: skipped — …` and the local page is still written.
 
 ## Restore
 

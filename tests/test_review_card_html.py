@@ -226,3 +226,39 @@ def test_a_malformed_store_name_is_flagged_not_rendered_raw(tmp_path):
     page = R.render(s)
     assert "not a valid store name" in page
     assert "<b>x</b>" not in page
+
+
+# ---------------------------------------------------------------------------
+# The link: the local app's /review/<shoot>, never an offsite upload
+# ---------------------------------------------------------------------------
+
+def test_review_url_is_the_local_app_path_under_inventory(tmp_path):
+    inv = tmp_path / "inventory"
+    (inv / "fr" / "arquilt").mkdir(parents=True)
+    (inv / "Estate Lot 3").mkdir()
+    assert R.review_url(inv / "fr" / "arquilt", inv) == \
+        "http://127.0.0.1:8770/review/fr/arquilt"
+    assert R.review_url(inv / "Estate Lot 3", inv) == \
+        "http://127.0.0.1:8770/review/Estate%20Lot%203"
+    assert R.review_url(tmp_path / "elsewhere", inv) is None
+    assert R.review_url(inv, inv) is None
+
+
+def test_main_prints_the_local_link_and_uploads_nothing(tmp_path, monkeypatch, capsys):
+    s = _shoot(tmp_path)
+    monkeypatch.setattr(R, "review_url", lambda shoot: "http://127.0.0.1:8770/review/1")
+    monkeypatch.setattr(R.pick_store, "server_is_up", lambda *a, **k: True)
+    monkeypatch.setitem(sys.modules, "offsite", None)    # any import of it fails
+    assert R.main([str(s)]) == 0
+    out = capsys.readouterr()
+    assert "review: http://127.0.0.1:8770/review/1" in out.out
+    assert "share" not in out.out + out.err
+    assert (s / "review_card.html").exists()
+
+
+def test_main_says_so_when_the_local_app_is_down(tmp_path, monkeypatch, capsys):
+    s = _shoot(tmp_path)
+    monkeypatch.setattr(R, "review_url", lambda shoot: "http://127.0.0.1:8770/review/1")
+    monkeypatch.setattr(R.pick_store, "server_is_up", lambda *a, **k: False)
+    assert R.main([str(s)]) == 0
+    assert "lib.cli serve" in capsys.readouterr().err

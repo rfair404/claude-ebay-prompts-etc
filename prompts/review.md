@@ -60,16 +60,17 @@ second. So REVIEW always also builds the page:
 
     python tools/review_card_html.py <shoot-dir>    # -> <shoot-dir>/review_card.html
 
-By default that also uploads the page to the offsite bucket
-(`ebz offsite share`, [docs/offsite-storage.md](../docs/offsite-storage.md))
-and prints `share: <url>` — a presigned link, good for 7 days, that opens the
-page from any device. The sandbox needs the bucket's endpoint host in
-`allowed_domains`. **That URL is the link you give the operator**, beside the
-text card in chat. If the upload is skipped (`share: skipped — …`: no
-`offsite:` config, no network), say so and fall back to sending the file.
-Re-running the command re-uploads the page and prints a fresh link; give the
-new one. This is the official review surface — not a 4,000px JPEG, not a
-prose summary, not the text card alone.
+It prints `review: http://127.0.0.1:8770/review/<shoot>` — the local app's
+live render of the same page (`python -m lib.cli serve`, `webapp/server.py`).
+**That URL is the link you give the operator**, beside the text card in chat.
+If it also prints the "local app isn't running" hint, start the app (from the
+main checkout) rather than handing over a dead link; if it can't be started,
+say so and fall back to sending the file. Review pages are **not** uploaded to
+the offsite bucket and have no R2 link
+([docs/offsite-storage.md](../docs/offsite-storage.md)). The link is live, so
+after a re-render the same URL shows the new page. This is the official
+review surface — not a 4,000px JPEG, not a prose summary, not the text card
+alone.
 
 What the page must carry (the generator does this; don't strip it):
 - the listing as a buyer meets it — the lead photo big enough to judge, every
@@ -170,6 +171,6 @@ user, and only pass `--confirm` on an explicit yes.
 ## Closing
 
 Per _shared: lead with the result.
-- Awaiting decision: the review page (its `share:` link), `review_card.md`
+- Awaiting decision: the review page (its `review:` link), `review_card.md`
   path + the headline (title + price) + the count of ⚠ lines. Then stop.
 - After publish: the live listing URL + price. Nothing further runs.

@@ -146,6 +146,34 @@ def test_review_route_rejects_a_path_traversal_shoot_name(inventory_client):
     assert r.status_code in (404, 400)
 
 
+def test_review_route_serves_a_nested_shoot(inventory_client):
+    # Shoots nest (fr/arquilt, estate-lots/lot-3); review_card_html.py prints
+    # /review/<path under inventory/>, so the route has to take the path.
+    client, inv = inventory_client
+    _write_shoot(inv, "fr/arquilt")
+    r = client.get("/review/fr/arquilt")
+    assert r.status_code == 200
+    assert "Test Item" in r.text
+
+
+def test_review_route_takes_an_encoded_space(inventory_client):
+    client, inv = inventory_client
+    _write_shoot(inv, "Estate Lot 3")
+    assert client.get("/review/Estate%20Lot%203").status_code == 200
+
+
+def test_review_route_cannot_walk_out_of_inventory(inventory_client, tmp_path):
+    client, inv = inventory_client
+    _write_shoot(inv, "item-1")
+    outside = tmp_path / "outside"
+    _write_shoot(tmp_path, "outside")
+    (inv / "link").symlink_to(outside)
+    for bad in ("item-1/..%2F..%2Foutside", "item-1/%2E%2E/%2E%2E/outside",
+                "%2Fetc", "link", "item-1//x", "item-1%5C..%5Coutside"):
+        r = client.get(f"/review/{bad}")
+        assert r.status_code in (400, 404), bad
+
+
 def test_review_route_never_calls_any_ebay_or_apify_client(inventory_client, monkeypatch):
     # The route must stay strictly local/secret-free (docs/webapp-
     # architecture.md's Phase-2 boundary) — assert no eBay/Apify module
