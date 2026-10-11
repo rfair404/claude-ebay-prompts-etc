@@ -109,7 +109,10 @@ ledger_reconcile_report-*.json
 
 # Inventory working files — private business data + images (photos, per-item
 # phase output, comps, SKUs). The default content store; never tracked.
-/inventory/
+# No trailing slash: in a worktree, inventory is a symlink/junction to the
+# main checkout's (tools/worktree_link.py), and "/inventory/" only matches a
+# real directory — #197 committed the link and it broke CI.
+/inventory
 
 # Photos staged for sharing/consignment outside the pipeline.
 /share-inventory/
