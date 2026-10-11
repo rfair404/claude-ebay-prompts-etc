@@ -40,6 +40,11 @@ junction (a symlink off Windows) to `<main>/inventory/`. Then:
   paths lexically and has no exemption setting. That is why the carve-out is
   a link, and why it covers exactly `inventory/` and nothing else. Code and
   tracked files in the base checkout stay protected.
+- The Bash sandbox follows the link to its target, so `<main>/inventory/`
+  would be read-only to sandboxed commands, and every pipeline write would
+  prompt to run unsandboxed. `sandbox.filesystem.allowWrite` in
+  `.claude/settings.json` grants `~/EBAYBIZ/inventory` and nothing else.
+  The entry assumes the main checkout is at `~/EBAYBIZ`.
 - Only `inventory/` is linked. `config.yaml` and the ledgers are not, so the
   "run ledger/sync tools from the main checkout" rule (GH #103) still holds.
 - If a worktree already has a real `inventory/` directory, the script leaves

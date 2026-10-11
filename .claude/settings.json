@@ -71,6 +71,11 @@
       "Bash(gh pr checks:*)"
     ]
   },
+  "sandbox": {
+    "filesystem": {
+      "allowWrite": ["~/EBAYBIZ/inventory"]
+    }
+  },
   "worktree": {
     "symlinkDirectories": [
       "inventory"
