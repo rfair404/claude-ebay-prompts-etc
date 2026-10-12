@@ -874,6 +874,39 @@ def _best_offer_terms(draft: Draft, price: Optional[str]) -> Optional[dict]:
     return terms
 
 
+def _needs_deferred_payment(draft: Draft) -> Optional[str]:
+    """Why this offer must NOT require immediate payment, or None.
+
+    eBay refuses immediate payment on two kinds of listing, each with its own
+    error at publish time:
+      * AUCTION            — errorId 25003
+      * Local Pickup Only  — errorId 25008 "Because you've specified Local
+        Pickup Only for this item, you can't require immediate payment."
+        (hit 2026-10-11 on the junk store, offer 308971645011)
+    Both are served by the same no-immediate-pay policy,
+    `payment_policy_id_auction` in config (the key predates the pickup case).
+    """
+    if str(draft.get("format") or "FIXED_PRICE").upper() == "AUCTION":
+        return "AUCTION"
+    if str(draft.get("shipping.fulfillment_mode") or "").strip().upper() == "LOCAL_PICKUP":
+        return "LOCAL_PICKUP"
+    return None
+
+
+def _payment_policy_blocker(draft: Draft, policies: dict) -> Optional[str]:
+    """A preflight BLOCKER line when the offer needs a no-immediate-pay policy
+    and none is configured, else None. The publish would fail at eBay with
+    25003/25008; saying so at REVIEW is cheaper than finding out at --list."""
+    why = _needs_deferred_payment(draft)
+    if not why or policies.get("payment_auction"):
+        return None
+    code = "25003" if why == "AUCTION" else "25008"
+    return (f"payment: BLOCKER — item is {why} but ebay.payment_policy_id_auction "
+            f"(a payment policy WITHOUT immediate payment) is unset. eBay refuses "
+            f"immediate payment on {why} listings (errorId {code}), so this "
+            f"publish will fail. Create one and set that key before listing.")
+
+
 def _build_offer(draft: Draft, sku: str, category_id: str,
                  location_key: str, policies: dict) -> dict:
     price = _to_decimal_str(draft.get("price"))
@@ -895,21 +928,22 @@ def _build_offer(draft: Draft, sku: str, category_id: str,
     if fmt == "AUCTION":
         # Auctions: the start bid goes in auctionStartPrice (NOT price); a
         # listingDuration is REQUIRED (DAYS_1..DAYS_10); availableQuantity is
-        # rejected (always 1 implicitly); Best Offer is not permitted. eBay also
-        # forbids immediate-payment on auctions, so use the auction-specific
-        # payment policy (no immediate pay) when configured.
+        # rejected (always 1 implicitly); Best Offer is not permitted.
         offer.pop("availableQuantity", None)
         offer["pricingSummary"] = {
             "auctionStartPrice": {"value": price, "currency": CURRENCY}
         }
         offer["listingDuration"] = str(draft.get("listing_duration") or "DAYS_7").upper()
-        if policies.get("payment_auction"):
-            offer["listingPolicies"]["paymentPolicyId"] = policies["payment_auction"]
     else:
         offer["pricingSummary"] = {"price": {"value": price, "currency": CURRENCY}}
         terms = _best_offer_terms(draft, price)
         if terms:
             offer["listingPolicies"]["bestOfferTerms"] = terms
+    # Auctions and Local-Pickup-Only listings may not require immediate
+    # payment — see _needs_deferred_payment. Unset policy → keep the default;
+    # preflight reports the BLOCKER (_payment_policy_blocker).
+    if _needs_deferred_payment(draft) and policies.get("payment_auction"):
+        offer["listingPolicies"]["paymentPolicyId"] = policies["payment_auction"]
     return offer
 
 
@@ -948,8 +982,8 @@ def _resolve_policies_and_location(creds: EbayCredentials) -> tuple[dict, str]:
     # default one ships Worldwide — see lib/us_only.py for why that matters.
     policies["fulfillment_us_only"] = _ebay_extra("fulfillment_policy_id_us_only", store=store)
     # Optional: a payment policy WITHOUT immediate-payment, required for AUCTION
-    # offers (eBay forbids immediate-pay on auctions — error 25003). Only auction
-    # listings need it; falls back to the default payment policy otherwise.
+    # offers (error 25003) and LOCAL_PICKUP offers (error 25008) — eBay forbids
+    # immediate-pay on both. Everything else uses the default payment policy.
     policies["payment_auction"] = _ebay_extra("payment_policy_id_auction", store=store)
     location = _ebay_extra("merchant_location_key", store=store)
     for k, v in policies.items():
@@ -1434,6 +1468,10 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     # Shipping policy selection (media vs ground) + validation
     _chosen, ship = _resolve_shipping_policy(draft, policies, creds)
     msgs.extend(ship)
+    # Payment policy: auctions and pickup-only listings need no-immediate-pay
+    _pay_block = _payment_policy_blocker(draft, policies)
+    if _pay_block:
+        msgs.append(_pay_block)
     # Insurance: retired, no-op — see _insurance_notes
     msgs.extend(_insurance_notes(draft))
     return msgs
@@ -1589,6 +1627,11 @@ def build_review_card(draft_path: Path,
     # fail, not just what a human eye happens to catch.
     for _issue in validate_draft_for_sync(draft_path):
         flags.append(f"  • ⚠ {_issue} — would block --sync")
+    # A preflight BLOCKER (US-only / no-immediate-pay policy missing) means the
+    # publish this card offers would fail at eBay — never let it read ALL CLEAR.
+    for _m in pf:
+        if "BLOCKER" in _m:
+            flags.append(f"  • ⚠ {_m}")
     if not flags:
         flags = ["  • None"]
 

@@ -272,6 +272,60 @@ def test_build_offer_golden_auction_never_has_best_offer_or_quantity():
     assert offer["listingPolicies"]["paymentPolicyId"] == "PAY-AUCTION"
 
 
+def test_build_offer_local_pickup_uses_no_immediate_pay_policy():
+    # eBay errorId 25008: a Local-Pickup-Only listing can't require immediate
+    # payment. Same no-immediate-pay policy as auctions (payment_auction).
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "475.00", "quantity": 1,
+        "shipping": {"fulfillment_mode": "LOCAL_PICKUP"},
+    }, body=_BODY)
+    pol = {**_POLICIES, "payment_auction": "PAY-DEFERRED"}
+
+    offer = L._build_offer(draft, sku="s", category_id="1", location_key="L",
+                           policies=pol)
+
+    assert offer["format"] == "FIXED_PRICE"
+    assert offer["listingPolicies"]["paymentPolicyId"] == "PAY-DEFERRED"
+
+
+def test_build_offer_shipped_fixed_price_keeps_default_payment_policy():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "10.00", "quantity": 1, "shipping": {"fulfillment_mode": "SHIP"},
+    }, body=_BODY)
+    pol = {**_POLICIES, "payment_auction": "PAY-DEFERRED"}
+    offer = L._build_offer(draft, sku="s", category_id="1", location_key="L",
+                           policies=pol)
+    assert offer["listingPolicies"]["paymentPolicyId"] == "P-1"
+
+
+def test_build_offer_local_pickup_without_deferred_policy_keeps_default():
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "10.00", "quantity": 1,
+        "shipping": {"fulfillment_mode": "local_pickup"},
+    }, body=_BODY)
+    offer = L._build_offer(draft, sku="s", category_id="1", location_key="L",
+                           policies=_POLICIES)
+    assert offer["listingPolicies"]["paymentPolicyId"] == "P-1"
+
+
+def test_payment_policy_blocker_names_the_missing_key_for_pickup_and_auction():
+    pickup = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "10.00", "shipping": {"fulfillment_mode": "LOCAL_PICKUP"}}, body=_BODY)
+    auction = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "10.00", "format": "AUCTION"}, body=_BODY)
+    shipped = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "price": "10.00"}, body=_BODY)
+
+    b = L._payment_policy_blocker(pickup, _POLICIES)
+    assert b and "BLOCKER" in b and "payment_policy_id_auction" in b and "25008" in b
+    b = L._payment_policy_blocker(auction, _POLICIES)
+    assert b and "25003" in b
+    assert L._payment_policy_blocker(shipped, _POLICIES) is None
+    configured = {**_POLICIES, "payment_auction": "PAY-DEFERRED"}
+    assert L._payment_policy_blocker(pickup, configured) is None
+    assert L._payment_policy_blocker(auction, configured) is None
+
+
 def test_build_inventory_item_golden():
     draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
         "title": "Vintage Widget MPN-100",
