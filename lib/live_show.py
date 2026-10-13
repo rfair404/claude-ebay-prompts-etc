@@ -268,7 +268,7 @@ code{{font-size:12px}}
 </style></head><body><main>
 <h1>Live show: {_e(name)}</h1>
 <div class="sub">store <b>{_e(lineup.get("store") or "?")}</b> · {len(lineup["lots"])} lots, {n_ok} unflagged · built {_e(lineup.get("built_at") or "?")}<br>
-OBS browser source: <code>http://127.0.0.1:{{port}}/live/{_e(name)}/overlay</code> · paste list: <code>inventory/_live/{_e(name)}/item_ids.txt</code></div>
+OBS browser source: <code id="ovl">/live/{_e(name)}/overlay</code> · paste list: <code>inventory/_live/{_e(name)}/item_ids.txt</code></div>
 <div class="bar"><input id="note" placeholder="Overlay line (e.g. Starting bid $5)" value="{_e(state.get('note') or '')}">
 <button onclick="setNote()">Set line</button><button class="ghost" onclick="show(null)">Clear screen</button></div>
 <table>{''.join(rows)}</table>
@@ -282,7 +282,7 @@ async function post(lot,note){{
 async function show(lot){{ if(await post(lot,document.getElementById('note').value)) location.reload(); }}
 async function setNote(){{ await post(cur,document.getElementById('note').value); }}
 async function copyId(id,btn){{ try{{await navigator.clipboard.writeText(id);btn.textContent='Copied'}}catch(e){{prompt('Item ID',id)}} }}
-document.querySelector('.sub code').textContent='http://'+location.host+'/live/'+SHOW+'/overlay';
+document.getElementById('ovl').textContent=location.origin+'/live/'+SHOW+'/overlay';
 </script></body></html>"""
 
 

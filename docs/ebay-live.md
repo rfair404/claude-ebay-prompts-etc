@@ -63,9 +63,18 @@ A lot is flagged, and left out of `item_ids.txt` unless you pass
 ACTIVE, has Best Offer on, or has a reserve price. Nothing else is checked.
 An unflagged lot can still be refused by Stream manager.
 
-Measured 2026-10-13: the **default** store has 238 active listings and 163
-of them have Best Offer on. The **junk** store has 38 active listings and
-none are flagged.
+To paste flagged lots anyway (to see what Stream manager does with them),
+rebuild with `--keep-flagged`. Clearing a flag means editing the live
+listing (e.g. turning Best Offer off), which this tool never does. Note
+that `lib/list_edit.py --update --fields bestoffer` works from a draft.md,
+and listings published before the October rebuild have none.
+
+Offers that share an Item ID (variation listings) become one lot, so the
+lot count can be lower than the active-offer count.
+
+Measured 2026-10-13: the **default** store had 238 active offers, giving
+230 lots, 163 of them flagged for Best Offer. The **junk** store had 38
+active lots and none were flagged.
 
 ## Known limits
 
