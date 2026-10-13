@@ -17,6 +17,7 @@ prompt, not the archive.
 | [STORE-CONNECTION-README.md](STORE-CONNECTION-README.md) | IMPLEMENTED (#147/#150) — the runbook for connecting an ADDITIONAL eBay seller account (e.g. a junk store) so both stay connected at once. The procedure, in order, with the silent-failure steps called out. |
 | [local-pickup-fragile.md](local-pickup-fragile.md) | IMPLEMENTED — how ship-risky items route to the local-pickup fulfillment policy, and the freight fallback for distant buyers. |
 | [price-strategy-v2.md](price-strategy-v2.md) | IMPLEMENTED — the distribution-based PRICE strategy (`lib/price_stats.py`) and the policy defaults it ships with. |
+| [ebay-live.md](ebay-live.md) | MVP — eBay Live show lineup (`tools/live_lineup.py`) and the host page + OBS overlay (`/live/<show>`). What eBay documents for Live, what's built, and the open questions in the eBay UI that gate the next step. |
 | [top-rated-plus.md](top-rated-plus.md) | What eBay's seller-standards policy requires a *listing* to carry, separated from the behavioral requirements a listing cannot encode. |
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
 | [prep-white-backgrounds.md](prep-white-backgrounds.md) | PROPOSAL, not built. Why the punch preset does not transfer from dark cloth to white-background shoots. |
