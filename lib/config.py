@@ -325,6 +325,31 @@ def get_easypost_key() -> str:
     )
 
 
+FREIGHT_KEY_ENV = {
+    "warp": "WARP_API_KEY",
+    "shipengine": "SHIPENGINE_API_KEY",
+    "uship": "USHIP_API_KEY",
+}
+
+
+def get_freight_config() -> dict:
+    """The `freight:` block (lib/freight), with each provider's api_key
+    resolved env var > config file, the same precedence as every other key.
+
+    Never raises for a missing key: Warp quotes without one, and a provider
+    with no key reports itself not-ready in `ebz freight providers` rather
+    than failing the whole comparison.
+    """
+    block = dict(_nested(load_config(), "freight") or {})
+    providers = {k: dict(v or {}) for k, v in (block.get("providers") or {}).items()}
+    for name, env in FREIGHT_KEY_ENV.items():
+        p = providers.setdefault(name, {})
+        if os.environ.get(env):
+            p["api_key"] = os.environ[env]
+    block["providers"] = providers
+    return block
+
+
 def get_ebay_credentials() -> dict:
     """Return the raw eBay credentials section from config.
 

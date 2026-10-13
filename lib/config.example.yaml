@@ -214,6 +214,37 @@ easypost:
   api_key: "EZAK_REPLACE_ME"
 
 # ---------------------------------------------------------------------------
+# Freight (LTL) — lib/freight, `ebz freight`, http://127.0.0.1:8770/freight
+# ---------------------------------------------------------------------------
+# For what a parcel carrier won't take. Quoting is free and runs freely;
+# booking spends money and is DRY RUN unless --confirm (CLI) or an explicit
+# second confirm (web app). Every key is optional and env vars win:
+#   WARP_API_KEY / SHIPENGINE_API_KEY / USHIP_API_KEY
+# Origin is the store's storefront ship_from (above), like ship-quote.
+freight:
+  # db_path: "reports/freight.db"   # relative to the repo root
+  # web_booking: true               # false = the app quotes/tracks but won't book
+  providers:
+    warp:
+      # Quotes need no key. Booking needs one: wak_test_... (sandbox, charges
+      # nothing) or wak_live_... (charges the card/balance on your Warp account).
+      api_key: ""
+      market_options: true          # also pull Warp's ~20-carrier indicative spread
+    shipengine:
+      # Advanced plan or higher, plus at least one LTL carrier account
+      # connected in ShipEngine — it quotes YOUR contracted rates, it is not
+      # a broker. Pickups go out as carrier TEST transactions until test: false.
+      api_key: ""
+      # carrier_ids: []             # default: every connected LTL carrier
+      # test: true
+      # pickup_window: {start: "09:00:00-05:00", end: "17:00:00-05:00"}
+      # bill_to: {type: "third_party", payment_terms: "prepaid", account: "..."}
+    uship:
+      # API docs are invite-only (apisupport@uship.com). Until then, record
+      # uship.com quotes by hand: `ebz freight add-quote ID --provider uship`.
+      enabled: true
+
+# ---------------------------------------------------------------------------
 # Offsite storage — lib/offsite.py (`ebz offsite`)
 # ---------------------------------------------------------------------------
 # A second copy of the ledgers, inventory/ (photos, drafts, phase output) and
