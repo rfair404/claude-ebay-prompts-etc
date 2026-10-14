@@ -267,3 +267,7 @@ session_friction.json
 # (dir_context.rel()/sweep() need paths relative to the real repo root) and
 # cleaned up by teardown_module — but an interrupted run can leave them behind.
 /dctx_*/
+
+# SEO landing pages built by tools/seo_pages.py (class 3: generated, refreshed
+# from the Browse API on every build; the source is seo/collections/*.json).
+/seo/dist/

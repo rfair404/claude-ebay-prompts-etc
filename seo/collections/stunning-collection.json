@@ -1,0 +1,328 @@
+{
+  "_about": "Editorial content for the SEO landing pages built by tools/seo_pages.py from eBay Ambassador collection 153990004751 ('Stunning Collection'). Live facts (price, photos, availability, condition) are fetched from the Browse API at build time; everything here is the copy we wrote. Maker facts are limited to well-established ones; anything that rests on the seller's word is attributed to the seller in the copy.",
+  "collection_id": 153990004751,
+  "slug": "stunning-collection",
+  "site_name": "The Fair Hand",
+  "storefront_url": "https://ebay.com/inf/rfair",
+  "base_url": "https://thefairhand.com/finds/",
+  "tracking": {
+    "mkcid": "1",
+    "mkrid": "711-53200-19255-0",
+    "siteid": "0",
+    "campid": "5339215365",
+    "toolid": "80009",
+    "customid_prefix": "seo-sc"
+  },
+  "hub": {
+    "title": "Curated Antique & Vintage Finds: Art Glass, Porcelain, Jewelry",
+    "description": "A hand-picked set of signed antique and vintage pieces on eBay: Royal Copenhagen, Murano and Perthshire glass, Mata Ortiz pottery, Hayward and Trifari jewelry.",
+    "h1": "Stunning Collection: signed antique & vintage finds",
+    "intro": [
+      "Every piece here is signed, marked or attributed to a named maker, and every one is listed for sale on eBay right now. They range from a Royal Copenhagen greyhound pair modeled by Theodor Madsen to a small Japanese sake cup. Each has its own page with measurements, maker's marks, the seller's condition notes, and what to check in the photos before you buy.",
+      "All twelve come from one long-running eBay seller with 100% positive feedback. They ship free in the US, and the seller accepts returns."
+    ]
+  },
+  "topics": [
+    {
+      "slug": "art-glass-paperweights",
+      "title": "Collectible Art Glass: Murano, Perthshire & Glass Eye Studio",
+      "description": "Mid-century Murano controlled-bubble pheasants, a 1974 Perthshire millefiori paperweight and a 2002 Glass Eye Studio Mars orb, all signed and on eBay now.",
+      "h1": "Collectible art glass & paperweights",
+      "intro": "Three makers, three ways of trapping color inside clear glass. The Murano pair uses controlled bubbles and gold inclusions in amber glass. The Perthshire weight is built from millefiori cane slices under a faceted dome. The Glass Eye Studio orb renders a planet in swirled, iridescent glass. All three are signed.",
+      "items": [178511153050, 198362109934, 198364492754],
+      "search": "art glass paperweight signed"
+    },
+    {
+      "slug": "porcelain-pottery",
+      "title": "Signed Porcelain & Studio Pottery: Royal Copenhagen to Mata Ortiz",
+      "description": "Royal Copenhagen Art Deco greyhounds, Mata Ortiz pottery by Yoly Ledezma, Edinbane stoneware from Skye, English bone china and a Japanese sake cup, on eBay.",
+      "h1": "Signed porcelain & studio pottery",
+      "intro": "From a Danish factory figure to a hand-built Mexican pot, each of these ceramics carries a maker's mark or an artist's signature. Prices run from about twenty dollars to a museum-grade Art Deco sculpture.",
+      "items": [178198376823, 178423669071, 196317546175, 178157113274, 198371308793],
+      "search": "signed porcelain pottery vintage"
+    },
+    {
+      "slug": "vintage-jewelry",
+      "title": "Signed Vintage Jewelry: Hayward Eagle Locket & Crown Trifari",
+      "description": "An unworn Hayward 1/20 12K gold-filled US Army eagle sweetheart locket in its box, and a signed Crown Trifari silver-tone barrel bead necklace, on eBay.",
+      "h1": "Signed vintage jewelry",
+      "intro": "Two signed American pieces. One is a military-motif photo locket on a matching gold-filled chain, still in its original box. The other is a long Trifari bead necklace in brushed silver tone.",
+      "items": [198603813634, 177786748705],
+      "search": "signed vintage necklace"
+    },
+    {
+      "slug": "antique-silverplate-cloisonne",
+      "title": "Victorian Bride's Basket & Chinese Cloisonné Silent Butlers",
+      "description": "A Homan Silver Plate Co. Victorian bride's basket with a blue ruffled art-glass bowl, and a pair of signed Chinese cloisonné silent butlers, on eBay.",
+      "h1": "Antique silverplate & cloisonné",
+      "intro": "Two kinds of decorated metalwork for the table. One is an American silverplate bride's basket holding a ruffled art-glass bowl. The other is a pair of Chinese enamel-on-brass crumb catchers.",
+      "items": [198662097412, 198530593202],
+      "search": "antique bride's basket silverplate"
+    }
+  ],
+  "items": [
+    {
+      "id": 178198376823,
+      "slug": "royal-copenhagen-greyhound-pair-theodor-madsen",
+      "title": "Royal Copenhagen Art Deco Greyhound Pair by Theodor Madsen",
+      "description": "Signed Royal Copenhagen porcelain greyhound pair modeled by Theodor Madsen, Art Deco foliage base, 7 in tall. Bonhams provenance per seller. On eBay now.",
+      "h1": "Royal Copenhagen Art Deco greyhound pair by Theodor Madsen",
+      "search": "royal copenhagen greyhound",
+      "intro": "A mated pair of greyhounds, one standing over the other, on a stylized Art Deco foliage base, in glazed Royal Copenhagen porcelain. It is signed by the Danish sculptor Theodor Madsen. The seller lists it as model No. 3016 (possibly 3014) and says it is the only example with the pair on this base they have seen.",
+      "about_heading": "About Royal Copenhagen figures",
+      "about": "Royal Copenhagen has made porcelain in Denmark since 1775. Its figures are identified by the factory mark of three wavy lines, usually with a crown, a painted or incised model number, and often the modeler's signature. When you compare examples, match the model number first. Many Royal Copenhagen animals were made in several sizes and variations under nearby numbers.",
+      "details": [
+        ["Maker", "Royal Copenhagen, Denmark"],
+        ["Modeler", "Theodor Madsen (signed)"],
+        ["Model", "No. 3016 (or 3014), per the seller"],
+        ["Era", "Early 20th century, Art Deco"],
+        ["Size", "7 in tall × 8 in long × 3.5 in wide"],
+        ["Weight", "2 lb 2.5 oz"],
+        ["Provenance", "Bought at Bonhams in 2022; the auction ticket is pictured (per the seller)"]
+      ],
+      "check": [
+        "Zoom in on the base photos for the factory mark and the model number.",
+        "Look at the thin parts, the legs and tails, for restoration. Glaze that changes sheen or color at a joint is the usual sign.",
+        "Ask the seller for the Bonhams lot number if provenance matters to you."
+      ]
+    },
+    {
+      "id": 178511153050,
+      "slug": "murano-pheasant-pair-controlled-bubble-gold-glass",
+      "title": "Pair of Mid-Century Murano Pheasants, Controlled Bubble & Gold",
+      "description": "Vintage 1960s Murano Italy art glass pheasant pair, amber with controlled bubbles and gold inclusions, 12 in tall, original foil labels. On eBay now.",
+      "h1": "Mid-century Murano pheasant pair in controlled-bubble amber glass",
+      "search": "murano glass pheasant",
+      "intro": "A matched pair of long-tailed pheasants in amber Murano glass, about 12 inches tall. Both have rows of controlled bubbles and gold inclusions, and both keep their original signed foil labels. They date from the 1960s.",
+      "about_heading": "Murano glass and the controlled bubble",
+      "about": "Murano glassmaking has been concentrated on its island in the Venetian lagoon since the late thirteenth century. The controlled bubble, or bullicante, technique presses a grid of air pockets into the hot glass and traps them under another layer, which produces the even rows of bubbles you see here. Original foil labels matter to collectors because so much unlabeled glass is sold as Murano.",
+      "details": [
+        ["Origin", "Murano, Italy"],
+        ["Era", "1960s, mid-century modern"],
+        ["Technique", "Controlled bubble with gold inclusions"],
+        ["Color", "Amber"],
+        ["Size", "About 12 in tall × 9 in × 3¼ in"],
+        ["Marks", "Original signed foil labels on both"]
+      ],
+      "check": [
+        "Check the label photos. Labels that survive in this condition add to the value.",
+        "Look along the thin tail tips and the beaks for chips or grinding.",
+        "Ask how the pair will be packed. Glass this size ships best double-boxed."
+      ]
+    },
+    {
+      "id": 198662097412,
+      "slug": "victorian-brides-basket-homan-silverplate-blue-glass",
+      "title": "Victorian Bride's Basket, Homan Silver Plate & Blue Art Glass",
+      "description": "Antique Homan Silver Plate Co. bride's basket, pattern 964, with a blue-to-white ruffled art-glass bowl, c. 1870 per seller, 6½ in tall. On eBay now.",
+      "h1": "Victorian bride's basket by Homan Silver Plate Co. with blue art glass",
+      "search": "victorian brides basket",
+      "intro": "A small Victorian bride's basket: a ruffled art-glass bowl shading from blue to white, set in a silverplate stand marked by Homan Silver Plate Co., pattern 964. The seller dates it to about 1870. It measures 6⅛ inches wide and nearly 6½ inches tall.",
+      "about_heading": "What a bride's basket is",
+      "about": "The bride's basket was a popular Victorian wedding gift: a decorative glass bowl, often ruffled, cased or shaded, sitting in a silverplate frame with a handle. The glass and the frame were often made by different firms and paired by the retailer, so a matched, original combination with a marked frame is the thing to look for.",
+      "details": [
+        ["Frame", "Homan Silver Plate Co., pattern 964 (marked)"],
+        ["Glass", "Ruffled art glass, blue shading to white"],
+        ["Era", "Victorian, c. 1870 per the seller"],
+        ["Size", "6⅛ in wide × about 6½ in tall"]
+      ],
+      "check": [
+        "Compare the glass rim to the frame opening. A good fit suggests the two have always been together.",
+        "Look for wear in the plating on high points such as the handle and feet.",
+        "Zoom in on the ruffled glass edge for flakes."
+      ]
+    },
+    {
+      "id": 198603813634,
+      "slug": "hayward-gold-filled-army-eagle-sweetheart-locket",
+      "title": "Hayward 12K Gold-Filled US Army Eagle Sweetheart Locket & Chain",
+      "description": "Unworn vintage W.E.H. Hayward 1/20 12K gold-filled eagle photo locket on a 22 in Atlas rope chain, in its original box. On eBay now.",
+      "h1": "Hayward 12K gold-filled US Army eagle sweetheart locket on a 22\" Atlas chain",
+      "search": "hayward sweetheart locket",
+      "intro": "A round photo locket in yellow and white gold-filled metal, with a US eagle motif. It is marked \"W.E.H. 12K G.F.\" for Hayward and hangs on a matching 22-inch Atlas 1/20 12K gold-filled rope chain. The seller describes it as unworn and in its original box.",
+      "about_heading": "Sweetheart jewelry and what \"1/20 12K G.F.\" means",
+      "about": "Sweetheart jewelry is the name collectors use for military-themed pieces that servicemen bought for wives, mothers and girlfriends. It is most often associated with the Second World War. A mark like \"1/20 12K G.F.\" means the piece is gold filled: a layer of 12-karat gold is bonded to a base metal and makes up at least one-twentieth of the total metal weight. That is far more gold than plating, which is why gold-filled pieces like this one hold up for decades.",
+      "details": [
+        ["Locket", "W.E.H. (Hayward) 12K gold filled, yellow & white, eagle motif, photo locket"],
+        ["Locket size", "1¼ in long including bail × almost 1 in wide, 6.4 g"],
+        ["Chain", "Atlas 1/20 12K gold-filled rope, 22 in, 3.4 g, spring-ring clasp"],
+        ["Condition", "Unworn per the seller; the box shows storage wear"],
+        ["Includes", "Original box"]
+      ],
+      "check": [
+        "Find both marks in the photos: W.E.H. on the locket and Atlas on the chain.",
+        "Check that the locket hinge closes flush. That matters if you plan to put photos in it."
+      ]
+    },
+    {
+      "id": 178423669071,
+      "slug": "mata-ortiz-yoly-ledezma-checkerboard-pot",
+      "title": "Mata Ortiz Pottery by Yoly Ledezma, Checkerboard Red Clay Pot",
+      "description": "Signed Yoly Ledezma Mata Ortiz pot: red clay, black geometric checkerboard with white dots, hand-built, 5¼ in wide. On eBay now.",
+      "h1": "Mata Ortiz pot by Yoly Ledezma: red clay with black checkerboard",
+      "search": "mata ortiz pottery",
+      "intro": "A small hand-built pot from Mata Ortiz, signed by the potter Yoly Ledezma. The red clay body is painted with a black geometric checkerboard and white dots. It is 5¼ inches wide and about 3⅝ inches tall.",
+      "about_heading": "About Mata Ortiz pottery",
+      "about": "Mata Ortiz is a village in Chihuahua, Mexico. In the 1970s Juan Quezada revived pottery-making there, drawing on the ancient Paquimé (Casas Grandes) tradition. The pots are typically hand-built without a wheel, burnished, painted with mineral pigments using very fine brushes, and fired at low temperature. Pieces are signed on the base, and collectors follow individual potters by name.",
+      "details": [
+        ["Artist", "Yoly Ledezma (signed)"],
+        ["Origin", "Mata Ortiz, Chihuahua, Mexico"],
+        ["Decoration", "Black geometric checkerboard with white dots on red clay"],
+        ["Size", "5¼ in wide × 3⅝ in"]
+      ],
+      "check": [
+        "Read the base signature in the photos.",
+        "Burnished surfaces show scratches easily, so check the widest point of the pot under raking light."
+      ]
+    },
+    {
+      "id": 198362109934,
+      "slug": "perthshire-1974-f-cane-millefiori-paperweight",
+      "title": "1974 Perthshire Millefiori Paperweight with \"F\" Date Cane",
+      "description": "Signed Perthshire Scotland millefiori flower paperweight with an F date cane (1974 per seller), faceted clear dome, 2⅜ in. On eBay now.",
+      "h1": "1974 Perthshire millefiori flower paperweight with \"F\" date cane",
+      "search": "perthshire paperweight",
+      "intro": "A faceted, domed Perthshire paperweight with a multicolor millefiori flower design, signed and carrying a letter \"F\" cane. The seller reads the cane as the 1974 date mark. It is just over 2⅜ inches across and 1½ inches tall.",
+      "about_heading": "Perthshire paperweights and date canes",
+      "about": "Perthshire Paperweights was a Scottish studio known for millefiori weights. \"Millefiori\" means \"thousand flowers\": rods of patterned glass are bundled, stretched and sliced, and the slices are arranged under a clear dome. Perthshire marked many weights with a signature or letter cane, which collectors use to date them, so the F cane is the detail to confirm.",
+      "details": [
+        ["Maker", "Perthshire, Scotland (signed)"],
+        ["Year", "1974, per the seller's reading of the F cane"],
+        ["Design", "Multicolor millefiori flower, faceted domed clear glass"],
+        ["Size", "Just over 2⅜ in wide × 1½ in tall"]
+      ],
+      "check": [
+        "Find the F cane in the photos and compare it with a Perthshire cane reference.",
+        "Look at the facet edges and the base for bruises. Faceted weights show wear on their high edges."
+      ]
+    },
+    {
+      "id": 198364492754,
+      "slug": "glass-eye-studio-mars-celestial-paperweight-2002",
+      "title": "Glass Eye Studio Mars Paperweight, 2002 Celestial Series",
+      "description": "Signed \"GES 02 MARS\" Glass Eye Studio Celestial Series art glass paperweight orb, iridescent, 3¼ in. Hand made in Seattle. On eBay now.",
+      "h1": "Glass Eye Studio Mars paperweight, 2002 Celestial Series",
+      "search": "glass eye studio celestial paperweight",
+      "intro": "A hand-made art glass sphere from Glass Eye Studio's Celestial Series, rendering Mars in swirled, iridescent glass. It is incised \"GES 02 MARS\" and measures about 3¼ inches wide.",
+      "about_heading": "About Glass Eye Studio's Celestial Series",
+      "about": "Glass Eye Studio is a Seattle art-glass maker. Its Celestial Series of planet and moon paperweights is a popular collecting theme, and people often try to assemble the whole solar system. The incised base mark gives the studio, the year and the planet, so a signed example is easy to place.",
+      "details": [
+        ["Maker", "Glass Eye Studio, Seattle (incised GES 02 MARS)"],
+        ["Series", "Celestial Series, Mars"],
+        ["Year", "2002"],
+        ["Finish", "Iridescent"],
+        ["Size", "About 3¼ in wide × 3⅛ in tall"]
+      ],
+      "check": [
+        "Confirm the incised mark in the base photo.",
+        "Check the flat base for scratches. It is the part of a paperweight that takes the wear."
+      ]
+    },
+    {
+      "id": 198530593202,
+      "slug": "chinese-cloisonne-silent-butler-pair",
+      "title": "Two Vintage Chinese Cloisonné Silent Butlers, One with Carnelian",
+      "description": "Pair of signed Chinese cloisonné enamel brass silent butlers / crumb catchers, the larger with a carnelian bead finial. Marked China. On eBay now.",
+      "h1": "Two vintage Chinese cloisonné silent butlers, one with a carnelian bead",
+      "search": "cloisonne silent butler",
+      "intro": "A lot of two lidded cloisonné silent butlers in enamel on brass, both incised \"China\". The larger one, about 4⅜ by 2⅞ inches, has a carnelian bead on top. The smaller is 3 inches long. The seller notes that the lid of the larger one has come off and needs to be reattached.",
+      "about_heading": "Cloisonné and the silent butler",
+      "about": "Cloisonné is made by soldering thin wires onto a metal body to form small cells (cloisons), filling them with colored enamel, then firing and polishing the piece. A silent butler is a lidded dish with a handle, used to sweep crumbs or empty ashtrays at the table without carrying a full tray away. A \"China\" export mark is the usual mark on pieces made for Western buyers.",
+      "details": [
+        ["Origin", "China; both incised \"China\""],
+        ["Material", "Cloisonné enamel on brass; carnelian bead on the larger"],
+        ["Era", "1900–1940 per the listing"],
+        ["Sizes", "About 4⅜ × 2⅞ × 1⅜ in, and 3 × 1¼ × 1¼ in"],
+        ["Condition", "The larger one's lid is detached and needs reattaching; otherwise age-related surface wear, per the seller"]
+      ],
+      "check": [
+        "Look closely at the hinge photos so you know how big the lid repair will be.",
+        "Check the enamel for pitting or losses, which are common on pieces that were handled often."
+      ]
+    },
+    {
+      "id": 178157113274,
+      "slug": "victoria-annette-bone-china-cup-saucer",
+      "title": "Victoria C&E \"Annette\" Bone China Tea Cup & Saucer, England",
+      "description": "Vintage Victoria C&E Annette pattern floral bone china tea cup and saucer, marked England, both signed. On eBay now.",
+      "h1": "Victoria C&E \"Annette\" floral bone china tea cup & saucer",
+      "search": "annette bone china tea cup",
+      "intro": "A floral tea cup and saucer in the \"Annette\" pattern, marked Victoria C&E and bone china, England. The saucer is 5⅜ inches across. The cup is about 2⅜ inches tall and 4½ inches across including the handle.",
+      "about_heading": "Collecting cup & saucer sets",
+      "about": "Single cup-and-saucer sets are one of the easiest ways to collect English bone china. They are small, they display well together, and a backstamp usually gives both the maker and the pattern name. When you buy a set, check that both pieces carry the same pattern name. Mismatched \"married\" sets are common.",
+      "details": [
+        ["Mark", "Victoria C&E, bone china, England"],
+        ["Pattern", "Annette"],
+        ["Saucer", "5⅜ in"],
+        ["Cup", "About 2⅜ in tall × 4½ in with handle"]
+      ],
+      "check": [
+        "Confirm both backstamps in the photos.",
+        "Look at the gilt rim for rubbing, which is the usual wear on a set that was used."
+      ]
+    },
+    {
+      "id": 196317546175,
+      "slug": "edinbane-pottery-skye-stoneware-bowl",
+      "title": "Edinbane Pottery Isle of Skye Signed Stoneware Bowl, 4 in",
+      "description": "Vintage Edinbane Pottery studio stoneware footed bowl from the Isle of Skye, Scotland, glazed and signed, 4 in wide. On eBay now.",
+      "h1": "Edinbane Pottery footed stoneware bowl, Isle of Skye",
+      "search": "edinbane pottery",
+      "intro": "A small footed bowl in glazed stoneware from Edinbane Pottery on the Isle of Skye, signed on the base. It measures 4 inches across and 1⅞ inches tall.",
+      "about_heading": "About Edinbane Pottery",
+      "about": "Edinbane Pottery is a working studio pottery in the village of Edinbane on Skye, in Scotland's Inner Hebrides. Its glazed stoneware is bought as a keepsake of the island and collected for its glazes, so signed pieces turn up far from Skye.",
+      "details": [
+        ["Maker", "Edinbane Pottery, Isle of Skye, Scotland (signed)"],
+        ["Material", "Glazed studio stoneware"],
+        ["Size", "4 in wide × 1⅞ in"]
+      ],
+      "check": [
+        "Read the base signature or stamp in the photos.",
+        "Check the foot ring for chips."
+      ]
+    },
+    {
+      "id": 198371308793,
+      "slug": "japanese-guinomi-blue-white-sake-cup",
+      "title": "Vintage Japanese Guinomi Blue & White Porcelain Sake Cup",
+      "description": "Signed c. 1950 Japanese guinomi / ochoko sake cup, blue and white flower porcelain, kanji in the well, 2⅝ in. On eBay now.",
+      "h1": "Vintage Japanese guinomi blue & white porcelain sake cup",
+      "search": "guinomi sake cup",
+      "intro": "A small blue-and-white porcelain sake cup painted with flowers, with kanji in the well that the seller translates as \"everything goes well.\" It is signed, dated to about 1950 by the seller, and measures 2⅝ inches across and 1 inch tall.",
+      "about_heading": "Guinomi vs. ochoko",
+      "about": "Both words name small cups for drinking sake. Collectors generally use \"guinomi\" for a larger, more substantial cup and \"ochoko\" for a smaller one, but sellers often use both terms, as this one does. A cup with an inscription in the well is a nice detail: you see it as you drink.",
+      "details": [
+        ["Origin", "Japan (signed)"],
+        ["Era", "About 1950, per the seller"],
+        ["Decoration", "Blue and white flowers; kanji in the well"],
+        ["Size", "2⅝ in wide × 1 in tall"]
+      ],
+      "check": [
+        "Photograph or zoom in on the foot to see the signature clearly.",
+        "Check the rim for fleabite chips, which are common on small cups."
+      ]
+    },
+    {
+      "id": 177786748705,
+      "slug": "crown-trifari-silver-tone-barrel-bead-necklace",
+      "title": "Crown Trifari Brushed Silver-Tone Barrel Bead Necklace, 24\"",
+      "description": "Signed Trifari c. 1960 brushed silver-tone oval barrel bead necklace, 24 in long, ⅜ in wide. Vintage designer costume jewelry on eBay now.",
+      "h1": "Vintage Crown Trifari brushed silver-tone barrel bead necklace, 24\"",
+      "search": "crown trifari necklace",
+      "intro": "A 24-inch strand of brushed silver-tone oval barrel beads, signed Trifari. The seller dates it to about 1960. The beads are ⅜ inch wide, and the strand is long enough to wear alone or layered.",
+      "about_heading": "About Trifari",
+      "about": "Trifari was one of the great New York costume-jewelry houses. Its signed pieces, especially those with the crown-over-T mark, are among the most collected American costume jewelry. Plain metal designs like this one from the 1960s are easy to wear today.",
+      "details": [
+        ["Maker", "Trifari (signed)"],
+        ["Era", "About 1960, per the seller"],
+        ["Length", "24 in"],
+        ["Width", "⅜ in"],
+        ["Finish", "Brushed silver tone"]
+      ],
+      "check": [
+        "Find the Trifari signature tag in the photos.",
+        "Look at the clasp and the bead ends for plating wear."
+      ]
+    }
+  ]
+}
