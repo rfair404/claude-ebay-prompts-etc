@@ -31,9 +31,11 @@ documents these seams:
 | Lineup builder | `tools/live_lineup.py` | Inventory API reads only |
 | Lineup/state logic, pages | `lib/live_show.py` | none |
 | Host page, overlay, state | `webapp/server.py` `/live/*` | none |
+| Promo image (marquee) | `tools/live_marquee.py`, `lib/live_marquee.py` | Browse API reads only |
 
 Show data lives in `inventory/_live/<show>/` (gitignored): `lineup.json`,
-`item_ids.txt` (the paste list) and `state.json` (the lot on screen).
+`item_ids.txt` (the paste list), `state.json` (the lot on screen), and the
+marquee's `marquee.json` / `marquee.png` / `marquee_img/`.
 
 ## Demo
 
@@ -75,6 +77,34 @@ lot count can be lower than the active-offer count.
 Measured 2026-10-13: the **default** store had 238 active offers, giving
 230 lots, 163 of them flagged for Best Offer. The **junk** store had 38
 active lots and none were flagged.
+
+## Marquee
+
+A 1050x1575 promo image for the show: title, start time, offer badges,
+four hero photos and up to 21 thumbnails, with an optional corner ribbon
+("FIRST SHOW!"). `--pick` sweeps the seller's live listings in one category
+(Jewelry & Watches by default) through Browse, keeps the oldest that pass
+the filters, and downloads their first photos:
+
+    python tools/live_marquee.py --show jewelry-oct-14 --pick --limit 25 \
+        --min-price 25 --max-price 100 --skip-seasonal \
+        --exclude 206418132464 --include 206418132358 --start "2026-10-14 20:00"
+
+Watch parts, bands and brochures filed under Jewelry & Watches are always
+dropped. `--include` adds pieces filed elsewhere (religious medals under
+Collectibles, say); they still face the price and seasonal filters.
+
+Then edit `marquee.json` (labels, `heroes`, `deck`, ribbon and footer copy)
+and run again without `--pick` to re-render. `--pick` keeps labels and
+heroes for items still on the list.
+
+`--start` is Eastern. The tool also prints that moment in GMT, which is
+what eBay's show scheduler showed on 2026-10-13. In daylight time an 8 PM
+ET show is 00:00 GMT **the next day**.
+
+The marquee only advertises. It doesn't make the listings $1 auctions with
+free shipping, and it doesn't turn Best Offer off. Most of the oldest
+default-store jewelry has Best Offer on, which `live_lineup.py` flags.
 
 ## Known limits
 
