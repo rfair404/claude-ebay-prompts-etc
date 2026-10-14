@@ -1,0 +1,23 @@
+# OBS Studio on Ubuntu 24.04 via the official PPA
+# (https://github.com/obsproject/obs-studio/wiki/install-instructions#linux)
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends software-properties-common gpg-agent ca-certificates \
+ && add-apt-repository -y ppa:obsproject/obs-studio \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      obs-studio ffmpeg \
+      libgl1-mesa-dri libegl-mesa0 mesa-vulkan-drivers \
+      intel-media-va-driver va-driver-all vainfo \
+      libpulse0 pulseaudio-utils \
+      fonts-dejavu-core dbus-x11 xdg-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# Ubuntu 24.04 ships a uid-1000 "ubuntu" user; run as it so files written to
+# the mounted config/recordings dirs are owned by the host user (keep-id).
+USER ubuntu
+WORKDIR /home/ubuntu
+ENTRYPOINT ["obs"]
