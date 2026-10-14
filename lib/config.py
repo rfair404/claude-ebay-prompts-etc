@@ -325,6 +325,27 @@ def get_easypost_key() -> str:
     )
 
 
+SHIP_FROM_FIELDS = ("name", "company", "street1", "street2", "city", "state", "zip",
+                    "country", "phone", "email")
+
+
+def get_ship_from(store: Optional[str] = None) -> dict:
+    """The store's configured ship-from mapping (storefront `ship_from`), or
+    {} when unset. Shared by ship-quote (parcel) and lib/freight (LTL).
+
+    `ship_from` is a policy-ish storefront key, so a named store that omits
+    it inherits the default store's (same shelf, same return address) — a
+    named store that ships from elsewhere states its own. Raises ConfigError
+    for a named store with no storefront entry, and for a ship_from that
+    isn't a mapping."""
+    sf = get_storefront(store).get("ship_from") or {}
+    if not isinstance(sf, dict):
+        raise ConfigError(f"storefront ship_from for store {store!r} must be a "
+                          f"mapping of {', '.join(SHIP_FROM_FIELDS)}")
+    return {k: (str(v) if v is not None else None) for k, v in sf.items()
+            if k in SHIP_FROM_FIELDS}
+
+
 FREIGHT_KEY_ENV = {
     "warp": {"sandbox_key": "WARP_SANDBOX_KEY", "live_key": "WARP_LIVE_KEY"},
     "shipengine": {"api_key": "SHIPENGINE_API_KEY"},
