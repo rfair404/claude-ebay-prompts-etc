@@ -122,3 +122,55 @@ def test_render_without_start_or_ribbon():
     LM.set_items(spec, [rec("a", "1")])
     page = LM.render(spec)
     assert 'class="ribbon"' not in page and " ET" not in page
+
+
+def test_grid_shape_balances_rows():
+    assert LM.grid_shape(21) == (7, 3, 122)
+    assert LM.grid_shape(16)[:2] == (6, 3)        # 6/6/4, not 7/7/2
+    assert LM.grid_shape(14)[:2] == (7, 2)
+    assert LM.grid_shape(5) == (5, 1, 176)       # one row: wide tiles, width-bound
+    assert LM.grid_shape(0) == (0, 0, 0)
+
+
+def test_render_focus_zoom_and_count_in_deck():
+    spec = LM.default_spec("s")
+    spec["deck"] = "{n} pieces"
+    LM.set_items(spec, [rec(str(i), str(i)) for i in range(6)])
+    spec["items"][5].update(focus="50% 30%", zoom=1.5)
+    page = LM.render(spec, "img")
+    assert "6 pieces" in page
+    assert "object-position:50% 30%;transform:scale(1.5);transform-origin:50% 30%" in page
+
+
+def test_download_refetches_when_listing_photo_changes(tmp_path, monkeypatch):
+    import importlib.util    # tools/live_marquee.py shares the lib module's name
+    spec = importlib.util.spec_from_file_location("live_marquee_tool",
+                                                  ROOT / "tools" / "live_marquee.py")
+    tool_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool_mod)
+    hits = []
+
+    class Resp:
+        def __init__(self, url): self.url = url
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return self.url.encode()
+
+    monkeypatch.setattr(tool_mod.urllib.request, "urlopen",
+                        lambda url, timeout: hits.append(url) or Resp(url))
+    items = [{"item_id": "1", "image": "https://i/a/s-l225.jpg"}, {"item_id": "2", "image": ""}]
+    assert tool_mod.download_photos(items, tmp_path) == (["1"], ["2"])
+    assert hits == ["https://i/a/s-l800.jpg"]
+    assert tool_mod.download_photos(items, tmp_path) == ([], ["2"])      # cached
+    items[0]["image"] = "https://i/b/s-l225.jpg"                          # re-shot
+    assert tool_mod.download_photos(items, tmp_path) == (["1"], ["2"])
+    assert (tmp_path / "1.jpg").read_bytes() == b"https://i/b/s-l800.jpg"
+
+
+def test_set_items_keeps_photo_edits():
+    spec = LM.default_spec("s")
+    LM.set_items(spec, [rec("a", "1")])
+    spec["items"][0].update(photo_url="https://x/alt.jpg", focus="40% 60%", zoom=1.3)
+    LM.set_items(spec, [rec("a", "1", price=12.0)])
+    it = spec["items"][0]
+    assert (it["photo_url"], it["focus"], it["zoom"], it["price"]) == ("https://x/alt.jpg", "40% 60%", 1.3, 12.0)
