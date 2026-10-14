@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import re
+from datetime import date
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
@@ -157,6 +158,9 @@ def book(store: FreightStore, sid: int, which: str | int,
     if q.expired():
         raise ValueError(f"quote {q.ref} ({q.carrier} ${q.price:,.2f}) expired at "
                          f"{q.expires_at} — re-quote before booking")
+    if s.request.pickup_date < date.today().isoformat():
+        raise ValueError(f"pickup date {s.request.pickup_date} has passed — set a new one "
+                         f"(`ebz freight set {sid} --pickup-date YYYY-MM-DD`) and re-quote")
     p = providers([q.provider]).get(q.provider)
     if p is None:
         raise ProviderNotReady(f"provider {q.provider!r} is disabled in config")
@@ -167,7 +171,9 @@ def book(store: FreightStore, sid: int, which: str | int,
     try:
         result = p.book(q, s.request, confirm=True)
     except http.FreightAPIError as e:
-        if e.no_response or e.status >= 500:
+        # 409: Warp's BOOKING_IN_PROGRESS — a booking for this quote is
+        # already under way, quite possibly our own earlier request.
+        if e.no_response or e.status >= 500 or e.status == 409:
             store.mark_book_unknown(sid, f"{q.provider} gave no clear answer: {e}")
             raise http.FreightAPIError(
                 e.provider, e.status,
@@ -285,14 +291,24 @@ def _later(a: str, b: str) -> bool:
     return b in _ORDER and a in _ORDER and _ORDER.index(a) > _ORDER.index(b)
 
 
+_DELIVERED = {"delivered", "complete", "completed", "deliverysuccessful"}
+_PICKED_UP = {"pickedup", "pickupsuccessful", "pickupcomplete", "pickupcompleted"}
+
+
 def _status_from(raw: str) -> Optional[str]:
-    r = (raw or "").lower().replace("-", "_").replace(" ", "_")
-    if "deliver" in r and "out_for" not in r:
+    """Map a provider's status text to ours — only on a clear match.
+    Substring guesses advanced shipments on "inRouteToPickup" or
+    "pickupFailed"; an unknown status now leaves the shipment where it is."""
+    k = re.sub(r"[^a-z]", "", (raw or "").lower())
+    if not k or any(bad in k for bad in ("fail", "exception", "cancel", "refused", "return")):
+        return None
+    if k in _DELIVERED:
         return "delivered"
-    if "transit" in r or "out_for" in r or "terminal" in r:
-        return "in_transit"
-    if "pick" in r and ("up" in r or "success" in r):
+    if k in _PICKED_UP:
         return "picked_up"
+    if k in ("intransit", "outfordelivery") or k.startswith("intransit") \
+            or k.startswith("arrivedat") or k.startswith("departed"):
+        return "in_transit"
     return None
 
 

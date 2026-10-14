@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from urllib.parse import urlparse
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -38,13 +40,35 @@ from freight.providers import ProviderNotReady
 from freight.store import STATUSES, FreightStore, Shipment
 from tools.sales_report import STYLE, _e, _stat
 
-router = APIRouter()
-
 PII_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, private",
     "X-Robots-Tag": "noindex, nofollow, noarchive",
     "Referrer-Policy": "no-referrer",
 }
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _local_only(request: Request, response: Response) -> None:
+    """Every /freight route: the browser must be talking to this machine by
+    a loopback name, and a write must come from a loopback page.
+
+    Binding 127.0.0.1 stops other machines, not other web pages: a site the
+    operator visits can point its own hostname at 127.0.0.1 (DNS rebinding)
+    and then call these routes as same-origin — including the one that
+    books freight. Checking Host (and Origin on writes) closes that. JSON
+    answers carry buyer addresses, so they get the no-store headers too."""
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
+    if host not in LOCAL_HOSTS:
+        raise HTTPException(403, f"freight is served to localhost only, not {host!r}")
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and (urlparse(origin).hostname or "") not in LOCAL_HOSTS:
+            raise HTTPException(403, "cross-origin write refused")
+    response.headers.update(PII_HEADERS)
+
+
+router = APIRouter(dependencies=[Depends(_local_only)])
 
 _store: Optional[FreightStore] = None
 
@@ -148,6 +172,7 @@ class PatchIn(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
     buyer_paid: Optional[float] = None
+    pickup_date: Optional[str] = None
     destination: Optional[Address] = None
 
 
@@ -167,8 +192,8 @@ def _request(body: QuoteIn) -> tuple[str, FreightRequest]:
     store = _store_name(body.store)
     try:
         origin = _svc.store_origin(store)
-    except ConfigError:
-        origin = FreightAddress(zip="")
+    except ConfigError as exc:      # a malformed ship_from is the operator's to fix
+        raise HTTPException(400, str(exc)) from exc
     for k, v in body.origin.model_dump().items():
         if v:
             setattr(origin, k, v)
@@ -266,11 +291,13 @@ def api_patch(sid: int, body: PatchIn) -> dict:
     fs = get_store()
     try:
         fields = {k: v for k, v in body.model_dump().items()
-                  if v is not None and k != "destination"}
+                  if v is not None and k not in ("destination", "pickup_date")}
         s = fs.set_fields(sid, **fields)
-        if body.destination is not None:
+        if body.destination is not None or body.pickup_date:
             req = s.request
-            req.destination = FreightAddress(**body.destination.model_dump())
+            if body.destination is not None:
+                req.destination = FreightAddress(**body.destination.model_dump())
+            req.pickup_date = body.pickup_date or req.pickup_date
             fs.update_request(sid, req)
         return fs.require(sid).to_dict()
     except (ValueError, KeyError) as exc:
@@ -496,8 +523,13 @@ def _quotes_table(quotes: list[FreightQuote], errors: dict, sid: Optional[int],
         if charges:
             notes += '<span class="inc">' + _e(" · ".join(
                 f"{c.get('description')} {_money(c.get('amount'))}" for c in charges)) + '</span>'
+        expired = q.expired()
+        if expired:
+            notes += f'<span class="w">EXPIRED {_e(q.expires_at)} — re-quote</span>'
         if sid is None or booked:
             action = ""
+        elif expired and q.tier != "manual":
+            action = '<span class="dim">expired</span>'
         elif q.bookable:
             action = (f'<button class="small" onclick="book(this,{sid},{_e(_js(q.ref))})">'
                       'Book…</button>')
@@ -592,12 +624,17 @@ def _list_table(rows: list[Shipment]) -> str:
         price = s.cost if s.booking else (best.price if best else None)
         carrier = (s.booking or {}).get("carrier") or (best.carrier if best else "")
         st = s.status
-        cls = "on" if st == "delivered" else ("off" if st in ("draft", "quoted") else "")
+        cls = "on" if st == "delivered" else ("off" if st in ("draft", "quoted", "booking") else "")
+        flag = ""
+        if st == "booking":
+            flag = '<span class="w">outcome unknown — check the provider</span>'
+        elif (s.booking or {}).get("payment_link") and st == "booked":
+            flag = '<span class="w">UNPAID — on hold</span>'
         out.append(
             f'<tr><td class="num"><a href="/freight/{s.id}">#{s.id}</a></td>'
             f'<td><span class="pill {cls}">{_e(st)}</span></td>'
             f'<td><a href="/freight/{s.id}">{_e(s.title or "(untitled)")}</a>'
-            f'<span class="inc">{_e(s.order_id or "")}</span></td>'
+            f'<span class="inc">{_e(s.order_id or "")}</span>{flag}</td>'
             f'<td class="num">{_e(s.request.origin.zip)} → {_e(s.request.destination.zip)}</td>'
             f'<td>{_e(carrier)}</td><td class="num">{_money(price)}</td>'
             f'<td class="num">{_money(s.margin)}</td></tr>')
@@ -717,16 +754,21 @@ def _detail(s: Shipment) -> str:
         + ")) body.destination=dest;")
     paid = "" if s.buyer_paid is None else s.buyer_paid
     edit = (
-        f'<details><summary>Edit order, notes, buyer-paid{"" if booked else ", destination"}'
+        f'<details><summary>Edit order, notes, buyer-paid{"" if booked else ", pickup date, destination"}'
         '</summary><form class="grid" style="margin-top:10px" onsubmit="saveEdit(this);return false">'
         f'<label>eBay order id<input name=order_id value="{_e(s.order_id)}"></label>'
         f'<label>Title<input name=title value="{_e(s.title)}"></label>'
         f'<label>Buyer paid $<input name=buyer_paid type=number step=any value="{paid}"></label>'
         f'<label style="grid-column:1/-1">Notes<input name=notes value="{_e(s.notes)}"></label>'
-        f'{dest_fields}<div class="actions"><button class="small">Save</button></div></form></details>'
+        + ("" if booked else f'<label>Pickup date (changing it clears quotes)<input '
+                             f'name=pickup_date type=date value="{_e(s.request.pickup_date)}"></label>')
+        + f'{dest_fields}<div class="actions"><button class="small">Save</button></div></form></details>'
         '<script>\nasync function saveEdit(f){\n'
         '  const o=formJSON(f), body={order_id:o.order_id,title:o.title,notes:o.notes,'
-        'buyer_paid:o.buyer_paid};\n  ' + dest_js + '\n'
+        'buyer_paid:o.buyer_paid};\n'
+        + ("" if booked else "  if(o.pickup_date && o.pickup_date!==" + _js(s.request.pickup_date)
+           + ") body.pickup_date=o.pickup_date;\n")
+        + '  ' + dest_js + '\n'
         "  await act(f.querySelector('button'),'PATCH','" + base + "',body);\n}\n"
         'async function markBooked(btn,sid,n){\n'
         "  const pro=prompt('PRO / tracking number for quote '+n+' (blank if not yet known):');\n"

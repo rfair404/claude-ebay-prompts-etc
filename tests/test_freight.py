@@ -448,7 +448,7 @@ def client(world, monkeypatch):
     monkeypatch.setattr(svc, "provider_status", lambda: [
         {"provider": "alpha", "ready": True, "note": ""}])
     monkeypatch.setattr(wf, "get_freight_config", lambda: {})
-    with TestClient(server.app) as c:
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as c:
         yield c, fs, wf, monkeypatch
     wf.set_store(None)
 
@@ -692,3 +692,78 @@ def test_detail_page_escapes_script_breakouts_and_bad_links(client):
     fs.update_booking(sid, b)
     page = c.get(f"/freight/{sid}").text
     assert "javascript:alert" not in page
+
+
+# --------------------------------------------------------------------- production pass
+
+def test_status_mapping_only_advances_on_a_clear_match():
+    assert svc._status_from("inRouteToPickup") is None
+    assert svc._status_from("pickupFailed") is None
+    assert svc._status_from("deliveryFailed") is None
+    assert svc._status_from("needCarrier") is None
+    assert svc._status_from("pickupSuccessful") == "picked_up"
+    assert svc._status_from("picked up") == "picked_up"
+    assert svc._status_from("In Transit") == "in_transit"
+    assert svc._status_from("complete") == "delivered"
+
+
+def test_warp_2xx_without_booking_ids_is_unknown_not_booked(fake, world):
+    fake({("POST", "/freights/booking"): {"message": "accepted"}})
+    with pytest.raises(FH.FreightAPIError) as e:
+        Warp(SANDBOX).book(_dev_q(), _req(), confirm=True)
+    assert e.value.no_response
+
+
+def test_409_booking_in_progress_keeps_the_lock(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].book_error = FH.FreightAPIError("beta", 409, "BOOKING_IN_PROGRESS")
+    with pytest.raises(FH.FreightAPIError, match="OUTCOME UNKNOWN"):
+        svc.book(fs, sid, q.ref, confirm=True)
+    assert fs.require(sid).status == "booking"
+
+
+def test_past_pickup_date_is_refused_and_can_be_moved(world, capsys, monkeypatch):
+    import tools.freight as cli
+    fs, provs = world
+    monkeypatch.setattr(svc, "open_store", lambda path=None: fs)
+    sid = fs.create(_req(pickup_date="2020-01-02"))
+    q = svc.quote_shipment(fs, sid).quotes[0]
+    with pytest.raises(ValueError, match="has passed"):
+        svc.book(fs, sid, q.ref, confirm=False)
+    assert cli.main(["set", str(sid), "--pickup-date", "2099-01-05"]) == 0
+    s = fs.require(sid)
+    assert s.request.pickup_date == "2099-01-05" and s.quotes == []   # re-quote required
+
+
+def test_malformed_ship_from_stops_the_cli(world, monkeypatch, capsys):
+    import config as CFG
+    import tools.freight as cli
+    monkeypatch.setattr(CFG, "get_storefront", lambda s=None: {"ship_from": "Madison GA"})
+    rc = cli.main(["quote", "--to-zip", "30301", "--length", "48", "--width", "40",
+                   "--height", "50", "--weight", "320"])
+    assert rc == 1 and "ship_from" in capsys.readouterr().err
+
+
+def test_freight_routes_refuse_foreign_hosts_and_origins(client):
+    c, fs, _, _ = client
+    assert c.get("/freight", headers={"host": "evil.example"}).status_code == 403
+    r = c.post("/api/freight/quote", json=PAYLOAD, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+    r = c.post("/api/freight/quote", json=PAYLOAD, headers={"origin": "http://127.0.0.1:8770"})
+    assert r.status_code == 200 and "no-store" in r.headers["cache-control"]
+    assert c.get("/freight", headers={"host": "[::1]:8770"}).status_code == 200
+
+
+def test_web_marks_expired_quotes_and_unknown_outcomes(client):
+    c, fs, _, _ = client
+    sid = c.post("/api/freight/shipments", json=PAYLOAD).json()["id"]
+    stale = [q.to_dict() for q in fs.require(sid).quotes]
+    stale[0]["expires_at"] = "2020-01-01T00:00:00Z"
+    fs._update(sid, quotes=json.dumps(stale))
+    page = c.get(f"/freight/{sid}").text
+    assert "EXPIRED" in page
+    fs.claim_booking(sid)
+    fs.mark_book_unknown(sid, "beta: timed out")
+    assert "OUTCOME UNKNOWN" in c.get(f"/freight/{sid}").text
+    assert "outcome unknown" in c.get("/freight").text

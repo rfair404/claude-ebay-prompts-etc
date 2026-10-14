@@ -224,6 +224,9 @@ class ShipEngine(Provider):
         r = http.send(self.name, "POST", f"{BASE}/quotes/{quote.quote_id}/pickup",
                       body=body, headers=headers, retry_network_errors=False)
         r = r if isinstance(r, dict) else {}
+        if not (r.get("pickup_id") or r.get("pro_number")):
+            raise http.FreightAPIError(self.name, 0, f"pickup answered 2xx with no "
+                                       f"pickup_id/pro_number: {str(r)[:300]}")
         warnings += [str(w.get("message")) for w in r.get("warnings") or [] if w.get("message")]
         return BookResult(dry_run=False, provider=self.name, quote_id=quote.quote_id,
                           price=quote.price, carrier=quote.carrier,

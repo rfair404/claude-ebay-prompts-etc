@@ -100,11 +100,9 @@ def _addr(args, prefix: str, base: FreightAddress | None = None) -> FreightAddre
 
 def _request(args, unit_from_draft: HandlingUnit | None = None) -> FreightRequest:
     store = stores.resolve_store_name(args.store)
-    try:
-        origin = svc.store_origin(store)
-    except ConfigError:
-        origin = FreightAddress(zip="")
-    origin = _addr(args, "from", origin)
+    # A malformed ship_from is a ConfigError and stops here — silently
+    # quoting from a blank origin is how a bad config goes unnoticed.
+    origin = _addr(args, "from", svc.store_origin(store))
     if not origin.zip:
         raise SystemExit("[X] no origin zip — pass --from-zip or set storefront ship_from "
                          "in config.yaml")
@@ -186,7 +184,7 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
 
 def print_shipment(s: Shipment) -> None:
     r = s.request
-    print(f"#{s.id}  [{s.status}]  {s.title or '(untitled)'}")
+    print(f"#{s.id}  [{s.status}]  {s.title or '(untitled)'}{_flag(s)}")
     print(f"  store {s.store or 'default'}   order {s.order_id or '—'}   sku {s.sku or '—'}")
     print(f"  {r.origin.zip} {r.origin.city} -> {r.destination.zip} {r.destination.city} "
           f"{r.destination.name}   pickup {r.pickup_date}")
@@ -196,8 +194,15 @@ def print_shipment(s: Shipment) -> None:
               f"{x.effective_class()}{'' if x.freight_class else ' (est.)'}")
     if r.accessorials:
         print("  accessorials: " + ", ".join(ACCESSORIALS[a] for a in r.accessorials))
+    if s.status == "booking":
+        last = next((e for e in reversed(s.events) if e.get("status") == "book_unknown"), {})
+        print(f"  ! booking outcome unknown: {last.get('note') or '?'}")
+        print(f"    check the provider, then `freight mark-booked {s.id} --quote REF "
+              f"--tracking …` or `freight status {s.id} quoted`")
     if s.booking:
         b = s.booking
+        if b.get("payment_link"):
+            print(f"  UNPAID — on hold until paid: {b['payment_link']}")
         print(f"  BOOKED {b.get('provider')} / {b.get('carrier')}  {_money(b.get('price'))}  "
               f"tracking {b.get('tracking_number') or '—'}")
         for k in ("tracking_url", "bol_url"):
@@ -262,6 +267,14 @@ def cmd_new(args) -> int:
     return 0
 
 
+def _flag(s: Shipment) -> str:
+    if s.status == "booking":
+        return "  [OUTCOME UNKNOWN — check the provider]"
+    if s.status == "booked" and (s.booking or {}).get("payment_link"):
+        return "  [UNPAID — on hold]"
+    return ""
+
+
 def cmd_list(args) -> int:
     rows = svc.open_store().list(status=args.status, open_only=not args.all)
     if not rows:
@@ -272,7 +285,7 @@ def cmd_list(args) -> int:
                        (best.price if best else None))
         print(f"  #{s.id:<4} {s.status:<10} {s.request.origin.zip}->{s.request.destination.zip}  "
               f"{price:>10}  {(s.booking or {}).get('carrier') or (best.carrier if best else ''):<20} "
-              f"{s.title[:40]}")
+              f"{s.title[:40]}{_flag(s)}")
     return 0
 
 
@@ -390,10 +403,11 @@ def cmd_set(args) -> int:
     s = fs.set_fields(args.id, **fields)
     to_given = any(getattr(args, f"to_{f}") for f in ADDR)
     from_given = any(getattr(args, f"from_{f}") for f in ADDR)
-    if to_given or from_given:
+    if to_given or from_given or args.pickup_date:
         req = s.request
         req.destination = _addr(args, "to", req.destination)
         req.origin = _addr(args, "from", req.origin)
+        req.pickup_date = args.pickup_date or req.pickup_date
         had = len(s.quotes)
         fs.update_request(args.id, req)
         if had and not fs.require(args.id).quotes:
@@ -481,11 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("status", choices=STATUSES)
     st.add_argument("--note")
 
-    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid or either stop")
+    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid, pickup date or either stop")
     se.add_argument("id", type=int)
     for f in ("order_id", "sku", "title", "notes"):
         se.add_argument(f"--{f.replace('_', '-')}", dest=f)
     se.add_argument("--buyer-paid", type=float, dest="buyer_paid")
+    se.add_argument("--pickup-date", help="YYYY-MM-DD; changing it clears the quotes")
     _add_addr(se, "from")
     _add_addr(se, "to")
     return ap
