@@ -326,14 +326,14 @@ def get_easypost_key() -> str:
 
 
 FREIGHT_KEY_ENV = {
-    "warp": "WARP_API_KEY",
-    "shipengine": "SHIPENGINE_API_KEY",
-    "uship": "USHIP_API_KEY",
+    "warp": {"sandbox_key": "WARP_SANDBOX_KEY", "live_key": "WARP_LIVE_KEY"},
+    "shipengine": {"api_key": "SHIPENGINE_API_KEY"},
+    "uship": {"api_key": "USHIP_API_KEY"},
 }
 
 
 def get_freight_config() -> dict:
-    """The `freight:` block (lib/freight), with each provider's api_key
+    """The `freight:` block (lib/freight), with each provider's key(s)
     resolved env var > config file, the same precedence as every other key.
 
     Never raises for a missing key: Warp quotes without one, and a provider
@@ -342,10 +342,11 @@ def get_freight_config() -> dict:
     """
     block = dict(_nested(load_config(), "freight") or {})
     providers = {k: dict(v or {}) for k, v in (block.get("providers") or {}).items()}
-    for name, env in FREIGHT_KEY_ENV.items():
+    for name, fields in FREIGHT_KEY_ENV.items():
         p = providers.setdefault(name, {})
-        if os.environ.get(env):
-            p["api_key"] = os.environ[env]
+        for fld, env in fields.items():
+            if os.environ.get(env):
+                p[fld] = os.environ[env]
     block["providers"] = providers
     return block
 

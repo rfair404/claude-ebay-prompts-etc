@@ -175,6 +175,7 @@ class BookResult:
     tracking_number: str = ""     # PRO or broker shipment number
     bol_url: str = ""
     tracking_url: str = ""
+    payment_link: str = ""        # set when the provider booked it but it's unpaid
     warnings: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)
 

@@ -102,6 +102,13 @@ class Shipment:
         }
 
 
+def _quote_basis(req: FreightRequest) -> tuple:
+    """What a price depends on. Contact details and street lines don't."""
+    return (req.origin.zip[:5], req.destination.zip[:5], req.pickup_date,
+            json.dumps([u.__dict__ for u in req.units], sort_keys=True),
+            tuple(sorted(req.accessorials)), req.declared_value)
+
+
 def _sort(quotes: list[FreightQuote]) -> list[FreightQuote]:
     # Cheapest first; among equal prices, bookable before indicative.
     return sorted(quotes, key=lambda q: (q.price, not q.bookable, q.provider, q.carrier))
@@ -186,7 +193,12 @@ class FreightStore:
         if s.status not in ("draft", "quoted"):
             raise ValueError(f"#{sid} is {s.status}; its request can't change after booking")
         req.validate()
-        # A changed request invalidates every quote, manual ones included.
+        if _quote_basis(req) == _quote_basis(s.request):
+            # Only names/streets/phones changed — what was priced is the same.
+            self._update(sid, request=json.dumps(req.to_dict()))
+            return
+        # A changed load, lane, date or accessorial invalidates every quote,
+        # manual ones included.
         self._update(sid, request=json.dumps(req.to_dict()), quotes="[]",
                      quote_errors="{}", quoted_at=None, status="draft")
 

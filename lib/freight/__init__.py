@@ -14,8 +14,9 @@ hand. This package is that quote, done properly:
 
 Providers today (see each module's docstring for what is and isn't verified):
 
-    warp        wearewarp.com — keyless instant LTL quotes + a 20-carrier
-                indicative spread; booking needs a key and a card on file
+    warp        wearewarp.com — firm quotes, booking, tracking and BOL via its
+                developer API (sandbox / live key), plus a keyless public quote
+                and a ~20-carrier indicative spread
     shipengine  ShipEngine/ShipStation API LTL — quotes from the LTL carrier
                 accounts *you* connect (Advanced plan or higher)
     uship       uShip — API docs are invite-only; until access is granted it

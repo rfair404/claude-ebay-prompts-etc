@@ -219,17 +219,22 @@ easypost:
 # For what a parcel carrier won't take. Quoting is free and runs freely;
 # booking spends money and is DRY RUN unless --confirm (CLI) or an explicit
 # second confirm (web app). Every key is optional and env vars win:
-#   WARP_API_KEY / SHIPENGINE_API_KEY / USHIP_API_KEY
+#   WARP_SANDBOX_KEY / WARP_LIVE_KEY / SHIPENGINE_API_KEY / USHIP_API_KEY
 # Origin is the store's storefront ship_from (above), like ship-quote.
 freight:
   # db_path: "reports/freight.db"   # relative to the repo root
   # web_booking: true               # false = the app quotes/tracks but won't book
   providers:
     warp:
-      # Quotes need no key. Booking needs one: wak_test_... (sandbox, charges
-      # nothing) or wak_live_... (charges the card/balance on your Warp account).
-      api_key: ""
+      # Keys come from Warp (developer.wearewarp.com/docs/freight), one per
+      # environment, sent as the `apikey` header. Without a key for the
+      # current mode, quotes still work (public, not bookable).
+      mode: "sandbox"               # sandbox -> stg.wearewarp.com (no truck, no charge)
+                                    # live    -> gw.wearewarp.com (REAL pickups, REAL money)
+      sandbox_key: ""
+      live_key: ""
       market_options: true          # also pull Warp's ~20-carrier indicative spread
+      # pickup_window: {from: "09:00", to: "17:00"}   # this machine's local time
     shipengine:
       # Advanced plan or higher, plus at least one LTL carrier account
       # connected in ShipEngine — it quotes YOUR contracted rates, it is not

@@ -17,7 +17,7 @@ and runs freely. Booking spends money: DRY RUN unless --confirm.
     python -m lib.cli freight book 3 --quote 1             # DRY RUN
     python -m lib.cli freight book 3 --quote 1 --confirm   # books + charges
 
-    python -m lib.cli freight list | show 3 | track 3 | track --open
+    python -m lib.cli freight list | show 3 | track 3 | track --open | docs 3
     python -m lib.cli freight add-quote 3 --provider uship --carrier "Estes via uShip" --price 412
     python -m lib.cli freight mark-booked 3 --quote 2 --tracking PRO123
     python -m lib.cli freight status 3 delivered
@@ -168,6 +168,10 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
             included = (q.extra or {}).get("included")
             if included:
                 print(f"        includes: {', '.join(map(str, included))}")
+            charges = (q.extra or {}).get("charges")
+            if charges:
+                print("        " + " · ".join(
+                    f"{c.get('description')} {_money(c.get('amount'))}" for c in charges))
             for w in q.warnings:
                 print(f"        ! {w}")
         if hidden:
@@ -311,12 +315,17 @@ def cmd_book(args) -> int:
             print(f"  ! {w}")
         print(f"\n  To book it: python -m lib.cli freight book {s.id} --quote {args.quote} --confirm")
         return 0
-    print("[OK] Booked — money is committed:")
+    sandbox = (r.raw or {}).get("mode") == "sandbox"
+    print("[OK] Booked in the SANDBOX — no truck, no charge:" if sandbox else
+          "[OK] Booked — a real pickup is scheduled" +
+          (" (UNPAID, on hold):" if r.payment_link else " and money is committed:"))
     print(f"  {r.provider} / {r.carrier}  {_money(r.price)}")
     print(f"  booking {r.booking_id or '—'}   tracking {r.tracking_number or '—'}")
     for k in ("tracking_url", "bol_url"):
         if getattr(r, k):
             print(f"  {k}: {getattr(r, k)}")
+    if r.payment_link:
+        print(f"  PAY HERE (order is on hold until paid): {r.payment_link}")
     for w in r.warnings:
         print(f"  ! {w}")
     if s.order_id and r.tracking_number:
@@ -357,6 +366,15 @@ def cmd_track(args) -> int:
     return rc
 
 
+def cmd_docs(args) -> int:
+    docs = svc.documents(svc.open_store(), args.id)
+    if not docs:
+        print(f"  #{args.id}: no documents yet (the BOL can lag the booking)")
+    for d in docs:
+        print(f"  {d.get('type')}{'/' + d['podType'] if d.get('podType') else ''}: {d.get('url')}")
+    return 0
+
+
 def cmd_status(args) -> int:
     print_shipment(svc.open_store().set_status(args.id, args.status, note=args.note or ""))
     return 0
@@ -367,11 +385,16 @@ def cmd_set(args) -> int:
     fields = {k: getattr(args, k) for k in ("order_id", "sku", "title", "notes", "buyer_paid")
               if getattr(args, k) is not None}
     s = fs.set_fields(args.id, **fields)
-    if any(getattr(args, f"to_{f}") for f in ADDR):
+    to_given = any(getattr(args, f"to_{f}") for f in ADDR)
+    from_given = any(getattr(args, f"from_{f}") for f in ADDR)
+    if to_given or from_given:
         req = s.request
         req.destination = _addr(args, "to", req.destination)
+        req.origin = _addr(args, "from", req.origin)
+        had = len(s.quotes)
         fs.update_request(args.id, req)
-        print("  destination changed — quotes cleared, re-quote before booking")
+        if had and not fs.require(args.id).quotes:
+            print("  lane changed — quotes cleared, re-quote before booking")
     print_shipment(fs.require(args.id))
     return 0
 
@@ -446,16 +469,20 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("id", type=int, nargs="?")
     t.add_argument("--open", action="store_true", help="every open, booked shipment")
 
+    dc = sub.add_parser("docs", help="BOL / POD links for a booked shipment")
+    dc.add_argument("id", type=int)
+
     st = sub.add_parser("status", help="set status by hand")
     st.add_argument("id", type=int)
     st.add_argument("status", choices=STATUSES)
     st.add_argument("--note")
 
-    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid or the destination")
+    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid or either stop")
     se.add_argument("id", type=int)
     for f in ("order_id", "sku", "title", "notes"):
         se.add_argument(f"--{f.replace('_', '-')}", dest=f)
     se.add_argument("--buyer-paid", type=float, dest="buyer_paid")
+    _add_addr(se, "from")
     _add_addr(se, "to")
     return ap
 
@@ -464,7 +491,7 @@ COMMANDS = {
     "providers": cmd_providers, "quote": cmd_quote, "new": cmd_new, "list": cmd_list,
     "show": cmd_show, "requote": cmd_requote, "add-quote": cmd_add_quote,
     "book": cmd_book, "mark-booked": cmd_mark_booked, "track": cmd_track,
-    "status": cmd_status, "set": cmd_set,
+    "status": cmd_status, "set": cmd_set, "docs": cmd_docs,
 }
 
 

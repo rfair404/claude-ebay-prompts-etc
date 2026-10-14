@@ -184,6 +184,19 @@ def track(store: FreightStore, sid: int) -> TrackResult:
     return t
 
 
+def documents(store: FreightStore, sid: int) -> list[dict]:
+    """BOL / POD links for a booked shipment, from its provider."""
+    s = store.require(sid)
+    if not s.booking:
+        raise ValueError(f"#{sid} isn't booked")
+    if s.booking.get("manual"):
+        raise ProviderNotReady(f"#{sid} was booked by hand — its BOL came from the carrier")
+    p = providers([s.booking["provider"]]).get(s.booking["provider"])
+    if p is None or not hasattr(p, "documents"):
+        raise ProviderNotReady(f"{s.booking['provider']} has no documents API here")
+    return p.documents(s.booking)
+
+
 _ORDER = ["booked", "picked_up", "in_transit", "delivered"]
 
 

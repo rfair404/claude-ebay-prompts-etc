@@ -318,6 +318,14 @@ def api_track(sid: int) -> dict:
             "shipment_status": get_store().require(sid).status}
 
 
+@router.get("/api/freight/shipments/{sid}/documents")
+def api_documents(sid: int) -> list[dict]:
+    try:
+        return _svc.documents(get_store(), sid)
+    except (ValueError, KeyError, ProviderNotReady, _http.FreightAPIError) as exc:
+        raise _fail(exc) from exc
+
+
 @router.post("/api/freight/shipments/{sid}/status")
 def api_status(sid: int, body: StatusIn) -> dict:
     try:
@@ -422,6 +430,17 @@ async function book(btn, sid, n){
   try{ await api('POST',`/api/freight/shipments/${sid}/book`,{quote:n,confirm:true}); location.reload(); }
   catch(e){ say(m,e.message,true); btn.disabled=false; }
 }
+async function showDocs(btn, sid){
+  const m=document.getElementById('msg'); btn.disabled=true; say(m,'Fetching documents…');
+  try{
+    const docs=await api('GET',`/api/freight/shipments/${sid}/documents`);
+    m.className='msg'; m.textContent='';
+    if(!docs.length){ m.textContent='No documents yet — the BOL can lag the booking.'; }
+    for(const d of docs){ const a=document.createElement('a'); a.href=d.url; a.target='_blank';
+      a.rel='noreferrer'; a.textContent=(d.type||'doc')+(d.podType?' / '+d.podType:'');
+      m.append(a,' '); }
+  }catch(e){ say(m,e.message,true); } finally{ btn.disabled=false; }
+}
 function formJSON(f){ const o={}; for(const el of f.elements){ if(!el.name) continue;
   o[el.name]= el.type==='number'? num(el.value) : el.value; } return o; }
 """
@@ -455,6 +474,10 @@ def _quotes_table(quotes: list[FreightQuote], errors: dict, sid: Optional[int],
         inc = (q.extra or {}).get("included")
         if inc:
             notes += f'<span class="inc">includes {_e(", ".join(map(str, inc)))}</span>'
+        charges = (q.extra or {}).get("charges")
+        if charges:
+            notes += '<span class="inc">' + _e(" · ".join(
+                f"{c.get('description')} {_money(c.get('amount'))}" for c in charges)) + '</span>'
         if sid is None or booked:
             action = ""
         elif q.bookable:
@@ -616,6 +639,10 @@ def _detail(s: Shipment) -> str:
         kv.insert(0, ("Booked", f'{_e(b.get("provider"))} / {_e(b.get("carrier"))} · '
                                 f'{_money(b.get("price"))} · tracking '
                                 f'{_e(b.get("tracking_number") or "—")} {links}'
+                                + (f'<span class="w">UNPAID — on hold until paid: '
+                                   f'<a href="{_e(b["payment_link"])}" target=_blank '
+                                   f'rel=noreferrer>pay</a></span>'
+                                   if b.get("payment_link") else "")
                                 + "".join(f'<span class="w">! {_e(w)}</span>'
                                           for w in b.get("warnings") or [])))
     info = '<dl class="kv">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in kv) + "</dl>"
@@ -630,7 +657,9 @@ def _detail(s: Shipment) -> str:
                  'Track</button>' if booked else "")
     set_status = ("act(this,'POST','" + base + "/status',"
                   "{status:document.getElementById('st').value})")
-    controls = (f'<div class="actions" style="margin-top:16px">{requote_btn}{track_btn}'
+    docs_btn = (f'<button class="ghost small" onclick="showDocs(this,{s.id})">Documents</button>'
+                if booked else "")
+    controls = (f'<div class="actions" style="margin-top:16px">{requote_btn}{track_btn}{docs_btn}'
                 f'<select id=st>{status_opts}</select>'
                 f'<button class="ghost small" onclick="{set_status}">Set status</button>'
                 '<span id=msg class="msg"></span></div>')

@@ -89,15 +89,20 @@ def fake(monkeypatch):
     return install
 
 
-WARP_QUOTE = {"quote_id": "PRICING_1", "price_usd": 249.07, "transit_days": 4,
-              "quote_tier": "firm", "expires_at": "2026-10-16T00:00:00Z",
-              "service": {"vehicle": "LTL (shared)",
-                          "included_at_no_charge": ["liftgate", "residential delivery"]},
-              "missing_for_ship": []}
+DEV_QUOTE = {"quote_id": "W01Q", "price": {"amount": 294.1853005, "currency_code": "USD"},
+             "charges": [{"code": "TOTAL", "description": "Total rate", "amount": 294.1853005},
+                         {"code": "SERVICE_OPTION", "description": "liftgate-pickup", "amount": 0},
+                         {"code": "TRANSIT", "description": "Transit Cost", "amount": 244.66}],
+             "transit_time": 3, "expiration_time_utc": 1792110146, "status": "ACCEPT",
+             "insurance": {"insuranceQuoteId": "INS1", "total": 66}}
+PUBLIC_QUOTE = {"quote_id": "PRICING_1", "price_usd": 249.07, "transit_days": 4,
+                "quote_tier": "firm",
+                "service": {"included_at_no_charge": ["liftgate", "residential delivery"]}}
 WARP_MARKET = {"market_options": [
     {"rank": 1, "price_usd": 446.0, "transit_days": 2, "carrier_name": "DAYLIGHT",
      "is_warp": False, "bookable": False},
     {"rank": 2, "price_usd": 250.0, "carrier_name": "Warp", "is_warp": True}]}
+SANDBOX = {"sandbox_key": "sbx", "market_options": True}
 
 
 # --------------------------------------------------------------------- models
@@ -129,80 +134,113 @@ def test_request_round_trips_through_dict():
 
 # --------------------------------------------------------------------- warp
 
-def test_warp_quote_maps_accessorials_and_parses_both_tiers(fake):
-    f = fake({("POST", "/ltl/quote"): WARP_QUOTE,
+def test_warp_with_sandbox_key_quotes_on_staging_with_apikey_header(fake):
+    f = fake({("POST", "stg.wearewarp.com/api/v1/freights/quote"): DEV_QUOTE,
+              ("POST", "/ltl/market-options"): WARP_MARKET})
+    qs = Warp(SANDBOX).quote(_req(declared_value=475))
+    method, url, body, headers = f.calls[0]
+    assert url == "https://stg.wearewarp.com/api/v1/freights/quote"
+    assert headers["Apikey"] == "sbx"
+    assert body["deliveryServices"] == [{"quantity": 1, "service": "liftgate-delivery"},
+                                        {"quantity": 1, "service": "residential-delivery"}]
+    assert body["listItems"][0]["totalWeight"] == 320 and body["listItems"][0]["packaging"] == "Pallet"
+    assert body["insuranceInfo"]["insuredValue"] == 475
+    q = qs[0]
+    assert (q.carrier, q.price, q.bookable, q.quote_id, q.extra["mode"]) == \
+        ("Warp", 294.19, True, "W01Q", "sandbox")
+    assert q.expires_at.startswith("2026-10-1") and q.transit_days == 3
+    assert [c["code"] for c in q.extra["charges"]] == ["SERVICE_OPTION", "TRANSIT"]
+    assert "Authorization" not in f.calls[1][3] and "Apikey" not in f.calls[1][3]  # spread keyless
+    assert [(x.carrier, x.bookable) for x in qs[1:]] == [("DAYLIGHT", False)]
+
+
+def test_warp_live_mode_uses_gw_and_live_key(fake):
+    f = fake({("POST", "gw.wearewarp.com/api/v1/freights/quote"): DEV_QUOTE})
+    Warp({"mode": "live", "live_key": "lv", "sandbox_key": "sbx",
+          "market_options": False}).quote(_req())
+    assert f.calls[0][1].startswith("https://gw.wearewarp.com") and f.calls[0][3]["Apikey"] == "lv"
+
+
+def test_warp_without_key_quotes_publicly_and_is_not_bookable(fake):
+    f = fake({("POST", "www.wearewarp.com/api/v1/ltl/quote"): PUBLIC_QUOTE,
               ("POST", "/ltl/market-options"): WARP_MARKET})
     qs = Warp({}).quote(_req())
-    body = f.calls[0][2]
-    assert body["accessorials"] == {"pickup": [],
-                                    "delivery": ["liftgate-delivery", "residential-delivery"]}
-    assert body["pallets"] == 1 and body["weight_lbs_per_pallet"] == 320
-    assert "Authorization" not in f.calls[0][3]          # keyless quoting
-    assert [(q.carrier, q.price, q.bookable) for q in qs] == [
-        ("Warp", 249.07, True), ("DAYLIGHT", 446.0, False)]   # is_warp row dropped
-    assert qs[0].extra["included"] == ["liftgate", "residential delivery"]
-    assert qs[1].tier == "indicative"
+    assert f.calls[0][2]["accessorials"]["delivery"] == ["liftgate-delivery", "residential-delivery"]
+    assert qs[0].price == 249.07 and not qs[0].bookable
+    with pytest.raises(ProviderNotReady, match="can't be booked"):
+        Warp({}).book(qs[0], _req())
 
 
-def test_warp_mixed_load_is_flagged(fake):
-    fake({("POST", "/ltl/quote"): WARP_QUOTE, ("POST", "/ltl/market-options"): WARP_MARKET})
-    r = _req(units=[HandlingUnit(48, 40, 50, 320), HandlingUnit(20, 20, 20, 40, count=2)])
-    qs = Warp({}).quote(r)
-    assert any("mixed load" in w for w in qs[0].warnings)
-
-
-def test_warp_market_failure_keeps_the_bookable_quote(fake):
-    fake({("POST", "/ltl/quote"): WARP_QUOTE,
+def test_warp_market_failure_keeps_the_firm_quote(fake):
+    fake({("POST", "/freights/quote"): DEV_QUOTE,
           ("POST", "/ltl/market-options"): urllib.error.HTTPError(
               "u", 400, "x", None, io.BytesIO(b"bad"))})
-    qs = Warp({}).quote(_req())
-    assert len(qs) == 1 and "market spread unavailable" in qs[0].warnings[0]
+    qs = Warp(SANDBOX).quote(_req())
+    assert len(qs) == 1 and any("market spread unavailable" in w for w in qs[0].warnings)
+
+
+def _dev_q(mode="sandbox"):
+    return FreightQuote(provider="warp", carrier="Warp", price=294.19, quote_id="W01Q",
+                        bookable=True, tier="firm",
+                        extra={"mode": mode, "insurance": {"insuranceQuoteId": "INS1", "total": 66}})
 
 
 def test_warp_book_dry_run_makes_no_call(fake):
     f = fake({})
-    q = FreightQuote(provider="warp", carrier="Warp", price=249.07,
-                     quote_id="PRICING_1", bookable=True)
-    r = Warp({"api_key": "wak_test_x"}).book(q, _req(), confirm=False)
-    assert r.dry_run and f.calls == []
+    r = Warp(SANDBOX).book(_dev_q(), _req(), confirm=False)
+    assert r.dry_run and f.calls == [] and "SANDBOX" in r.warnings[0]
 
 
-def test_warp_book_needs_a_key_and_full_addresses(fake):
+def test_warp_sandbox_quote_never_books_live(fake):
+    f = fake({})
+    with pytest.raises(ProviderNotReady, match="came from sandbox"):
+        Warp({"mode": "live", "live_key": "lv"}).book(_dev_q("sandbox"), _req(), confirm=True)
+    assert f.calls == []
+
+
+def test_warp_book_needs_full_addresses(fake):
     fake({})
-    q = FreightQuote(provider="warp", carrier="Warp", price=1, quote_id="P", bookable=True)
-    with pytest.raises(ProviderNotReady):
-        Warp({}).book(q, _req(), confirm=False)
     with pytest.raises(ValueError, match="destination.street1"):
-        Warp({"api_key": "k"}).book(q, _req(destination=FreightAddress(zip="30301")))
-
-
-def test_warp_indicative_rate_is_not_bookable(fake):
-    fake({})
-    q = FreightQuote(provider="warp", carrier="ABF", price=1, tier="indicative")
-    with pytest.raises(ProviderNotReady, match="indicative"):
-        Warp({"api_key": "k"}).book(q, _req(), confirm=True)
+        Warp(SANDBOX).book(_dev_q(), _req(destination=FreightAddress(zip="30301")))
 
 
 def test_warp_confirmed_book_posts_once_and_never_retries(fake):
-    f = fake({("POST", "/book"): urllib.error.URLError("reset")})
-    q = FreightQuote(provider="warp", carrier="Warp", price=1, quote_id="P", bookable=True)
+    f = fake({("POST", "/freights/booking"): urllib.error.URLError("reset")})
     with pytest.raises(FH.FreightAPIError):
-        Warp({"api_key": "wak_live_x"}).book(q, _req(), confirm=True)
-    assert len([c for c in f.calls if c[1].endswith("/book")]) == 1
+        Warp(SANDBOX).book(_dev_q(), _req(), confirm=True)
+    assert len([c for c in f.calls if c[1].endswith("/freights/booking")]) == 1
 
 
-def test_warp_confirmed_book_parses_result(fake):
-    f = fake({("POST", "/book"): {"booked": True, "order_id": "O1", "shipment_id": "S1",
-                                  "tracking_number": "S-1", "sandbox": True,
-                                  "tracking_dashboard": "https://t/1"}})
-    q = FreightQuote(provider="warp", carrier="Warp", price=249.07, quote_id="P", bookable=True)
-    r = Warp({"api_key": "wak_test_x"}).book(q, _req(reference="12-345"), confirm=True)
-    sent = f.calls[0][2]
-    assert sent["quote_id"] == "P" and sent["reference"] == "12-345"
-    assert sent["patch"]["delivery"]["zipCode"] == "30301"
-    assert f.calls[0][3]["Authorization"] == "Bearer wak_test_x"
-    assert (r.booking_id, r.tracking_number, r.dry_run) == ("O1", "S-1", False)
-    assert "SANDBOX" in r.warnings[0]
+def test_warp_confirmed_book_sends_stops_window_insurance_and_flags_unpaid(fake):
+    f = fake({("POST", "stg.wearewarp.com/api/v1/freights/booking"): {
+        "message": "Success", "trackingNumber": "2E2E", "orderId": "O1", "shipmentId": "S1",
+        "insuranceStatus": "failed", "paymentLink": "https://customer.wearewarp.com/pay"}})
+    r = Warp(SANDBOX).book(_dev_q(), _req(reference="12-345", declared_value=475), confirm=True)
+    body = f.calls[0][2]
+    assert body["quoteId"] == "W01Q" and body["refNum"] == "12-345"
+    assert body["insuranceQuoteId"] == "INS1"
+    assert body["deliveryInfo"]["address"]["zipcode"] == "30301"
+    assert body["deliveryInfo"]["contactName"] == "Jane"
+    assert body["pickupInfo"]["windowTime"]["from"].startswith("2026-10-1")
+    assert body["listItems"][0]["totalWeight"] == 320
+    assert (r.booking_id, r.tracking_number, r.dry_run) == ("O1", "2E2E", False)
+    assert r.payment_link.endswith("/pay") and r.raw["mode"] == "sandbox"
+    assert any("FAILED" in w for w in r.warnings)
+
+
+def test_warp_track_and_documents_use_the_booking_environment(fake):
+    f = fake({("POST", "stg.wearewarp.com/api/v1/freights/tracking"): [
+                  {"trackingNumber": "2E2E", "statusInfo": {"status": "complete"}}],
+              ("GET", "/freights/events/S1"): [{"when": "t", "message": "Delivered"}],
+              ("GET", "/freights/documents/O1"): {"data": [
+                  {"type": "bol", "url": "https://x/bol.pdf"}, {"type": "pod"}]}})
+    booking = {"tracking_number": "2E2E", "booking_id": "O1",
+               "raw": {"mode": "sandbox", "shipmentId": "S1"}}
+    w = Warp({"mode": "live", "live_key": "lv", "sandbox_key": "sbx"})
+    t = w.track(booking)
+    assert t.delivered and t.events[0].status == "Delivered"
+    assert f.calls[0][2] == {"trackingNumbers": ["2E2E"]} and f.calls[0][3]["Apikey"] == "sbx"
+    assert w.documents(booking) == [{"type": "bol", "podType": None, "url": "https://x/bol.pdf"}]
 
 
 # --------------------------------------------------------------------- shipengine
@@ -336,6 +374,15 @@ def test_changing_destination_clears_every_quote(world):
     fs.update_request(sid, _req(destination=FreightAddress(zip="10001")))
     s = fs.require(sid)
     assert s.quotes == [] and s.status == "draft"
+
+
+def test_adding_contact_details_keeps_quotes(world):
+    fs, _ = world
+    sid = fs.create(_req(destination=FreightAddress(zip="30301")))
+    svc.quote_shipment(fs, sid)
+    fs.update_request(sid, _req())          # same zip, now with street/name/phone
+    s = fs.require(sid)
+    assert len(s.quotes) == 2 and s.status == "quoted" and s.request.destination.name == "Jane"
 
 
 def test_mark_booked_and_status_needs_a_booking(world):
