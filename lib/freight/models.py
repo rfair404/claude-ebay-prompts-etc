@@ -2,9 +2,10 @@
 from these; nothing outside providers/ sees a broker's own JSON."""
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 # Accessorials, as one vocabulary. Each provider maps the ones it can and
@@ -154,6 +155,7 @@ class FreightQuote:
     tier: str = ""                        # "indicative" | "firm" | "manual" | ""
     warnings: list[str] = field(default_factory=list)
     extra: dict = field(default_factory=dict)   # provider ids book() needs back
+    ref: str = ""                         # stable handle; see quote_ref()
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -161,7 +163,30 @@ class FreightQuote:
     @classmethod
     def from_dict(cls, d: dict) -> "FreightQuote":
         known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in d.items() if k in known})
+        q = cls(**{k: v for k, v in d.items() if k in known})
+        q.ref = q.ref or quote_ref(q)
+        return q
+
+    def expired(self, now: Optional[datetime] = None) -> bool:
+        """True once expires_at has passed. No expiry stated -> never."""
+        if not self.expires_at:
+            return False
+        try:
+            exp = datetime.fromisoformat(str(self.expires_at).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        return exp <= (now or datetime.now(timezone.utc))
+
+
+def quote_ref(q: "FreightQuote") -> str:
+    """A short, stable id for one quote. Booking names a quote by this rather
+    than by its row number, because a re-quote re-sorts the rows — "book #2"
+    typed from yesterday's table must not book today's #2."""
+    basis = "|".join(str(x) for x in (q.provider, q.carrier, q.service, q.quote_id,
+                                      f"{q.price:.2f}", q.tier, q.expires_at or ""))
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:8]
 
 
 @dataclass

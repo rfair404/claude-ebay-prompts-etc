@@ -14,12 +14,12 @@ and runs freely. Booking spends money: DRY RUN unless --confirm.
         --to-name "Jane Buyer" --to-street1 "1 Main St" --to-city Atlanta \\
         --to-state GA --to-zip 30301 --to-phone 4045550100 \\
         --length 48 --width 40 --height 50 --weight 320 --quote
-    python -m lib.cli freight book 3 --quote 1             # DRY RUN
-    python -m lib.cli freight book 3 --quote 1 --confirm   # books + charges
+    python -m lib.cli freight book 3 --quote 1                    # DRY RUN, prints the ref
+    python -m lib.cli freight book 3 --quote 9f3a2c1e --confirm   # books + charges
 
     python -m lib.cli freight list | show 3 | track 3 | track --open | docs 3
     python -m lib.cli freight add-quote 3 --provider uship --carrier "Estes via uShip" --price 412
-    python -m lib.cli freight mark-booked 3 --quote 2 --tracking PRO123
+    python -m lib.cli freight mark-booked 3 --quote 9f3a2c1e --tracking PRO123
     python -m lib.cli freight status 3 delivered
     python -m lib.cli freight providers
 
@@ -154,8 +154,8 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
     shown = 0
     hidden = 0
     if quotes:
-        print(f"  {'#':>2}  {'provider':<10} {'carrier':<26} {'price':>10}  {'days':>4}  "
-              f"{'tier':<10} book")
+        print(f"  {'#':>2}  {'ref':<8}  {'provider':<10} {'carrier':<26} {'price':>10}  "
+              f"{'days':>4}  {'tier':<10} book")
         for i, q in enumerate(quotes, 1):
             if q.tier == "indicative" and not q.bookable:
                 if market_rows and shown >= market_rows:
@@ -163,8 +163,9 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
                     continue
                 shown += 1
             days = "?" if q.transit_days is None else str(q.transit_days)
-            print(f"  {i:>2}  {q.provider:<10} {q.carrier[:26]:<26} {_money(q.price):>10}  "
-                  f"{days:>4}  {q.tier[:10]:<10} {_book_label(q)}")
+            print(f"  {i:>2}  {q.ref:<8}  {q.provider:<10} {q.carrier[:26]:<26} "
+                  f"{_money(q.price):>10}  {days:>4}  {q.tier[:10]:<10} {_book_label(q)}"
+                  + ("  EXPIRED" if q.expired() else ""))
             included = (q.extra or {}).get("included")
             if included:
                 print(f"        includes: {', '.join(map(str, included))}")
@@ -306,14 +307,16 @@ def cmd_book(args) -> int:
     s = fs.require(args.id)
     r = svc.book(fs, args.id, args.quote, confirm=args.confirm)
     if r.dry_run:
-        q = s.quotes[args.quote - 1]
+        _, q = svc.pick_quote(s, args.quote)
         print("[DRY RUN] Nothing booked, nothing charged. This WOULD book:")
         print(f"  #{s.id} {s.request.origin.zip} -> {s.request.destination.zip}  "
               f"pickup {s.request.pickup_date}")
-        print(f"  {q.provider} / {q.carrier} {q.service}  {_money(q.price)}  quote {q.quote_id}")
+        print(f"  {q.provider} / {q.carrier} {q.service}  {_money(q.price)}  ref {q.ref}  "
+              f"(provider quote {q.quote_id})")
         for w in r.warnings + q.warnings:
             print(f"  ! {w}")
-        print(f"\n  To book it: python -m lib.cli freight book {s.id} --quote {args.quote} --confirm")
+        print(f"\n  To book exactly this quote: python -m lib.cli freight book {s.id} "
+              f"--quote {q.ref} --confirm")
         return 0
     sandbox = (r.raw or {}).get("mode") == "sandbox"
     print("[OK] Booked in the SANDBOX — no truck, no charge:" if sandbox else
@@ -453,13 +456,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser("book", help="book a quote — DRY RUN unless --confirm")
     b.add_argument("id", type=int)
-    b.add_argument("--quote", type=int, required=True, help="number from the quote table")
+    b.add_argument("--quote", required=True,
+                   help="the quote's ref (or, for a dry run, its row number)")
     b.add_argument("--confirm", action="store_true",
                    help="actually book. Without it nothing is dispatched or charged.")
 
     mb = sub.add_parser("mark-booked", help="record a booking made outside the API")
     mb.add_argument("id", type=int)
-    mb.add_argument("--quote", type=int, required=True)
+    mb.add_argument("--quote", required=True, help="the quote's ref or row number")
     mb.add_argument("--tracking", help="PRO / shipment number")
     mb.add_argument("--price", type=float, help="final price if it differs from the quote")
     mb.add_argument("--bol", help="BOL link or path")
@@ -507,7 +511,7 @@ def main(argv: list[str] | None = None) -> int:
     except (KeyError, ValueError, ProviderNotReady, ConfigError) as e:
         print(f"[X] {e.args[0] if isinstance(e, KeyError) else e}", file=sys.stderr)
         return 1
-    except http.FreightAPIError as e:
+    except (http.FreightAPIError, RuntimeError) as e:
         print(f"[X] {e}", file=sys.stderr)
         return 1
 

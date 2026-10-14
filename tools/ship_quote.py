@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 import stores                                                        # noqa: E402
-from config import ConfigError, get_storefront                       # noqa: E402
+from config import ConfigError, get_ship_from                       # noqa: E402
 from easypost_client import (                                        # noqa: E402
     Address, EasyPostAPIError, EasyPostAuthError, Parcel, get_rates,
 )
@@ -69,19 +69,9 @@ def _add_address_args(ap: argparse.ArgumentParser, prefix: str, label: str,
 
 
 def store_ship_from(store: str | None) -> dict:
-    """The store's configured ship-from mapping, or {} when unset.
-
-    `ship_from` is a policy-ish storefront key, so a named store that omits
-    it inherits the default store's (same shelf, same return address) — a
-    named store that ships from elsewhere states its own. Raises ConfigError
-    for a named store with no storefront entry, and for a ship_from that
-    isn't a mapping."""
-    sf = get_storefront(store).get("ship_from") or {}
-    if not isinstance(sf, dict):
-        raise ConfigError(f"storefront ship_from for store {store!r} must be a "
-                          f"mapping of {', '.join(ADDRESS_FIELDS)}")
-    return {k: (str(v) if v is not None else None) for k, v in sf.items()
-            if k in ADDRESS_FIELDS}
+    """The store's configured ship-from (config.get_ship_from), limited to
+    the fields this tool has flags for."""
+    return {k: v for k, v in get_ship_from(store).items() if k in ADDRESS_FIELDS}
 
 
 def _fill_ship_from(args: argparse.Namespace, ap: argparse.ArgumentParser) -> None:
