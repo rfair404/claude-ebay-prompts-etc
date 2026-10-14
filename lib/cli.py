@@ -85,6 +85,9 @@ COMMANDS = {
                      "EasyPost shipping-rate quotes (#80) — free, no confirm needed"),
     "ship-buy":     ("tools.ship_buy",
                      "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
+    "freight":      ("tools.freight",
+                     "LTL freight: compare broker quotes (Warp, ShipEngine, uShip, by "
+                     "hand), book (DRY RUN unless --confirm), track"),
     "offsite":      ("lib.offsite",
                      "back up / restore ledgers + inventory/ to an S3-compatible "
                      "bucket (R2) — dry run unless --apply, never deletes remotely"),
@@ -98,11 +101,12 @@ COMMANDS = {
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
     "sales-report", "ad-report", "dashboard", "report", "promote", "listing", "status",
-    "ship-quote", "ship-buy",
+    "ship-quote", "ship-buy", "freight",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
 # spend money, so the store has to be typed, once, by name.
-SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote"}
+SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote",
+                     "freight"}
 
 
 def _pop_store_flags(args: list[str]) -> tuple[str | None, bool, list[str]]:

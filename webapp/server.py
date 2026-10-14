@@ -45,6 +45,11 @@ narrows it to one (a malformed name is a 400, an unconfigured one a 404).
 #150 that is a property the reviewer is approving. `/api/jobs` stays
 store-free: every whitelisted job is local and eBay-free (webapp/jobs.py).
 
+`/freight` (webapp/freight.py) manages LTL freight: compare broker quotes,
+book one (dry run, then an explicit confirm), track it. It is the one area
+that calls a paid third-party API with a stored key — see that module's
+docstring for why, and `freight.web_booking: false` to switch booking off.
+
     python -m lib.cli serve                 # -> http://127.0.0.1:8770
     python -m lib.cli serve --port 8080
 """
@@ -69,6 +74,7 @@ import pick_store as _pick_store                     # noqa: E402
 import stores as _stores                             # noqa: E402
 import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
+import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
@@ -77,6 +83,7 @@ DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
 DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
 app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
+app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
 _queue: Optional[JobQueue] = None
 
 
