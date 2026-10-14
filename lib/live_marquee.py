@@ -24,6 +24,11 @@ from zoneinfo import ZoneInfo
 WIDTH, HEIGHT = 1050, 1575
 MAX_HEROES = 4
 MAX_GRID = 21            # 7 columns x 3 rows is all the poster has room for
+GRID_MAX_COLS = 7
+GRID_WIDTH = 930         # inside the 60px side padding
+GRID_HEIGHT = 504        # between the "also on the table" rule and the footer
+GRID_GAP = 12
+CAPTION_H = 46           # caption + its margin + the row gap
 EASTERN = ZoneInfo("America/New_York")
 PACIFIC = ZoneInfo("America/Los_Angeles")
 UTC = ZoneInfo("UTC")
@@ -159,12 +164,23 @@ def default_spec(show: str) -> dict:
     }
 
 
+HAND_KEYS = ("label", "photo_url", "focus", "zoom")   # hand edits --pick keeps
+
+
 def set_items(spec: dict, records: list[dict]) -> dict:
-    """Replace the spec's items, keeping labels already written for an id and
-    heroes that are still in the list (topped up from the front)."""
+    """Replace the spec's items, keeping hand edits (HAND_KEYS) for ids still
+    on the list and heroes that are still in it (topped up from the front).
+
+    An item's "photo_url" picks a different photo of the listing than its
+    first one ("image", which --pick refreshes from eBay)."""
     old = {i["item_id"]: i for i in spec.get("items") or []}
-    spec["items"] = [{**r, "label": (old.get(r["item_id"]) or {}).get("label")
-                      or short_label(r["title"])} for r in records]
+    items = []
+    for r in records:
+        prev = old.get(r["item_id"]) or {}
+        item = {**r, **{k: prev[k] for k in HAND_KEYS if prev.get(k)}}
+        item.setdefault("label", short_label(r["title"]))
+        items.append(item)
+    spec["items"] = items
     ids = [r["item_id"] for r in records]
     heroes = [h for h in spec.get("heroes") or [] if h in ids][:MAX_HEROES]
     heroes += [i for i in ids if i not in heroes][:MAX_HEROES - len(heroes)]
@@ -224,10 +240,12 @@ h1 em{display:block;font-style:italic;font-weight:400;color:var(--gold);font-siz
 .hero .ph{aspect-ratio:1;border:3px solid var(--gold)}
 .hero figcaption{font-family:"P052","Palatino Linotype",Palatino,serif;font-style:italic;font-size:19px;line-height:1.15;
   text-align:center;margin-top:9px}
-.ph{background-size:cover;background-position:center;background-color:#2a251f}
+.ph{overflow:hidden;background-color:#2a251f}
+.ph img{display:block;width:100%;height:100%;object-fit:cover}
 .rule{display:flex;align-items:center;gap:16px;padding:26px 60px 14px;font-weight:600;letter-spacing:.3em;font-size:16px;color:var(--gold)}
 .rule:before,.rule:after{content:"";flex:1;height:1px;background:rgba(212,173,92,.55)}
-.grid{display:grid;grid-template-columns:repeat(7,1fr);gap:12px;padding:0 60px}
+.grid{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin:0 auto}
+.grid figure{flex:none}
 .grid .ph{aspect-ratio:1;border:1px solid rgba(212,173,92,.6)}
 .grid figcaption{font-size:11.5px;line-height:1.2;text-align:center;margin-top:6px;color:var(--grey);font-weight:500;height:28px}
 footer{position:absolute;left:18px;right:18px;bottom:18px;background:var(--red);padding:26px 60px 28px;text-align:center}
@@ -238,9 +256,29 @@ footer .cta{margin-top:12px;font-weight:600;letter-spacing:.28em;font-size:15px;
 """
 
 
-def _tile(item: dict, img_dir: str) -> str:
+def grid_shape(n: int) -> tuple[int, int, int]:
+    """(columns, rows, tile px) for n thumbnails: as few rows as fit, the
+    columns balanced across them (16 -> 6/6/4, not 7/7/2), the tile as big
+    as the width and height allow. Short rows are centered."""
+    if n <= 0:
+        return 0, 0, 0
+    rows = -(-n // GRID_MAX_COLS)
+    cols = -(-n // rows)
+    tile = min((GRID_WIDTH - (cols - 1) * GRID_GAP) // cols, GRID_HEIGHT // rows - CAPTION_H)
+    return cols, rows, tile
+
+
+def _tile(item: dict, img_dir: str, width: Optional[int] = None) -> str:
+    """One photo + caption. An item may carry "focus" (CSS object-position,
+    e.g. "50% 30%") and "zoom" (e.g. 1.4) to tighten a photo that's mostly
+    background at thumbnail size."""
     src = f"{img_dir}/{item['item_id']}.jpg"
-    return (f'<figure><div class="ph" style="background-image:url(\'{_e(src)}\')"></div>'
+    focus = item.get("focus") or "50% 50%"
+    style = f"object-position:{focus}"
+    if item.get("zoom"):
+        style += f";transform:scale({float(item['zoom'])});transform-origin:{focus}"
+    fig = f' style="width:{width}px"' if width else ""
+    return (f'<figure{fig}><div class="ph"><img src="{_e(src)}" style="{_e(style)}" alt=""></div>'
             f'<figcaption>{_e(item.get("label") or "")}</figcaption></figure>')
 
 
@@ -251,6 +289,8 @@ def render(spec: dict, img_dir: str = "marquee_img") -> str:
     heroes = [by_id[h] for h in spec.get("heroes") or [] if h in by_id][:MAX_HEROES]
     hero_ids = {h["item_id"] for h in heroes}
     grid = [i for i in spec.get("items") or [] if i["item_id"] not in hero_ids][:MAX_GRID]
+    cols, _, tile = grid_shape(len(grid))
+    grid_w = cols * tile + (cols - 1) * GRID_GAP
 
     when = when_lines(parse_start(spec["start"])) if spec.get("start") else None
     kicker_when = f' <b>{_e(when["kicker"])}</b>' if when else ""
@@ -268,12 +308,12 @@ def render(spec: dict, img_dir: str = "marquee_img") -> str:
 <header>
  <div class="kicker">{_e(spec.get("brand") or "")}<span class="live"><i></i>eBay LIVE</span>{kicker_when}</div>
  <h1>{_e(spec.get("headline") or "")}<em>{_e(spec.get("subhead") or "")}</em></h1>
- <div class="deck">{_e(spec.get("deck") or "")}</div>
+ <div class="deck">{_e((spec.get("deck") or "").replace("{n}", str(len(spec.get("items") or []))))}</div>
  <div class="badges">{badges}</div>
 </header>
 <section class="hero">{"".join(_tile(h, img_dir) for h in heroes)}</section>
 <div class="rule">ALSO ON THE TABLE</div>
-<section class="grid">{"".join(_tile(g, img_dir) for g in grid)}</section>
+<section class="grid" style="width:{grid_w}px">{"".join(_tile(g, img_dir, tile) for g in grid)}</section>
 <footer>
  <h2>{_e(spec.get("footer_title") or "")} <em>{_e(spec.get("footer_title_em") or "")}</em></h2>
  <p>{footer_text}</p>

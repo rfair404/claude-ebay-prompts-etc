@@ -7,9 +7,11 @@
   (always) renders marquee.html and marquee.png from marquee.json.
 
 Everything lands in inventory/_live/<show>/, next to tools/live_lineup.py's
-lineup. marquee.json is the place to fix labels, swap heroes or change copy;
-then run again without --pick to re-render. --pick rebuilds only the item
-list and keeps labels and heroes for items still on it.
+lineup. marquee.json is the place to fix labels, swap heroes or change copy, and
+per item to pick another of the listing's photos ("photo_url") or tighten
+one ("focus", "zoom"); then run again without --pick to re-render. --pick
+rebuilds only the item list and keeps those edits for items still on it.
+A photo is downloaded again when the listing's photo URL changes.
 
     python tools/live_marquee.py --show jewelry-oct-14 --pick --limit 25 \\
         --min-price 25 --max-price 100 --skip-seasonal \\
@@ -72,22 +74,34 @@ def fetch_one(item_id: str, api_get) -> dict:
     return LM.summary_record(api_get(BROWSE_ITEM, query={"legacy_item_id": item_id}))
 
 
-def download_photos(items: list[dict], dest: Path) -> list[str]:
-    """First photo of each item at 800px, skipping ones already on disk.
-    Returns the ids that have no photo."""
+def download_photos(items: list[dict], dest: Path) -> tuple[list[str], list[str]]:
+    """Each item's photo at 800px: its "photo_url" if set, else its first. A photo already on disk is kept
+    only while the listing's photo URL is the one it came from (sources.json):
+    a re-shot listing gets a new URL, and the marquee should follow it.
+    Returns (ids fetched, ids with no photo URL)."""
     dest.mkdir(parents=True, exist_ok=True)
-    missing = []
+    src_path = dest / "sources.json"
+    try:
+        sources = json.loads(src_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        sources = {}
+    fetched, missing = [], []
     for it in items:
-        path = dest / f"{it['item_id']}.jpg"
-        if path.exists():
+        iid, url = it["item_id"], it.get("photo_url") or it.get("image")
+        path = dest / f"{iid}.jpg"
+        if not url:
+            if not path.exists():
+                missing.append(iid)
             continue
-        if not it.get("image"):
-            missing.append(it["item_id"])
+        if path.exists() and sources.get(iid) == url:
             continue
-        url = re.sub(r"s-l\d+\.(jpg|jpeg|webp|png)", "s-l800.jpg", it["image"])
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        big = re.sub(r"s-l\d+\.(jpg|jpeg|webp|png)", "s-l800.jpg", url)
+        with urllib.request.urlopen(big, timeout=30) as resp:
             path.write_bytes(resp.read())
-    return missing
+        sources[iid] = url
+        fetched.append(iid)
+    LS._atomic_write(src_path, json.dumps(sources, indent=1) + "\n")
+    return fetched, missing
 
 
 def render_png(html_path: Path, png_path: Path) -> bool:
@@ -160,7 +174,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[!] {problem}")
 
     LS._atomic_write(spec_path, json.dumps(spec, indent=1) + "\n")
-    missing = download_photos(spec["items"], d / IMG_DIR)
+    fetched, missing = download_photos(spec["items"], d / IMG_DIR)
+    if fetched:
+        print(f"  fetched {len(fetched)} photo(s): {' '.join(fetched)}")
     for iid in missing:
         print(f"[!] {iid} has no photo URL")
     html_path, png_path = d / "marquee.html", d / "marquee.png"

@@ -94,9 +94,14 @@ Watch parts, bands and brochures filed under Jewelry & Watches are always
 dropped. `--include` adds pieces filed elsewhere (religious medals under
 Collectibles, say); they still face the price and seasonal filters.
 
-Then edit `marquee.json` (labels, `heroes`, `deck`, ribbon and footer copy)
-and run again without `--pick` to re-render. `--pick` keeps labels and
-heroes for items still on the list.
+Then edit `marquee.json` and run again without `--pick` to re-render:
+labels, `heroes`, `deck` (`{n}` becomes the item count), ribbon and footer
+copy, and per item `photo_url` (another of the listing's photos, when the
+first one is mostly background at thumbnail size), `focus` (CSS
+object-position) and `zoom`. `--pick` keeps all of those for items still on
+the list. A photo is downloaded again when the listing's photo URL changes,
+so re-shot listings show their new photo. Thumbnail rows are balanced and
+centered (16 items lay out 6/6/4).
 
 `--start` is Eastern. The tool also prints that moment in GMT, which is
 what eBay's show scheduler showed on 2026-10-13. In daylight time an 8 PM
