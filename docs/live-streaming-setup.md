@@ -13,6 +13,8 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | OBS eBay profile + vertical scene (no secrets) | `tools/live/obs/` |
 | Nikon D5100 webcam feed | `tools/live/d5100-webcam.sh` |
 | OM System TG-7 Wi-Fi control | `tools/live/tg7cam` |
+| OBS remote control, no GUI | `tools/live/obsctl.py` |
+| Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
 
 ## 1. OBS Studio — Flatpak, not the PPA
 
@@ -181,6 +183,39 @@ Then: **user** — camera menu Wi-Fi/Bluetooth Settings > Device Connection
 shows the SSID/password; `tg7cam connect <SSID>` prompts for the password;
 `tg7cam probe`; `tg7cam stream` in its own terminal.
 
+## 6. Running the show without the OBS window
+
+OBS is driven over its built-in obs-websocket (v5). Turn it on once (**user**
+or Claude): OBS Tools > WebSocket Server Settings > Enable, port 4455, with
+authentication. The password stays in OBS's own config, and
+`tools/live/obsctl.py` reads it from there. The Flatpak OBS listens on every
+interface, so the password is what keeps the LAN out.
+
+```bash
+python tools/live/obsctl.py launch            # OBS minimized to the tray, no window
+python tools/live/show_flow.py feed start     # tools/d5100_webcam.sh (self-restarting), detached
+python tools/live/show_flow.py setup --window "<title substring>"
+python tools/live/show_flow.py golive ebay --confirm
+python tools/live/show_flow.py next | back | refocus
+python tools/live/show_flow.py stop
+```
+
+`setup` builds two looks in the `eBay Live` collection. **Product** is the
+D5100 full frame (rotated 270 for the side-mounted camera) with the webcam
+full width across the top. **Up Next** is a desktop window centered on a dark
+card, under the same webcam strip. `back` refocuses the D5100 while Up Next
+is still on air, then fades to Product.
+
+**Verify:** `python tools/live/obsctl.py status` prints the OBS version and
+canvas; `python tools/live/obsctl.py shot program -o /tmp/p.jpg` writes the
+program picture.
+
+Measured 2026-10-15: a refocus costs about 4.6 s with the D5 picture frozen
+(stop 0.5 s, autofocus 1.4 s, live view restart 2.7 s), so `back` and
+`refocus` cover it with Up Next. Live-view brightness on the D5100 is
+automatic: ISO and shutter only change stills, so add light for a cleaner
+stream.
+
 ## Open items
 
 - TG-7 HDMI: buy a capture stick + micro-HDMI cable; confirm INFO hides the
@@ -188,3 +223,6 @@ shows the SSID/password; `tg7cam connect <SSID>` prompts for the password;
 - TG-7 Wi-Fi: first real `tg7cam probe` once a second internet path exists.
 - Optional: RM-WR1 + USB relay across its button for scripted AF/shoot over
   Bluetooth.
+- D5100 refocus in about 1 s: hold one libgphoto2 session (python-gphoto2)
+  that pulls live-view frames and triggers AF, instead of restarting
+  `gphoto2 --capture-movie`.
