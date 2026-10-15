@@ -13,6 +13,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -31,13 +32,17 @@ from freight.providers.shipengine import ShipEngine, _option_code      # noqa: E
 from freight.providers.warp import Warp                                 # noqa: E402
 from freight.store import FreightStore                                  # noqa: E402
 
+# Booking refuses a pickup date in the past, so a fixed date rots the suite.
+_PICKUP_DAY = date.today() + timedelta(days=7)
+PICKUP = _PICKUP_DAY.isoformat()
+
 
 def _req(**kw) -> FreightRequest:
     d = dict(origin=FreightAddress(zip="60120", name="Me", street1="9 Ship St",
                                    city="Elgin", state="IL", phone="8475550100"),
              destination=FreightAddress(zip="30301", name="Jane", street1="1 Main St",
                                         city="Atlanta", state="GA", phone="4045550100"),
-             pickup_date="2026-10-14",
+             pickup_date=PICKUP,
              units=[HandlingUnit(length_in=48, width_in=40, height_in=50, weight_lbs=320)],
              accessorials=["liftgate_delivery", "residential_delivery"],
              commodity="antique sewing machine")
@@ -221,7 +226,9 @@ def test_warp_confirmed_book_sends_stops_window_insurance_and_flags_unpaid(fake)
     assert body["insuranceQuoteId"] == "INS1"
     assert body["deliveryInfo"]["address"]["zipcode"] == "30301"
     assert body["deliveryInfo"]["contactName"] == "Jane"
-    assert body["pickupInfo"]["windowTime"]["from"].startswith("2026-10-1")
+    # 09:00 local, sent as UTC: same day give or take one, depending on the zone
+    assert body["pickupInfo"]["windowTime"]["from"][:10] in {
+        (_PICKUP_DAY + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
     assert body["listItems"][0]["totalWeight"] == 320
     assert (r.booking_id, r.tracking_number, r.dry_run) == ("O1", "2E2E", False)
     assert r.payment_link.endswith("/pay") and r.raw["mode"] == "sandbox"
@@ -456,7 +463,7 @@ def client(world, monkeypatch):
 PAYLOAD = {"destination": {"zip": "30301", "name": "Jane", "street1": "1 Main St",
                            "city": "Atlanta", "state": "GA", "phone": "4045550100"},
            "units": [{"length_in": 48, "width_in": 40, "height_in": 50, "weight_lbs": 320}],
-           "accessorials": ["liftgate_delivery"], "pickup_date": "2026-10-14",
+           "accessorials": ["liftgate_delivery"], "pickup_date": PICKUP,
            "title": "Pfaff 463", "order_id": "12-345"}
 
 
