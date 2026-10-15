@@ -61,6 +61,7 @@ assumed stale. These are how you check.
 |---|---|
 | `pick_list.py` | The orders that still have to be packed. |
 | `pick_list_html.py` | The print-friendly pick sheet for one shipment — open it, hit print. One page is one box; it doubles as the packing slip, because eBay has no packing-slip endpoint. Hands back a LINK (`http://127.0.0.1:8770/pick/<token>`, expires in 48h) rather than a file path — run `ebz serve` first; `--local-only` writes the file the old way. Carries buyer PII, so the link is unguessable, self-expiring and localhost-only (lib/pick_store.py). |
+| `freight.py` | LTL freight for what a parcel carrier won't take (`ebz freight`). Compares quotes across brokers (Warp keyless, ShipEngine with your own LTL carrier accounts, uShip and phone/web quotes entered by hand), books one — DRY RUN unless `--confirm` — and tracks it. Same shipments at `http://127.0.0.1:8770/freight`. Library: `lib/freight/`. |
 
 ## Money and meta
 

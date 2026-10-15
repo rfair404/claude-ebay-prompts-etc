@@ -32,12 +32,23 @@ and the store behind them, live in lib/pick_store.py. Localhost-only is
 what currently keeps this honest — the link is clickable from this
 machine's browser and nowhere else.
 
+`/live/{show}` (host page), `/live/{show}/overlay` (OBS browser source) and
+`/live/{show}/state` serve an eBay Live show from inventory/_live/<show>/
+(lib/live_show.py). The lineup is built by tools/live_lineup.py, which does
+the eBay read; these routes only read that file and write which lot is on
+screen, so they stay eBay-free like the rest of the app.
+
 Stores (#156 §5). `GET /` covers every configured store — one drift panel
 per store, each against its own ledger, never pooled — and `GET /?store=NAME`
 narrows it to one (a malformed name is a 400, an unconfigured one a 404).
 `/review/{shoot}` shows which store the draft will publish to, because since
 #150 that is a property the reviewer is approving. `/api/jobs` stays
 store-free: every whitelisted job is local and eBay-free (webapp/jobs.py).
+
+`/freight` (webapp/freight.py) manages LTL freight: compare broker quotes,
+book one (dry run, then an explicit confirm), track it. It is the one area
+that calls a paid third-party API with a stored key — see that module's
+docstring for why, and `freight.web_booking: false` to switch booking off.
 
     python -m lib.cli serve                 # -> http://127.0.0.1:8770
     python -m lib.cli serve --port 8080
@@ -58,10 +69,12 @@ from fastapi import FastAPI, HTTPException          # noqa: E402
 from fastapi.responses import HTMLResponse          # noqa: E402
 from pydantic import BaseModel                       # noqa: E402
 
+import live_show as _live                            # noqa: E402
 import pick_store as _pick_store                     # noqa: E402
 import stores as _stores                             # noqa: E402
 import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
+import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
@@ -70,6 +83,7 @@ DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
 DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
 app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
+app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
 _queue: Optional[JobQueue] = None
 
 
@@ -106,6 +120,21 @@ def set_queue(queue: Optional[JobQueue]) -> None:
     default reports/jobs.db, and lets a test reset to the lazy default."""
     global _queue
     _queue = queue
+
+
+_live_base: Optional[Path] = None
+
+
+def set_live_base(path: Optional[Path]) -> None:
+    """Test hook — points /live/* at a throwaway folder instead of the real
+    inventory/_live/."""
+    global _live_base
+    _live_base = path
+
+
+class LiveStateRequest(BaseModel):
+    lot: Optional[int] = None
+    note: str = ""
 
 
 class EnqueueRequest(BaseModel):
@@ -176,6 +205,51 @@ def review(shoot: str) -> str:
             status_code=404,
             detail=f"{shoot!r} has no draft.md yet — DRAFT hasn't run")
     return _review_card_html.render(shoot_dir)
+
+
+def _live_lineup(show: str) -> dict:
+    try:
+        lineup = _live.load_lineup(show, _live_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if lineup is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"show {show!r} has no lineup — run tools/live_lineup.py")
+    return lineup
+
+
+@app.get("/live/{show}", response_class=HTMLResponse)
+def live_host(show: str) -> str:
+    """eBay Live host page: the show's lineup, which lot is on screen, and a
+    Copy-ID button per lot for Stream manager's "Add by Item ID". Reads
+    inventory/_live/<show>/ only — the lineup itself is built (with the
+    eBay read) by tools/live_lineup.py, so this route makes no eBay call."""
+    lineup = _live_lineup(show)
+    return _live.render_host(show, lineup, _live.load_state(show, _live_base))
+
+
+@app.get("/live/{show}/overlay", response_class=HTMLResponse)
+def live_overlay(show: str) -> str:
+    """Transparent page for an OBS browser source over the camera feed."""
+    _live_lineup(show)
+    return _live.render_overlay(show)
+
+
+@app.get("/live/{show}/state")
+def live_state(show: str) -> dict:
+    _live_lineup(show)
+    return _live.current(show, _live_base)
+
+
+@app.post("/live/{show}/state")
+def set_live_state(show: str, req: LiveStateRequest) -> dict:
+    _live_lineup(show)
+    try:
+        _live.save_state(show, req.lot, req.note, _live_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _live.current(show, _live_base)
 
 
 @app.get("/healthz")

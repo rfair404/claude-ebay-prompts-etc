@@ -83,6 +83,14 @@ reproducible with `python lib/list_edit.py --create-pickup-policy`.
 - Validator: rejects a `fulfillment_mode` typo; accepts `LOCAL_PICKUP`;
   existing drafts (no field → default `SHIP`) still validate.
 
+## Freight quotes (2026-10)
+
+The "message me for a freight quote" answer is now a command, not a phone
+call: `python -m lib.cli freight quote --to-zip <buyer zip> --length .. --width
+.. --height .. --weight ..` compares brokers in one go, and `freight new
+--shoot <path> --order-id .. --quote` opens a shipment to book and track —
+also at `http://127.0.0.1:8770/freight`. See `lib/freight/__init__.py`.
+
 ## Not done / follow-up
 
 - No item has been listed pickup-only end-to-end yet (no live publish in this

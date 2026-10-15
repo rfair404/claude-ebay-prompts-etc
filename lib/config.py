@@ -325,6 +325,53 @@ def get_easypost_key() -> str:
     )
 
 
+SHIP_FROM_FIELDS = ("name", "company", "street1", "street2", "city", "state", "zip",
+                    "country", "phone", "email")
+
+
+def get_ship_from(store: Optional[str] = None) -> dict:
+    """The store's configured ship-from mapping (storefront `ship_from`), or
+    {} when unset. Shared by ship-quote (parcel) and lib/freight (LTL).
+
+    `ship_from` is a policy-ish storefront key, so a named store that omits
+    it inherits the default store's (same shelf, same return address) — a
+    named store that ships from elsewhere states its own. Raises ConfigError
+    for a named store with no storefront entry, and for a ship_from that
+    isn't a mapping."""
+    sf = get_storefront(store).get("ship_from") or {}
+    if not isinstance(sf, dict):
+        raise ConfigError(f"storefront ship_from for store {store!r} must be a "
+                          f"mapping of {', '.join(SHIP_FROM_FIELDS)}")
+    return {k: (str(v) if v is not None else None) for k, v in sf.items()
+            if k in SHIP_FROM_FIELDS}
+
+
+FREIGHT_KEY_ENV = {
+    "warp": {"sandbox_key": "WARP_SANDBOX_KEY", "live_key": "WARP_LIVE_KEY"},
+    "shipengine": {"api_key": "SHIPENGINE_API_KEY"},
+    "uship": {"api_key": "USHIP_API_KEY"},
+}
+
+
+def get_freight_config() -> dict:
+    """The `freight:` block (lib/freight), with each provider's key(s)
+    resolved env var > config file, the same precedence as every other key.
+
+    Never raises for a missing key: Warp quotes without one, and a provider
+    with no key reports itself not-ready in `ebz freight providers` rather
+    than failing the whole comparison.
+    """
+    block = dict(_nested(load_config(), "freight") or {})
+    providers = {k: dict(v or {}) for k, v in (block.get("providers") or {}).items()}
+    for name, fields in FREIGHT_KEY_ENV.items():
+        p = providers.setdefault(name, {})
+        for fld, env in fields.items():
+            if os.environ.get(env):
+                p[fld] = os.environ[env]
+    block["providers"] = providers
+    return block
+
+
 def get_ebay_credentials() -> dict:
     """Return the raw eBay credentials section from config.
 
