@@ -109,3 +109,9 @@ checkout, run `tools/pick_list.py --poll --all-stores`. Copy each sheet into
 `inventory/_pick_lists/`, upload them with `lib.cli offsite share`, and reply
 with one presigned R2 link per order. Don't reply with `127.0.0.1` links, the
 terminal report, or a file path.
+
+## Streaming setup on a new machine
+
+When asked to set a computer up for eBay Live / OBS streaming, work through
+[`docs/live-streaming-setup.md`](docs/live-streaming-setup.md) in order. Steps
+marked **user** need a password, the eBay stream URL, or hands on a camera.

@@ -15,6 +15,7 @@ prompt, not the archive.
 |---|---|
 | [V4_PLAN.md](V4_PLAN.md) | The refactor being worked: skinny prompts, terse tools, one CLI, fewer round-trips, a session observer. Phase checkboxes are the live status. |
 | [STORE-CONNECTION-README.md](STORE-CONNECTION-README.md) | IMPLEMENTED (#147/#150) — the runbook for connecting an ADDITIONAL eBay seller account (e.g. a junk store) so both stay connected at once. The procedure, in order, with the silent-failure steps called out. |
+| [live-streaming-setup.md](live-streaming-setup.md) | The new-machine checklist for eBay Live streaming: OBS (Flatpak) + the eBay WHIP profile, v4l2loopback, the Nikon D5100 feed, and what the OM System TG-7 can and can't do (`tools/live/`). |
 | [local-pickup-fragile.md](local-pickup-fragile.md) | IMPLEMENTED — how ship-risky items route to the local-pickup fulfillment policy, and the freight fallback for distant buyers. |
 | [price-strategy-v2.md](price-strategy-v2.md) | IMPLEMENTED — the distribution-based PRICE strategy (`lib/price_stats.py`) and the policy defaults it ships with. |
 | [ebay-live.md](ebay-live.md) | MVP — eBay Live show lineup (`tools/live_lineup.py`), the host page + OBS overlay (`/live/<show>`), and the show's promo image (`tools/live_marquee.py`). What eBay documents for Live, what's built, and the open questions in the eBay UI that gate the next step. |
