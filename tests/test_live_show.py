@@ -127,3 +127,18 @@ def test_unknown_or_bad_show_is_404(client):
     assert client.get("/live/nope").status_code == 404
     assert client.get("/live/..%2Fx").status_code == 404
     assert client.get("/live/nope/state").status_code == 404
+
+
+def test_state_post_works_when_server_runs_via_runpy(tmp_path):
+    """`ebz serve` runs webapp.server through runpy under a name that isn't in
+    sys.modules; the request models must still resolve, or POST /state 500s."""
+    import runpy
+    ns = runpy.run_module("webapp.server", run_name="ebz_serve_runpy_test")
+    assert ns["LiveStateRequest"].__pydantic_complete__
+    assert ns["EnqueueRequest"].__pydantic_complete__
+    LS.save_lineup("demo", "junk", LS.build_lineup([(offer("111"), "Lamp", None)]),
+                   base=tmp_path)
+    ns["set_live_base"](tmp_path)
+    with TestClient(ns["app"]) as c:
+        r = c.post("/live/demo/state", json={"lot": 1, "note": "hi"})
+    assert r.status_code == 200, r.text

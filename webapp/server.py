@@ -144,6 +144,14 @@ class EnqueueRequest(BaseModel):
     params: dict = {}
 
 
+# `ebz serve` runs this file through runpy as "__main__" without replacing
+# sys.modules["__main__"], so pydantic can't find this module to resolve the
+# postponed (string) annotations and every POST body 500s. Rebuilding here,
+# at module level, resolves them against this namespace instead.
+LiveStateRequest.model_rebuild()
+EnqueueRequest.model_rebuild()
+
+
 def _job_dict(job: Job) -> dict:
     return {
         "id": job.id, "type": job.type, "params": job.params,
