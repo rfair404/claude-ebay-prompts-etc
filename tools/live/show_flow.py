@@ -24,8 +24,9 @@ connection: live view has to stop, autofocus, restart).
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
-    python tools/live/show_flow.py golive ebay|twitch --confirm
-    python tools/live/show_flow.py stop
+    python tools/live/show_flow.py golive ebay|twitch --confirm   # each independently; both can run
+    python tools/live/show_flow.py stop [ebay|twitch]               # default: both
+    python tools/live/show_flow.py twitch-setup                     # once, then paste the URL in OBS
     python tools/live/show_flow.py status [--json]
 
 `--json` prints the same objects webapp/pager.py serves at /api/pager, for
@@ -35,8 +36,9 @@ the camera at the same time; a second caller waits for the first.
 
 `golive` only sends video. On eBay the show starts when the host clicks
 Start event in Stream manager; Twitch is public the moment it connects.
-Profiles: "Ebay" (WHIP, docs/live-streaming-setup.md step 2) and "Untitled"
-(Twitch, RTMP). Both keep their stream keys in OBS's own config, never here.
+Both run from the "Ebay" profile: eBay on the stream output (WHIP,
+docs/live-streaming-setup.md step 2), Twitch on the recording output (see
+DESTS below). The keys stay in OBS's own config, never here.
 """
 from __future__ import annotations
 
@@ -71,8 +73,22 @@ INTRO_TEXT = "Intro Text"
 OVERLAY = "Live Overlay"  # eBay draws its own lot overlay; ours stays hidden
 FADE_MS = 300
 W, H = 1080, 1920
-PROFILES = {"ebay": "Ebay", "twitch": "Untitled"}
-# Up Next shows whatever the captured window shows *now*: one browser window
+# Both destinations run at once from the one "Ebay" profile: eBay on OBS's
+# stream output (WHIP), Twitch on its *recording* output, set to Custom Output
+# (FFmpeg) -> Output to URL. OBS has a single stream output, and this ffmpeg
+# (7.1) has no WHIP muxer, so a relay can't carry eBay. The cost: no local
+# recording while Twitch is live, and a second x264 encode. `twitch-setup`
+# writes the non-secret half of that output; the user pastes the
+# rtmp://live.twitch.tv/app/<key> URL into OBS (keys never pass through here).
+SHOW_PROFILE = "Ebay"
+DESTS = {"ebay": "Stream", "twitch": "Record"}  # destination -> OBS output
+TWITCH_OUT = {"RecType": "FFmpeg", "FFOutputToFile": "false", "FFFormat": "flv",
+              "FFFormatMimeType": "video/x-flv", "FFExtension": "flv",
+              "FFVEncoder": "libx264", "FFVEncoderId": "27",      # AV_CODEC_ID_H264
+              "FFAEncoder": "aac", "FFAEncoderId": "86018",       # AV_CODEC_ID_AAC
+              "FFVBitrate": "3000", "FFVGOPSize": "60", "FFABitrate": "160",
+              "FFVCustom": "preset=veryfast", "FFUseRescale": "false", "FFAudioMixes": "1"}
+# Up Next (and any other page carrying the window) shows whatever the captured window shows *now*: one browser window
 # can be on the store page at setup and on the stream itself (a feedback
 # loop), mail or My eBay later. Before Up Next goes on air the pager reads
 # the window's live title (OBS's own list can be stale) and hides the window
@@ -269,6 +285,93 @@ def cmd_feed(c, a):
 
 
 # --- the pager: the API the CLI below and webapp/pager.py share --------------
+# --- destinations: eBay and Twitch, independently ----------------------------
+def streams(c) -> dict:
+    out = {}
+    for dest, kind in DESTS.items():
+        st = c.call(f"Get{kind}Status")
+        out[dest] = {"live": st["outputActive"],
+                     "timecode": st["outputTimecode"] if st["outputActive"] else None}
+    return out
+
+
+def _profile_param(c, name: str) -> str:
+    return c.call("GetProfileParameter", {"parameterCategory": "AdvOut",
+                                          "parameterName": name}).get("parameterValue") or ""
+
+
+def twitch_problem(c) -> str | None:
+    """Why Twitch can't start, or None. Never returns the URL itself."""
+    if any(_profile_param(c, k) != v for k, v in (("RecType", "FFmpeg"), ("FFOutputToFile", "false"))):
+        return "Twitch isn't set up: run `show_flow.py twitch-setup` (with nothing live)"
+    if not _profile_param(c, "FFURL").startswith("rtmp"):
+        return ("no Twitch URL: OBS Settings > Output > Recording > File path or URL, "
+                "paste rtmp://live.twitch.tv/app/<your stream key>")
+    return None
+
+
+def show_profile(c) -> None:
+    """Make the show profile current (vertical canvas, eBay Live scenes)."""
+    if c.call("GetProfileList")["currentProfileName"] != SHOW_PROFILE:
+        if any(s["live"] for s in streams(c).values()):
+            raise obsctl.ObsError(f"an output is live on another profile; stop it before using {SHOW_PROFILE!r}")
+        c.call("SetCurrentProfile", {"profileName": SHOW_PROFILE})
+        time.sleep(2)
+    if c.call("GetSceneCollectionList")["currentSceneCollectionName"] != COLLECTION:
+        c.call("SetCurrentSceneCollection", {"sceneCollectionName": COLLECTION})
+        time.sleep(2)
+    vs = c.call("GetVideoSettings")
+    if (vs["baseWidth"], vs["baseHeight"]) != (W, H):
+        c.call("SetVideoSettings", {"baseWidth": W, "baseHeight": H, "outputWidth": W,
+                                    "outputHeight": H, "fpsNumerator": 30, "fpsDenominator": 1})
+
+
+def go_live(c, dest: str, check: float = 5) -> dict:
+    """Start one destination, leaving the other as it is, and check that
+    bytes are flowing. Not under the camera lock: a 5 s check mustn't hold
+    up a page switch."""
+    if dest not in DESTS:
+        raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
+    kind = DESTS[dest]
+    if c.call(f"Get{kind}Status")["outputActive"]:
+        return {"dest": dest, "changed": False}
+    show_profile(c)
+    if dest == "twitch" and (why := twitch_problem(c)):
+        raise obsctl.ObsError(why)
+    c.call(f"Start{kind}")
+    time.sleep(check)
+    st = c.call(f"Get{kind}Status")
+    if not st["outputActive"] or not st.get("outputBytes"):
+        raise obsctl.ObsError(f"{dest} didn't connect: {obsctl.redact(st)}")
+    kbps = st["outputBytes"] * 8 / 1000 / max(st["outputDuration"] / 1000, 0.001)
+    return {"dest": dest, "changed": True, "kbps": round(kbps),
+            "skipped": (f"{st['outputSkippedFrames']}/{st['outputTotalFrames']}"
+                        if "outputSkippedFrames" in st else None)}
+
+
+def stop_dest(c, dest: str) -> dict:
+    if dest not in DESTS:
+        raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
+    kind = DESTS[dest]
+    if not c.call(f"Get{kind}Status")["outputActive"]:
+        return {"dest": dest, "changed": False}
+    c.call(f"Stop{kind}")
+    deadline = time.monotonic() + 10
+    while c.call(f"Get{kind}Status")["outputActive"] and time.monotonic() < deadline:
+        time.sleep(0.25)
+    return {"dest": dest, "changed": True}
+
+
+def twitch_setup(c) -> None:
+    """Point the recording output at Twitch (everything but the URL)."""
+    if any(s["live"] for s in streams(c).values()):
+        raise obsctl.ObsError("OBS won't change outputs while one is live; stop both first")
+    show_profile(c)
+    for k, v in TWITCH_OUT.items():
+        c.call("SetProfileParameter", {"parameterCategory": "AdvOut", "parameterName": k,
+                                       "parameterValue": v})
+
+
 def page_of(scene: str) -> str | None:
     return next((k for k, v in PAGES.items() if v == scene), None)
 
@@ -284,11 +387,16 @@ def window_title(c) -> str | None:
     return title or None
 
 
-def guard_window(c) -> dict:
-    """Show or hide the Up Next window by its live title (PRIVATE_WINDOW)."""
+def guard_window(c, scene: str = UPNEXT) -> dict | None:
+    """Show or hide the desktop window in `scene` by its live title
+    (PRIVATE_WINDOW). None if the scene doesn't carry the window."""
+    items = c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]
+    ids = [i["sceneItemId"] for i in items if i["sourceName"] == WINDOW]
+    if not ids:
+        return None
     title = window_title(c)
     safe = bool(title) and not PRIVATE_WINDOW.search(title)
-    set_box(c, UPNEXT, WINDOW, enabled=safe)
+    c.call("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": ids[0], "sceneItemEnabled": safe})
     return {"title": title, "shown": safe}
 
 
@@ -296,11 +404,11 @@ def state(c) -> dict:
     """What's on air. `page` is None when the program scene isn't one of the
     pager's (someone switched in OBS by hand)."""
     scene = program(c)
-    st = c.call("GetStreamStatus")
-    return {"page": page_of(scene), "scene": scene,
-            "pages": list(PAGES), "live": st["outputActive"],
-            "timecode": st["outputTimecode"] if st["outputActive"] else None,
-            "feed": bool(feed_pids())}
+    out = streams(c)
+    on = [s["timecode"] for s in out.values() if s["live"]]
+    return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
+            "live": bool(on), "timecode": max(on) if on else None,
+            "streams": out, "feed": bool(feed_pids())}
 
 
 def go(c, page: str, refocus: bool = True) -> dict:
@@ -315,8 +423,10 @@ def go(c, page: str, refocus: bool = True) -> dict:
         out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
         if program(c) == PAGES[page]:
             return out
-        if page == "next":
-            out["window"] = guard_window(c)
+        if page != "item":  # any page that shows the desktop window
+            w = guard_window(c, PAGES[page])
+            if w:
+                out["window"] = w
         if page == "item" and refocus:
             out["focused"], secs = refocus_d5(c)
             out["refocus_s"] = round(secs, 1)
@@ -370,55 +480,41 @@ def cmd_refocus(c, a):
 def cmd_golive(c, a):
     if not a.confirm:
         raise obsctl.ObsError(f"going live on {a.dest} is public-facing; re-run with --confirm")
-    if c.call("GetStreamStatus")["outputActive"]:
-        raise obsctl.ObsError("already streaming; `stop` first")
-    profile = PROFILES[a.dest]
-    if c.call("GetProfileList")["currentProfileName"] != profile:
-        c.call("SetCurrentProfile", {"profileName": profile})
-        time.sleep(2)
-    if c.call("GetSceneCollectionList")["currentSceneCollectionName"] != COLLECTION:
-        c.call("SetCurrentSceneCollection", {"sceneCollectionName": COLLECTION})
-        time.sleep(2)
-    vs = c.call("GetVideoSettings")
-    if (vs["baseWidth"], vs["baseHeight"]) != (W, H):  # Twitch profile defaults to 16:9
-        c.call("SetVideoSettings", {"baseWidth": W, "baseHeight": H, "outputWidth": 720,
-                                    "outputHeight": 1280, "fpsNumerator": 30, "fpsDenominator": 1})
-    c.call("StartStream")
-    time.sleep(a.check)
-    st = c.call("GetStreamStatus")
-    if not st["outputActive"] or st["outputBytes"] == 0:
-        raise obsctl.ObsError(f"stream didn't connect: {obsctl.redact(st)}")
-    kbps = st["outputBytes"] * 8 / 1000 / max(st["outputDuration"] / 1000, 0.001)
-    print(f"LIVE on {a.dest} ({profile}): {kbps:.0f} kbps, "
-          f"skipped {st['outputSkippedFrames']}/{st['outputTotalFrames']} frames")
+    r = go_live(c, a.dest, check=a.check)
+    if not r["changed"]:
+        print(f"{a.dest}: already live")
+        return
+    print(f"LIVE on {a.dest}: {r['kbps']} kbps"
+          + (f", skipped {r['skipped']}" if r.get("skipped") is not None else ""))
     if a.dest == "ebay":
         print("video is flowing; the show starts when you click Start event in Stream manager")
 
 
 def cmd_stop(c, a):
-    if c.call("GetStreamStatus")["outputActive"]:
-        c.call("StopStream")
-    deadline = time.monotonic() + 10
-    while c.call("GetStreamStatus")["outputActive"] and time.monotonic() < deadline:
-        time.sleep(0.25)
-    print("stream: off")
+    for d in [a.dest] if a.dest else list(DESTS):
+        stop_dest(c, d)
+        print(f"{d}: off")
+
+
+def cmd_twitch_setup(c, a):
+    twitch_setup(c)
+    print("Twitch output configured (Custom Output (FFmpeg) -> URL, flv, x264 veryfast 3000k, AAC).\n"
+          "Last step, yours: OBS Settings > Output > Recording > \"File path or URL\": paste\n"
+          "  rtmp://live.twitch.tv/app/<your Twitch stream key>\n"
+          "then OK. (Twitch dashboard > Settings > Stream > Primary Stream key.)")
 
 
 def cmd_status(c, a):
     if a.json:
         print(json.dumps(state(c)))
         return
-    st = c.call("GetStreamStatus")
     print(f"profile: {c.call('GetProfileList')['currentProfileName']}  "
           f"scenes: {c.call('GetSceneCollectionList')['currentSceneCollectionName']}")
     scene = program(c)
     page = page_of(scene)
     print(f"on air: {page + ' (' + scene + ')' if page else scene}")
-    if st["outputActive"]:
-        print(f"stream: LIVE {st['outputTimecode']}  "
-              f"skipped {st['outputSkippedFrames']}/{st['outputTotalFrames']}")
-    else:
-        print("stream: off")
+    for dest, s in streams(c).items():
+        print(f"{dest}: {'LIVE ' + s['timecode'] if s['live'] else 'off'}")
     print(f"D5100 feed: {'running' if feed_pids() else 'stopped'}")
 
 
@@ -445,12 +541,16 @@ def main(argv=None) -> int:
     s = sub.add_parser("refocus", help="refocus the D5 (hidden if the item page is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)
-    s = sub.add_parser("golive", help="start streaming the eBay Live scenes")
-    s.add_argument("dest", choices=sorted(PROFILES))
+    s = sub.add_parser("golive", help="start one destination (the other keeps running)")
+    s.add_argument("dest", choices=list(DESTS))
     s.add_argument("--confirm", action="store_true", help="required: this broadcasts")
     s.add_argument("--check", type=float, default=5, help="seconds to watch the connection")
     s.set_defaults(fn=cmd_golive)
-    sub.add_parser("stop", help="stop streaming").set_defaults(fn=cmd_stop)
+    s = sub.add_parser("stop", help="stop one destination, or both")
+    s.add_argument("dest", nargs="?", choices=list(DESTS))
+    s.set_defaults(fn=cmd_stop)
+    sub.add_parser("twitch-setup", help="point the recording output at Twitch (once; nothing live)"
+                   ).set_defaults(fn=cmd_twitch_setup)
     s = sub.add_parser("status")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_status)

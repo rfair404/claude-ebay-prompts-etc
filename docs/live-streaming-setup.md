@@ -75,8 +75,16 @@ not type it in. Stream manager > event > Streaming information > No delay
 the list, under Show All...) > paste into Server. The URL stays the same for
 every event.
 
-Keep Twitch in its own profile (`Untitled`); switching Service in one
-profile overwrites the other's stream settings.
+**Twitch rides along in the same profile**, so eBay and Twitch can run at
+once and start/stop independently. OBS has one stream output (eBay's WHIP),
+and Debian's ffmpeg 7.1 has no WHIP muxer for a relay, so Twitch goes out
+on the *recording* output: Custom Output (FFmpeg) > Output to URL, flv, x264
+veryfast 3000k, AAC. With nothing live, run `python
+tools/live/show_flow.py twitch-setup` to set all of that except the URL.
+Then (**user**): OBS Settings > Output > Recording > "File path or URL",
+paste `rtmp://live.twitch.tv/app/<stream key>` (Twitch dashboard > Settings
+> Stream), and click OK. The cost: no local recording while Twitch is
+live, and a second encode. The old `Untitled` profile is no longer used.
 
 Don't run Tools > Auto-Configuration Wizard on the eBay profile: its bandwidth
 test only speaks RTMP (it fails with "Unknown protocol" against the WHIP URL)
@@ -196,9 +204,9 @@ python tools/live/obsctl.py launch            # OBS minimized to the tray, no wi
 python tools/live/show_flow.py feed start     # tools/d5100_webcam.sh (self-restarting), detached
 python tools/live/show_flow.py setup --window "<title substring>"
 python tools/live/show_flow.py page intro       # pre-show card, before going live
-python tools/live/show_flow.py golive ebay --confirm
+python tools/live/show_flow.py golive ebay --confirm    # and/or: golive twitch --confirm
 python tools/live/show_flow.py page item | next # the pager; also: refocus
-python tools/live/show_flow.py stop
+python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
 `setup` builds the show's three pages in the `eBay Live` collection.
@@ -224,8 +232,10 @@ The local web app (`python -m lib.cli serve`) has a control page at
 http://localhost:8770/pager: one button per page, a Refocus button, the
 LIVE timer, and keys 1/2/3/R. The same pager is served as JSON for other
 pages or agents:
-`GET /api/pager`, `POST /api/pager {"page": "item"}` and `POST
-/api/pager/refocus`. `webapp/pager.py` documents the JSON and error codes.
+`GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
+/api/pager/refocus` and `POST /api/pager/stream {"dest": "twitch",
+"action": "start"}`. The page has Start/Stop buttons for eBay and Twitch,
+each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
 
 **Verify:** `python tools/live/obsctl.py status` prints the OBS version and

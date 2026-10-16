@@ -22,10 +22,16 @@ import webapp.server as server  # noqa: E402
 
 class FakeObs:
     def __init__(self, scene="Intro", live=False):
-        self.scene, self.live = scene, live
+        self.scene = scene
+        self.active = {"Stream": live, "Record": False}  # OBS output -> on air
+        self.profile = "Ebay"
+        self.params = {"RecType": "FFmpeg", "FFOutputToFile": "false",
+                       "FFURL": "rtmp://live.twitch.tv/app/secret"}
+        self.connects = True  # does a started output move bytes?
         self.switches: list[str] = []
         self.closed = False
-        self.window_shown = None  # Up Next window item's last enabled state
+        self.window_shown = None  # the window item's last enabled state
+        self.window_scenes = {"Up Next"}
         self.capture = "62914622\r\nThe Fair Hand \u2014 Mozilla Firefox\r\nNavigator"
 
     def call(self, req, data=None):
@@ -35,12 +41,40 @@ class FakeObs:
             self.scene = data["sceneName"]
             self.switches.append(self.scene)
             return {}
-        if req == "GetStreamStatus":
-            return {"outputActive": self.live, "outputTimecode": "00:01:02.000"}
+        for kind in ("Stream", "Record"):
+            if req == f"Get{kind}Status":
+                on = self.active[kind]
+                st = {"outputActive": on, "outputTimecode": "00:01:02.000" if on else "00:00:00.000",
+                      "outputBytes": 375000 if on and self.connects else 0, "outputDuration": 1000}
+                if kind == "Stream":
+                    st.update(outputSkippedFrames=0, outputTotalFrames=30)
+                return st
+            if req == f"Start{kind}":
+                self.active[kind] = True
+                return {}
+            if req == f"Stop{kind}":
+                self.active[kind] = False
+                return {}
+        if req == "GetProfileList":
+            return {"currentProfileName": self.profile}
+        if req == "SetCurrentProfile":
+            self.profile = data["profileName"]
+            return {}
+        if req == "GetSceneCollectionList":
+            return {"currentSceneCollectionName": SF.COLLECTION}
+        if req == "GetVideoSettings":
+            return {"baseWidth": SF.W, "baseHeight": SF.H}
+        if req == "GetProfileParameter":
+            assert data["parameterCategory"] == "AdvOut"
+            return {"parameterValue": self.params.get(data["parameterName"])}
+        if req == "SetProfileParameter":
+            self.params[data["parameterName"]] = data["parameterValue"]
+            return {}
         if req == "GetSceneItemList":
-            return {"sceneItems": [{"sourceName": SF.WINDOW, "sceneItemId": 7}]}
+            has = data["sceneName"] in self.window_scenes
+            return {"sceneItems": [{"sourceName": SF.WINDOW, "sceneItemId": 7}] if has else []}
         if req == "SetSceneItemEnabled":
-            assert data["sceneName"] == SF.UPNEXT and data["sceneItemId"] == 7
+            assert data["sceneName"] in self.window_scenes and data["sceneItemId"] == 7
             self.window_shown = data["sceneItemEnabled"]
             return {}
         if req == "GetInputSettings":
@@ -78,9 +112,12 @@ def test_pages_are_the_three_in_running_order():
 
 
 def test_state_maps_scene_to_page(obs):
-    obs.live = True
-    assert SF.state(obs) == {"page": "intro", "scene": "Intro", "pages": ["intro", "item", "next"],
-                             "live": True, "timecode": "00:01:02.000", "feed": True}
+    obs.active["Stream"] = True
+    assert SF.state(obs) == {
+        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next"],
+        "live": True, "timecode": "00:01:02.000", "feed": True,
+        "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
+                    "twitch": {"live": False, "timecode": None}}}
     obs.scene = "Desktop"  # switched by hand in OBS
     assert SF.state(obs)["page"] is None
 
@@ -213,6 +250,8 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
     for page in SF.PAGES:
         assert f'data-page="{page}"' in r.text
+    for dest in SF.DESTS:
+        assert f'data-dest="{dest}"' in r.text
     assert "/api/pager/refocus" in r.text
     assert client.get("/pager", headers={"host": "evil.example"}).status_code == 403
 
@@ -269,3 +308,78 @@ def test_item_without_refocus_skips_the_camera(obs, client):
     obs.scene = "Intro"
     body = client.post("/api/pager", json={"page": "item", "refocus": False}).json()
     assert body["page"] == "item" and obs.refocused == []
+
+
+def test_intro_is_guarded_only_when_it_carries_the_window(obs):
+    obs.title = "Twitch \u2014 Mozilla Firefox"
+    obs.scene = "Up Next"
+    assert "window" not in SF.go(obs, "intro") and obs.window_shown is None  # plain card
+    obs.window_scenes.add("Intro")
+    obs.scene = "Up Next"
+    r = SF.go(obs, "intro")
+    assert r["window"] == {"title": "Twitch \u2014 Mozilla Firefox", "shown": False}
+    assert obs.window_shown is False
+
+
+# --- destinations ------------------------------------------------------------
+def test_ebay_and_twitch_start_and_stop_independently(obs):
+    r = SF.go_live(obs, "ebay", check=0)
+    assert r == {"dest": "ebay", "changed": True, "kbps": 3000, "skipped": "0/30"}
+    assert SF.go_live(obs, "twitch", check=0)["changed"] is True
+    assert obs.active == {"Stream": True, "Record": True}
+    SF.stop_dest(obs, "twitch")
+    assert obs.active == {"Stream": True, "Record": False}  # eBay untouched
+    assert SF.go_live(obs, "ebay", check=0)["changed"] is False
+
+
+def test_twitch_refuses_until_set_up_and_never_leaks_the_url(obs):
+    obs.params = {"RecType": "Standard"}
+    with pytest.raises(obsctl.ObsError, match="twitch-setup"):
+        SF.go_live(obs, "twitch", check=0)
+    SF.twitch_setup(obs)
+    assert obs.params["RecType"] == "FFmpeg" and obs.params["FFFormat"] == "flv"
+    with pytest.raises(obsctl.ObsError, match="paste rtmp") as e:
+        SF.go_live(obs, "twitch", check=0)
+    obs.params["FFURL"] = "rtmp://live.twitch.tv/app/secret"
+    assert SF.go_live(obs, "twitch", check=0)["changed"]
+    assert "secret" not in str(e.value)
+    assert obs.active["Record"] is True and obs.active["Stream"] is False
+
+
+def test_twitch_setup_refuses_while_anything_is_live(obs):
+    obs.active["Stream"] = True
+    with pytest.raises(obsctl.ObsError, match="stop both"):
+        SF.twitch_setup(obs)
+
+
+def test_go_live_switches_to_the_show_profile_but_not_mid_stream(obs):
+    obs.profile = "Untitled"
+    SF.go_live(obs, "ebay", check=0)
+    assert obs.profile == "Ebay"
+    obs.profile = "Untitled"
+    with pytest.raises(obsctl.ObsError, match="another profile"):
+        SF.go_live(obs, "twitch", check=0)
+
+
+def test_a_start_that_moves_no_bytes_is_an_error(obs):
+    obs.connects = False
+    with pytest.raises(obsctl.ObsError, match="didn't connect"):
+        SF.go_live(obs, "ebay", check=0)
+
+
+def test_stream_route(client, obs, monkeypatch):
+    real = SF.go_live
+    monkeypatch.setattr(SF, "go_live", lambda c, d: real(c, d, check=0))
+    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["streams"]["twitch"]["live"] and not body["streams"]["ebay"]["live"]
+    assert body["stream"]["changed"] and body["live"]
+    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "stop"})
+    assert r.json()["streams"]["twitch"]["live"] is False
+    assert client.post("/api/pager/stream", json={"dest": "youtube", "action": "start"}).status_code == 422
+    assert client.post("/api/pager/stream", json={"dest": "ebay", "action": "start"},
+                       headers={"origin": "https://evil.example"}).status_code == 403
+    obs.params = {}
+    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start"})
+    assert r.status_code == 502 and "twitch-setup" in r.json()["detail"]

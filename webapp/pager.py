@@ -8,14 +8,20 @@ page, a phone, or another agent's web app can drive the show:
     GET  /api/pager             what's on air
     POST /api/pager             {"page": "intro" | "item" | "next", "refocus": true}
     POST /api/pager/refocus     refocus the D5100 without changing page
+    POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
 
     {"page": "item", "scene": "eBay Main", "pages": ["intro", "item", "next"],
      "live": true, "timecode": "00:12:03.400", "feed": true,
+     "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
+                 "twitch": {"live": false, "timecode": null}},
      "switch": {"page": "item", "changed": true, "focused": true, "refocus_s": 5.2}}
 
-`page` is null when OBS is on a scene that isn't one of the three.
+`page` is null when OBS is on a scene that isn't one of the three. eBay and
+Twitch start and stop independently (show_flow DESTS: eBay on OBS's stream
+output, Twitch on its recording output); a start blocks ~5 s while it
+checks that bytes are flowing, and is public on Twitch the moment it lands.
 A switch to `next` also carries `window: {"title", "shown"}`: the Up Next
 window is hidden (card + webcam only) when its live title looks private or
 is the stream itself (show_flow.PRIVATE_WINDOW). `focused: false` means the
@@ -49,6 +55,11 @@ import obsctl as _obsctl          # noqa: E402
 import show_flow as _show_flow    # noqa: E402
 
 router = APIRouter(dependencies=[Depends(_local_only)])
+
+
+class StreamRequest(BaseModel):
+    dest: Literal["ebay", "twitch"]
+    action: Literal["start", "stop"]
 
 
 class PageRequest(BaseModel):
@@ -88,6 +99,14 @@ def pager_go(req: PageRequest) -> dict:
     with _obs() as c:
         switch = _show_flow.go(c, req.page, refocus=req.refocus)
         return {**_show_flow.state(c), "switch": switch}
+
+
+@router.post("/api/pager/stream")
+def pager_stream(req: StreamRequest) -> dict:
+    with _obs() as c:
+        fn = _show_flow.go_live if req.action == "start" else _show_flow.stop_dest
+        r = fn(c, req.dest)
+        return {**_show_flow.state(c), "stream": r}
 
 
 @router.post("/api/pager/refocus")
@@ -134,6 +153,14 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .page:disabled, #refocus:disabled { opacity:.55; cursor:wait; }
 .row { display:flex; gap:12px; margin-top:12px; }
 #refocus { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:22px 2px 8px; }
+.dests { display:grid; gap:10px; }
+.dest { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px;
+        border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+.dest b { display:block; } .dest small { color:var(--muted); }
+.dest.live { border-color:var(--live); } .dest.live small { color:var(--live); font-weight:600; }
+.dest .go { padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-width:86px; }
+.dest.live .go { background:var(--live); border-color:var(--live); color:#fff; }
 .opt { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--muted); }
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
@@ -150,6 +177,13 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
 </div>
 <div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button></div>
+<h2>Streams</h2>
+<div class="dests">
+  <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
+    <button class="go">Start</button></div>
+  <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
+    <button class="go">Start</button></div>
+</div>
 <label class="opt"><input type="checkbox" id="nod5"> No D5100: Item skips the refocus (rehearsal, battery swap)</label>
 <p id="msg"></p>
 <footer id="foot"></footer>
@@ -165,6 +199,12 @@ function show(st) {
   const badge = $('#badge');
   badge.textContent = st.live ? 'LIVE ' + (st.timecode || '').split('.')[0] : 'Off air';
   badge.classList.toggle('live', !!st.live);
+  for (const el of document.querySelectorAll('.dest')) {
+    const s = (st.streams || {})[el.dataset.dest] || {};
+    el.classList.toggle('live', !!s.live);
+    el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
+    el.querySelector('.go').textContent = s.live ? 'Stop' : 'Start';
+  }
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed ? 'running' : 'stopped');
 }
@@ -178,7 +218,34 @@ async function api(method, path, body) {
   return data;
 }
 
-function lock(on) { busy = on; buttons.concat($('#refocus')).forEach(b => b.disabled = on); }
+function lock(on) {
+  busy = on;
+  buttons.concat($('#refocus'), [...document.querySelectorAll('.go')]).forEach(b => b.disabled = on);
+}
+
+const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
+const ASK = {
+  'twitch start': 'Go live on Twitch? It is public the moment it connects.',
+  'ebay start': 'Start sending video to eBay? Viewers see it after you click Start event in Stream manager.',
+  'twitch stop': 'Stop the Twitch stream?',
+  'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
+};
+
+async function stream(dest) {
+  if (busy) return;
+  const live = document.querySelector('.dest[data-dest="' + dest + '"]').classList.contains('live');
+  const action = live ? 'stop' : 'start';
+  if (!confirm(ASK[dest + ' ' + action])) return;
+  lock(true); say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
+  try {
+    const st = await api('POST', '/api/pager/stream', { dest, action });
+    show(st);
+    const r = st.stream;
+    say(action === 'start' ? (r.changed ? NAMES[dest] + ' is live: ' + r.kbps + ' kbps.' : NAMES[dest] + ' was already live.')
+                           : NAMES[dest] + ' stopped.');
+  } catch (e) { say(e.message, 'err'); }
+  lock(false);
+}
 
 function focusText(r) {
   return r.focused ? 'Focused (' + r.refocus_s + ' s).'
@@ -223,6 +290,8 @@ async function poll() {
 
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
+document.querySelectorAll('.dest').forEach(el =>
+  el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = { '1': 'intro', '2': 'item', '3': 'next' }[e.key];

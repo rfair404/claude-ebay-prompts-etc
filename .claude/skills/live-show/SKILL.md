@@ -7,7 +7,7 @@ description: Run the eBay Live / Twitch show from the shell with no OBS GUI — 
 
 You are the show's director. Everything runs through two scripts, on the
 machine set up per `docs/live-streaming-setup.md` (Flatpak OBS, profiles
-`Ebay` and `Untitled`, scene collection `eBay Live`, D5100 on /dev/video10).
+`Ebay`, scene collection `eBay Live`, D5100 on /dev/video10).
 
 - `tools/live/obsctl.py` — raw OBS remote (status, screenshots, any request).
 - `tools/live/show_flow.py` — the show: pages (intro / item / next), D5 feed, refocus, go live.
@@ -48,11 +48,15 @@ media, terminals) and the stream's own dashboard (it feeds back into itself).
 Then, after the user says yes:
 
 ```bash
-python tools/live/show_flow.py golive ebay --confirm    # or: golive twitch --confirm
+python tools/live/show_flow.py golive ebay --confirm    # and/or: golive twitch --confirm
 ```
 
-It prints kbps and skipped frames after 5 s. Healthy is roughly 3000 kbps
-and 0 skipped.
+It prints kbps (and skipped frames for eBay) after 5 s. Healthy is roughly
+3000 kbps and 0 skipped. eBay and Twitch are independent: both can run, and
+`stop ebay` / `stop twitch` end one. Each start is its own yes from the
+user. Twitch needs a one-time `twitch-setup` plus the user pasting the
+Twitch URL into OBS (docs/live-streaming-setup.md step 2); `golive twitch`
+says so if that's missing.
 
 ## During the show: the pager
 
@@ -97,7 +101,7 @@ shots, suggest the user zoom the lens or bring the item closer.
 ## End of show
 
 ```bash
-python tools/live/show_flow.py stop
+python tools/live/show_flow.py stop           # both destinations
 python tools/live/show_flow.py feed stop     # frees the camera for stills/settings
 python tools/live/obsctl.py quit             # optional; refuses while live/recording
 ```
@@ -113,5 +117,5 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what
   helps the stream.
-- The Twitch profile (`Untitled`) is 16:9 by default. `golive twitch` switches
-  it to the vertical 1080x1920 canvas.
+- Twitch runs on OBS's recording output, so `obsctl.py quit` refuses while
+  it's live, and there's no local recording during a Twitch stream.
