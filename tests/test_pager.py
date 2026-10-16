@@ -260,3 +260,12 @@ def test_window_title_reads_the_live_title_from_x(monkeypatch):
     gone = FakeObs()
     gone.capture = ""
     assert SF.window_title(gone) is None
+
+
+def test_item_without_refocus_skips_the_camera(obs, client):
+    obs.scene = "Intro"
+    r = SF.go(obs, "item", refocus=False)
+    assert r["changed"] and r["focused"] is None and obs.refocused == []
+    obs.scene = "Intro"
+    body = client.post("/api/pager", json={"page": "item", "refocus": False}).json()
+    assert body["page"] == "item" and obs.refocused == []

@@ -20,7 +20,7 @@ connection: live view has to stop, autofocus, restart).
 
     python tools/live/show_flow.py setup [--window "Fair Hand"] [--intro-text "Starting\\nsoon"]
     python tools/live/show_flow.py feed start|stop|status
-    python tools/live/show_flow.py page intro|item|next [--json]
+    python tools/live/show_flow.py page intro|item|next [--json] [--no-refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
@@ -303,10 +303,12 @@ def state(c) -> dict:
             "feed": bool(feed_pids())}
 
 
-def go(c, page: str) -> dict:
+def go(c, page: str, refocus: bool = True) -> dict:
     """Put a page on air. Going to `item` from another page refocuses the
-    D5100 first, while the current page still hides it. A page that's
-    already on air is left alone."""
+    D5100 first, while the current page still hides it; refocus=False skips
+    that (rehearsal or battery swap: the item view goes up with whatever the
+    D5 source shows, which with the camera off is its last frame, frozen).
+    A page that's already on air is left alone."""
     if page not in PAGES:
         raise ValueError(f"unknown page {page!r}; pages: {', '.join(PAGES)}")
     with exclusive():
@@ -315,7 +317,7 @@ def go(c, page: str) -> dict:
             return out
         if page == "next":
             out["window"] = guard_window(c)
-        if page == "item":
+        if page == "item" and refocus:
             out["focused"], secs = refocus_d5(c)
             out["refocus_s"] = round(secs, 1)
         c.call("SetCurrentProgramScene", {"sceneName": PAGES[page]})
@@ -343,7 +345,7 @@ def focus_note(locked: bool) -> str:
 
 
 def cmd_page(c, a):
-    r = go(c, a.page)
+    r = go(c, a.page, refocus=not a.no_refocus)
     if a.json:
         print(json.dumps({**state(c), "switch": r}))
     elif not r["changed"]:
@@ -434,9 +436,12 @@ def main(argv=None) -> int:
     s = sub.add_parser("page", help="put a page on air (item refocuses the D5 first, hidden)")
     s.add_argument("page", choices=list(PAGES))
     s.add_argument("--json", action="store_true")
+    s.add_argument("--no-refocus", action="store_true", help="item without the D5 refocus (no camera)")
     s.set_defaults(fn=cmd_page)
-    sub.add_parser("next", help="= page next").set_defaults(fn=cmd_page, page="next", json=False)
-    sub.add_parser("back", help="= page item").set_defaults(fn=cmd_page, page="item", json=False)
+    sub.add_parser("next", help="= page next").set_defaults(fn=cmd_page, page="next", json=False,
+                                                            no_refocus=False)
+    sub.add_parser("back", help="= page item").set_defaults(fn=cmd_page, page="item", json=False,
+                                                            no_refocus=False)
     s = sub.add_parser("refocus", help="refocus the D5 (hidden if the item page is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)

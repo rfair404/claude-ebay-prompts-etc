@@ -6,7 +6,7 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "next"}
+    POST /api/pager             {"page": "intro" | "item" | "next", "refocus": true}
     POST /api/pager/refocus     refocus the D5100 without changing page
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
@@ -53,6 +53,7 @@ router = APIRouter(dependencies=[Depends(_local_only)])
 
 class PageRequest(BaseModel):
     page: Literal["intro", "item", "next"]
+    refocus: bool = True  # false: item without the D5100 (rehearsal, battery swap)
 
 
 @contextmanager
@@ -85,7 +86,7 @@ def pager_state() -> dict:
 @router.post("/api/pager")
 def pager_go(req: PageRequest) -> dict:
     with _obs() as c:
-        switch = _show_flow.go(c, req.page)
+        switch = _show_flow.go(c, req.page, refocus=req.refocus)
         return {**_show_flow.state(c), "switch": switch}
 
 
@@ -133,6 +134,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .page:disabled, #refocus:disabled { opacity:.55; cursor:wait; }
 .row { display:flex; gap:12px; margin-top:12px; }
 #refocus { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+.opt { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--muted); }
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
 footer { margin-top:22px; font-size:13px; color:var(--muted); }
@@ -148,6 +150,7 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
 </div>
 <div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button></div>
+<label class="opt"><input type="checkbox" id="nod5"> No D5100: Item skips the refocus (rehearsal, battery swap)</label>
 <p id="msg"></p>
 <footer id="foot"></footer>
 </main>
@@ -184,9 +187,9 @@ function focusText(r) {
 
 async function go(page) {
   if (busy) return;
-  lock(true); say(page === 'item' ? 'Refocusing behind the current page...' : 'Switching...');
+  lock(true); say(page === 'item' && !$('#nod5').checked ? 'Refocusing behind the current page...' : 'Switching...');
   try {
-    const st = await api('POST', '/api/pager', { page });
+    const st = await api('POST', '/api/pager', { page, refocus: !$('#nod5').checked });
     show(st);
     const sw = st.switch;
     if (!sw.changed) say('Already on ' + page + '.');
