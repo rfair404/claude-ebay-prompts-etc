@@ -99,8 +99,8 @@ def _draft(tmp: Path, sku="abc"):
     tmp.mkdir(parents=True, exist_ok=True)
     (tmp / "listing").mkdir(exist_ok=True)
     (tmp / "draft.md").write_text(
-        "---\nmeta:\n  ebay_inventory_sku: \"%s\"\n---\n"
-        "photos:\n  - \"listing/a.jpg\"\n\nbody\n" % sku, encoding="utf-8")
+        "---\nmeta:\n  ebay_inventory_sku: \"%s\"\n"
+        "photos:\n  - \"listing/a.jpg\"\n---\n\nbody\n" % sku, encoding="utf-8")
     return tmp / "draft.md"
 
 
