@@ -47,7 +47,6 @@ DESTS below). The keys stay in OBS's own config, never here.
 from __future__ import annotations
 
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -58,6 +57,12 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # Windows: the web app (and its tests) import this module there too
+    fcntl = None
+    import msvcrt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import obsctl  # noqa: E402
@@ -167,13 +172,21 @@ def exclusive():
         deadline = time.monotonic() + LOCK_WAIT
         while True:
             try:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                if fcntl:
+                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                else:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
                 break
-            except BlockingIOError:
+            except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
                     raise Busy(f"another page switch or refocus is still running after {LOCK_WAIT}s")
                 time.sleep(0.1)
-        yield  # the lock goes with the file when it closes
+        try:
+            yield
+        finally:
+            if not fcntl:  # flock goes with the file when it closes; msvcrt needs an unlock
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def d5_hash(c) -> str:
