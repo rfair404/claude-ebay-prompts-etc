@@ -81,6 +81,7 @@ verifies and lists that account's own policy IDs.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -671,16 +672,29 @@ def upload_photos_to_eps(photo_paths: list[Path],
 # Payload builders
 # ---------------------------------------------------------------------------
 
+def _aspect_values(val: object) -> list[str]:
+    """A draft aspect value as eBay's list form. A string is one value; a list
+    is several. Drafts rebuilt from eBay (tools/draft_rebuild.py) carry lists
+    wherever the live listing has more than one value, and collapsing those to
+    the first would silently drop values on the next `--fields aspects` push."""
+    if isinstance(val, str):
+        return [val.strip()] if val.strip() else []
+    if isinstance(val, list):
+        return [str(v).strip() for v in val if isinstance(v, str) and v.strip()]
+    return []
+
+
 def _build_aspects(draft: Draft) -> dict[str, list[str]]:
     aspects: dict[str, list[str]] = {}
     spec = draft.frontmatter.get("item_specifics") or {}
     for key, name in _ASPECT_NAMES.items():
-        val = spec.get(key)
-        if isinstance(val, str) and val.strip():
-            aspects[name] = [val.strip()]
+        vals = _aspect_values(spec.get(key))
+        if vals:
+            aspects[name] = vals
     for k, v in (spec.get("extra") or {}).items():
-        if isinstance(v, str) and v.strip():
-            aspects[str(k)] = [v.strip()]
+        vals = _aspect_values(v)
+        if vals:
+            aspects[str(k)] = vals
     return aspects
 
 
@@ -1964,13 +1978,63 @@ def resolve_draft_state(draft_path: Path,
                 **st)
 
 
+def _flatten(node: object, prefix: str = "") -> dict[str, object]:
+    """Nested dict -> {dotted.path: leaf}. Lists stay whole (they are values)."""
+    if isinstance(node, dict):
+        out: dict[str, object] = {}
+        for k, v in node.items():
+            out.update(_flatten(v, f"{prefix}.{k}" if prefix else str(k)))
+        return out
+    return {prefix: node}
+
+
+def _same_number(a: object, b: object) -> bool:
+    """'14.0' and '14.00' are one price: eBay echoes values unpadded."""
+    try:
+        return Decimal(str(a)) == Decimal(str(b))
+    except (InvalidOperation, ValueError):
+        return False
+
+
+def payload_diff(before: dict, after: dict) -> list[str]:
+    """Human-readable field-level diff of a GET body vs the PUT we would send.
+
+    Long strings (descriptions) get a unified line diff instead of two walls of
+    HTML; everything else prints `path: old -> new`. Keys present only in the
+    GET (read-only echoes the PUT strips) are not reported — they are not
+    changes, the PUT just doesn't carry them.
+    """
+    import difflib
+    b, a = _flatten(before), _flatten(after)
+    lines: list[str] = []
+    for key in sorted(a):
+        old, new = b.get(key, "<absent>"), a[key]
+        if old == new or _same_number(old, new):
+            continue
+        if isinstance(old, str) and isinstance(new, str) and max(len(old), len(new)) > 120:
+            lines.append(f"{key}:")
+            for d in difflib.unified_diff(old.splitlines() or [old], new.splitlines() or [new],
+                                          "live", "draft", lineterm="", n=1):
+                lines.append(f"    {d}")
+        else:
+            lines.append(f"{key}: {old!r} -> {new!r}")
+    return lines
+
+
 def update_listing_fields(draft_path: Path, fields,
                           creds: Optional[EbayCredentials] = None,
-                          allow_not_sellable: bool = False) -> list[str]:
+                          allow_not_sellable: bool = False,
+                          dry_run: bool = False,
+                          plan: Optional[list] = None) -> list[str]:
     """Update ONLY the named field groups on an existing eBay item/offer.
 
     GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
     current eBay value. Never publishes. Returns the list of fields changed.
+
+    dry_run: do every read (sellable check, GETs, category condition lookup)
+    and build the exact PUT bodies, but send nothing — no PUT, no photo upload,
+    no `last_synced` stamp. Each would-be write is appended to `plan` (when a
+    list is passed) as {method, path, before, after}; `payload_diff` renders it.
 
     REFUSES a SKU whose offer is not currently live, unless explicitly
     overridden. Writing to a sold-out inventory item is not harmless: this
@@ -2003,7 +2067,8 @@ def update_listing_fields(draft_path: Path, fields,
             cur = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
         except EbayAPIError as e:
             raise ValueError(f"no inventory item for SKU {sku} — run a full `--sync` first ({e})")
-        item = {k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur}
+        # Deep copy: edits below must not reach `cur`, the "before" of the diff.
+        item = copy.deepcopy({k: cur[k] for k in _WRITABLE_ITEM_KEYS if k in cur})
         # `availability` MUST stay in the payload. This PUT is a full replace of
         # the inventory item, not a merge: omitting the key does not "leave
         # eBay's value alone", it sets the quantity to zero and drops the
@@ -2047,17 +2112,33 @@ def update_listing_fields(draft_path: Path, fields,
                 "shipToLocationAvailability", {})["quantity"] = int(draft.get("quantity") or 1)
             changed.append("quantity")
         if "photos" in item_fields:
-            urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
+            paths = resolve_photo_paths(draft)
+            # An empty photos: list would PUT imageUrls=[] onto a live listing.
+            # A draft rebuilt from eBay has exactly that (its photos are
+            # eBay-hosted, not local), so refuse rather than strip the gallery.
+            if not paths:
+                raise ValueError(
+                    f"SKU {sku}: draft has no local photos — refusing to replace "
+                    f"the live listing's photos with none")
+            if dry_run:
+                _assert_photos_cleared(paths)
+                urls = [f"<upload {p.name}>" for p in paths]
+            else:
+                urls = upload_photos_to_eps(paths, creds=creds)
             product["imageUrls"] = urls
             changed.append(f"photos({len(urls)})")
-        api_send("PUT", f"/sell/inventory/v1/inventory_item/{sku}", item, creds=creds)
+        path = f"/sell/inventory/v1/inventory_item/{sku}"
+        if plan is not None:
+            plan.append(dict(method="PUT", path=path, before=cur, after=item))
+        if not dry_run:
+            api_send("PUT", path, item, creds=creds)
 
     if offer_fields:
         offer_id = _find_offer_id_for_sku(sku, creds)
         if not offer_id:
             raise ValueError(f"no offer for SKU {sku} — run a full `--sync` first")
         cur = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
-        offer = {k: cur[k] for k in _WRITABLE_OFFER_KEYS if k in cur}
+        offer = copy.deepcopy({k: cur[k] for k in _WRITABLE_OFFER_KEYS if k in cur})
         if "description" in offer_fields and "description" not in changed:
             changed.append("description")
         if "description" in offer_fields:
@@ -2096,9 +2177,14 @@ def update_listing_fields(draft_path: Path, fields,
                            if prev != fid else "policies(unchanged)")
             for m in pol_msgs:
                 print(f"  {m}")
-        api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer, creds=creds)
+        path = f"/sell/inventory/v1/offer/{offer_id}"
+        if plan is not None:
+            plan.append(dict(method="PUT", path=path, before=cur, after=offer))
+        if not dry_run:
+            api_send("PUT", path, offer, creds=creds)
 
-    update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    if not dry_run:
+        update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
     return changed
 
 
@@ -2518,7 +2604,9 @@ def _cli() -> None:
     ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
-    ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else).")
+    ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else). Add --dry-run to see the field-level diff first. A live listing with no local draft: tools/draft_rebuild.py.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="with --update: read everything and print the field-level diff of what WOULD be written; send nothing")
     ap.add_argument("--allow-not-sellable", action="store_true",
                     help="update even if the SKU's offer is not live (DANGEROUS: writing to a sold item can relist it)")
     ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
@@ -2690,13 +2778,23 @@ def _cli() -> None:
             field_list = [f for f in args.fields.split(",") if f.strip()]
             try:
                 upd_creds = load_credentials(store=_resolve_store(args.update, args.store))
+                plan: list = []
                 changed = update_listing_fields(Path(args.update), field_list,
                                                 creds=upd_creds,
-                                                allow_not_sellable=args.allow_not_sellable)
+                                                allow_not_sellable=args.allow_not_sellable,
+                                                dry_run=args.dry_run, plan=plan)
             except ListingNotSellable as e:
                 print(f"[SKIP] {e}")
                 sys.exit(2)
-            if changed:
+            if args.dry_run:
+                print(f"[DRY RUN] nothing sent. {args.update} would update: {', '.join(changed) or 'nothing'}")
+                for w in plan:
+                    diff = payload_diff(w["before"], w["after"])
+                    print(f"\n  {w['method']} {w['path']}  ({len(diff)} change(s))")
+                    for line in diff or ["(no difference from live)"]:
+                        print(f"    {line}")
+                print("\n  To apply: re-run without --dry-run")
+            elif changed:
                 print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
             else:
                 print(f"[i] nothing changed on {args.update}.")
