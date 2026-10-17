@@ -197,6 +197,39 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
 
+def test_poll_and_print_holds_orders_in_an_open_live_window():
+    """eBay Live: an order inside a show's 8-hour shopping window is not
+    rendered and not marked printed, so the next poll after the window
+    closes picks it up (with anything else the buyer bought)."""
+    from datetime import datetime, timezone
+    out_dir, _ = _scratch_dirs()
+    win = {"show": "oct-20", "item_ids": {"206000000001"}, "skus": set(),
+           "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    live = _order(oid="live-1")                       # created 2026-08-20T12:00
+    other = _order(oid="store-1", item_id="206000000009")
+    other["creationDate"] = "2026-08-19T12:00:00.000Z"   # before the show
+    patches = {(pick_list, "scan_drafts"): lambda *_a: [],
+               (pick_list, "load_listings_ledger"): lambda *_a: []}
+    try:
+        with _Patched(patches):
+            new_ids, _, state, _ = pick_list.poll_and_print(
+                out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                fetch=lambda: [live, other], publish=False, live_windows=[win])
+        assert new_ids == ["store-1"]
+        assert "live-1" not in state["printed"]
+        assert state["held"] == {"live-1": {"show": "oct-20",
+                                            "until": "2026-08-20T13:00:00Z"}}
+        # window closed: the held order comes through
+        with _Patched(patches):
+            new_ids, _, state, _ = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [live, other],
+                publish=False, live_windows=[])
+        assert new_ids == ["live-1"] and state["held"] == {}
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
 def test_poll_and_print_reprint_forces_one_order_through():
     out_dir, _ = _scratch_dirs()
     orders = [_order(oid="dup-1")]

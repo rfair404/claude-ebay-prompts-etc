@@ -24,6 +24,45 @@ documents these seams:
 - **Video:** from the eBay app, or from a broadcast tool such as OBS using
   the event's stream URL.
 
+### Live Studio Resource center (read 2026-10-16)
+
+`ebay.com/ebaylive/studio/resources` needs a signed-in eBay account. Our
+account could read it but is **on the eBay Live waitlist**: Events,
+Insights, Shipments and Settings are locked in Live Studio, and
+`/ebaylive/studio` redirects to "You're on the waitlist". What it settles:
+
+- **Ineligible listings** (`resources/itemid-listing`): Best Offer, reserve
+  price, and Auction with Buy It Now. `live_flags` checks all three.
+- **Buy It Now → auction happens in Stream manager** (`resources/lineup`).
+  "Change to auction", alone or as a bulk action, converts a listing with a
+  single quantity and a single SKU; multi-SKU and third-party-managed
+  listings can't be converted. While it runs as an auction the listing has a
+  **new Item ID**, with no insertion fee, and keeps the original listing's
+  shipping policy. If it doesn't sell it returns to Buy It Now with its
+  original Item ID and quantity. So the pipeline keeps listing Buy It Now;
+  `live_notes` marks lots Stream manager can't convert.
+- **Also in Stream manager:** edit title, description, price and auction
+  duration; "Sudden death" (no timer extension); a "Purchasable" switch on
+  Buy It Now lots; flash deals; pin (one item at a time; starting an
+  auction pins it).
+- **Live shipping policy** (`resources/shipping-policies`): at least one is
+  required before adding listings. It's set up in Live Studio → Settings
+  and policies, and it includes the combined-shipping discount.
+- **OBS** (`resources/obs`, `resources/go-live`):
+  - Advanced output, CBR 3000 Kbps, 1 s keyframe interval, x264
+    `superfast`, audio 128 Kbps, 1080×1920 canvas and output at 30 FPS.
+    Drop to 2000–2500 Kbps if frames drop.
+  - Needs 30+ Mbps down and 10+ Mbps up.
+  - Two modes: **No delay (WHIP)** for shows of about 1–3 h, which needs
+    only the stream URL with no bearer token, and **High resolution
+    (RTMP)** for 3 h+, which needs a URL and a key.
+  - The stream URL stays the same across events, while the stream key
+    changes for each event. The checked-in `Ebay` profile already matches
+    all of this (`tools/live/obs/profiles/Ebay`).
+  - OBS "Start Streaming" only sends video. The show starts at Stream
+    manager → **Start event** (with an optional **Test connection**) and
+    ends at **End event**. Recommended length: at least an hour.
+
 ## What's built
 
 | Piece | File | eBay calls |
@@ -62,14 +101,14 @@ From the main checkout (config and ledgers live there; from a worktree set
 
 A lot is flagged, and left out of `item_ids.txt` unless you pass
 `--keep-flagged`, when it breaks one of eBay's documented rules: it isn't
-ACTIVE, has Best Offer on, or has a reserve price. Nothing else is checked.
-An unflagged lot can still be refused by Stream manager.
+ACTIVE, has Best Offer on, has a reserve price, or is an auction with a Buy
+It Now price. An unflagged lot can still be refused by Stream manager.
+Lots that can't be converted with "Change to auction" (quantity > 1, or
+several SKUs on one listing) get a **note**, not a flag.
 
 To paste flagged lots anyway (to see what Stream manager does with them),
-rebuild with `--keep-flagged`. Clearing a flag means editing the live
-listing (e.g. turning Best Offer off), which this tool never does. Note
-that `lib/list_edit.py --update --fields bestoffer` works from a draft.md,
-and listings published before the October rebuild have none.
+rebuild with `--keep-flagged`. Best Offer is fixed by `--confirm` (see
+"Show prep" below). Other flags mean editing the listing by hand.
 
 Offers that share an Item ID (variation listings) become one lot, so the
 lot count can be lower than the active-offer count.
@@ -121,12 +160,78 @@ default-store jewelry has Best Offer on, which `live_lineup.py` flags.
 - Both pages are localhost-only, like the rest of the app. OBS has to run
   on the same machine as `serve`.
 
+## Show prep: `tools/live_prep.py`
+
+One command finds the show's items, makes them fit eBay Live's listing
+rules, and writes the paste list and the marquee:
+
+    python tools/live_prep.py --store default --show jewelry-oct-20 \
+        --start "2026-10-20 20:00" --limit 25 --min-price 25 --max-price 100 \
+        --skip-seasonal                       # dry run: nothing on eBay changes
+    python tools/live_prep.py ... --confirm   # turns Best Offer off on the picks
+
+1. **Find.** It sweeps the seller's live listings in `--category` (default
+   281, Jewelry & Watches) through Browse, oldest first. The filters are the
+   same as the marquee's `--pick`. `--seller` defaults to the default
+   store's username; any other store needs it passed.
+2. **Check.** It reads every active offer on the store (Inventory API) and
+   runs each candidate through `live_flags`.
+3. **Choose.** It keeps candidates that comply, or that only need Best
+   Offer turned off, until `--limit`. The rest are skipped and the output
+   says why: a reserve price, Buy It Now on an auction, or not visible to
+   the Inventory API (made in the eBay web UI).
+4. **Fix.** With `--confirm`, it turns Best Offer off on the chosen
+   listings. Each offer is re-read and PUT back with only `bestOfferTerms`
+   removed. Its old terms are saved on the lot as `best_offer_was`.
+5. **Write.** `lineup.json` and `item_ids.txt`, then `marquee.json`, and
+   it renders the marquee. `--no-marquee` skips the marquee.
+
+After the show, put Best Offer back on whatever didn't sell:
+
+    python tools/live_lineup.py --store default --show jewelry-oct-20 \
+        --restore-best-offer [--confirm]
+
+This restores the saved terms on listings that are still ACTIVE Buy It Now
+under the same Item ID. Sold or ended listings drop their record. A listing
+still running as a converted auction keeps it, for a later run. Rebuilding
+a lineup that would drop a lot with a pending restore is refused, so the
+record can't be lost.
+
+`tools/live_lineup.py` does the same check and fix for a hand-picked list:
+`--items`, `--all`, or `--from-marquee` (the marquee's items), with
+`--confirm` to apply the Best Offer fix.
+
+Still manual, in Live Studio:
+
+- create the event
+- set up a Live shipping policy
+- paste `item_ids.txt` into Stream manager → Add listings → By Item ID/URL
+- "Change to auction" on the lots you want auctioned
+
+### Start time and the pick-list hold
+
+- **`--start`** is the event's scheduled start in Live Studio, in Eastern
+  time unless the value carries an offset. It's stored in `lineup.json` as
+  UTC, and later builds keep it.
+- **Pick-list hold.** eBay keeps a show's orders in "Paid – wait to ship"
+  until 8 h after the scheduled start, and shipping early stops combined
+  shipping. `tools/pick_list.py --poll` therefore holds an order while that
+  window is open if either:
+  - it has a lot from the lineup, or
+  - it was placed after the scheduled start. This rule catches converted
+    auctions, which sell under a new Item ID.
+
+  Held orders aren't rendered or marked printed, so the first poll after
+  the window closes picks them up together with the rest of that buyer's
+  box. A show with no `--start` holds nothing.
+
 ## Not built: open questions to answer in the eBay UI first
 
-- What the stream URL is: the protocol (RTMP/SRT/WHIP), and whether the
-  key is per event.
+- ~~What the stream URL is~~: WHIP (URL only) or RTMP (URL and key). The
+  URL is the same for every event; the key changes per event. See above.
 - Whether an imported 7/10-day auction gets a short live timer, and what
-  happens to bids it already has.
+  happens to bids it already has. (Stream manager can edit an auction's
+  duration, per `resources/lineup`.)
 - Whether Item IDs can be pasted while a show is live, and how fast the
   item appears.
 - Whether listings created inside Live Studio show up in our API reads
