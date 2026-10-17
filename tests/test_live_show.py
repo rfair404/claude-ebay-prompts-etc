@@ -72,13 +72,35 @@ def test_best_offer_only_and_the_update_body():
     cur = offer("1", best_offer=True)
     cur["listingPolicies"]["fulfillmentPolicyId"] = "F1"
     cur["listingDescription"] = "desc"
-    body = LS.offer_without_best_offer(
-        cur, ("listingPolicies", "pricingSummary", "format", "sku",
-              "listingDescription", "categoryId"))
+    keys = ("listingPolicies", "pricingSummary", "format", "sku",
+            "listingDescription", "categoryId")
+    body = LS.offer_with_best_offer(cur, keys, None)
     assert body["listingPolicies"] == {"fulfillmentPolicyId": "F1"}
     assert body["listingDescription"] == "desc" and body["format"] == "FIXED_PRICE"
     assert "listing" not in body and "offerId" not in body
     assert cur["listingPolicies"]["bestOfferTerms"]   # input left untouched
+    back = LS.offer_with_best_offer(body, keys, {"bestOfferEnabled": True})
+    assert back["listingPolicies"] == {"fulfillmentPolicyId": "F1",
+                                       "bestOfferTerms": {"bestOfferEnabled": True}}
+
+
+def test_fixable_is_eligible_or_best_offer_only():
+    assert LS.fixable(LS.lot_from_offer(offer("1")))
+    assert LS.fixable(LS.lot_from_offer(offer("1", best_offer=True)))
+    assert not LS.fixable(LS.lot_from_offer(offer("1", fmt="AUCTION", reserve="9.0")))
+    assert not LS.fixable(LS.lot_from_offer(offer("1", best_offer=True, status="ENDED")))
+
+
+def test_carry_restores_keeps_the_record_and_names_orphans():
+    old = LS.build_lineup([(offer("1"), "A", None), (offer("2"), "B", None),
+                           (offer("3"), "C", None)])
+    old[0]["best_offer_was"] = {"bestOfferEnabled": True}
+    old[1]["best_offer_was"] = {"bestOfferEnabled": True, "autoAcceptPrice": {}}
+    new = LS.build_lineup([(offer("1"), "A", None), (offer("3"), "C", None)])
+    orphans = LS.carry_restores(old, new)
+    assert new[0]["best_offer_was"] == {"bestOfferEnabled": True}
+    assert "best_offer_was" not in new[1]
+    assert [l["item_id"] for l in orphans] == ["2"]
 
 
 def test_scheduled_start_is_saved_in_utc(tmp_path):

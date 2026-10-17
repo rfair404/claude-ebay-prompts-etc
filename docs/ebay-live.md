@@ -107,9 +107,8 @@ Lots that can't be converted with "Change to auction" (quantity > 1, or
 several SKUs on one listing) get a **note**, not a flag.
 
 To paste flagged lots anyway (to see what Stream manager does with them),
-rebuild with `--keep-flagged`. For Best Offer, `--clear-best-offer`
-turns it off on the live listing; see "Show prep" below. Other flags mean
-editing the listing by hand.
+rebuild with `--keep-flagged`. Best Offer is fixed by `--confirm` (see
+"Show prep" below). Other flags mean editing the listing by hand.
 
 Offers that share an Item ID (variation listings) become one lot, so the
 lot count can be lower than the active-offer count.
@@ -161,21 +160,59 @@ default-store jewelry has Best Offer on, which `live_lineup.py` flags.
 - Both pages are localhost-only, like the rest of the app. OBS has to run
   on the same machine as `serve`.
 
-## Show prep: Best Offer, start time, pick-list hold
+## Show prep: `tools/live_prep.py`
 
-    python tools/live_lineup.py --store default --show oct-20 --all \
-        --start "2026-10-20 20:00" --clear-best-offer            # dry run
-    python tools/live_lineup.py --store default --show oct-20 --all \
-        --start "2026-10-20 20:00" --clear-best-offer --confirm  # edits listings
+One command finds the show's items, makes them fit eBay Live's listing
+rules, and writes the paste list and the marquee:
 
-- **`--clear-best-offer`** works on lots whose *only* flag is Best Offer. It
-  re-reads each offer, then PUTs it back with `bestOfferTerms` removed and
-  every other field as read. A lot that is no longer ACTIVE, or whose Best
-  Offer is already off, is skipped. It's a dry run unless `--confirm` is
-  given.
+    python tools/live_prep.py --store default --show jewelry-oct-20 \
+        --start "2026-10-20 20:00" --limit 25 --min-price 25 --max-price 100 \
+        --skip-seasonal                       # dry run: nothing on eBay changes
+    python tools/live_prep.py ... --confirm   # turns Best Offer off on the picks
+
+1. **Find.** It sweeps the seller's live listings in `--category` (default
+   281, Jewelry & Watches) through Browse, oldest first. The filters are the
+   same as the marquee's `--pick`. `--seller` defaults to the default
+   store's username; any other store needs it passed.
+2. **Check.** It reads every active offer on the store (Inventory API) and
+   runs each candidate through `live_flags`.
+3. **Choose.** It keeps candidates that comply, or that only need Best
+   Offer turned off, until `--limit`. The rest are skipped and the output
+   says why: a reserve price, Buy It Now on an auction, or not visible to
+   the Inventory API (made in the eBay web UI).
+4. **Fix.** With `--confirm`, it turns Best Offer off on the chosen
+   listings. Each offer is re-read and PUT back with only `bestOfferTerms`
+   removed. Its old terms are saved on the lot as `best_offer_was`.
+5. **Write.** `lineup.json` and `item_ids.txt`, then `marquee.json`, and
+   it renders the marquee. `--no-marquee` skips the marquee.
+
+After the show, put Best Offer back on whatever didn't sell:
+
+    python tools/live_lineup.py --store default --show jewelry-oct-20 \
+        --restore-best-offer [--confirm]
+
+This restores the saved terms on listings that are still ACTIVE Buy It Now
+under the same Item ID. Sold or ended listings drop their record. A listing
+still running as a converted auction keeps it, for a later run. Rebuilding
+a lineup that would drop a lot with a pending restore is refused, so the
+record can't be lost.
+
+`tools/live_lineup.py` does the same check and fix for a hand-picked list:
+`--items`, `--all`, or `--from-marquee` (the marquee's items), with
+`--confirm` to apply the Best Offer fix.
+
+Still manual, in Live Studio:
+
+- create the event
+- set up a Live shipping policy
+- paste `item_ids.txt` into Stream manager → Add listings → By Item ID/URL
+- "Change to auction" on the lots you want auctioned
+
+### Start time and the pick-list hold
+
 - **`--start`** is the event's scheduled start in Live Studio, in Eastern
   time unless the value carries an offset. It's stored in `lineup.json` as
-  UTC, and `--append` keeps it.
+  UTC, and later builds keep it.
 - **Pick-list hold.** eBay keeps a show's orders in "Paid – wait to ship"
   until 8 h after the scheduled start, and shipping early stops combined
   shipping. `tools/pick_list.py --poll` therefore holds an order while that

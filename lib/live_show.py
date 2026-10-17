@@ -193,20 +193,46 @@ def eligible_ids(lots: list[dict], keep_flagged: bool = False) -> list[str]:
             if l.get("item_id") and (keep_flagged or not l.get("flags"))]
 
 
+def fixable(lot: dict) -> bool:
+    """Eligible already, or one Best Offer switch away from it. Reserve
+    prices, Buy It Now on an auction and ended listings aren't fixed here."""
+    return not lot.get("flags") or lot.get("flags") == [BEST_OFFER_FLAG]
+
+
 def best_offer_only(lots: list[dict]) -> list[dict]:
     """Lots whose one and only flag is Best Offer: turning it off is all it
-    takes to make them eligible, so they're what --clear-best-offer edits."""
+    takes to make them eligible, so they're what show prep edits."""
     return [l for l in lots if l.get("flags") == [BEST_OFFER_FLAG]
             and l.get("offer_id")]
 
 
-def offer_without_best_offer(offer: dict, writable_keys) -> dict:
-    """The updateOffer body for `offer` (a GET /offer response) with Best
-    Offer turned off and nothing else changed. updateOffer is a full
-    replace, so every writable field is carried over as read."""
+def carry_restores(old: list[dict], new: list[dict]) -> list[dict]:
+    """Copy each old lot's "best_offer_was" (the Best Offer terms prep
+    turned off) onto the same listing in `new`, and return the old lots that
+    have one but aren't in `new`. Replacing a lineup with those still
+    pending would lose the record --restore-best-offer works from."""
+    was = {l.get("item_id"): l["best_offer_was"] for l in old
+           if l.get("best_offer_was")}
+    ids = set()
+    for l in new:
+        ids.add(l.get("item_id"))
+        if l.get("item_id") in was:
+            l["best_offer_was"] = was[l["item_id"]]
+    return [l for l in old if l.get("best_offer_was") and l.get("item_id") not in ids]
+
+
+def offer_with_best_offer(offer: dict, writable_keys,
+                          terms: Optional[dict]) -> dict:
+    """The updateOffer body for `offer` (a GET /offer response) with its
+    Best Offer terms set to `terms` (None: turned off) and nothing else
+    changed. updateOffer is a full replace, so every writable field is
+    carried over as read."""
     body = {k: offer[k] for k in writable_keys if k in offer}
     lp = dict(body.get("listingPolicies") or {})
-    lp.pop("bestOfferTerms", None)
+    if terms:
+        lp["bestOfferTerms"] = terms
+    else:
+        lp.pop("bestOfferTerms", None)
     body["listingPolicies"] = lp
     return body
 
