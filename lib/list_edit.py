@@ -110,6 +110,7 @@ from ebay_client import (
     EbayAuthError,
     EbayCredentials,
     api_send,
+    category_uses_conditions,
     create_local_pickup_policy,
     create_calculated_shipping_policy,
     create_immediate_payment_policy,
@@ -1116,6 +1117,31 @@ def _remap_condition_for_category(enum: str, allowed_ids: set[int]) -> tuple[str
                       f"(accepts {sorted(allowed_ids)}) -> remapped to {new_enum}")
 
 
+def _conditionless_category_check(draft: Draft, category_id: str,
+                                  creds: EbayCredentials) -> Optional[tuple[str, bool]]:
+    """(preflight line, is_blocker) when the category has no item-condition
+    field, else None.
+
+    Such a category (all of Antiques > Silver, e.g. 20099) takes the condition
+    we send and never displays it, so the buyer's only condition information is
+    conditionDescription. With that empty they get none at all, so that case
+    is a BLOCKER. With it set, the line just says what the buyer sees.
+    """
+    if category_uses_conditions(category_id, creds=creds) is not False:
+        return None
+    cur = str(draft.get("condition") or "")
+    desc = str(draft.get("condition_description") or "").strip()
+    if not desc:
+        return (f"condition: BLOCKER — category {category_id} has no item-condition "
+                f"field, so eBay will not show {cur or 'any condition'} to buyers, and "
+                f"condition_description is empty. Write the grade into "
+                f"condition_description, or pick a category that takes a condition.",
+                True)
+    return (f"condition: category {category_id} has no item-condition field — "
+            f"buyers see no condition ({cur} is stored, not shown); they get the "
+            f"grade only from condition_description", False)
+
+
 def _set_draft_condition(draft_path: Path, new_enum: str) -> None:
     """Rewrite the top-level `condition:` line in the draft file."""
     text = draft_path.read_text(encoding="utf-8")
@@ -1446,7 +1472,9 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
     allowed, required = get_allowed_condition_ids(category_id, creds=creds)
     cur = str(draft.get("condition") or "")
     if not allowed:
-        msgs.append(f"condition: {cur} (category condition metadata unavailable — left as-is)")
+        _nc = _conditionless_category_check(draft, category_id, creds)
+        msgs.append(_nc[0] if _nc else
+                    f"condition: {cur} (category condition metadata unavailable — left as-is)")
     else:
         names = get_condition_names(category_id, creds=creds)
         new_enum, reason = _remap_condition_for_category(cur, allowed)
@@ -1780,6 +1808,12 @@ def create_or_update_listing(draft_path: Path,
             notes = str(draft.get("meta.notes") or "")
             update_meta(draft_path, {"notes": (notes + f" | PREFLIGHT: {reason}").strip(" |")})
             print(f"  [preflight] {reason}")
+    else:
+        _nc = _conditionless_category_check(draft, category_id, creds)
+        if _nc and _nc[1]:
+            raise ValueError(_nc[0])
+        if _nc:
+            print(f"  [preflight] {_nc[0]}")
     # Shipping: pick the right fulfillment policy (Media Mail for media items,
     # else default ground) and use it for this offer.
     chosen_fulfillment, ship_msgs = _resolve_shipping_policy(draft, policies, creds, strict=True)

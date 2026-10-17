@@ -1059,6 +1059,27 @@ def get_allowed_condition_ids(category_id: str,
     return ids, bool(cp.get("itemConditionRequired"))
 
 
+def category_uses_conditions(category_id: str,
+                             marketplace: str = DEFAULT_MARKETPLACE,
+                             creds: Optional[EbayCredentials] = None) -> Optional[bool]:
+    """True/False if eBay says whether a category has an item-condition field;
+    None if the metadata didn't come back.
+
+    get_allowed_condition_ids() returns an empty set for both "no metadata" and
+    "this category has no conditions", and the two are not the same. Antiques >
+    Silver (e.g. 20099, Silverplate > Flatware & Silverware) returns a policy
+    with `itemConditions: []`: eBay accepts the condition we send on the
+    inventory item, stores it, and never shows it to a buyer. Measured
+    2026-10-16 on 12 popsgames flatware listings, which the Listing Quality
+    Report filed under "Listings condition: Unknown".
+    """
+    data = get_item_condition_policies(category_id, marketplace, creds)
+    pols = data.get("itemConditionPolicies") or []
+    if not pols:
+        return None
+    return bool(pols[0].get("itemConditions"))
+
+
 # ---------------------------------------------------------------------------
 # eBay Picture Services (EPS) upload — Trading API UploadSiteHostedPictures
 # ---------------------------------------------------------------------------
