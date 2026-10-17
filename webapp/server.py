@@ -38,6 +38,11 @@ machine's browser and nowhere else.
 the eBay read; these routes only read that file and write which lot is on
 screen, so they stay eBay-free like the rest of the app.
 
+`/api/pager` (webapp/pager.py) switches the show's OBS page: intro, item
+(the camera view) or next. It is tools/live/show_flow.py's pager over
+HTTP, for a control page or another agent; it talks to OBS on this
+machine and to the camera over USB, never to eBay.
+
 Stores (#156 §5). `GET /` covers every configured store — one drift panel
 per store, each against its own ledger, never pooled — and `GET /?store=NAME`
 narrows it to one (a malformed name is a 400, an unconfigured one a 404).
@@ -76,6 +81,7 @@ import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
 import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
+import webapp.pager as _pager                          # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
 
@@ -84,6 +90,7 @@ DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
 app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
 app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
+app.include_router(_pager.router)     # /api/pager — which page of the live show is on air
 _queue: Optional[JobQueue] = None
 
 

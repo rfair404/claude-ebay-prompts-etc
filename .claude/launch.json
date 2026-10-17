@@ -2,6 +2,12 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "ebz-serve",
+      "runtimeExecutable": "/home/russ/EBAYBIZ/.venv/bin/python",
+      "runtimeArgs": ["-m", "lib.cli", "serve"],
+      "port": 8770
+    },
+    {
       "name": "prep-review",
       "runtimeExecutable": "python",
       "runtimeArgs": [

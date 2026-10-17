@@ -341,8 +341,12 @@ def cmd_launch(host, port, a) -> None:
             c = _connect(host, port, timeout=3)
         except ObsError:
             continue
-        v = c.call("GetVersion")
-        c.close()
+        try:
+            v = c.call("GetVersion")
+        except ObsError:  # 207 "not ready": the websocket is up before OBS finishes loading
+            continue
+        finally:
+            c.close()
         print(f"OBS {v['obsVersion']} up, no window (pid {', '.join(map(str, _obs_pids()))}); log {log}")
         return
     raise ObsError(f"OBS didn't answer on {host}:{port} within {a.wait}s; see {log}")

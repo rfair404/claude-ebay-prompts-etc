@@ -60,7 +60,7 @@ def _local_only(request: Request, response: Response) -> None:
     answers carry buyer addresses, so they get the no-store headers too."""
     host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
     if host not in LOCAL_HOSTS:
-        raise HTTPException(403, f"freight is served to localhost only, not {host!r}")
+        raise HTTPException(403, f"served to localhost only, not {host!r}")
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         origin = request.headers.get("origin")
         if origin and (urlparse(origin).hostname or "") not in LOCAL_HOSTS:
