@@ -194,6 +194,18 @@ def test_unknown_storefront_raises_rather_than_falling_back():
     _patched(CONFIG, go)
 
 
+def test_a_store_under_ebay_stores_needs_no_storefronts_entry():
+    """`ebay.stores.<name>` alone makes a store: identity unset, terms inherited."""
+    cfg = dict(CONFIG, ebay={"stores": {"thrift": {"app_id": "x"}}})
+
+    def go():
+        s = get_storefront("thrift")
+        for key in STOREFRONT_IDENTITY_KEYS:
+            assert s[key] is None, key
+        assert s["returns"] == "free_30_day"
+    _patched(cfg, go)
+
+
 def test_a_non_mapping_storefront_is_an_error():
     cfg = dict(CONFIG, storefronts={"junk": "not-a-mapping"})
 

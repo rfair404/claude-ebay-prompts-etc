@@ -543,13 +543,15 @@ def get_storefront(name: Optional[str] = None) -> dict:
         through — an unset display_name is None, not the default store's name.
 
     Raises:
-        ConfigError if a non-default storefront name has no `storefronts:`
-        entry — silently falling back to the main storefront's terms is how a
-        junk listing would go out under the good store's identity.
+        ConfigError if a non-default name is not a configured store (neither
+        `ebay.stores.<name>` nor `storefronts.<name>`) — silently falling back
+        to the main storefront's terms is how a typo'd store would go out
+        under the good store's identity. A store under `ebay.stores` needs no
+        `storefronts:` entry: its identity keys are simply unset.
     """
     config = load_config()
 
-    from stores import resolve_store_name  # local: stores imports config
+    from stores import configured_stores, resolve_store_name  # local: stores imports config
     name = resolve_store_name(name)
 
     base = dict(_nested(config, "store") or {})
@@ -559,14 +561,15 @@ def get_storefront(name: Optional[str] = None) -> dict:
 
     override = _nested(config, "storefronts", name)
     if override is None:
-        known = ", ".join(list_storefronts()) or "(none configured)"
-        raise ConfigError(
-            f"Storefront '{name}' not found in {config_path()}.\n"
-            f"  Add it under 'storefronts:' — a named store needs its own "
-            f"identity and terms, and inheriting the default store's would "
-            f"ship its name on the wrong listings.\n"
-            f"  Configured storefronts: {known}"
-        )
+        known = [s for s in configured_stores() if s != "default"]
+        if name not in known:
+            raise ConfigError(
+                f"Store '{name}' not found in {config_path()}.\n"
+                f"  Add it under 'ebay.stores:' — inheriting the default "
+                f"store's identity would ship its name on the wrong listings.\n"
+                f"  Configured stores: {', '.join(known) or '(none configured)'}"
+            )
+        override = {}
     if not isinstance(override, dict):
         raise ConfigError(
             f"Storefront '{name}' in {config_path()} is not a YAML mapping "
