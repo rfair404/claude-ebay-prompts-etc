@@ -79,6 +79,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from comps_csv import _now as _now_iso                              # noqa: E402
+import live_show                                                    # noqa: E402
 import stores                                                       # noqa: E402
 from ebay_client import api_send, EbayAPIError, load_credentials    # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
@@ -479,7 +480,9 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                    do_print: bool = False, reprint: str | None = None,
                    fetch=None, publish: bool = True,
                    ttl_hours: float | None = None,
-                   store: str | None = None) -> tuple[list[str], list[str], dict, list[str]]:
+                   store: str | None = None,
+                   live_windows: list[dict] | None = None,
+                   ) -> tuple[list[str], list[str], dict, list[str]]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
     Idempotent: an orderId already recorded in `state["printed"]` is skipped
@@ -505,11 +508,30 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     credentials (unless `fetch` is injected), items are placed against its
     ledger, and a `state` loaded here is its own file. One call, one store —
     --all-stores is a loop over this, never a merged queue.
+
+    eBay Live: an order inside an open show's shopping window (scheduled
+    start + 8 h, lib/live_show.py) is held — not rendered, not marked
+    printed — so the buyer's later purchases can still join the same box.
+    `state["held"]` lists this poll's held orders and when each window
+    closes; the next poll after that picks them up. `reprint` overrides.
     """
     orders = tag_orders(fetch() if fetch is not None else fetch_open(store), store)
+    st = state if state is not None else _load_state(store)
+    if live_windows is None:
+        live_windows = live_show.open_windows(store or stores.DEFAULT_STORE)
+    held: dict[str, dict] = {}
+    kept = []
+    for o in orders:
+        w = live_show.holding_window(o, live_windows)
+        if w and o["orderId"] != reprint:
+            held[o["orderId"]] = {"show": w["show"],
+                                  "until": w["closes"].strftime("%Y-%m-%dT%H:%M:%SZ")}
+        else:
+            kept.append(o)
+    orders = kept
+    st["held"] = held
     ledger = ledger_for(store)
     drafts = drafts_for(store, ledger)
-    st = state if state is not None else _load_state(store)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     new_ids: list[str] = []
@@ -695,8 +717,14 @@ def _poll_one_store(args, store: str) -> int:
         out_dir=OUT_DIR, do_print=args.do_print, reprint=args.reprint,
         publish=not args.no_links, ttl_hours=args.ttl, store=store)
     _save_state(state, store)
+    held = state.get("held") or {}
+    if held:
+        for show, until in sorted({(h["show"], h["until"]) for h in held.values()}):
+            n = sum(1 for h in held.values() if h["show"] == show)
+            print(f"[..] {tag}{n} order(s) from eBay Live show {show!r} held until "
+                  f"{until} (8 h combined-shipping window)")
     if not new_ids and not skipped_ids:
-        print(f"[OK] {tag}nothing awaiting shipment")
+        print(f"[OK] {tag}nothing {'else ' if held else ''}awaiting shipment")
         return 0
     rel = OUT_DIR.name
     print(f"[OK] {tag}{len(new_ids)} new pick list(s)"

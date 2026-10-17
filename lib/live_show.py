@@ -3,13 +3,20 @@
 eBay Live has no public API (researched 2026-10-13: nothing in the developer
 API catalog, the Sell release notes, or the Notification API's topic list —
 the last checked against this app's own credentials). What eBay does give a
-seller, per its help page (ebay.com/help/selling/ebay-live, id=5762):
+seller, per its help page (ebay.com/help/selling/ebay-live, id=5762) and the
+Live Studio Resource center (ebay.com/ebaylive/studio/resources, read
+2026-10-16):
 
   - Stream manager: "Add listings" -> "By Item ID/URL" takes pasted Item IDs,
     up to 750 listings per event.
   - "Auction and Buy It Now listings can be added by all sellers."
-  - "Listings can't include any special pricing options like Best Offer or
-    reserve pricing."
+  - Listings with best offer, reserve pricing, or Auction with Buy It Now
+    "are not compatible with Live events" (resources/itemid-listing).
+  - Stream manager's "Change to auction" converts a Buy It Now listing in
+    place, but only one with a single quantity and a single SKU
+    (resources/lineup). An unsold auction reverts to the original listing.
+  - Paid Live orders sit in "Paid - wait to ship" for 8 hours from the
+    event's *scheduled* start so buyers can combine shipping (help id=5762).
   - Video from the eBay app, or from a broadcast tool such as OBS using the
     event's stream URL.
 
@@ -26,7 +33,7 @@ So the integration seams are (1) the Item ID list we hand Stream manager and
 Show data lives in inventory/_live/<show>/ (gitignored, main checkout's
 store — see CLAUDE.md "Pipeline data"):
 
-  lineup.json    {"show", "store", "built_at", "lots": [...]}
+  lineup.json    {"show", "store", "built_at", "scheduled_start", "lots": [...]}
   item_ids.txt   one Item ID per line, eligible lots only — paste this
   state.json     {"lot": <1-based lot number or null>, "note": str}
 """
@@ -37,7 +44,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -47,6 +54,10 @@ LIVE_DIR = REPO / "inventory" / "_live"
 SHOW_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 LIVE_FORMATS = ("AUCTION", "FIXED_PRICE")
 MAX_LOTS = 750   # Stream manager's per-event listing cap (help page)
+# Live orders stay "Paid - wait to ship" this long after the event's
+# scheduled start, so later purchases can be combined (help id=5762).
+SHOPPING_WINDOW = timedelta(hours=8)
+BEST_OFFER_FLAG = "Best Offer is on (not allowed on eBay Live)"
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +95,30 @@ def live_flags(offer: dict) -> list[str]:
         flags.append(f"format {fmt} (Live takes auction or Buy It Now)")
     terms = (offer.get("listingPolicies") or {}).get("bestOfferTerms") or {}
     if terms.get("bestOfferEnabled"):
-        flags.append("Best Offer is on (not allowed on eBay Live)")
-    if (offer.get("pricingSummary") or {}).get("auctionReservePrice"):
+        flags.append(BEST_OFFER_FLAG)
+    ps = offer.get("pricingSummary") or {}
+    if ps.get("auctionReservePrice"):
         flags.append("reserve price set (not allowed on eBay Live)")
+    # On an AUCTION offer, pricingSummary.price is the Buy It Now price.
+    if fmt == "AUCTION" and _money(ps.get("price")):
+        flags.append("Buy It Now price on an auction (not allowed on eBay Live)")
     return flags
+
+
+def live_notes(offer: dict, skus_on_listing: int = 1) -> list[str]:
+    """Things that don't keep a lot off the show but limit what Stream
+    manager can do with it. Only "Change to auction" is checked: it takes a
+    Buy It Now listing with a single quantity and a single SKU."""
+    if offer.get("format") != "FIXED_PRICE":
+        return []
+    notes = []
+    qty = offer.get("availableQuantity")
+    if isinstance(qty, int) and qty > 1:
+        notes.append(f"quantity {qty}: Stream manager can't change it to auction")
+    if skus_on_listing > 1:
+        notes.append(f"{skus_on_listing} SKUs on one listing: Stream manager "
+                     f"can't change it to auction")
+    return notes
 
 
 def _money(m: Optional[dict]) -> Optional[str]:
@@ -97,12 +128,14 @@ def _money(m: Optional[dict]) -> Optional[str]:
 
 
 def lot_from_offer(offer: dict, title: str = "",
-                   shoot: Optional[str] = None) -> dict:
+                   shoot: Optional[str] = None, skus_on_listing: int = 1) -> dict:
     ps = offer.get("pricingSummary") or {}
     item_id = (offer.get("listing") or {}).get("listingId")
     return {
         "item_id": item_id,
         "sku": offer.get("sku"),
+        "offer_id": offer.get("offerId"),
+        "quantity": offer.get("availableQuantity"),
         "title": title,
         "format": offer.get("format"),
         "price": _money(ps.get("price")),
@@ -111,15 +144,23 @@ def lot_from_offer(offer: dict, title: str = "",
         "url": f"https://www.ebay.com/itm/{item_id}" if item_id else None,
         "shoot": shoot,
         "flags": live_flags(offer),
+        "notes": live_notes(offer, skus_on_listing),
     }
 
 
 def build_lineup(entries: list[tuple[dict, str, Optional[str]]]) -> list[dict]:
     """(offer, title, shoot) triples -> numbered lots, in the given order.
-    A listing that appears twice keeps its first position."""
+    A listing that appears twice keeps its first position. Offers that
+    share an Item ID are one multi-SKU (variation) listing."""
+    skus: dict[str, set] = {}
+    for offer, _t, _s in entries:
+        iid = (offer.get("listing") or {}).get("listingId")
+        if iid:
+            skus.setdefault(iid, set()).add(offer.get("sku"))
     lots, seen = [], set()
     for offer, title, shoot in entries:
-        lot = lot_from_offer(offer, title, shoot)
+        iid = (offer.get("listing") or {}).get("listingId")
+        lot = lot_from_offer(offer, title, shoot, len(skus.get(iid, ())) or 1)
         key = lot["item_id"] or lot["sku"]
         if key in seen:
             continue
@@ -152,6 +193,92 @@ def eligible_ids(lots: list[dict], keep_flagged: bool = False) -> list[str]:
             if l.get("item_id") and (keep_flagged or not l.get("flags"))]
 
 
+def best_offer_only(lots: list[dict]) -> list[dict]:
+    """Lots whose one and only flag is Best Offer: turning it off is all it
+    takes to make them eligible, so they're what --clear-best-offer edits."""
+    return [l for l in lots if l.get("flags") == [BEST_OFFER_FLAG]
+            and l.get("offer_id")]
+
+
+def offer_without_best_offer(offer: dict, writable_keys) -> dict:
+    """The updateOffer body for `offer` (a GET /offer response) with Best
+    Offer turned off and nothing else changed. updateOffer is a full
+    replace, so every writable field is carried over as read."""
+    body = {k: offer[k] for k in writable_keys if k in offer}
+    lp = dict(body.get("listingPolicies") or {})
+    lp.pop("bestOfferTerms", None)
+    body["listingPolicies"] = lp
+    return body
+
+
+# ---------------------------------------------------------------------------
+# shopping window (pick lists wait for it)
+# ---------------------------------------------------------------------------
+
+def _parse_utc(text: str) -> datetime:
+    dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def shopping_window(lineup: dict) -> Optional[tuple[datetime, datetime]]:
+    """(scheduled start, window close) for a lineup with a scheduled start."""
+    start = lineup.get("scheduled_start")
+    if not start:
+        return None
+    s = _parse_utc(start)
+    return s, s + SHOPPING_WINDOW
+
+
+def open_windows(store: str, now: Optional[datetime] = None,
+                 base: Optional[Path] = None) -> list[dict]:
+    """Every show on `store` whose shopping window hasn't closed yet."""
+    now = now or datetime.now(timezone.utc)
+    root = base or LIVE_DIR
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for p in sorted(root.glob("*/lineup.json")):
+        try:
+            lu = json.loads(p.read_text(encoding="utf-8"))
+            win = shopping_window(lu)
+        except (OSError, ValueError):
+            continue
+        if lu.get("store") != store or not win or now >= win[1]:
+            continue
+        lots = lu.get("lots") or []
+        out.append({"show": lu.get("show") or p.parent.name,
+                    "start": win[0], "closes": win[1],
+                    "item_ids": {l["item_id"] for l in lots if l.get("item_id")},
+                    "skus": {l["sku"] for l in lots if l.get("sku")}})
+    return out
+
+
+def holding_window(order: dict, windows: list[dict]) -> Optional[dict]:
+    """The open shopping window that should hold `order` back, if any.
+
+    An order is held when it was placed before the window closes and either
+    has a line item from the show's lineup, or was placed after the show's
+    scheduled start. The second rule catches lots Stream manager changed to
+    auction: those run under a new Item ID that isn't in our lineup.
+    """
+    created = order.get("creationDate")
+    if not created:
+        return None
+    try:
+        at = _parse_utc(created)
+    except ValueError:
+        return None
+    lines = order.get("lineItems") or []
+    for w in windows:
+        if at >= w["closes"]:
+            continue
+        if at >= w["start"] or any(
+                li.get("legacyItemId") in w["item_ids"] or li.get("sku") in w["skus"]
+                for li in lines):
+            return w
+    return None
+
+
 # ---------------------------------------------------------------------------
 # files
 # ---------------------------------------------------------------------------
@@ -169,10 +296,16 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 def save_lineup(name: str, store: str, lots: list[dict],
-                keep_flagged: bool = False, base: Optional[Path] = None) -> Path:
+                keep_flagged: bool = False, base: Optional[Path] = None,
+                scheduled_start: Optional[datetime] = None) -> Path:
+    """`scheduled_start` (aware) is the event's start as set in Live
+    Studio; pick lists hold the show's orders until 8 hours after it."""
     d = show_dir(name, base)
     doc = {"show": name, "store": store,
            "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "scheduled_start": (scheduled_start.astimezone(timezone.utc)
+                               .strftime("%Y-%m-%dT%H:%M:%SZ")
+                               if scheduled_start else None),
            "lots": lots}
     _atomic_write(d / "lineup.json", json.dumps(doc, indent=1) + "\n")
     ids = eligible_ids(lots, keep_flagged)
@@ -228,6 +361,7 @@ def render_host(name: str, lineup: dict, state: dict) -> str:
     for l in lineup["lots"]:
         on = l.get("lot") == state.get("lot")
         flags = "".join(f'<div class="flag">{_e(f)}</div>' for f in l.get("flags") or [])
+        flags += "".join(f'<div class="m">{_e(n)}</div>' for n in l.get("notes") or [])
         price = ""
         if l.get("format") == "FIXED_PRICE" and l.get("price"):
             price = f"BIN ${_e(l['price'])}"
