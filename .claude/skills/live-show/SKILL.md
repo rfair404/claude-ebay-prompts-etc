@@ -1,6 +1,6 @@
 ---
 name: live-show
-description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's three views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
+description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam, desktop = an app window like Claude + webcam), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
 ---
 
 # Live show: stream and camera views
@@ -60,15 +60,17 @@ says so if that's missing.
 
 ## During the show: the pager
 
-A show has three pages. One command puts any of them on air:
-`show_flow.py page intro|item|next`.
+A show has four pages. One command puts any of them on air:
+`show_flow.py page intro|item|next|desktop`.
 
 | User says | Run |
 |---|---|
 | "intro", "starting soon", "pre-show" | `show_flow.py page intro` |
 | "next item", "swap", "pause", "show what's coming up" | `show_flow.py page next` |
 | "back to the product", "ready", "item view" | `show_flow.py page item` |
+| "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
+| "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
 - `page item` refocuses the D5100 *while the current page is still on air*
@@ -82,6 +84,14 @@ A show has three pages. One command puts any of them on air:
   result says `window hidden`; tell the user to open the next lot in a
   window of its own and re-run `setup --window`.
 - `next` / `back` are aliases of `page next` / `page item`.
+- `standin on` puts a white panel in the item view in place of the D5100;
+  while it's on, `page item` skips the refocus and `refocus` refuses. The
+  pager page has the same switch, and it stays on through reloads (it lives
+  in OBS).
+- `page desktop` shows the window picked with `setup --desktop-window
+  "<title>" [--desktop-crop-left <px>]` under the webcam. The privacy guard
+  doesn't check it (the host chose it), so remind the user that whatever is
+  in that window is on air.
 - Web: the local app (`python -m lib.cli serve`) has a button page at
   http://localhost:8770/pager (keys 1/2/3/R) and serves the same pager at
   `/api/pager` (`GET` state, `POST {"page": ...}`, `POST /api/pager/refocus`).

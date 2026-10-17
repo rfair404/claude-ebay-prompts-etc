@@ -12,6 +12,9 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
           next lot's page, the store, ...) centered on the dark background,
           the same webcam strip on top.
 
+  desktop scene "Desktop with Face Cam": one app window (Claude, say) on
+          white under the webcam strip; `setup --desktop-window` picks it.
+
 `page next` fades to Up Next while the host swaps the item on the podium.
 `page item` refocuses the D5100 while the current page is still on air
 (starting the feed if it's off), then fades to the item view, so viewers
@@ -20,10 +23,11 @@ connection: live view has to stop, autofocus, restart).
 
     python tools/live/show_flow.py setup [--window "Fair Hand"] [--intro-text "Starting\\nsoon"]
     python tools/live/show_flow.py feed start|stop|status
-    python tools/live/show_flow.py page intro|item|next [--json] [--no-refocus]
+    python tools/live/show_flow.py page intro|item|next|desktop [--json] [--no-refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
+    python tools/live/show_flow.py standin on|off    # white panel for the D5100 (dead battery)
     python tools/live/show_flow.py golive ebay|twitch --confirm   # each independently; both can run
     python tools/live/show_flow.py stop [ebay|twitch]               # default: both
     python tools/live/show_flow.py twitch-setup                     # once, then paste the URL in OBS
@@ -65,11 +69,19 @@ FEED_LOG = Path(tempfile.gettempdir()) / "d5100_feed.log"
 
 COLLECTION = "eBay Live"
 INTRO, PRODUCT, UPNEXT = "Intro", "eBay Main", "Up Next"
+DESKTOP = "Desktop with Face Cam"
 # The pager's pages, in running order: what callers say -> OBS scene name.
-PAGES = {"intro": INTRO, "item": PRODUCT, "next": UPNEXT}
+PAGES = {"intro": INTRO, "item": PRODUCT, "next": UPNEXT, "desktop": DESKTOP}
 D5, WEBCAM, WINDOW, MIC = "Nikon D5100", "Webcam", "Window Capture (Xcomposite)", "Mic/Aux"
 BG = "Up Next BG"
 INTRO_TEXT = "Intro Text"
+# White panel in the item view in place of the D5100 (dead battery, rehearsal).
+# Its visibility in OBS *is* the switch, so every caller sees the same state.
+STANDIN = "D5 Stand-in"
+# The desktop page: one app window (e.g. Claude) under the webcam strip, on
+# white. Its own capture, not WINDOW: the host picks it deliberately, so the
+# PRIVATE_WINDOW guard doesn't apply. `setup --desktop-window` picks it.
+DESKTOP_WIN = "Desktop Window"
 OVERLAY = "Live Overlay"  # eBay draws its own lot overlay; ours stays hidden
 FADE_MS = 300
 W, H = 1080, 1920
@@ -82,6 +94,11 @@ W, H = 1080, 1920
 # rtmp://live.twitch.tv/app/<key> URL into OBS (keys never pass through here).
 SHOW_PROFILE = "Ebay"
 DESTS = {"ebay": "Stream", "twitch": "Record"}  # destination -> OBS output
+# Twitch on its own, the older way: the "Untitled" profile's stream output
+# (signed in to Twitch in OBS). go_live("twitch") falls back to it when the
+# recording output has no Twitch URL and eBay isn't live. It can't run
+# alongside eBay: one profile at a time.
+TWITCH_PROFILE = "Untitled"
 TWITCH_OUT = {"RecType": "FFmpeg", "FFOutputToFile": "false", "FFFormat": "flv",
               "FFFormatMimeType": "video/x-flv", "FFExtension": "flv",
               "FFVEncoder": "libx264", "FFVEncoderId": "27",      # AV_CODEC_ID_H264
@@ -270,6 +287,9 @@ def cmd_setup(c, a):
     set_box(c, INTRO, INTRO_TEXT, {"positionX": W / 2, "positionY": H / 2, "alignment": 0, "rotation": 0})
     stack(c, INTRO, [BG, INTRO_TEXT])
 
+    if a.desktop_window or DESKTOP_WIN in inputs:
+        build_desktop(c, a.desktop_window, a.desktop_crop_left)
+
     c.call("SetCurrentSceneTransition", {"transitionName": "Fade"})
     c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": FADE_MS})
     print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
@@ -286,12 +306,18 @@ def cmd_feed(c, a):
 
 # --- the pager: the API the CLI below and webapp/pager.py share --------------
 # --- destinations: eBay and Twitch, independently ----------------------------
+def _on_twitch_profile(c) -> bool:
+    return c.call("GetProfileList")["currentProfileName"] == TWITCH_PROFILE
+
+
 def streams(c) -> dict:
     out = {}
     for dest, kind in DESTS.items():
         st = c.call(f"Get{kind}Status")
         out[dest] = {"live": st["outputActive"],
                      "timecode": st["outputTimecode"] if st["outputActive"] else None}
+    if _on_twitch_profile(c):  # the stream output is Twitch here, not eBay
+        out["twitch"], out["ebay"] = out["ebay"], {"live": False, "timecode": None}
     return out
 
 
@@ -307,6 +333,17 @@ def twitch_problem(c) -> str | None:
     if not _profile_param(c, "FFURL").startswith("rtmp"):
         return ("no Twitch URL: OBS Settings > Output > Recording > File path or URL, "
                 "paste rtmp://live.twitch.tv/app/<your stream key>")
+    return None
+
+
+def ebay_problem(c) -> str | None:
+    """Why the stream output isn't eBay, or None. Signing in to Twitch in
+    OBS Settings > Stream silently replaces the WHIP service (and its URL)."""
+    svc = c.call("GetStreamServiceSettings")
+    if svc.get("streamServiceType") != "whip_custom" or not (svc.get("streamServiceSettings") or {}).get("server"):
+        return ("the stream output isn't eBay's WHIP (it's "
+                f"{svc.get('streamServiceType')!r}): OBS Settings > Stream > Service WHIP, "
+                "paste the Stream URL from Stream manager > No delay (WHIP)")
     return None
 
 
@@ -332,11 +369,21 @@ def go_live(c, dest: str, check: float = 5) -> dict:
     up a page switch."""
     if dest not in DESTS:
         raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
-    kind = DESTS[dest]
-    if c.call(f"Get{kind}Status")["outputActive"]:
+    if streams(c)[dest]["live"]:
         return {"dest": dest, "changed": False}
-    show_profile(c)
-    if dest == "twitch" and (why := twitch_problem(c)):
+    kind = DESTS[dest]
+    if _on_twitch_profile(c) and not c.call("GetStreamStatus")["outputActive"]:
+        show_profile(c)  # idle on the Twitch-only profile: back to the show profile
+    if dest == "ebay" and _on_twitch_profile(c):
+        raise obsctl.ObsError("Twitch is live on its own profile; stop it to start eBay "
+                              "(or set the Twitch URL so both can run)")
+    if not _on_twitch_profile(c):
+        show_profile(c)
+    why = twitch_problem(c) if dest == "twitch" else ebay_problem(c)
+    if dest == "twitch" and why and not c.call("GetStreamStatus")["outputActive"]:
+        _twitch_profile(c)  # Twitch alone, the older way
+        kind, why = "Stream", None
+    if why:
         raise obsctl.ObsError(why)
     c.call(f"Start{kind}")
     time.sleep(check)
@@ -344,17 +391,28 @@ def go_live(c, dest: str, check: float = 5) -> dict:
     if not st["outputActive"] or not st.get("outputBytes"):
         raise obsctl.ObsError(f"{dest} didn't connect: {obsctl.redact(st)}")
     kbps = st["outputBytes"] * 8 / 1000 / max(st["outputDuration"] / 1000, 0.001)
-    return {"dest": dest, "changed": True, "kbps": round(kbps),
+    return {"dest": dest, "changed": True, "kbps": round(kbps), "profile": c.call(
+                "GetProfileList")["currentProfileName"],
             "skipped": (f"{st['outputSkippedFrames']}/{st['outputTotalFrames']}"
                         if "outputSkippedFrames" in st else None)}
+
+
+def _twitch_profile(c) -> None:
+    if not _on_twitch_profile(c):
+        c.call("SetCurrentProfile", {"profileName": TWITCH_PROFILE})
+        time.sleep(2)
+    vs = c.call("GetVideoSettings")
+    if (vs["baseWidth"], vs["baseHeight"]) != (W, H):  # this profile defaults to 16:9
+        c.call("SetVideoSettings", {"baseWidth": W, "baseHeight": H, "outputWidth": 720,
+                                    "outputHeight": 1280, "fpsNumerator": 30, "fpsDenominator": 1})
 
 
 def stop_dest(c, dest: str) -> dict:
     if dest not in DESTS:
         raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
-    kind = DESTS[dest]
-    if not c.call(f"Get{kind}Status")["outputActive"]:
+    if not streams(c)[dest]["live"]:
         return {"dest": dest, "changed": False}
+    kind = "Stream" if dest == "twitch" and _on_twitch_profile(c) else DESTS[dest]
     c.call(f"Stop{kind}")
     deadline = time.monotonic() + 10
     while c.call(f"Get{kind}Status")["outputActive"] and time.monotonic() < deadline:
@@ -408,7 +466,66 @@ def state(c) -> dict:
     on = [s["timecode"] for s in out.values() if s["live"]]
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
             "live": bool(on), "timecode": max(on) if on else None,
-            "streams": out, "feed": bool(feed_pids())}
+            "streams": out, "feed": bool(feed_pids()), "standin": standin_on(c)}
+
+
+def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> None:
+    """The desktop page: white background, DESKTOP_WIN under the webcam strip.
+    `title` (substring) picks the window; `crop_left` trims source pixels
+    off its left edge (Claude's session sidebar is ~216 at 1440 wide)."""
+    if DESKTOP not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        c.call("CreateScene", {"sceneName": DESKTOP})
+    inputs = {i["inputName"] for i in c.call("GetInputList")["inputs"]}
+    if STANDIN not in inputs:
+        c.call("CreateInput", {"sceneName": DESKTOP, "inputName": STANDIN, "inputKind": "color_source_v3",
+                               "inputSettings": {"color": 0xFFFFFFFF, "width": W, "height": H}})
+    if title:
+        props = c.call("GetInputPropertiesListPropertyItems",
+                       {"inputName": WINDOW, "propertyName": "capture_window"})["propertyItems"]
+        match = [p for p in props if title.lower() in p["itemName"].lower()]
+        if not match:
+            raise obsctl.ObsError(f"no open window matches {title!r}")
+        settings = {"capture_window": match[0]["itemValue"], "show_cursor": True}
+        if DESKTOP_WIN in inputs:
+            c.call("SetInputSettings", {"inputName": DESKTOP_WIN, "inputSettings": settings})
+        else:
+            c.call("CreateInput", {"sceneName": DESKTOP, "inputName": DESKTOP_WIN,
+                                   "inputKind": "xcomposite_input", "inputSettings": settings})
+    elif DESKTOP_WIN not in inputs:
+        raise obsctl.ObsError("the desktop page needs a window: setup --desktop-window <title>")
+    box = {"positionX": W / 2, "positionY": 608 + (H - 608) / 2, "alignment": 0, "rotation": 0,
+           "scaleX": 1, "scaleY": 1, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+           "boundsWidth": W, "boundsHeight": H - 608}
+    if crop_left is not None:
+        box["cropLeft"] = crop_left
+    set_box(c, DESKTOP, STANDIN, {"positionX": 0, "positionY": 0, "alignment": 5, "rotation": 0,
+                                  "boundsType": "OBS_BOUNDS_NONE", "scaleX": 1, "scaleY": 1})
+    set_box(c, DESKTOP, DESKTOP_WIN, box)
+    set_box(c, DESKTOP, WEBCAM, WEBCAM_BOX)
+    item(c, DESKTOP, MIC)
+    stack(c, DESKTOP, [STANDIN, DESKTOP_WIN, WEBCAM])
+
+
+def standin_on(c) -> bool:
+    for i in c.call("GetSceneItemList", {"sceneName": PRODUCT})["sceneItems"]:
+        if i["sourceName"] == STANDIN:
+            return i["sceneItemEnabled"]
+    return False
+
+
+def standin(c, on: bool) -> None:
+    """Swap the D5100 in the item view for a white panel, or back. While it's
+    on, `go("item")` and `refocus()` leave the camera alone."""
+    if on and STANDIN not in {i["inputName"] for i in c.call("GetInputList")["inputs"]}:
+        c.call("CreateInput", {"sceneName": PRODUCT, "inputName": STANDIN, "inputKind": "color_source_v3",
+                               "inputSettings": {"color": 0xFFFFFFFF, "width": W, "height": H}})
+    if on or STANDIN in {i["sourceName"] for i in
+                         c.call("GetSceneItemList", {"sceneName": PRODUCT})["sceneItems"]}:
+        set_box(c, PRODUCT, STANDIN, {"positionX": 0, "positionY": 0, "alignment": 5, "rotation": 0,
+                                      "boundsType": "OBS_BOUNDS_NONE", "scaleX": 1, "scaleY": 1},
+                enabled=on)
+        stack(c, PRODUCT, [STANDIN, D5, WEBCAM])
+    set_box(c, PRODUCT, D5, enabled=not on)
 
 
 def go(c, page: str, refocus: bool = True) -> dict:
@@ -427,7 +544,7 @@ def go(c, page: str, refocus: bool = True) -> dict:
             w = guard_window(c, PAGES[page])
             if w:
                 out["window"] = w
-        if page == "item" and refocus:
+        if page == "item" and refocus and not standin_on(c):
             out["focused"], secs = refocus_d5(c)
             out["refocus_s"] = round(secs, 1)
         c.call("SetCurrentProgramScene", {"sceneName": PAGES[page]})
@@ -438,6 +555,8 @@ def go(c, page: str, refocus: bool = True) -> dict:
 def refocus(c) -> dict:
     """Refocus the D5100 without changing page. If the item view is on air
     it hides behind Up Next for the ~5 s the camera is frozen."""
+    if standin_on(c):
+        raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
         hide = program(c) == PRODUCT
         if hide:
@@ -467,6 +586,11 @@ def cmd_page(c, a):
             print(f"  window hidden: {w['title'] or '(closed)'!r} isn't safe to show; card + webcam only")
     else:
         print(f"{focus_note(r['focused'])} ({r['refocus_s']}s); on air: {a.page}")
+
+
+def cmd_standin(c, a):
+    standin(c, a.state == "on")
+    print(f"D5100 stand-in: {a.state}" + ("  (item view shows white; no refocus)" if a.state == "on" else ""))
 
 
 def cmd_refocus(c, a):
@@ -524,6 +648,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("setup", help="build/refresh the intro, item and next pages")
     s.add_argument("--window", help="title substring of the desktop window for Up Next")
     s.add_argument("--intro-text", default="Starting\nsoon", help="the pre-show card's text; \\n breaks a line")
+    s.add_argument("--desktop-window", help="title substring of the app window for the desktop page")
+    s.add_argument("--desktop-crop-left", type=int, help="source pixels to trim off that window's left")
     s.add_argument("--d5-rotation", type=float, default=270, help="D5100 mounted on its side: 270")
     s.set_defaults(fn=cmd_setup)
     s = sub.add_parser("feed", help="D5100 live view -> /dev/video10")
@@ -538,6 +664,9 @@ def main(argv=None) -> int:
                                                             no_refocus=False)
     sub.add_parser("back", help="= page item").set_defaults(fn=cmd_page, page="item", json=False,
                                                             no_refocus=False)
+    s = sub.add_parser("standin", help="white panel instead of the D5100 in the item view")
+    s.add_argument("state", choices=["on", "off"])
+    s.set_defaults(fn=cmd_standin)
     s = sub.add_parser("refocus", help="refocus the D5 (hidden if the item page is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)

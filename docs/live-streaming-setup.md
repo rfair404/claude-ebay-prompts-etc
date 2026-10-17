@@ -209,7 +209,10 @@ python tools/live/show_flow.py page item | next # the pager; also: refocus
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
-`setup` builds the show's three pages in the `eBay Live` collection.
+`setup` builds the show's pages in the `eBay Live` collection (a fourth,
+**desktop** = scene `Desktop with Face Cam`, an app window such as Claude on
+white under the webcam, comes with `--desktop-window "<title>"`; `standin
+on|off` swaps the D5100 for a white panel when its battery is dead).
 **intro** (scene `Intro`) is the pre-show card: `--intro-text`, default
 "Starting soon", on a dark background with no cameras. **item** (scene
 `eBay Main`) is the D5100 full frame (rotated 270 for the side-mounted

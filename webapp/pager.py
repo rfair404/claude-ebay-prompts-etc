@@ -6,9 +6,10 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "next", "refocus": true}
+    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop", "refocus": true}
     POST /api/pager/refocus     refocus the D5100 without changing page
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
+    POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
 
@@ -57,13 +58,17 @@ import show_flow as _show_flow    # noqa: E402
 router = APIRouter(dependencies=[Depends(_local_only)])
 
 
+class StandinRequest(BaseModel):
+    on: bool
+
+
 class StreamRequest(BaseModel):
     dest: Literal["ebay", "twitch"]
     action: Literal["start", "stop"]
 
 
 class PageRequest(BaseModel):
-    page: Literal["intro", "item", "next"]
+    page: Literal["intro", "item", "next", "desktop"]
     refocus: bool = True  # false: item without the D5100 (rehearsal, battery swap)
 
 
@@ -109,6 +114,13 @@ def pager_stream(req: StreamRequest) -> dict:
         return {**_show_flow.state(c), "stream": r}
 
 
+@router.post("/api/pager/standin")
+def pager_standin(req: StandinRequest) -> dict:
+    with _obs() as c:
+        _show_flow.standin(c, req.on)
+        return _show_flow.state(c)
+
+
 @router.post("/api/pager/refocus")
 def pager_refocus() -> dict:
     with _obs() as c:
@@ -119,7 +131,7 @@ def pager_refocus() -> dict:
 # The control page. Plain HTML + fetch against the routes above, same
 # origin, so the guard's Origin check passes. It polls every 2 s, so a
 # switch made from the shell (show_flow.py page ...) shows up here too.
-# Keys: 1 intro, 2 item, 3 next, R refocus.
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, R refocus.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -175,6 +187,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Item</b><small>D5100 + webcam (refocuses first, ~5 s)</small></span></button>
   <button class="page" data-page="next"><span class="key">3</span>
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
+  <button class="page" data-page="desktop"><span class="key">4</span>
+    <span><b>Desktop</b><small>Desktop with face cam: app window + webcam</small></span></button>
 </div>
 <div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button></div>
 <h2>Streams</h2>
@@ -184,7 +198,7 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
     <button class="go">Start</button></div>
 </div>
-<label class="opt"><input type="checkbox" id="nod5"> No D5100: Item skips the refocus (rehearsal, battery swap)</label>
+<label class="opt"><input type="checkbox" id="standin"> D5100 stand-in: white panel in the item view, no refocus (dead battery, rehearsal)</label>
 <p id="msg"></p>
 <footer id="foot"></footer>
 </main>
@@ -205,6 +219,8 @@ function show(st) {
     el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
     el.querySelector('.go').textContent = s.live ? 'Stop' : 'Start';
   }
+  if (!busy) $('#standin').checked = !!st.standin;
+  $('#refocus').hidden = !!st.standin;
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed ? 'running' : 'stopped');
 }
@@ -254,9 +270,9 @@ function focusText(r) {
 
 async function go(page) {
   if (busy) return;
-  lock(true); say(page === 'item' && !$('#nod5').checked ? 'Refocusing behind the current page...' : 'Switching...');
+  lock(true); say(page === 'item' && !$('#standin').checked ? 'Refocusing behind the current page...' : 'Switching...');
   try {
-    const st = await api('POST', '/api/pager', { page, refocus: !$('#nod5').checked });
+    const st = await api('POST', '/api/pager', { page });
     show(st);
     const sw = st.switch;
     if (!sw.changed) say('Already on ' + page + '.');
@@ -290,11 +306,19 @@ async function poll() {
 
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
+$('#standin').addEventListener('change', async e => {
+  const on = e.target.checked;
+  lock(true);
+  try { show(await api('POST', '/api/pager/standin', { on }));
+        say(on ? 'Stand-in on: the item view shows white.' : 'Stand-in off: the item view shows the D5100.'); }
+  catch (err) { e.target.checked = !on; say(err.message, 'err'); }
+  lock(false);
+});
 document.querySelectorAll('.dest').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const k = { '1': 'intro', '2': 'item', '3': 'next' }[e.key];
+  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
 });
 poll();

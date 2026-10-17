@@ -28,6 +28,8 @@ class FakeObs:
         self.params = {"RecType": "FFmpeg", "FFOutputToFile": "false",
                        "FFURL": "rtmp://live.twitch.tv/app/secret"}
         self.connects = True  # does a started output move bytes?
+        self.service = "whip_custom"
+        self.standin_shown = False
         self.switches: list[str] = []
         self.closed = False
         self.window_shown = None  # the window item's last enabled state
@@ -64,6 +66,9 @@ class FakeObs:
             return {"currentSceneCollectionName": SF.COLLECTION}
         if req == "GetVideoSettings":
             return {"baseWidth": SF.W, "baseHeight": SF.H}
+        if req == "GetStreamServiceSettings":
+            return {"streamServiceType": self.service,
+                    "streamServiceSettings": {"server": "https://whip.example/secret"}}
         if req == "GetProfileParameter":
             assert data["parameterCategory"] == "AdvOut"
             return {"parameterValue": self.params.get(data["parameterName"])}
@@ -71,9 +76,17 @@ class FakeObs:
             self.params[data["parameterName"]] = data["parameterValue"]
             return {}
         if req == "GetSceneItemList":
-            has = data["sceneName"] in self.window_scenes
-            return {"sceneItems": [{"sourceName": SF.WINDOW, "sceneItemId": 7}] if has else []}
+            items = []
+            if data["sceneName"] in self.window_scenes:
+                items.append({"sourceName": SF.WINDOW, "sceneItemId": 7, "sceneItemEnabled": True})
+            if data["sceneName"] == SF.PRODUCT:
+                items.append({"sourceName": SF.STANDIN, "sceneItemId": 9,
+                              "sceneItemEnabled": self.standin_shown})
+            return {"sceneItems": items}
         if req == "SetSceneItemEnabled":
+            if data["sceneItemId"] == 9:
+                self.standin_shown = data["sceneItemEnabled"]
+                return {}
             assert data["sceneName"] in self.window_scenes and data["sceneItemId"] == 7
             self.window_shown = data["sceneItemEnabled"]
             return {}
@@ -105,7 +118,7 @@ def obs(tmp_path, monkeypatch):
 
 
 def test_pages_are_the_three_in_running_order():
-    assert list(SF.PAGES) == ["intro", "item", "next"]
+    assert list(SF.PAGES) == ["intro", "item", "next", "desktop"]
     assert SF.PAGES["item"] == SF.PRODUCT and SF.PAGES["next"] == SF.UPNEXT
     # the HTTP body schema names the same pages
     assert pager.PageRequest.model_fields["page"].annotation.__args__ == tuple(SF.PAGES)
@@ -114,10 +127,10 @@ def test_pages_are_the_three_in_running_order():
 def test_state_maps_scene_to_page(obs):
     obs.active["Stream"] = True
     assert SF.state(obs) == {
-        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next"],
+        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next", "desktop"],
         "live": True, "timecode": "00:01:02.000", "feed": True,
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
-                    "twitch": {"live": False, "timecode": None}}}
+                    "twitch": {"live": False, "timecode": None}}, "standin": False}
     obs.scene = "Desktop"  # switched by hand in OBS
     assert SF.state(obs)["page"] is None
 
@@ -324,7 +337,7 @@ def test_intro_is_guarded_only_when_it_carries_the_window(obs):
 # --- destinations ------------------------------------------------------------
 def test_ebay_and_twitch_start_and_stop_independently(obs):
     r = SF.go_live(obs, "ebay", check=0)
-    assert r == {"dest": "ebay", "changed": True, "kbps": 3000, "skipped": "0/30"}
+    assert r == {"dest": "ebay", "changed": True, "kbps": 3000, "profile": "Ebay", "skipped": "0/30"}
     assert SF.go_live(obs, "twitch", check=0)["changed"] is True
     assert obs.active == {"Stream": True, "Record": True}
     SF.stop_dest(obs, "twitch")
@@ -334,16 +347,19 @@ def test_ebay_and_twitch_start_and_stop_independently(obs):
 
 def test_twitch_refuses_until_set_up_and_never_leaks_the_url(obs):
     obs.params = {"RecType": "Standard"}
+    obs.active["Stream"] = True  # eBay live: no fallback profile possible
     with pytest.raises(obsctl.ObsError, match="twitch-setup"):
         SF.go_live(obs, "twitch", check=0)
+    obs.active["Stream"] = False
     SF.twitch_setup(obs)
+    obs.active["Stream"] = True
     assert obs.params["RecType"] == "FFmpeg" and obs.params["FFFormat"] == "flv"
     with pytest.raises(obsctl.ObsError, match="paste rtmp") as e:
         SF.go_live(obs, "twitch", check=0)
     obs.params["FFURL"] = "rtmp://live.twitch.tv/app/secret"
     assert SF.go_live(obs, "twitch", check=0)["changed"]
     assert "secret" not in str(e.value)
-    assert obs.active["Record"] is True and obs.active["Stream"] is False
+    assert obs.active["Record"] is True and obs.active["Stream"] is True
 
 
 def test_twitch_setup_refuses_while_anything_is_live(obs):
@@ -356,8 +372,23 @@ def test_go_live_switches_to_the_show_profile_but_not_mid_stream(obs):
     obs.profile = "Untitled"
     SF.go_live(obs, "ebay", check=0)
     assert obs.profile == "Ebay"
-    obs.profile = "Untitled"
-    with pytest.raises(obsctl.ObsError, match="another profile"):
+    obs.profile = "Untitled"  # Twitch live on its own profile
+    with pytest.raises(obsctl.ObsError, match="Twitch is live on its own profile"):
+        SF.go_live(obs, "ebay", check=0)
+
+
+def test_twitch_without_a_url_falls_back_to_its_own_profile(obs):
+    obs.params = {"RecType": "FFmpeg", "FFOutputToFile": "false"}  # no FFURL
+    r = SF.go_live(obs, "twitch", check=0)
+    assert r["profile"] == "Untitled" and obs.active == {"Stream": True, "Record": False}
+    st = SF.streams(obs)
+    assert st["twitch"]["live"] and not st["ebay"]["live"]  # not mislabelled as eBay
+    SF.stop_dest(obs, "twitch")
+    assert obs.active["Stream"] is False
+    # with eBay live the fallback isn't possible: it says what's missing
+    obs.profile = "Ebay"
+    obs.active["Stream"] = True
+    with pytest.raises(obsctl.ObsError, match="no Twitch URL"):
         SF.go_live(obs, "twitch", check=0)
 
 
@@ -381,5 +412,36 @@ def test_stream_route(client, obs, monkeypatch):
     assert client.post("/api/pager/stream", json={"dest": "ebay", "action": "start"},
                        headers={"origin": "https://evil.example"}).status_code == 403
     obs.params = {}
+    obs.active["Stream"] = True  # eBay live, so Twitch can't fall back to its own profile
     r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start"})
     assert r.status_code == 502 and "twitch-setup" in r.json()["detail"]
+
+
+def test_ebay_refuses_when_the_stream_service_is_not_whip(obs):
+    obs.service = "rtmp_common"  # Twitch sign-in replaced it
+    with pytest.raises(obsctl.ObsError, match="isn't eBay's WHIP") as e:
+        SF.go_live(obs, "ebay", check=0)
+    assert obs.active["Stream"] is False and "secret" not in str(e.value)
+
+
+def test_standin_makes_item_skip_the_camera_and_refocus_refuse(obs):
+    obs.standin_shown = True
+    r = SF.go(obs, "item")
+    assert r["changed"] and r["focused"] is None and obs.refocused == []
+    with pytest.raises(obsctl.ObsError, match="stand-in is on"):
+        SF.refocus(obs)
+    assert SF.state(obs)["standin"] is True
+
+
+def test_standin_route(client, obs, monkeypatch):
+    calls = []
+    monkeypatch.setattr(SF, "standin", lambda c, on: calls.append(on))
+    assert client.post("/api/pager/standin", json={"on": True}).status_code == 200
+    assert calls == [True]
+
+
+def test_desktop_page_switches_without_camera_or_window_guard(obs):
+    obs.scene = "eBay Main"
+    r = SF.go(obs, "desktop")
+    assert obs.scene == "Desktop with Face Cam" and r["focused"] is None
+    assert "window" not in r and obs.refocused == []
