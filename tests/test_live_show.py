@@ -134,12 +134,68 @@ def test_open_windows_and_which_orders_they_hold(tmp_path):
     assert LS.open_windows("junk", now=after, base=tmp_path) == []
 
     held = lambda o: LS.holding_window(o, wins)            # noqa: E731
-    assert held(_order("1", "2026-10-20T12:00:00.000Z"))   # lineup lot, bought pre-show
+    assert held(_order("1", "2026-10-20T22:30:00.000Z"))   # lineup lot, just pre-show
+    assert held(_order("1", "2026-10-20T22:00:00.000Z"))   # exactly PRE_SHOW_MARGIN before
     assert held(_order("99", "2026-10-21T01:00:00.000Z"))  # new id (converted to auction)
     assert held(_order("1", "2026-10-21T00:00:00Z", sku="sku1"))
     assert not held(_order("99", "2026-10-20T12:00:00.000Z"))  # unrelated, pre-show
+    assert not held(_order("99", "2026-10-20T23:00:00.000Z"))  # unrelated, in the margin
+    assert not held(_order("1", "2026-10-20T21:59:00.000Z"))   # lineup lot, sold earlier
+    assert not held(_order("1", "2026-10-20T12:00:00.000Z"))   # ordinary store sale
     assert not held(_order("1", "2026-10-21T09:00:00.000Z"))   # after the window
     assert not held({"orderId": "x", "lineItems": []})         # no creationDate
+
+
+def test_a_lineup_saved_after_a_sale_does_not_reach_back_for_it(tmp_path):
+    """The case from 2026-10-19: an order placed and printed at 1 PM, a
+    lineup with an 8 PM start saved at 2 PM, a poll at 3 PM."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    LS.save_lineup("tonight", "junk", LS.build_lineup([(offer("1"), "A", None)]),
+                   base=tmp_path, scheduled_start=datetime(2026, 10, 19, 20, 0, tzinfo=et))
+    wins = LS.open_windows("junk", now=datetime(2026, 10, 19, 15, 0, tzinfo=et),
+                           base=tmp_path)
+    assert [w["show"] for w in wins] == ["tonight"]
+    assert LS.holding_window(_order("1", "2026-10-19T16:55:00.000Z"), wins) is None
+
+
+def test_open_windows_for_every_store_and_cross_store_overlaps(tmp_path):
+    from datetime import datetime, timezone
+    start = datetime(2026, 10, 21, 0, 0, tzinfo=timezone.utc)
+    LS.save_lineup("a", "junk", [], base=tmp_path, scheduled_start=start)
+    LS.save_lineup("b", "default", [], base=tmp_path,
+                   scheduled_start=datetime(2026, 10, 21, 6, 0, tzinfo=timezone.utc))
+    LS.save_lineup("c", "default", [], base=tmp_path,
+                   scheduled_start=datetime(2026, 10, 22, 0, 0, tzinfo=timezone.utc))
+    LS.save_lineup("d", "junk", [], base=tmp_path,
+                   scheduled_start=datetime(2026, 10, 21, 1, 0, tzinfo=timezone.utc))
+    now = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
+    wins = LS.open_windows(None, now=now, base=tmp_path)
+    assert sorted((w["show"], w["store"]) for w in wins) == [
+        ("a", "junk"), ("b", "default"), ("c", "default"), ("d", "junk")]
+    pairs = LS.cross_store_overlaps(wins)
+    # a/d share a store (not warned); c starts after both junk windows close
+    assert sorted(tuple(sorted((x["show"], y["show"]))) for x, y in pairs) == [
+        ("a", "b"), ("b", "d")]
+    assert "show 'a' on store 'junk' (Tue Oct 20 08:00 PM ET - " in LS.describe_window(wins[0])
+
+
+def test_set_scheduled_start_clears_only_the_start(tmp_path):
+    from datetime import datetime, timezone
+    lots = LS.build_lineup([(offer("1"), "A", None), (offer("2", best_offer=True), "B", None)])
+    d = LS.save_lineup("s", "junk", lots, keep_flagged=True, base=tmp_path,
+                       scheduled_start=datetime(2026, 10, 21, tzinfo=timezone.utc))
+    before = LS.load_lineup("s", base=tmp_path)
+    LS.set_scheduled_start("s", None, base=tmp_path)
+    after = LS.load_lineup("s", base=tmp_path)
+    assert after["scheduled_start"] is None
+    assert {k: v for k, v in after.items() if k != "scheduled_start"} == \
+        {k: v for k, v in before.items() if k != "scheduled_start"}
+    assert (d / "item_ids.txt").read_text() == "1\n2\n"     # untouched
+    assert LS.open_windows("junk", base=tmp_path) == []
+    with pytest.raises(LookupError):
+        LS.set_scheduled_start("nope", None, base=tmp_path)
 
 
 def test_build_lineup_numbers_in_order_and_dedupes():
