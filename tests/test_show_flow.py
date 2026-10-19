@@ -253,10 +253,29 @@ def test_setup_creates_the_webcam_page_when_missing():
 def test_webcam_page_on_the_cli(monkeypatch, capsys):
     seen = []
     monkeypatch.setattr(SF, "connect", lambda: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(SF, "go", lambda c, page, refocus=True: seen.append((page, refocus)) or
+    monkeypatch.setattr(SF, "go", lambda c, page, refocus=False: seen.append((page, refocus)) or
                         {"page": page, "changed": True, "focused": None, "refocus_s": None})
     assert SF.main(["page", "webcam"]) == 0
-    assert seen == [("webcam", True)] and "on air: webcam" in capsys.readouterr().out
+    assert seen == [("webcam", False)] and "on air: webcam" in capsys.readouterr().out
+
+
+def test_page_item_is_a_plain_switch_unless_refocus_is_asked_for(monkeypatch):
+    seen = []
+    monkeypatch.setattr(SF, "connect", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(SF, "go", lambda c, page, refocus=False: seen.append((page, refocus)) or
+                        {"page": page, "changed": True, "focused": None, "refocus_s": None})
+    for argv in (["page", "item"], ["back"], ["page", "item", "--no-refocus"], ["page", "item", "--refocus"]):
+        assert SF.main(argv) == 0
+    assert seen == [("item", False), ("item", False), ("item", False), ("item", True)]
+
+
+def test_a_dropped_obs_connection_is_an_error_line_not_a_traceback(monkeypatch, capsys):
+    def boom(c, a):
+        raise ConnectionResetError("reset by peer")
+    monkeypatch.setattr(SF, "connect", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(SF, "cmd_status", boom)
+    assert SF.main(["status"]) == 1
+    assert "lost the connection to OBS" in capsys.readouterr().err
 
 
 # --- feed status ---------------------------------------------------------------

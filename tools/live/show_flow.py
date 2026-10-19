@@ -17,15 +17,24 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
   webcam  scene "Webcam Only": the fallback. The webcam alone, filling the
           frame, with the mic. Never touches the D5100.
 
-`page next` fades to Up Next while the host swaps the item on the podium.
-`page item` refocuses the D5100 while the current page is still on air
-(starting the feed if it's off), then fades to the item view, so viewers
-never see the ~5 s freeze a refocus costs (the camera takes one USB
-connection: live view has to stop, autofocus, restart).
+Every `page` is one scene switch (300 ms fade): it never waits for the
+camera. `page next` fades to Up Next while the host swaps the item on the
+podium; `page item` fades straight back. Refocusing is its own command,
+`refocus` (key R on the pager page): on the item view it covers the camera
+with Up Next for the ~5 s freeze (the camera takes one USB connection: live
+view has to stop, autofocus, restart), then fades back. `page item
+--refocus` does both in one go, refocusing behind the current page first.
+A failed refocus never leaves the D5 feed stopped.
+
+OBS can sit black or frozen on a v4l2 camera whose device has frames again.
+`feed start` and a refocus make OBS reopen the D5 source when the feed has
+frames but OBS's picture doesn't move; `reconnect` (the pager's Reconnect
+cameras button) reopens the D5 and the webcam by hand.
 
     python tools/live/show_flow.py setup [--window "Fair Hand"] [--intro-text "Starting\\nsoon"]
     python tools/live/show_flow.py feed start|stop|status
-    python tools/live/show_flow.py page intro|item|next|desktop|webcam [--json] [--no-refocus]
+    python tools/live/show_flow.py reconnect [d5|webcam]  # OBS reopens a black/frozen camera
+    python tools/live/show_flow.py page intro|item|next|desktop|webcam [--json] [--refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
@@ -36,9 +45,11 @@ connection: live view has to stop, autofocus, restart).
     python tools/live/show_flow.py status [--json]
 
 `--json` prints the same objects webapp/pager.py serves at /api/pager, for
-scripts and agents. Page switches and refocuses take a lock
-($XDG_RUNTIME_DIR/show_flow.lock), so the shell and the web app never drive
-the camera at the same time; a second caller waits for the first.
+scripts and agents. A refocus takes a lock ($XDG_RUNTIME_DIR/show_flow.lock),
+so the shell and the web app never drive the camera at the same time; a
+second refocus is refused at once (Busy), never queued. Page switches don't
+take it: a switch made during a refocus goes on air immediately, and the
+refocus then leaves that page alone.
 
 `golive` only sends video. On eBay the show starts when the host clicks
 Start event in Stream manager; Twitch is public the moment it connects.
@@ -140,7 +151,17 @@ PRIVATE_WINDOW = re.compile(
 
 # One lock for every caller (shell, web app), so it can't live in a per-process TMPDIR.
 LOCK = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "show_flow.lock"
-LOCK_WAIT = 30  # seconds: a refocus takes ~5, so a queued click still goes through
+# Refocuses don't queue: a second one is refused. The short wait only rides
+# out refocusing() probing the lock for an instant.
+LOCK_WAIT = 0.5
+FRAMES_WAIT = 30  # seconds for the D5's frames to come back after a refocus
+GPHOTO_TIMEOUT = 15  # a wedged camera mustn't hold the lock (and the feed) forever
+REOPEN_GRACE = 3  # seconds after reopen_d5 before the feed's own frame is taken as proof
+FEED_START_WAIT = 15  # `feed start`: seconds to wait for frames before reopening in OBS
+D5_DEVICE = "/dev/video10"  # the feed's v4l2loopback device (tools/d5100_webcam.sh DEV)
+# The v4l2 cameras `reconnect` reopens -> device to use if OBS's setting is empty
+# (the webcam's own device_id is read from OBS; it has no safe default).
+CAMERAS = {D5: D5_DEVICE, WEBCAM: None}
 
 # webcam: full canvas width, anchored to the top (16:9 -> 1080x608)
 WEBCAM_BOX = {"positionX": 0, "positionY": 0, "alignment": 5, "rotation": 0,
@@ -186,7 +207,7 @@ def program(c) -> str:
 
 
 class Busy(obsctl.ObsError):
-    """Another page switch or refocus held the lock past LOCK_WAIT."""
+    """A refocus is already running (from the shell or the web app)."""
 
 
 @contextmanager
@@ -202,8 +223,9 @@ def exclusive():
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
-                    raise Busy(f"another page switch or refocus is still running after {LOCK_WAIT}s")
-                time.sleep(0.1)
+                    raise Busy("a D5100 refocus is already running (pager or shell); "
+                               "it takes about 5 s, try again when it's done")
+                time.sleep(0.05)
         try:
             yield
         finally:
@@ -212,9 +234,35 @@ def exclusive():
                 msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def d5_hash(c) -> str:
-    d = c.call("GetSourceScreenshot", {"sourceName": D5, "imageFormat": "jpg",
-                                       "imageWidth": 160, "imageCompressionQuality": 90})
+def refocusing() -> bool:
+    """Is a refocus holding the lock right now? A non-blocking probe."""
+    try:
+        f = open(LOCK, "a")
+    except OSError:
+        return False
+    with f:
+        try:
+            if fcntl:
+                fcntl.flock(f, fcntl.LOCK_SH | fcntl.LOCK_NB)  # released when f closes
+            else:
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            return True
+    return False
+
+
+def d5_hash(c) -> str | None:
+    """A hash of the D5 source's picture, or None when OBS can't render one
+    (code 702 "Failed to render screenshot": no frames, e.g. right after the
+    feed stops or the stand-in comes off)."""
+    try:
+        d = c.call("GetSourceScreenshot", {"sourceName": D5, "imageFormat": "jpg",
+                                           "imageWidth": 160, "imageCompressionQuality": 90})
+    except obsctl.ObsError:
+        return None
     return hashlib.md5(d["imageData"].encode()).hexdigest()
 
 
@@ -235,12 +283,14 @@ def feed_stop() -> None:
         time.sleep(0.05)
 
 
-def feed_start() -> None:
+def feed_start() -> bool:
+    """Start the feed loop unless it's running; True if this started it."""
     if feed_pids():
-        return
+        return False
     log = open(FEED_LOG, "ab")
     subprocess.Popen([str(FEED)], cwd=REPO, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                      start_new_session=True)
+    return True
 
 
 def _proc_env(pid: int) -> dict:
@@ -279,27 +329,122 @@ def feed_status(pids=None) -> str:
     return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
 
 
+def _gphoto2(*args, **kw):
+    try:
+        return subprocess.run(["gphoto2", *args], capture_output=True, timeout=GPHOTO_TIMEOUT, **kw)
+    except subprocess.TimeoutExpired as e:
+        raise obsctl.ObsError(f"gphoto2 {' '.join(args)} hung for {GPHOTO_TIMEOUT}s; "
+                              "switch the D5100 off and on") from e
+    except OSError as e:  # gphoto2 not installed
+        raise obsctl.ObsError(f"can't run gphoto2: {e}") from e
+
+
+def _snap_fresh(snaps: list[Path], since: float) -> bool:
+    """Has the feed written a frame (FEED_SNAP, every 2 s) since `since`? Then
+    /dev/video10 has frames, whatever OBS shows."""
+    for snap in snaps:
+        try:
+            if snap.stat().st_mtime > since:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+def reopen_source(c, name: str, fallback: str | None = None) -> str:
+    """Make OBS reopen a v4l2 source's device; returns the device. A v4l2
+    source can sit black or frozen on one frame while its device has frames
+    again (the D5 after its feed restarts, the webcam mid-stream: both seen
+    live 2026-10-19). Clearing device_id and setting it back forces OBS to
+    reopen it. `fallback` is the device when the setting is empty."""
+    r = c.call("GetInputSettings", {"inputName": name})
+    if r.get("inputKind", "v4l2_input") != "v4l2_input":
+        raise obsctl.ObsError(f"{name!r} isn't a v4l2 camera source ({r['inputKind']}); nothing to reopen")
+    dev = r["inputSettings"].get("device_id") or fallback
+    if not dev:
+        raise obsctl.ObsError(f"{name!r} has no device set; pick its camera in OBS")
+    c.call("SetInputSettings", {"inputName": name, "inputSettings": {"device_id": ""}})
+    c.call("SetInputSettings", {"inputName": name, "inputSettings": {"device_id": dev}})
+    return dev
+
+
+def reopen_d5(c) -> str:
+    return reopen_source(c, D5, D5_DEVICE)
+
+
+def reconnect(c, names=None) -> dict:
+    """Reopen the show's cameras in OBS (CAMERAS, or `names`): {source:
+    {"ok", "device" | "error"}}. One camera failing doesn't stop the other.
+    Takes no lock: it's the fix for a frozen picture, so it must never wait.
+    Viewers see a blink of black on that camera while OBS reopens it."""
+    out = {}
+    for name in names or CAMERAS:
+        try:
+            out[name] = {"ok": True, "device": reopen_source(c, name, CAMERAS.get(name))}
+        except obsctl.ObsError as e:
+            out[name] = {"ok": False, "error": str(e)}
+    return out
+
+
+def wait_d5_frames(c, frozen: str | None, since: float, snaps: list[Path], wait: float | None = None) -> None:
+    """Wait until OBS shows moving D5 frames after the feed (re)started at
+    `since`. Once the feed itself has frames and OBS's picture still hasn't
+    moved, reopen the source in OBS (reopen_d5), once. With no `frozen`
+    picture to compare against (OBS couldn't render one, code 702), moving
+    means two different pictures in a row, and a few seconds after the
+    reopen the feed's own fresh frame is taken as the answer."""
+    wait = FRAMES_WAIT if wait is None else wait
+    deadline = time.monotonic() + wait
+    reopened = last = None
+    while True:
+        h = d5_hash(c)
+        if h is not None and h != frozen and (frozen is not None or (last is not None and h != last)):
+            return
+        last = h
+        if _snap_fresh(snaps, since):
+            if reopened is None:
+                reopen_d5(c)
+                reopened = time.monotonic()
+            elif frozen is None and time.monotonic() - reopened > REOPEN_GRACE:
+                return
+        if time.monotonic() > deadline:
+            raise obsctl.ObsError(
+                f"D5100 frames didn't come back in OBS within {wait:g}s (the feed is running and keeps "
+                f"retrying; {'it has frames, OBS shows none' if reopened else 'no frames from the camera'}"
+                f"); see {FEED_LOG}")
+        time.sleep(0.1)
+
+
 def refocus_d5(c) -> tuple[bool, float]:
     """Stop live view, autofocus, restart; returns (focus locked, seconds until
     OBS shows moving D5 frames again). The D5100 refuses autofocus ("Unspecified
     error") when its AF point sees nothing with contrast, e.g. an empty podium;
-    focus then stays where it was."""
+    focus then stays where it was.
+
+    Whatever fails, this never leaves the feed stopped: it's restarted if it
+    was running before or the camera answered on USB (the feed loop then
+    retries on its own until frames flow)."""
     t = time.monotonic()
-    feed_stop()
-    found = subprocess.run(["gphoto2", "--auto-detect"], capture_output=True, text=True).stdout
-    if "usb:" not in found:  # fail now, not after the 30 s wait for frames below
-        raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
-    af = subprocess.run(["gphoto2", "--set-config", "autofocusdrive=1"], capture_output=True)
-    time.sleep(0.2)
-    frozen = d5_hash(c)
-    feed_start()
-    deadline = time.monotonic() + 30
-    while d5_hash(c) == frozen:
-        if time.monotonic() > deadline:
-            raise obsctl.ObsError(f"D5100 feed didn't come back within 30s; see {FEED_LOG}")
-        time.sleep(0.05)
-    time.sleep(0.25)  # let live view settle its exposure before it goes on air
-    return af.returncode == 0, time.monotonic() - t
+    restart = bool(feed_pids())
+    started = False
+    try:
+        feed_stop()
+        found = _gphoto2("--auto-detect", text=True).stdout
+        if "usb:" not in found:  # fail now, not after the wait for frames below
+            raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
+        restart = True
+        af = _gphoto2("--set-config", "autofocusdrive=1")
+        time.sleep(0.2)
+        frozen = d5_hash(c)
+        since = time.time()
+        feed_start()
+        started = True
+        wait_d5_frames(c, frozen, since, feed_snaps(feed_pids()))
+        time.sleep(0.25)  # let live view settle its exposure before it goes on air
+        return af.returncode == 0, time.monotonic() - t
+    finally:
+        if restart and not started:
+            feed_start()
 
 
 # --- commands ----------------------------------------------------------------
@@ -389,13 +534,37 @@ def cmd_setup(c, a):
     print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
 
 
+def feed_up(c) -> str:
+    """Start the feed (if it's off) and, once it has frames, make OBS reopen
+    the D5 source, so the item view isn't left black. Returns what happened."""
+    if feed_pids():
+        return "already running"
+    frozen, since = d5_hash(c), time.time()
+    feed_start()
+    try:
+        wait_d5_frames(c, frozen, since, feed_snaps(feed_pids()), wait=FEED_START_WAIT)
+    except obsctl.ObsError:
+        return f"started, but no frames in OBS within {FEED_START_WAIT}s (camera off? see {FEED_LOG})"
+    return "started"
+
+
 def cmd_feed(c, a):
     if a.action == "stop":
         feed_stop()
     elif a.action == "start":
-        feed_start()
-        time.sleep(3)
+        print(f"D5100 feed {feed_up(c)}")
     print(f"D5100 feed: {feed_status()}  (log {FEED_LOG})")
+
+
+def cmd_reconnect(c, a):
+    names = {"d5": [D5], "webcam": [WEBCAM]}.get(a.camera)
+    r = reconnect(c, names)
+    for name, res in r.items():
+        print(f"{name}: " + (f"reopened {res['device']}" if res["ok"] else res["error"]))
+    if a.json:
+        print(json.dumps({**state(c), "reconnect": r}))
+    if not all(res["ok"] for res in r.values()):
+        raise obsctl.ObsError("not every camera reopened (above)")
 
 
 # --- the pager: the API the CLI below and webapp/pager.py share --------------
@@ -603,7 +772,7 @@ def state(c) -> dict:
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
             "live": bool(on), "timecode": max(on) if on else None,
             "streams": out, "feed": bool(pids), "feed_status": feed_status(pids),
-            "standin": standin_on(c)}
+            "standin": standin_on(c), "refocusing": refocusing()}
 
 
 def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> None:
@@ -660,35 +829,60 @@ def standin(c, on: bool) -> None:
     set_box(c, PRODUCT, D5, enabled=not on)
 
 
-def go(c, page: str, refocus: bool = True) -> dict:
-    """Put a page on air. Going to `item` from another page refocuses the
-    D5100 first, while the current page still hides it; refocus=False skips
-    that (rehearsal or battery swap: the item view goes up with whatever the
-    D5 source shows, which with the camera off is its last frame, frozen).
-    A page that's already on air is left alone."""
+def _no_scene(e: obsctl.ObsError, page: str) -> obsctl.ObsError:
+    """OBS's "code 600" (not found) on a page's scene, said plainly."""
+    if "code 600" in str(e):
+        return obsctl.ObsError(f"OBS has no scene {PAGES[page]!r} for the {page} page "
+                               f"(collection {COLLECTION!r}); run `show_flow.py setup`")
+    return e
+
+
+def go(c, page: str, refocus: bool = False) -> dict:
+    """Put a page on air: one scene switch with OBS's 300 ms fade. No camera
+    work and no lock, so it never waits behind a refocus.
+
+    refocus=True (item only) refocuses the D5100 first, while the current
+    page still hides it. If that fails, the feed is left running and the
+    current page stays on air (the error says why). If someone switches page
+    during that refocus, their switch wins and this one isn't made
+    (`superseded_by`). A page that's already on air is left alone."""
     if page not in PAGES:
         raise ValueError(f"unknown page {page!r}; pages: {', '.join(PAGES)}")
-    with exclusive():
-        out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
-        if program(c) == PAGES[page]:
-            return out
+    scene = PAGES[page]
+    out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
+    before = program(c)
+    if before == scene:
+        return out
+    try:
         if page == "next":  # the one page allowed to show the desktop window
             w = guard_window(c)
             if w:
                 out["window"] = w
         else:
-            hide_window(c, PAGES[page])
-        if page == "item" and refocus and not standin_on(c):
+            hide_window(c, scene)
+    except obsctl.ObsError as e:
+        raise _no_scene(e, page) from e
+    if page == "item" and refocus and not standin_on(c):
+        with exclusive():
             out["focused"], secs = refocus_d5(c)
-            out["refocus_s"] = round(secs, 1)
-        c.call("SetCurrentProgramScene", {"sceneName": PAGES[page]})
-        out["changed"] = True
-        return out
+        out["refocus_s"] = round(secs, 1)
+        now = program(c)
+        if now != before:
+            out["superseded_by"] = page_of(now) or now
+            return out
+    try:
+        c.call("SetCurrentProgramScene", {"sceneName": scene})
+    except obsctl.ObsError as e:
+        raise _no_scene(e, page) from e
+    out["changed"] = True
+    return out
 
 
 def refocus(c) -> dict:
     """Refocus the D5100 without changing page. If the item view is on air
-    it hides behind Up Next for the ~5 s the camera is frozen."""
+    it hides behind Up Next for the ~5 s the camera is frozen, then fades
+    back to item, also when the refocus fails (the feed is left running),
+    but not if someone switched page meanwhile: that page stays."""
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
@@ -697,9 +891,13 @@ def refocus(c) -> dict:
             guard_window(c)
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
             time.sleep(FADE_MS / 1000)
-        locked, secs = refocus_d5(c)
-        if hide:
-            c.call("SetCurrentProgramScene", {"sceneName": PRODUCT})
+        try:
+            locked, secs = refocus_d5(c)
+        except obsctl.ObsError as e:
+            raise obsctl.ObsError(f"refocus failed: {e}") from e
+        finally:
+            if hide and program(c) == UPNEXT:
+                c.call("SetCurrentProgramScene", {"sceneName": PRODUCT})
         return {"focused": locked, "refocus_s": round(secs, 1)}
 
 
@@ -708,9 +906,12 @@ def focus_note(locked: bool) -> str:
 
 
 def cmd_page(c, a):
-    r = go(c, a.page, refocus=not a.no_refocus)
+    r = go(c, a.page, refocus=a.refocus)
     if a.json:
         print(json.dumps({**state(c), "switch": r}))
+    elif r.get("superseded_by"):
+        print(f"{focus_note(r['focused'])} ({r['refocus_s']}s); not switched: "
+              f"{r['superseded_by']} went on air during the refocus")
     elif not r["changed"]:
         print(f"on air: {a.page} (already)")
     elif r["focused"] is None:
@@ -789,19 +990,25 @@ def main(argv=None) -> int:
     s = sub.add_parser("feed", help="D5100 live view -> /dev/video10")
     s.add_argument("action", choices=["start", "stop", "status"])
     s.set_defaults(fn=cmd_feed)
-    s = sub.add_parser("page", help="put a page on air (item refocuses the D5 first, hidden)")
+    s = sub.add_parser("reconnect", help="make OBS reopen the cameras (picture black or frozen)")
+    s.add_argument("camera", nargs="?", choices=["d5", "webcam"], help="default: both")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_reconnect)
+    s = sub.add_parser("page", help="put a page on air (one scene switch, instant)")
     s.add_argument("page", choices=list(PAGES))
     s.add_argument("--json", action="store_true")
-    s.add_argument("--no-refocus", action="store_true", help="item without the D5 refocus (no camera)")
+    s.add_argument("--refocus", action="store_true",
+                   help="item: refocus the D5 first, hidden behind the current page (~5 s)")
+    s.add_argument("--no-refocus", action="store_true", help=argparse.SUPPRESS)  # now the default
     s.set_defaults(fn=cmd_page)
     sub.add_parser("next", help="= page next").set_defaults(fn=cmd_page, page="next", json=False,
-                                                            no_refocus=False)
+                                                            refocus=False)
     sub.add_parser("back", help="= page item").set_defaults(fn=cmd_page, page="item", json=False,
-                                                            no_refocus=False)
+                                                            refocus=False)
     s = sub.add_parser("standin", help="white panel instead of the D5100 in the item view")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn=cmd_standin)
-    s = sub.add_parser("refocus", help="refocus the D5 (hidden if the item page is on air)")
+    s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)
     s = sub.add_parser("golive", help="start one destination (the other keeps running)")
@@ -826,6 +1033,9 @@ def main(argv=None) -> int:
             c.close()
     except obsctl.ObsError as e:
         print(f"show_flow: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:  # the OBS socket timed out or dropped mid-command
+        print(f"show_flow: lost the connection to OBS: {e}", file=sys.stderr)
         return 1
     return 0
 

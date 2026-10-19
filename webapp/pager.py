@@ -6,8 +6,9 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop" | "webcam", "refocus": true}
+    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop" | "webcam", "refocus": false}
     POST /api/pager/refocus     refocus the D5100 without changing page
+    POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
 
@@ -17,7 +18,8 @@ Every answer is the state object, plus `switch` or `refocus` on a POST:
      "live": true, "timecode": "00:12:03.400", "feed": true, "feed_status": "running",
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
-     "switch": {"page": "item", "changed": true, "focused": true, "refocus_s": 5.2}}
+     "standin": false, "refocusing": false,
+     "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null}}
 
 `page` is null when OBS is on a scene that isn't one of the pager's.
 `feed_status` is "stopped", "running", or "running, no frames for Ns" (the
@@ -29,15 +31,21 @@ A switch to `next` also carries `window: {"title", "shown"}`: the Up Next
 window is shown only when its live title is a public eBay / Pop's Games
 page (show_flow.SAFE_WINDOW) and not a private one (PRIVATE_WINDOW);
 otherwise card + webcam only. Every other page hides the window.
-`webcam` is the fallback page: the webcam alone, no D5100. `focused: false` means the
-D5100's autofocus couldn't lock (nothing with
-contrast at the center of the frame); the page still switched.
+`webcam` is the fallback page: the webcam alone, no D5100.
 
-A switch to `item` blocks ~5 s while the camera refocuses behind the
-current page. Calls are serialized with the shell's (show_flow's lock): a
-second click waits for the first, and gets 409 if it waits more than 30 s.
-503 means OBS isn't reachable; 502 is any other OBS or camera failure,
-with OBS's message as the detail.
+A page switch is one OBS scene switch (300 ms fade) and never touches the
+camera, so it answers at once, even while a refocus runs (`refocusing`
+in the state). Refocus is its own call, POST /api/pager/refocus (on the item
+view it hides behind Up Next for ~5 s); `{"page": "item", "refocus": true}`
+refocuses first, behind the current page. `focused: false` means the
+D5100's autofocus couldn't lock (nothing with contrast at the center of the
+frame); focus is unchanged. A refocus while another is running (shell or
+web) is 409 at once, not queued. A failed refocus leaves the D5100 feed
+running. Reconnect answers `reconnect: {source: {"ok", "device" | "error"}}`
+per camera; it never waits on a refocus, and viewers see a blink of black
+on each camera as OBS reopens it. 503 means OBS isn't reachable, 504 that it stopped answering
+mid-call; 502 is any other OBS or camera failure, with the reason as the
+detail.
 
 These routes change what a public broadcast shows, so they get freight's
 guard (webapp/freight.py `_local_only`): loopback Host only, and writes
@@ -73,14 +81,14 @@ class StreamRequest(BaseModel):
 
 class PageRequest(BaseModel):
     page: Literal["intro", "item", "next", "desktop", "webcam"]
-    refocus: bool = True  # false: item without the D5100 (rehearsal, battery swap)
+    refocus: bool = False  # true: item refocuses the D5100 first, behind the current page (~5 s)
 
 
 @contextmanager
 def _obs():
     try:
         c = _show_flow.connect()
-    except _obsctl.ObsError as exc:
+    except (_obsctl.ObsError, OSError) as exc:  # OSError: timed out in the handshake
         raise HTTPException(503, str(exc)) from exc
     try:
         yield c
@@ -88,6 +96,8 @@ def _obs():
         raise HTTPException(409, str(exc)) from exc
     except _obsctl.ObsError as exc:
         raise HTTPException(502, str(exc)) from exc
+    except OSError as exc:  # socket timeout / reset mid-request: say so, not a bare 500
+        raise HTTPException(504, f"OBS stopped answering: {exc}") from exc
     finally:
         c.close()
 
@@ -132,10 +142,21 @@ def pager_refocus() -> dict:
         return {**_show_flow.state(c), "refocus": r}
 
 
+@router.post("/api/pager/reconnect")
+def pager_reconnect() -> dict:
+    with _obs() as c:
+        r = _show_flow.reconnect(c)
+        return {**_show_flow.state(c), "reconnect": r}
+
+
 # The control page. Plain HTML + fetch against the routes above, same
-# origin, so the guard's Origin check passes. It polls every 2 s, so a
-# switch made from the shell (show_flow.py page ...) shows up here too.
-# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, R refocus.
+# origin, so the guard's Origin check passes. It polls every 1 s while the
+# tab is visible (not at all while hidden: OBS is short of CPU during a
+# show), so a switch made from the shell or in OBS shows up here too.
+# Page clicks are sent one at a time, latest wins: clicking 2 then 3 fast
+# ends on 3, never on whichever request OBS happened to get last. A page
+# click is never blocked by a refocus or a stream start in flight.
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, R refocus, C reconnect cameras.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -166,9 +187,10 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .page small { color:var(--muted); }
 .page.on { background:var(--on); border-color:var(--on); color:var(--on-ink); }
 .page.on small, .page.on .key { color:var(--on-ink); border-color:rgba(255,255,255,.5); }
-.page:disabled, #refocus:disabled { opacity:.55; cursor:wait; }
+.page.pending { border-color:var(--on); border-style:dashed; }
+.row button:disabled, .go:disabled, #standin:disabled { opacity:.55; cursor:wait; }
 .row { display:flex; gap:12px; margin-top:12px; }
-#refocus { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+.row button { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
 h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:22px 2px 8px; }
 .dests { display:grid; gap:10px; }
 .dest { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px;
@@ -188,7 +210,7 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <button class="page" data-page="intro"><span class="key">1</span>
     <span><b>Intro</b><small>Pre-show card, no cameras</small></span></button>
   <button class="page" data-page="item"><span class="key">2</span>
-    <span><b>Item</b><small>D5100 + webcam (refocuses first, ~5 s)</small></span></button>
+    <span><b>Item</b><small>D5100 + webcam (R to refocus)</small></span></button>
   <button class="page" data-page="next"><span class="key">3</span>
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
   <button class="page" data-page="desktop"><span class="key">4</span>
@@ -196,7 +218,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <button class="page" data-page="webcam"><span class="key">5</span>
     <span><b>Webcam only</b><small>Fallback: face cam + mic, no D5100</small></span></button>
 </div>
-<div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button></div>
+<div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button>
+  <button id="reconnect">Reconnect cameras <small>(C)</small></button></div>
 <h2>Streams</h2>
 <div class="dests">
   <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
@@ -205,17 +228,21 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <button class="go">Start</button></div>
 </div>
 <label class="opt"><input type="checkbox" id="standin"> D5100 stand-in: white panel in the item view, no refocus (dead battery, rehearsal)</label>
-<p id="msg"></p>
+<p id="msg" role="status" aria-live="polite"></p>
 <footer id="foot"></footer>
 </main>
 <script>
 const $ = s => document.querySelector(s), buttons = [...document.querySelectorAll('.page')];
-let busy = false;
+const LABEL = { intro: 'Intro', item: 'Item', next: 'Next', desktop: 'Desktop', webcam: 'Webcam only' };
+// Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
+let pending = null, switching = false, refocusing = false, streaming = false, standinBusy = false;
+let epoch = 0;  // bumped by every action, so a poll answer from before it can't undo it
 
 function say(text, cls = '') { const m = $('#msg'); m.textContent = text; m.className = cls; }
 
 function show(st) {
-  buttons.forEach(b => b.classList.toggle('on', b.dataset.page === st.page));
+  buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
+                         b.classList.toggle('pending', b.dataset.page === pending); });
   const badge = $('#badge');
   badge.textContent = st.live ? 'LIVE ' + (st.timecode || '').split('.')[0] : 'Off air';
   badge.classList.toggle('live', !!st.live);
@@ -225,24 +252,29 @@ function show(st) {
     el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
     el.querySelector('.go').textContent = s.live ? 'Stop' : 'Start';
   }
-  if (!busy) $('#standin').checked = !!st.standin;
+  if (!standinBusy) $('#standin').checked = !!st.standin;
   $('#refocus').hidden = !!st.standin;
+  $('#refocus').disabled = refocusing || !!st.refocusing;
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
-                           ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped'));
+                           ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
+                           (st.refocusing ? ' \\u00b7 refocusing' : '');
 }
 
-async function api(method, path, body) {
-  const r = await fetch(path, { method, headers: body ? { 'Content-Type': 'application/json' } : {},
-                                body: body ? JSON.stringify(body) : undefined });
-  const data = await r.json().catch(() => ({}));
+// Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
+async function api(method, path, body, ms) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  let r, data;
+  try {
+    r = await fetch(path, { method, signal: ctl.signal, body: body ? JSON.stringify(body) : undefined,
+                            headers: body ? { 'Content-Type': 'application/json' } : {} });
+    data = await r.json().catch(() => ({}));
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'no answer after ' + ms / 1000 + ' s'
+                                            : 'pager server not reachable (is lib.cli serve running?)');
+  } finally { clearTimeout(timer); }
   if (!r.ok) throw new Error(data.detail ? (typeof data.detail === 'string' ? data.detail
                                             : JSON.stringify(data.detail)) : 'HTTP ' + r.status);
   return data;
-}
-
-function lock(on) {
-  busy = on;
-  buttons.concat($('#refocus'), [...document.querySelectorAll('.go')]).forEach(b => b.disabled = on);
 }
 
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
@@ -253,20 +285,23 @@ const ASK = {
   'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
 };
 
+function streamButtons(on) { document.querySelectorAll('.go').forEach(b => b.disabled = on); }
+
 async function stream(dest) {
-  if (busy) return;
+  if (streaming) return;
   const live = document.querySelector('.dest[data-dest="' + dest + '"]').classList.contains('live');
   const action = live ? 'stop' : 'start';
   if (!confirm(ASK[dest + ' ' + action])) return;
-  lock(true); say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
+  streaming = true; streamButtons(true);
+  say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
   try {
-    const st = await api('POST', '/api/pager/stream', { dest, action });
-    show(st);
+    const st = await api('POST', '/api/pager/stream', { dest, action }, 30000);
+    if (!switching) show(st);
     const r = st.stream;
     say(action === 'start' ? (r.changed ? NAMES[dest] + ' is live: ' + r.kbps + ' kbps.' : NAMES[dest] + ' was already live.')
                            : NAMES[dest] + ' stopped.');
-  } catch (e) { say(e.message, 'err'); }
-  lock(false);
+  } catch (e) { say(NAMES[dest] + ' ' + action + ' failed: ' + e.message, 'err'); }
+  streaming = false; streamButtons(false);
 }
 
 function focusText(r) {
@@ -274,58 +309,101 @@ function focusText(r) {
                    : 'Autofocus could not lock: center the item and refocus.';
 }
 
-async function go(page) {
-  if (busy) return;
-  lock(true); say(page === 'item' && !$('#standin').checked ? 'Refocusing behind the current page...' : 'Switching...');
-  try {
-    const st = await api('POST', '/api/pager', { page });
-    show(st);
-    const sw = st.switch;
-    if (!sw.changed) say('Already on ' + page + '.');
-    else if (sw.window && !sw.window.shown)
-      say('On air: next. Window hidden (' + (sw.window.title || 'closed') +
-          ' is not safe to show). Open the next lot in its own window.', 'warn');
-    else if (sw.focused === null) say('On air: ' + page + '.');
-    else say('On air: item. ' + focusText(sw), sw.focused ? '' : 'warn');
-  } catch (e) { say(e.message, 'err'); }
-  lock(false);
+function switched(page, st) {
+  const sw = st.switch;
+  if (sw.superseded_by) say('Not switched: ' + sw.superseded_by + ' went on air first.', 'warn');
+  else if (!sw.changed) say('Already on ' + LABEL[page] + '.');
+  else if (sw.window && !sw.window.shown)
+    say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
+        ' is not safe to show). Open the next lot in its own window.', 'warn');
+  else if (page === 'item' && st.refocusing)
+    say('On air: Item. The D5100 is still refocusing: its picture is frozen for a few seconds.', 'warn');
+  else if (page === 'item' && !st.standin && st.feed_status !== 'running')
+    say('On air: Item, but the D5100 feed is ' + st.feed_status + '.', 'warn');
+  else say('On air: ' + LABEL[page] + '.');
+}
+
+// Page clicks go out one at a time, and only the latest waiting click is kept,
+// so the last key pressed is what ends up on air.
+function go(page) {
+  pending = page; epoch++;
+  buttons.forEach(b => b.classList.toggle('pending', b.dataset.page === page));
+  if (!switching) drain();
+}
+
+async function drain() {
+  switching = true;
+  while (pending) {
+    const page = pending; pending = null;
+    say('Switching to ' + LABEL[page] + '...');
+    try {
+      const st = await api('POST', '/api/pager', { page }, 12000);
+      epoch++;
+      if (!pending) { show(st); switched(page, st); }
+    } catch (e) { say(LABEL[page] + ' did not go on air: ' + e.message, 'err'); }
+  }
+  buttons.forEach(b => b.classList.remove('pending'));
+  switching = false;
 }
 
 async function refocus() {
-  if (busy) return;
-  lock(true); say('Refocusing...');
-  try { const st = await api('POST', '/api/pager/refocus'); show(st);
+  if (refocusing || $('#refocus').hidden) return;
+  refocusing = true; $('#refocus').disabled = true; epoch++;
+  say('Refocusing the D5100 (about 5 s; the item view hides behind Next)...');
+  try { const st = await api('POST', '/api/pager/refocus', null, 60000);
+        refocusing = false;
+        if (!switching) show(st);
         say(focusText(st.refocus), st.refocus.focused ? '' : 'warn'); }
-  catch (e) { say(e.message, 'err'); }
-  lock(false);
+  catch (e) { say('Refocus failed: ' + e.message.replace(/^refocus failed: /, ''), 'err'); }
+  refocusing = false; $('#refocus').disabled = false;
 }
 
+let reconnecting = false;
+async function reconnect() {
+  if (reconnecting) return;
+  reconnecting = true; $('#reconnect').disabled = true; epoch++;
+  say('Reconnecting the cameras in OBS...');
+  try { const st = await api('POST', '/api/pager/reconnect', null, 12000);
+        if (!switching) show(st);
+        const r = Object.entries(st.reconnect), bad = r.filter(([, v]) => !v.ok);
+        say(bad.length ? 'Reconnect: ' + bad.map(([k, v]) => k + ': ' + v.error).join('; ')
+                       : 'Reconnected: ' + r.map(([k]) => k).join(', ') + '.', bad.length ? 'err' : ''); }
+  catch (e) { say('Reconnect failed: ' + e.message, 'err'); }
+  reconnecting = false; $('#reconnect').disabled = false;
+}
+
+// 1 s while the tab is visible, nothing while it's hidden: cheap for OBS and the server.
 async function poll() {
-  if (!busy) {
-    try { show(await api('GET', '/api/pager'));
+  if (!document.hidden) {
+    const mine = epoch;
+    try { const st = await api('GET', '/api/pager', null, 5000);
+          if (mine === epoch && !switching) show(st);
           if ($('#msg').textContent.startsWith('OBS')) say(''); }
     catch (e) { $('#badge').textContent = 'No OBS'; $('#badge').classList.remove('live');
                 say('OBS: ' + e.message, 'err'); }
   }
-  setTimeout(poll, 2000);
+  setTimeout(poll, 1000);
 }
 
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
+$('#reconnect').addEventListener('click', reconnect);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
-  lock(true);
-  try { show(await api('POST', '/api/pager/standin', { on }));
+  standinBusy = true; e.target.disabled = true; epoch++;
+  try { const st = await api('POST', '/api/pager/standin', { on }, 12000);
+        if (!switching) show(st);
         say(on ? 'Stand-in on: the item view shows white.' : 'Stand-in off: the item view shows the D5100.'); }
-  catch (err) { e.target.checked = !on; say(err.message, 'err'); }
-  lock(false);
+  catch (err) { e.target.checked = !on; say('Stand-in ' + (on ? 'on' : 'off') + ' failed: ' + err.message, 'err'); }
+  standinBusy = false; e.target.disabled = false;
 });
 document.querySelectorAll('.dest').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
   const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
+  else if (e.key === 'c' || e.key === 'C') reconnect();
 });
 poll();
 </script>
