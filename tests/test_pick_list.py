@@ -230,6 +230,113 @@ def test_poll_and_print_holds_orders_in_an_open_live_window():
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
 
+def test_a_lineup_saved_after_an_order_was_printed_does_not_hide_it():
+    """2026-10-19: order printed at 1 PM, lineup with an 8 PM start saved at
+    2 PM, poll at 3 PM. The order is neither held nor dropped from the poll:
+    it is still reported as already printed, with its link."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import live_show
+    et = ZoneInfo("America/New_York")
+    out_dir, _ = _scratch_dirs()
+    base = out_dir.parent / "_live"
+    live_show.save_lineup("tonight", "default", live_show.build_lineup([(
+        {"sku": "abc123def4", "format": "FIXED_PRICE",
+         "listing": {"listingId": "206000000001", "listingStatus": "ACTIVE"}}, "A", None)]),
+        base=base, scheduled_start=datetime(2026, 10, 19, 20, 0, tzinfo=et))
+    wins = live_show.open_windows("default", base=base,
+                                  now=datetime(2026, 10, 19, 15, 0, tzinfo=et))
+    assert [w["show"] for w in wins] == ["tonight"]
+    sold = _order(oid="early-1")                         # a lineup item, sold 12:55 PM
+    sold["creationDate"] = "2026-10-19T16:55:00.000Z"
+    state = {"printed": {"early-1": {"printed_at": "2026-10-19T17:00:00Z",
+                                     "file": "x", "url": "http://127.0.0.1/p/t"}},
+             "shipped": {}}
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
+            new_ids, skipped, state, _ = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [sold],
+                publish=False, live_windows=wins)
+            assert (new_ids, skipped, state["held"]) == ([], ["early-1"], {})
+            # same order unprinted: still not held (sold before start - margin)
+            new_ids, _, state, _ = pick_list.poll_and_print(
+                out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                fetch=lambda: [sold], publish=False, live_windows=wins)
+            assert new_ids == ["early-1"] and state["held"] == {}
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_an_already_printed_order_is_never_held():
+    """Even inside the window (placed after the start), an order already
+    printed keeps its "already printed" line instead of being held."""
+    from datetime import datetime, timezone
+    out_dir, _ = _scratch_dirs()
+    win = {"show": "oct-20", "store": "default", "item_ids": {"206000000001"},
+           "skus": set(), "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    state = {"printed": {"live-1": {"printed_at": "x", "file": "y"}}, "shipped": {}}
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
+            new_ids, skipped, state, _ = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [_order(oid="live-1")],
+                publish=False, live_windows=[win])
+        assert (new_ids, skipped, state["held"]) == ([], ["live-1"], {})
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_poll_prints_each_held_order_with_buyer_and_release_time():
+    import contextlib
+    import io
+    from datetime import datetime, timezone
+    win = {"show": "oct-20", "store": "default", "item_ids": {"206000000001"},
+           "skus": set(), "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    a, b = _order(oid="live-1"), _order(oid="live-2")
+    a["buyer"] = {"username": "jamie_b"}
+    out_dir, state_file = _scratch_dirs()
+    real_poll = pick_list.poll_and_print
+    import types
+    args = types.SimpleNamespace(store=None, all_stores=False, do_print=False,
+                                 reprint=None, no_links=True, ttl=None)
+    buf = io.StringIO()
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: [],
+                       (pick_list, "STATE_FILE"): state_file,
+                       (pick_list, "OUT_DIR"): out_dir,
+                       (pick_list, "poll_and_print"): lambda **k: real_poll(
+                           **k, fetch=lambda: [a, b], live_windows=[win])}), \
+                contextlib.redirect_stdout(buf):
+            assert pick_list._poll_one_store(args, "default") == 0
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+    out = buf.getvalue()
+    assert "2 order(s) from eBay Live show 'oct-20' held until Thu Aug 20 09:00 AM ET" in out
+    assert "  held live-1  jamie_b  until Thu Aug 20 09:00 AM ET\n" in out
+    assert "  held live-2  until Thu Aug 20 09:00 AM ET\n" in out
+
+
+def test_overlapping_shows_on_two_stores_get_a_warning():
+    from datetime import datetime, timezone
+    w = lambda show, store, h: {                                      # noqa: E731
+        "show": show, "store": store, "item_ids": set(), "skus": set(),
+        "start": datetime(2026, 10, 20, h, 0, tzinfo=timezone.utc),
+        "closes": datetime(2026, 10, 20, h + 8, 0, tzinfo=timezone.utc)}
+    lines = pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("main-show", "default", 4)])
+    assert len(lines) == 1
+    assert "show 'oct-19' on store 'junk'" in lines[0]
+    assert "show 'main-show' on store 'default'" in lines[0]
+    assert pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("late", "default", 8)]) == []
+    assert pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("also", "junk", 1)]) == []
+
+
 def test_poll_and_print_reprint_forces_one_order_through():
     out_dir, _ = _scratch_dirs()
     orders = [_order(oid="dup-1")]
