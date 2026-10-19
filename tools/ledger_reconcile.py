@@ -55,6 +55,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 
 import stores                                                         # noqa: E402
+from gdrive_mirror import ledger_changed                              # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,        # noqa: E402
                          get_offers_for_sku, EbayAPIError)
 
@@ -400,6 +401,7 @@ def reconcile(store: str, apply: bool = False, prune: bool = False) -> int:
         for r in rows:
             w.writerow({k: r.get(k, "") for k in FIELDS})
     print(f"wrote {ledger.name} — {len(rows)} rows, eBay treated as truth")
+    ledger_changed(ledger)
     return 0
 
 

@@ -97,6 +97,7 @@ from typing import Optional
 
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
+from gdrive_mirror import ledger_changed
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
@@ -316,8 +317,10 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
 
     Status only advances sensibly: a re-sync of an already-PUBLISHED item
     keeps PUBLISHED; DRAFTED never overwrites a later status; ENDED/DELETED
-    are explicit and always apply. Only fields that are provided are written
-    (so a later update never blanks an earlier value). Best-effort — never
+    are explicit and always apply. An empty `status` leaves the status alone
+    (a price edit on a live listing). Only fields that are provided are
+    written (so a later update never blanks an earlier value). Each write
+    nudges the Google Drive copy (lib/gdrive_mirror.py). Best-effort — never
     raises (ledger bookkeeping must not break a sync/publish)."""
     if not sku:
         return None
@@ -339,7 +342,9 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             if v:
                 row[k] = str(v)
         cur = row.get("status") or ""
-        if status == "DRAFTED":
+        if not status:
+            pass
+        elif status == "DRAFTED":
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
@@ -354,6 +359,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             w.writeheader()
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in _LEDGER_FIELDS})
+        ledger_changed(path)
         return str(path)
     except (OSError, csv.Error):
         return None
@@ -2219,6 +2225,10 @@ def update_listing_fields(draft_path: Path, fields,
 
     if not dry_run:
         update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+        if "price" in changed:
+            # The ledger's price column follows the live offer; status unchanged.
+            upsert_listing(sku, "", price=_to_decimal_str(draft.get("price")) or "",
+                           store=creds.store)
     return changed
 
 

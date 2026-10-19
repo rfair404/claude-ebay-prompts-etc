@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ebay_client import api_send, load_credentials, EbayAPIError, EbayAuthError  # noqa: E402
 import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
 import stores  # noqa: E402  the one store model (#156)
+from gdrive_mirror import ledger_changed  # noqa: E402  Drive copy after each write
 from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
 from stores import draft_belongs_to_store, draft_store_from_text, ledger_keys  # noqa: E402
 
@@ -559,6 +560,7 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
         w.writeheader()
         for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True):
             w.writerow(r)
+    ledger_changed(path)
     return path
 
 
