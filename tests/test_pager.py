@@ -111,14 +111,17 @@ def obs(tmp_path, monkeypatch):
     monkeypatch.setattr(SF, "feed_pids", lambda: [123])
     monkeypatch.setattr(SF, "LOCK", tmp_path / "show_flow.lock")
     monkeypatch.setattr(SF.time, "sleep", lambda s: None)
-    fake.title = "The Fair Hand \u2014 Mozilla Firefox"
+    fake.title = "Pop's Games | eBay Stores \u2014 Mozilla Firefox"
     monkeypatch.setattr(SF, "window_title", lambda c: fake.title)
+    fake.snap = tmp_path / "d5100_latest.jpg"  # the feed's 2 s frame
+    monkeypatch.setattr(SF, "feed_snaps", lambda pids: [fake.snap])
     fake.refocused = refocused
     return fake
 
 
-def test_pages_are_the_three_in_running_order():
-    assert list(SF.PAGES) == ["intro", "item", "next", "desktop"]
+def test_pages_are_the_five_in_running_order():
+    assert list(SF.PAGES) == ["intro", "item", "next", "desktop", "webcam"]
+    assert SF.PAGES["webcam"] == "Webcam Only"
     assert SF.PAGES["item"] == SF.PRODUCT and SF.PAGES["next"] == SF.UPNEXT
     # the HTTP body schema names the same pages
     assert pager.PageRequest.model_fields["page"].annotation.__args__ == tuple(SF.PAGES)
@@ -126,9 +129,10 @@ def test_pages_are_the_three_in_running_order():
 
 def test_state_maps_scene_to_page(obs):
     obs.active["Stream"] = True
+    obs.snap.write_bytes(b"jpeg")
     assert SF.state(obs) == {
-        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next", "desktop"],
-        "live": True, "timecode": "00:01:02.000", "feed": True,
+        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next", "desktop", "webcam"],
+        "live": True, "timecode": "00:01:02.000", "feed": True, "feed_status": "running",
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
                     "twitch": {"live": False, "timecode": None}}, "standin": False}
     obs.scene = "Desktop"  # switched by hand in OBS
@@ -266,6 +270,7 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     for dest in SF.DESTS:
         assert f'data-dest="{dest}"' in r.text
     assert "/api/pager/refocus" in r.text
+    assert "'5': 'webcam'" in r.text and "feed_status" in r.text
     assert client.get("/pager", headers={"host": "evil.example"}).status_code == 403
 
 
@@ -280,6 +285,15 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     "~ : bash \u2014 Konsole",
     "Show Pager \u2014 Mozilla Firefox",
     None,                                                   # window closed
+    # not on the allowlist (titles seen live on 2026-10-19)
+    "Desktop @ QRect(0,0 1440x810)",                        # a full-screen capture
+    "plasmashell",
+    "Google Ads - Overview \u2014 Mozilla Firefox",
+    "rfair404/claude-ebay-prompts-etc \u00b7 GitHub \u2014 Mozilla Firefox",
+    "The Fair Hand \u2014 Mozilla Firefox",
+    # on the allowlist, but vetoed
+    "Seller Hub | eBay \u2014 Mozilla Firefox",
+    "Pop's Games - Twitch \u2014 Mozilla Firefox",
 ])
 def test_next_hides_a_window_that_is_not_safe_to_show(obs, title):
     obs.title = title
@@ -288,9 +302,24 @@ def test_next_hides_a_window_that_is_not_safe_to_show(obs, title):
     assert obs.scene == "Up Next"  # still switches: card + webcam
 
 
-def test_next_shows_a_store_page(obs):
+@pytest.mark.parametrize("title", [
+    "Pop's Games | eBay Stores \u2014 Mozilla Firefox",
+    "Vintage Nikon 7x35 Binoculars | eBay \u2014 Mozilla Firefox",
+    "Pop\u2019s Games | eBay Stores \u2014 Mozilla Firefox",
+    "popsgames on eBay \u2014 Mozilla Firefox",
+])
+def test_next_shows_a_public_ebay_page(obs, title):
+    obs.title = title
     r = SF.go(obs, "next")
-    assert obs.window_shown is True and r["window"]["shown"] is True
+    assert obs.window_shown is True and r["window"] == {"title": title, "shown": True}
+
+
+def test_safe_window_is_an_allowlist_with_a_veto():
+    assert SF.window_safe("Vintage Nikon 7x35 Binoculars | eBay \u2014 Mozilla Firefox")
+    assert not SF.window_safe("eBay Live \u2014 Mozilla Firefox")
+    assert not SF.window_safe("Desktop @ QRect(0,0 1440x810)")
+    assert not SF.window_safe("")
+    assert not SF.window_safe(None)
 
 
 def test_refocus_checks_the_window_before_hiding_behind_up_next(obs):
@@ -323,15 +352,31 @@ def test_item_without_refocus_skips_the_camera(obs, client):
     assert body["page"] == "item" and obs.refocused == []
 
 
-def test_intro_is_guarded_only_when_it_carries_the_window(obs):
-    obs.title = "Twitch \u2014 Mozilla Firefox"
+def test_intro_never_shows_the_window_even_a_safe_one(obs):
     obs.scene = "Up Next"
     assert "window" not in SF.go(obs, "intro") and obs.window_shown is None  # plain card
+    # a stray window capture in Intro, with a title the Up Next guard would show
     obs.window_scenes.add("Intro")
     obs.scene = "Up Next"
     r = SF.go(obs, "intro")
-    assert r["window"] == {"title": "Twitch \u2014 Mozilla Firefox", "shown": False}
-    assert obs.window_shown is False
+    assert "window" not in r and obs.window_shown is False and obs.scene == "Intro"
+
+
+@pytest.mark.parametrize("page", ["item", "desktop", "webcam"])
+def test_other_pages_only_ever_hide_the_window(obs, page):
+    obs.window_scenes.add(SF.PAGES[page])
+    SF.go(obs, page, refocus=False)
+    assert obs.window_shown is False and obs.scene == SF.PAGES[page]
+
+
+def test_webcam_page_is_the_fallback_and_never_touches_the_d5100(obs, client):
+    obs.scene = "eBay Main"
+    r = SF.go(obs, "webcam")
+    assert r == {"page": "webcam", "changed": True, "focused": None, "refocus_s": None}
+    assert obs.scene == "Webcam Only" and obs.refocused == []
+    obs.scene = "Up Next"
+    body = client.post("/api/pager", json={"page": "webcam"}).json()
+    assert body["page"] == "webcam" and obs.refocused == []
 
 
 # --- destinations ------------------------------------------------------------

@@ -14,6 +14,8 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
 
   desktop scene "Desktop with Face Cam": one app window (Claude, say) on
           white under the webcam strip; `setup --desktop-window` picks it.
+  webcam  scene "Webcam Only": the fallback. The webcam alone, filling the
+          frame, with the mic. Never touches the D5100.
 
 `page next` fades to Up Next while the host swaps the item on the podium.
 `page item` refocuses the D5100 while the current page is still on air
@@ -23,7 +25,7 @@ connection: live view has to stop, autofocus, restart).
 
     python tools/live/show_flow.py setup [--window "Fair Hand"] [--intro-text "Starting\\nsoon"]
     python tools/live/show_flow.py feed start|stop|status
-    python tools/live/show_flow.py page intro|item|next|desktop [--json] [--no-refocus]
+    python tools/live/show_flow.py page intro|item|next|desktop|webcam [--json] [--no-refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
@@ -71,12 +73,19 @@ REPO = Path(__file__).resolve().parents[2]
 FEED = REPO / "tools" / "d5100_webcam.sh"
 FEED_PATTERN = r"^/bin/bash .*d5100_webcam\.sh$"
 FEED_LOG = Path(tempfile.gettempdir()) / "d5100_feed.log"
+# The feed script writes a frame to $SNAP (default ${TMPDIR:-/tmp}/<this>)
+# every 2 s while frames flow. Its age tells "running" from "running but
+# failing every 2 s" (camera off, unplugged).
+FEED_SNAP = "d5100_latest.jpg"
+FEED_STALE = 10  # seconds without a new frame before status says so
 
 COLLECTION = "eBay Live"
 INTRO, PRODUCT, UPNEXT = "Intro", "eBay Main", "Up Next"
 DESKTOP = "Desktop with Face Cam"
+WEBCAM_ONLY = "Webcam Only"
 # The pager's pages, in running order: what callers say -> OBS scene name.
-PAGES = {"intro": INTRO, "item": PRODUCT, "next": UPNEXT, "desktop": DESKTOP}
+PAGES = {"intro": INTRO, "item": PRODUCT, "next": UPNEXT, "desktop": DESKTOP,
+         "webcam": WEBCAM_ONLY}
 D5, WEBCAM, WINDOW, MIC = "Nikon D5100", "Webcam", "Window Capture (Xcomposite)", "Mic/Aux"
 BG = "Up Next BG"
 INTRO_TEXT = "Intro Text"
@@ -110,12 +119,21 @@ TWITCH_OUT = {"RecType": "FFmpeg", "FFOutputToFile": "false", "FFFormat": "flv",
               "FFAEncoder": "aac", "FFAEncoderId": "86018",       # AV_CODEC_ID_AAC
               "FFVBitrate": "3000", "FFVGOPSize": "60", "FFABitrate": "160",
               "FFVCustom": "preset=veryfast", "FFUseRescale": "false", "FFAudioMixes": "1"}
-# Up Next (and any other page carrying the window) shows whatever the captured window shows *now*: one browser window
-# can be on the store page at setup and on the stream itself (a feedback
-# loop), mail or My eBay later. Before Up Next goes on air the pager reads
-# the window's live title (OBS's own list can be stale) and hides the window
-# when it matches this, or can't be read; viewers then get the dark card and
-# the webcam strip.
+# Up Next is the only page that may ever show the desktop window (WINDOW);
+# every other page only ever hides it. Up Next shows whatever the captured
+# window shows *now*: one browser window can be on the store page at setup
+# and on the stream itself (a feedback loop), mail or My eBay later. So
+# before Up Next goes on air the pager reads the window's live title (OBS's
+# own list can be stale) and shows the window only when the title matches
+# SAFE_WINDOW and not PRIVATE_WINDOW. Anything else (a full-screen capture,
+# the desktop shell, Google Ads, GitHub, a closed window) is hidden, and
+# viewers get the dark card and the webcam strip.
+#
+# SAFE_WINDOW, the allowlist: public pages of ours. eBay titles listing,
+# search and store pages "<title> | eBay" and "<store> | eBay Stores".
+SAFE_WINDOW = re.compile(r"\| eBay\b|pop[’']?s games|popsgames", re.I)
+# PRIVATE_WINDOW, a veto on top: hidden even with "| eBay" in the title
+# (eBay Live, Seller Hub, My eBay, Twitch, mail, terminals, ...).
 PRIVATE_WINDOW = re.compile(
     r"twitch|ebay live|stream manager|show pager|gmail|inbox|mail|private browsing|my ebay|"
     r"bids & offers|seller hub|orders|paypal|bank|konsole|terminal|bash|claude", re.I)
@@ -128,6 +146,11 @@ LOCK_WAIT = 30  # seconds: a refocus takes ~5, so a queued click still goes thro
 WEBCAM_BOX = {"positionX": 0, "positionY": 0, "alignment": 5, "rotation": 0,
               "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 4,
               "boundsWidth": W, "boundsHeight": 608, "cropToBounds": False}
+# the webcam page: the webcam cover-cropped into the top 1080x1350 (4:5);
+# the values of the hand-built "Webcam Only" scene setup now maintains
+WEBCAM_ONLY_BOX = {"positionX": 0, "positionY": 0, "alignment": 5,
+                   "boundsType": "OBS_BOUNDS_SCALE_OUTER", "boundsWidth": W, "boundsHeight": 1350,
+                   "cropToBounds": True}
 
 
 # --- OBS helpers -------------------------------------------------------------
@@ -220,6 +243,42 @@ def feed_start() -> None:
                      start_new_session=True)
 
 
+def _proc_env(pid: int) -> dict:
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes().decode(errors="replace")
+    except OSError:
+        return {}
+    return dict(kv.split("=", 1) for kv in raw.split("\0") if "=" in kv)
+
+
+def feed_snaps(pids) -> list[Path]:
+    """Where the feed writes its 2 s frame: $SNAP or $TMPDIR as the feed's own
+    process sees them (a feed started from another shell can differ), then ours."""
+    out = []
+    for p in pids:
+        env = _proc_env(p)
+        out.append(Path(env.get("SNAP") or Path(env.get("TMPDIR") or "/tmp") / FEED_SNAP))
+    return out + [Path(os.environ.get("SNAP") or Path(tempfile.gettempdir()) / FEED_SNAP)]
+
+
+def feed_status(pids=None) -> str:
+    """"stopped", "running", or "running, no frames for Ns" when the loop is
+    alive but no frame has landed lately (camera off: gphoto2 fails every 2 s)."""
+    pids = feed_pids() if pids is None else pids
+    if not pids:
+        return "stopped"
+    ages = []
+    for snap in feed_snaps(pids):
+        try:
+            ages.append(time.time() - snap.stat().st_mtime)
+        except OSError:
+            pass
+    if not ages:
+        return "running, no frames yet"
+    age = min(ages)
+    return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
+
+
 def refocus_d5(c) -> tuple[bool, float]:
     """Stop live view, autofocus, restart; returns (focus locked, seconds until
     OBS shows moving D5 frames again). The D5100 refuses autofocus ("Unspecified
@@ -254,23 +313,27 @@ def cmd_setup(c, a):
         raise obsctl.ObsError(f"scene collection {COLLECTION!r} lacks {sorted(missing)}; "
                               "install tools/live/obs/scenes/eBay_Live.json (docs/live-streaming-setup.md)")
     if a.window:
-        props = c.call("GetInputPropertiesListPropertyItems",
-                       {"inputName": WINDOW, "propertyName": "capture_window"})["propertyItems"]
-        match = [p for p in props if a.window.lower() in p["itemName"].lower()]
-        if not match:
-            raise obsctl.ObsError(f"no open window matches {a.window!r}")
-        c.call("SetInputSettings", {"inputName": WINDOW, "inputSettings": {"capture_window": match[0]["itemValue"]}})
-        print(f"window: {match[0]['itemName']}")
+        value, live = pick_window(c, a.window)
+        c.call("SetInputSettings", {"inputName": WINDOW, "inputSettings": {"capture_window": value}})
+        print(f"window: {live}")
+        if not window_safe(live):
+            print("  Up Next will hide it: the title isn't a public eBay / Pop's Games page "
+                  "(show_flow.SAFE_WINDOW)")
 
-    # Product: D5 rotated to portrait (the camera is mounted on its side), cover-cropped
+    # Product: D5 rotated to portrait (the camera is mounted on its side), cover-cropped.
+    # The stand-in keeps its state: with it on, the D5 stays off, the white
+    # panel under the webcam.
+    sub = standin_on(c)
     set_box(c, PRODUCT, D5, {"positionX": W / 2, "positionY": H / 2, "alignment": 0, "rotation": a.d5_rotation,
                              "boundsType": "OBS_BOUNDS_SCALE_OUTER", "boundsAlignment": 0,
-                             "boundsWidth": H, "boundsHeight": W, "cropToBounds": True})
+                             "boundsWidth": H, "boundsHeight": W, "cropToBounds": True}, enabled=not sub)
     set_box(c, PRODUCT, WEBCAM, WEBCAM_BOX)
     set_box(c, PRODUCT, WINDOW, enabled=False)
     if OVERLAY in inputs:
         set_box(c, PRODUCT, OVERLAY, enabled=False)
-    stack(c, PRODUCT, [D5, WEBCAM])
+    has_standin = STANDIN in {i["sourceName"] for i in
+                              c.call("GetSceneItemList", {"sceneName": PRODUCT})["sceneItems"]}
+    stack(c, PRODUCT, [STANDIN, D5, WEBCAM] if has_standin else [D5, WEBCAM])
 
     # Up Next: dark card, window centered, webcam strip on top
     if UPNEXT not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
@@ -284,6 +347,7 @@ def cmd_setup(c, a):
                                 "boundsAlignment": 0, "boundsWidth": W - 40, "boundsHeight": H - 800})
     set_box(c, UPNEXT, WEBCAM, WEBCAM_BOX)
     stack(c, UPNEXT, [BG, WINDOW, WEBCAM])
+    guard_window(c)  # set_box just showed it; Up Next may be on air
 
     # Intro: the pre-show card, text centered on the same dark background
     if INTRO not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
@@ -300,8 +364,25 @@ def cmd_setup(c, a):
     set_box(c, INTRO, INTRO_TEXT, {"positionX": W / 2, "positionY": H / 2, "alignment": 0, "rotation": 0})
     stack(c, INTRO, [BG, INTRO_TEXT])
 
+    # Webcam Only: the fallback page, the webcam alone on the dark background
+    if WEBCAM_ONLY not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        c.call("CreateScene", {"sceneName": WEBCAM_ONLY})
+    set_box(c, WEBCAM_ONLY, BG)
+    set_box(c, WEBCAM_ONLY, WEBCAM, WEBCAM_ONLY_BOX)
+    item(c, WEBCAM_ONLY, MIC)
+    stack(c, WEBCAM_ONLY, [BG])
+    n = len(c.call("GetSceneItemList", {"sceneName": WEBCAM_ONLY})["sceneItems"])
+    c.call("SetSceneItemIndex", {"sceneName": WEBCAM_ONLY, "sceneItemId": item(c, WEBCAM_ONLY, WEBCAM),
+                                 "sceneItemIndex": n - 1})  # on top of anything hand-added
+
     if a.desktop_window or DESKTOP_WIN in inputs:
         build_desktop(c, a.desktop_window, a.desktop_crop_left)
+
+    # Only Up Next may show the desktop window (a stray one turned up in Intro)
+    scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
+    for scene in PAGES.values():
+        if scene != UPNEXT and scene in scenes:
+            hide_window(c, scene)
 
     c.call("SetCurrentSceneTransition", {"transitionName": "Fade"})
     c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": FADE_MS})
@@ -314,7 +395,7 @@ def cmd_feed(c, a):
     elif a.action == "start":
         feed_start()
         time.sleep(3)
-    print(f"D5100 feed: {'running' if feed_pids() else 'stopped'}  (log {FEED_LOG})")
+    print(f"D5100 feed: {feed_status()}  (log {FEED_LOG})")
 
 
 # --- the pager: the API the CLI below and webapp/pager.py share --------------
@@ -447,27 +528,68 @@ def page_of(scene: str) -> str | None:
     return next((k for k, v in PAGES.items() if v == scene), None)
 
 
-def window_title(c) -> str | None:
-    """The Up Next window's current title, or None if it's gone."""
-    v = c.call("GetInputSettings", {"inputName": WINDOW})["inputSettings"].get("capture_window", "")
-    wid = v.split("\r\n", 1)[0].strip()
+def live_title(capture: str) -> str | None:
+    """The live X title of an Xcomposite `capture_window` value
+    ("<window id>\\r\\n<title>\\r\\n<class>"), or None if that window is gone."""
+    wid = (capture or "").split("\r\n", 1)[0].strip()
     if not wid.isdigit():
         return None
-    r = subprocess.run(["xprop", "-id", wid, "_NET_WM_NAME"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["xprop", "-id", wid, "_NET_WM_NAME"], capture_output=True, text=True)
+    except OSError:  # no xprop: treat as unreadable, so the guard hides
+        return None
     title = r.stdout.partition("=")[2].strip().strip('"') if r.returncode == 0 else ""
     return title or None
 
 
-def guard_window(c, scene: str = UPNEXT) -> dict | None:
-    """Show or hide the desktop window in `scene` by its live title
-    (PRIVATE_WINDOW). None if the scene doesn't carry the window."""
-    items = c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]
+def window_title(c) -> str | None:
+    """The Up Next window's current title, or None if it's gone."""
+    return live_title(c.call("GetInputSettings", {"inputName": WINDOW})["inputSettings"]
+                      .get("capture_window", ""))
+
+
+def window_safe(title: str | None) -> bool:
+    """May Up Next show a window with this live title? SAFE_WINDOW, minus PRIVATE_WINDOW."""
+    return bool(title) and bool(SAFE_WINDOW.search(title)) and not PRIVATE_WINDOW.search(title)
+
+
+def pick_window(c, title: str) -> tuple[str, str]:
+    """(capture_window value, live title) of the first window whose name in
+    OBS's list contains `title` and that is still open. OBS's list keeps
+    windows that have since closed."""
+    props = c.call("GetInputPropertiesListPropertyItems",
+                   {"inputName": WINDOW, "propertyName": "capture_window"})["propertyItems"]
+    match = [p for p in props if title.lower() in p["itemName"].lower()]
+    if not match:
+        raise obsctl.ObsError(f"no open window matches {title!r}")
+    for p in match:
+        live = live_title(p["itemValue"])
+        if live:
+            return p["itemValue"], live
+    raise obsctl.ObsError(f"{title!r} matches {', '.join(repr(p['itemName']) for p in match)} in "
+                          "OBS's window list, but that window is closed; open it and re-run setup")
+
+
+def hide_window(c, scene: str) -> None:
+    """Disable the desktop window in `scene`, if it's there. Every page but
+    Up Next goes through this: they may hide the window, never show it."""
+    for i in c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]:
+        if i["sourceName"] == WINDOW and i["sceneItemEnabled"]:
+            c.call("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": i["sceneItemId"],
+                                           "sceneItemEnabled": False})
+
+
+def guard_window(c) -> dict | None:
+    """Show or hide the window in Up Next by its live title (window_safe).
+    None if Up Next doesn't carry the window."""
+    items = c.call("GetSceneItemList", {"sceneName": UPNEXT})["sceneItems"]
     ids = [i["sceneItemId"] for i in items if i["sourceName"] == WINDOW]
     if not ids:
         return None
     title = window_title(c)
-    safe = bool(title) and not PRIVATE_WINDOW.search(title)
-    c.call("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": ids[0], "sceneItemEnabled": safe})
+    safe = window_safe(title)
+    for i in ids:
+        c.call("SetSceneItemEnabled", {"sceneName": UPNEXT, "sceneItemId": i, "sceneItemEnabled": safe})
     return {"title": title, "shown": safe}
 
 
@@ -477,9 +599,11 @@ def state(c) -> dict:
     scene = program(c)
     out = streams(c)
     on = [s["timecode"] for s in out.values() if s["live"]]
+    pids = feed_pids()
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
             "live": bool(on), "timecode": max(on) if on else None,
-            "streams": out, "feed": bool(feed_pids()), "standin": standin_on(c)}
+            "streams": out, "feed": bool(pids), "feed_status": feed_status(pids),
+            "standin": standin_on(c)}
 
 
 def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> None:
@@ -493,12 +617,7 @@ def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> 
         c.call("CreateInput", {"sceneName": DESKTOP, "inputName": STANDIN, "inputKind": "color_source_v3",
                                "inputSettings": {"color": 0xFFFFFFFF, "width": W, "height": H}})
     if title:
-        props = c.call("GetInputPropertiesListPropertyItems",
-                       {"inputName": WINDOW, "propertyName": "capture_window"})["propertyItems"]
-        match = [p for p in props if title.lower() in p["itemName"].lower()]
-        if not match:
-            raise obsctl.ObsError(f"no open window matches {title!r}")
-        settings = {"capture_window": match[0]["itemValue"], "show_cursor": True}
+        settings = {"capture_window": pick_window(c, title)[0], "show_cursor": True}
         if DESKTOP_WIN in inputs:
             c.call("SetInputSettings", {"inputName": DESKTOP_WIN, "inputSettings": settings})
         else:
@@ -553,10 +672,12 @@ def go(c, page: str, refocus: bool = True) -> dict:
         out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
         if program(c) == PAGES[page]:
             return out
-        if page != "item":  # any page that shows the desktop window
-            w = guard_window(c, PAGES[page])
+        if page == "next":  # the one page allowed to show the desktop window
+            w = guard_window(c)
             if w:
                 out["window"] = w
+        else:
+            hide_window(c, PAGES[page])
         if page == "item" and refocus and not standin_on(c):
             out["focused"], secs = refocus_d5(c)
             out["refocus_s"] = round(secs, 1)
@@ -652,13 +773,13 @@ def cmd_status(c, a):
     print(f"on air: {page + ' (' + scene + ')' if page else scene}")
     for dest, s in streams(c).items():
         print(f"{dest}: {'LIVE ' + s['timecode'] if s['live'] else 'off'}")
-    print(f"D5100 feed: {'running' if feed_pids() else 'stopped'}")
+    print(f"D5100 feed: {feed_status()}")
 
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("setup", help="build/refresh the intro, item and next pages")
+    s = sub.add_parser("setup", help="build/refresh the intro, item, next and webcam pages")
     s.add_argument("--window", help="title substring of the desktop window for Up Next")
     s.add_argument("--intro-text", default="Starting\nsoon", help="the pre-show card's text; \\n breaks a line")
     s.add_argument("--desktop-window", help="title substring of the app window for the desktop page")
