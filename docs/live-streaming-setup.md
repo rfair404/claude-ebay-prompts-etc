@@ -265,12 +265,24 @@ python tools/live/show_flow.py stop                     # both; or: stop ebay | 
 `render skipped` (the GPU/compositor missed frames) and `output skipped`
 (the encoders couldn't keep up). Both should stay near 0. If they climb:
 check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
-(section 2), then check what else is running. The laptop has 4 cores and
-16 GB. During a Twitch run on 2026-10-22 its load average was 65, swap
-was full, and OBS took 71 ms to render each frame (the budget at 30 FPS
-is 33 ms). The cause was about 25 parallel ffmpeg loudness scans, a test
-suite and several browser and Claude windows. Keep batch jobs (music
-analysis, pytest, listing runs) off this machine while a show is live.
+(section 2), then check the power and what else is running.
+
+- **Power.** The laptop (ThinkPad X1 Yoga, 4 cores, 16 GB) needs a proper
+  USB-C charger. On 2026-10-22 it was powered through the Targus dock at a
+  5 V x 3 A (15 W) contract, and every core sat at 1.2 GHz under load. Before
+  a show, this should print `20000000` (20 V) for the charging port, and
+  the clocks should rise well above 1200 under load:
+
+  ```bash
+  cat /sys/class/power_supply/ucsi-source-psy-*/voltage_now; awk '/MHz/{printf "%d ", $4}' /proc/cpuinfo; echo
+  ```
+
+- **Other jobs.** During a Twitch run on 2026-10-22 the load average was
+  65, swap was full, and OBS took 71 ms to render each frame (the budget at
+  30 FPS is 33 ms). The cause was about 25 parallel ffmpeg loudness scans,
+  a test suite and several browser and Claude windows. Keep batch jobs
+  (music analysis, pytest, listing runs) off this machine while a show is
+  live.
 
 **closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
 (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
