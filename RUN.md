@@ -31,7 +31,9 @@ always goes there, even from a session in a worktree. A worktree's
 `tools/worktree_link.py` when the session starts. So write through the
 worktree path (`<worktree>/inventory/<name>/draft.md`). The desktop app's
 worktree write guard refuses the spelled-out `<main>/inventory/...` path and
-every other base-checkout path. See CLAUDE.md, "Pipeline data".
+every other base-checkout path. `reports/` is linked the same way, so a
+report written from a worktree lands in main's `reports/`, which both offsite
+backups copy. See CLAUDE.md, "Pipeline data".
 
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
     list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish

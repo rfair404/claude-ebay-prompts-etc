@@ -20,7 +20,7 @@
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/tools/worktree_link.py\"",
             "timeout": 15,
-            "statusMessage": "link worktree inventory/"
+            "statusMessage": "link worktree inventory/ and reports/"
           }
         ]
       }
@@ -32,7 +32,7 @@
             "type": "command",
             "command": "python \"$CLAUDE_PROJECT_DIR/tools/worktree_link.py\"",
             "timeout": 15,
-            "statusMessage": "link worktree inventory/"
+            "statusMessage": "link worktree inventory/ and reports/"
           }
         ]
       }
