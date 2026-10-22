@@ -2,7 +2,7 @@
 
 ```yaml
 triggers: [jewelry, jewellery, ring, necklace, pendant, locket, bracelet, bangle, brooch, "brooch pin", earrings, cufflinks, "tie clip", chain, charm, parure, hallmark, karat, "10k", "14k", "18k", "carat gold", sterling, "925", "gold filled", "gold-filled", vermeil, "costume jewelry", rhinestone, "signed jewelry", "diamond ring", "gemstone ring", "set gemstone"]
-version: 1
+version: 1.1.0
 last_reviewed: 2026-06-18
 coverage: v1 (built from four deep-research passes). SOURCE-VERIFIED: metals/marks (FTC);
   British + German + Russian + Mexican hallmark decode; diamond + corundum + assembled-stone +
