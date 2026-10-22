@@ -104,12 +104,11 @@ One command puts any page on air:
 - `wb [PRESET]` reads or sets the D5100's white balance: `auto`,
   `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
   `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
-  them). Too orange under bulbs: `tungsten`; too blue: `daylight` or
-  `cloudy`; when unsure, `auto`. It needs the USB connection, so it freezes
-  the D5 like a refocus (~5 s, hidden behind Up Next on item/multi), takes
-  the same lock and refuses while the stand-in is on. D5100 only; the TG-7
-  isn't touched. Unverified on hardware: whether the live-view feed (not
-  just stills) changes. Look at `obsctl.py shot program` after setting it.
+  them). It needs the USB connection, so it freezes the D5 like a refocus
+  (~5 s, hidden behind Up Next on item/multi), takes the same lock and
+  refuses while the stand-in is on. D5100 only; the TG-7 isn't touched.
+  Unverified on hardware: whether the live-view feed (not just stills)
+  changes. Look at `obsctl.py shot program` after setting it.
 - `page item --refocus` refocuses first, behind the current page, then
   switches (fails fast, staying put, if the camera isn't on USB).
 - `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
