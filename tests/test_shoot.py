@@ -164,7 +164,7 @@ def test_still_d5_hides_behind_up_next_and_restarts_the_feed(d5, tmp_path):
     r = SF.still_d5(c, tmp_path / "item")
     assert r["files"] == d5.saved
     assert d5.log[:3] == ["stop", "--auto-detect", "capture"] and d5.running
-    assert c.switches == ["Up Next", "eBay Main"]
+    assert c.switches == ["Up Next", "eBay Main (camera 1)"]
 
 
 def test_a_still_that_fails_says_why_and_leaves_the_feed_running(d5, tmp_path):
@@ -172,4 +172,4 @@ def test_a_still_that_fails_says_why_and_leaves_the_feed_running(d5, tmp_path):
     c = CamObs(["old", "new"])
     with pytest.raises(obsctl.ObsError, match=r"Out of Focus \*\*\* \(autofocus can't lock"):
         SF.still_d5(c, tmp_path / "item")
-    assert d5.running and c.scene == "eBay Main"
+    assert d5.running and c.scene == "eBay Main (camera 1)"

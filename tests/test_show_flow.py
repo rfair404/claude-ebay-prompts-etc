@@ -88,6 +88,13 @@ class SceneObs:
             assert d["sceneName"] not in self.scenes
             self.scenes[d["sceneName"]] = []
             return {}
+        if req == "SetSceneName":  # OBS keeps the scene's place, items and program status
+            assert d["sceneName"] in self.scenes and d["newSceneName"] not in self.scenes, d
+            self.scenes = {d["newSceneName"] if n == d["sceneName"] else n: stack
+                           for n, stack in self.scenes.items()}
+            if self.program == d["sceneName"]:
+                self.program = d["newSceneName"]
+            return {}
         if req == "GetSceneItemList":
             if d["sceneName"] not in self.scenes:
                 raise obsctl.ObsError(f"{req} failed: code 600 No source was found by the name of "
@@ -278,6 +285,37 @@ def test_live_title_reads_x_and_treats_a_bad_window_as_closed(monkeypatch):
     assert REAL_LIVE_TITLE("999\r\nThe Fair Hand\r\nfirefox") is None
     assert REAL_LIVE_TITLE("") is None
     assert seen == [["xprop", "-id", "111", "_NET_WM_NAME"], ["xprop", "-id", "999", "_NET_WM_NAME"]]
+
+
+# --- Russell's scene renames (2026-10-22) -----------------------------------
+def test_setup_renames_scenes_still_on_the_old_names(capsys):
+    c = live_obs()
+    c.scenes = {("eBay Main" if n == SF.PRODUCT else n): stack for n, stack in c.scenes.items()}
+    c.scenes["Close-up"] = [c._new(SF.MIC)]  # hand-added, so it must survive the rename
+    item_ids = [i["sceneItemId"] for i in c.scenes["eBay Main"]]
+    mic_id = c.scenes["Close-up"][0]["sceneItemId"]
+    c.program = "eBay Main"
+    SF.cmd_setup(c, args())
+    assert "eBay Main" not in c.scenes and "Close-up" not in c.scenes
+    assert SF.PRODUCT in c.scenes and SF.CLOSEUP in c.scenes  # dict keys: no duplicates possible
+    # the old scene's own items, set up in place: nothing re-added beside them
+    assert set(item_ids) <= {i["sceneItemId"] for i in c.scenes[SF.PRODUCT]}
+    assert c.count(SF.PRODUCT, SF.D5) == 1 and c.count(SF.PRODUCT, SF.WEBCAM) == 1
+    assert mic_id in {i["sceneItemId"] for i in c.scenes[SF.CLOSEUP]} and SF.TG7 in c.order(SF.CLOSEUP)
+    assert c.program == SF.PRODUCT
+    out = capsys.readouterr().out
+    assert "renamed scene 'eBay Main' -> 'eBay Main (camera 1)'" in out
+    assert "renamed scene 'Close-up' -> 'Close-up (camera 2)'" in out
+
+
+def test_setup_leaves_an_old_named_scene_alone_when_the_new_one_exists(capsys):
+    c = live_obs()  # already on the new names
+    c.scenes["eBay Main"] = [c._new(SF.WEBCAM)]  # a stray copy under the old name
+    SF.cmd_setup(c, args())
+    assert c.order("eBay Main") == [SF.WEBCAM]  # untouched, not renamed over the real one
+    assert c.count(SF.PRODUCT, SF.D5) == 1 and c.count(SF.PRODUCT, SF.WEBCAM) == 1
+    assert "Close-up" not in c.scenes  # build_closeup made only the new one
+    assert "renamed" not in capsys.readouterr().out
 
 
 # --- the webcam page ----------------------------------------------------------

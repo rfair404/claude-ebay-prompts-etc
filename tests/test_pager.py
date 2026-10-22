@@ -199,7 +199,7 @@ def obs(tmp_path, monkeypatch):
 def test_pages_are_the_seven_in_running_order():
     assert list(SF.PAGES) == ["intro", "item", "closeup", "next", "desktop", "webcam", "multi"]
     assert SF.PAGES["multi"] == "Multi View"
-    assert SF.PAGES["closeup"] == "Close-up"
+    assert SF.PAGES["closeup"] == "Close-up (camera 2)"
     assert SF.PAGES["webcam"] == "Webcam Only"
     assert SF.PAGES["item"] == SF.PRODUCT and SF.PAGES["next"] == SF.UPNEXT
     # the HTTP body schema names the same pages
@@ -225,7 +225,7 @@ def test_state_maps_scene_to_page(obs):
 def test_going_to_item_is_one_scene_switch_with_no_camera_work(obs):
     obs.scene = "Up Next"
     r = SF.go(obs, "item")
-    assert obs.refocused == [] and obs.switches == ["eBay Main"]
+    assert obs.refocused == [] and obs.switches == ["eBay Main (camera 1)"]
     assert r == {"page": "item", "changed": True, "focused": None, "refocus_s": None}
 
 
@@ -233,19 +233,19 @@ def test_item_with_refocus_refocuses_behind_the_current_page(obs):
     obs.scene = "Up Next"
     r = SF.go(obs, "item", refocus=True)
     assert obs.refocused == ["Up Next"]
-    assert obs.switches == ["eBay Main"]
+    assert obs.switches == ["eBay Main (camera 1)"]
     assert r == {"page": "item", "changed": True, "focused": True, "refocus_s": 5.0}
 
 
 def test_going_to_intro_or_next_does_not_touch_the_camera(obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     assert SF.go(obs, "next")["focused"] is None
     SF.go(obs, "intro")
     assert obs.switches == ["Up Next", "Intro"] and obs.refocused == []
 
 
 def test_page_already_on_air_is_left_alone(obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     assert SF.go(obs, "item")["changed"] is False
     assert obs.switches == [] and obs.refocused == []
 
@@ -256,10 +256,10 @@ def test_unknown_page_is_refused(obs):
 
 
 def test_refocus_on_item_hides_behind_up_next(obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     assert SF.refocus(obs) == {"focused": True, "refocus_s": 5.0}
     assert obs.refocused == ["Up Next"]
-    assert obs.switches == ["Up Next", "eBay Main"]
+    assert obs.switches == ["Up Next", "eBay Main (camera 1)"]
 
 
 def test_refocus_off_the_item_page_stays_put(obs):
@@ -278,7 +278,7 @@ def test_a_page_switch_never_waits_for_a_refocus(obs, monkeypatch):
         SF.go(obs, "next")
         with pytest.raises(SF.Busy):
             SF.go(obs, "item", refocus=True)
-    assert obs.switches == ["Up Next", "eBay Main", "Up Next"] and obs.refocused == []
+    assert obs.switches == ["Up Next", "eBay Main (camera 1)", "Up Next"] and obs.refocused == []
     assert SF.state(obs)["refocusing"] is False
     assert SF.refocus(obs)["focused"] is True  # released
 
@@ -384,7 +384,7 @@ def test_take_puts_preview_on_air_with_its_transition_and_swaps(client, obs):
     assert client.get("/api/pager").json()["preview"] == "item"
     body = client.post("/api/pager/take", json={"transition": "Swipe", "duration_ms": 800}).json()
     assert body["page"] == "item" and body["switch"]["changed"] is True
-    assert obs.cuts == [("eBay Main", "Swipe", 800)]
+    assert obs.cuts == [("eBay Main (camera 1)", "Swipe", 800)]
     assert body["preview"] == "intro"  # what was on air is lined up next, like a vision mixer
     # the page sends what was on preview when take was pressed, so a later click can't change it
     body = client.post("/api/pager/take", json={"page": "next", "transition": "Cut"}).json()
@@ -406,14 +406,14 @@ def test_a_transition_obs_lacks_is_named_and_nothing_switches(client, obs):
 def test_a_plain_switch_fades_again_after_a_cut(client, obs):
     client.post("/api/pager", json={"page": "item", "transition": "Cut"})
     SF.go(obs, "next")  # the shell's `page next`: the 300 ms fade, not the pager's last cut
-    assert obs.cuts == [("eBay Main", "Cut", 300), ("Up Next", "Fade", 300)]
+    assert obs.cuts == [("eBay Main (camera 1)", "Cut", 300), ("Up Next", "Fade", 300)]
 
 
 def test_a_refocus_after_a_slow_take_hides_with_the_fade_it_waits_for(client, obs):
     obs.scene = "Intro"
     client.post("/api/pager/take", json={"page": "item", "transition": "Swipe", "duration_ms": 800})
     SF.refocus(obs)  # its sleep covers FADE_MS, so the hide must be that fade, not the 800 ms swipe
-    assert obs.cuts[1:] == [("Up Next", "Fade", SF.FADE_MS), ("eBay Main", "Fade", SF.FADE_MS)]
+    assert obs.cuts[1:] == [("Up Next", "Fade", SF.FADE_MS), ("eBay Main (camera 1)", "Fade", SF.FADE_MS)]
 
 
 def test_transitions_lists_the_collections(client, obs):
@@ -429,7 +429,7 @@ def test_preview_is_local_only(client, obs):
 
 
 def test_post_refocus(client, obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     r = client.post("/api/pager/refocus")
     assert r.status_code == 200 and r.json()["refocus"]["focused"] is True
     assert r.json()["page"] == "item"
@@ -511,11 +511,11 @@ def test_refocus_fails_fast_when_the_camera_is_off(monkeypatch):
 
 
 def test_preview_is_a_jpeg_of_the_program_scene(client, obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     r = client.get("/api/pager/preview.jpg")
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
-    assert r.content == b"\xff\xd8eBay Main" and r.headers["cache-control"] == "no-store"
-    assert obs.shots == [{"sourceName": "eBay Main", "imageFormat": "jpg",
+    assert r.content == b"\xff\xd8eBay Main (camera 1)" and r.headers["cache-control"] == "no-store"
+    assert obs.shots == [{"sourceName": "eBay Main (camera 1)", "imageFormat": "jpg",
                           "imageWidth": 360, "imageCompressionQuality": 60}]
     assert obs.switches == [] and obs.refocused == [] and obs.closed
 
@@ -524,8 +524,8 @@ def test_a_tile_is_a_small_jpeg_of_that_pages_scene_on_air_or_not(client, obs):
     obs.scene = "Intro"
     r = client.get("/api/pager/tile/item.jpg")
     assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
-    assert r.content == b"\xff\xd8eBay Main" and r.headers["cache-control"] == "no-store"
-    assert obs.shots == [{"sourceName": "eBay Main", "imageFormat": "jpg",
+    assert r.content == b"\xff\xd8eBay Main (camera 1)" and r.headers["cache-control"] == "no-store"
+    assert obs.shots == [{"sourceName": "eBay Main (camera 1)", "imageFormat": "jpg",
                           "imageWidth": 160, "imageCompressionQuality": 50}]
     assert obs.switches == [] and obs.refocused == []  # looking never switches or touches a camera
     assert client.get("/api/pager/tile/outro.jpg").status_code == 422
@@ -646,7 +646,7 @@ def test_safe_window_is_an_allowlist_with_a_veto():
 
 
 def test_refocus_checks_the_window_before_hiding_behind_up_next(obs):
-    obs.scene, obs.title = "eBay Main", "Twitch \u2014 Mozilla Firefox"
+    obs.scene, obs.title = "eBay Main (camera 1)", "Twitch \u2014 Mozilla Firefox"
     SF.refocus(obs)
     assert obs.window_shown is False
 
@@ -693,7 +693,7 @@ def test_other_pages_only_ever_hide_the_window(obs, page):
 
 
 def test_webcam_page_is_the_fallback_and_never_touches_the_d5100(obs, client):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     r = SF.go(obs, "webcam")
     assert r == {"page": "webcam", "changed": True, "focused": None, "refocus_s": None}
     assert obs.scene == "Webcam Only" and obs.refocused == []
@@ -842,7 +842,7 @@ def test_standin_route(client, obs, monkeypatch):
 
 
 def test_desktop_page_switches_without_camera_or_window_guard(obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     r = SF.go(obs, "desktop")
     assert obs.scene == "Desktop with Face Cam" and r["focused"] is None
     assert "window" not in r and obs.refocused == []
@@ -871,10 +871,10 @@ def test_a_failed_refocus_on_item_fades_back_to_item(obs, monkeypatch):
     def fail(c):
         raise obsctl.ObsError("gphoto2 --set-config autofocusdrive=1 hung for 15s")
     monkeypatch.setattr(SF, "refocus_d5", fail)
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     with pytest.raises(obsctl.ObsError, match="^refocus failed: gphoto2"):
         SF.refocus(obs)
-    assert obs.switches == ["Up Next", "eBay Main"]
+    assert obs.switches == ["Up Next", "eBay Main (camera 1)"]
 
 
 def test_a_switch_made_during_a_refocus_wins(obs, monkeypatch):
@@ -882,7 +882,7 @@ def test_a_switch_made_during_a_refocus_wins(obs, monkeypatch):
         c.scene = "Intro"  # another caller's switch lands mid-refocus
         return True, 5.0
     monkeypatch.setattr(SF, "refocus_d5", host_clicks_intro)
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     SF.refocus(obs)
     assert obs.scene == "Intro"  # not yanked back to item
     obs.scene = "Up Next"
@@ -897,7 +897,7 @@ def test_next_asked_for_during_a_refocus_stays_on_next(obs, monkeypatch):
         assert SF.go(c, "next")["changed"] is False
         return True, 5.0
     monkeypatch.setattr(SF, "refocus_d5", host_clicks_next)
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     SF.refocus(obs)
     assert obs.scene == "Up Next" and obs.switches == ["Up Next"]
     r = SF.go(obs, "item", refocus=True)  # from Up Next: the host asks for Next again
@@ -906,9 +906,9 @@ def test_next_asked_for_during_a_refocus_stays_on_next(obs, monkeypatch):
 
 def test_a_refocus_with_no_switch_meanwhile_fades_back_to_item(obs, monkeypatch):
     SF.go(obs, "intro")  # an earlier switch's mark doesn't count
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     SF.refocus(obs)
-    assert obs.scene == "eBay Main"
+    assert obs.scene == "eBay Main (camera 1)"
 
 
 # --- the D5100: a refocus never strands the feed; OBS reopens the source ----
@@ -918,7 +918,7 @@ class CamObs(FakeObs):
     sets back."""
 
     def __init__(self, pictures=("x",), after_reopen=None):
-        super().__init__(scene="eBay Main")
+        super().__init__(scene="eBay Main (camera 1)")
         self.pictures = list(pictures)  # one per screenshot; the last one repeats
         self.after_reopen = after_reopen
         self.device_ids = {SF.D5: "/dev/video10", SF.WEBCAM: "/dev/video0"}
@@ -1005,7 +1005,7 @@ def test_refocus_survives_obs_702_right_after_the_standin_comes_off(camera):
     r = SF.refocus(c)
     assert r["focused"] is True
     assert camera.running and camera.log[:2] == ["stop", "--auto-detect"] and "start" in camera.log
-    assert c.switches == ["Up Next", "eBay Main"]  # hidden for the freeze, then back on item
+    assert c.switches == ["Up Next", "eBay Main (camera 1)"]  # hidden for the freeze, then back on item
 
 
 def test_obs_picking_the_feed_up_by_itself_needs_no_reopen(camera):
@@ -1035,7 +1035,7 @@ def test_a_failed_refocus_leaves_the_feed_running(camera, fault, message):
     with pytest.raises(obsctl.ObsError, match=message):
         SF.refocus(c)
     assert camera.running and camera.log[-1] == "start"
-    assert c.scene == "eBay Main"  # the item view is back, not stranded on Up Next
+    assert c.scene == "eBay Main (camera 1)"  # the item view is back, not stranded on Up Next
 
 
 def test_feed_start_makes_obs_reopen_the_source(camera, capsys):
@@ -1102,7 +1102,7 @@ def test_reconnect_route_and_cli(client, camera, monkeypatch, capsys):
 class HoldObs(FakeObs):
     """FakeObs plus the Hold Frame image source and OBS's own screenshots."""
 
-    def __init__(self, scene="eBay Main"):
+    def __init__(self, scene="eBay Main (camera 1)"):
         super().__init__(scene)
         self.hold_settings = {"file": "", "unload": False}
         self.shots = []  # (scene, path, width, height)
@@ -1131,10 +1131,10 @@ def held(obs, tmp_path, monkeypatch):
 
 
 def test_hold_freezes_the_camera_page_on_air(held):
-    held.scene = "Close-up"
+    held.scene = "Close-up (camera 2)"
     assert SF.hold(held) == {"held": "closeup", "changed": True}
     (scene, path, w, h), = held.shots
-    assert scene == "Close-up" and (w, h) == (SF.W, SF.H) and path.endswith("hold-a.jpg")
+    assert scene == "Close-up (camera 2)" and (w, h) == (SF.W, SF.H) and path.endswith("hold-a.jpg")
     assert held.hold_settings["file"] == path and held.hold_settings[SF.HELD] == "closeup"
     assert held.switches == ["Hold"]
     st = SF.state(held)
@@ -1170,7 +1170,7 @@ def test_release_goes_back_to_the_page_held_or_where_asked(held):
     assert SF.release(held)["page"] == "item"
     SF.hold(held)
     assert SF.release(held, "closeup")["page"] == "closeup"
-    assert held.switches == ["Hold", "eBay Main", "Hold", "Close-up"]
+    assert held.switches == ["Hold", "eBay Main (camera 1)", "Hold", "Close-up (camera 2)"]
     SF.hold(held)
     with pytest.raises(ValueError):
         SF.release(held, "next")
@@ -1180,9 +1180,9 @@ def test_step_walks_wide_closeup_hold_and_alternates_after_the_hold(held):
     seen = []
     for _ in range(6):
         seen.append(SF.step(held)["action"])
-    assert held.switches == ["Close-up", "Hold", "eBay Main", "Close-up", "Hold", "eBay Main"]
+    assert held.switches == ["Close-up (camera 2)", "Hold", "eBay Main (camera 1)", "Close-up (camera 2)", "Hold", "eBay Main (camera 1)"]
     assert seen == ["page", "hold", "release", "page", "hold", "release"]
-    assert [s for s, *_ in held.shots] == ["Close-up", "Close-up"]
+    assert [s for s, *_ in held.shots] == ["Close-up (camera 2)", "Close-up (camera 2)"]
 
 
 def test_step_from_a_hold_of_the_wide_view_goes_to_the_closeup(held):
@@ -1201,7 +1201,7 @@ def test_refocus_on_the_closeup_is_the_tg7s_and_leaves_the_d5_alone(obs, monkeyp
     calls = []
     cam = SimpleNamespace(autofocus=lambda: calls.append("af") or "ok", CamError=RuntimeError)
     monkeypatch.setattr(SF, "tg7cam", lambda: cam)
-    obs.scene = "Close-up"
+    obs.scene = "Close-up (camera 2)"
     obs.standin_shown = True  # the D5 stand-in doesn't matter to the TG-7
     r = SF.refocus(obs)
     assert r["camera"] == "tg7" and r["focused"] is True
@@ -1215,15 +1215,15 @@ def test_a_tg7_refocus_failure_is_an_obs_error_for_the_pager(obs, monkeypatch):
     def af():
         raise CamError("can't reach the camera at 192.168.0.10")
     monkeypatch.setattr(SF, "tg7cam", lambda: SimpleNamespace(autofocus=af, CamError=CamError))
-    obs.scene = "Close-up"
+    obs.scene = "Close-up (camera 2)"
     with pytest.raises(obsctl.ObsError, match="TG-7: can't reach"):
         SF.refocus(obs)
 
 
 def test_closeup_page_is_a_plain_switch(obs):
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     assert SF.go(obs, "closeup")["changed"] is True
-    assert obs.switches == ["Close-up"] and obs.refocused == []
+    assert obs.switches == ["Close-up (camera 2)"] and obs.refocused == []
 
 
 def test_hold_step_and_tg7_routes(held, monkeypatch, no_tg7_feed):
@@ -1292,7 +1292,7 @@ def wbcam(camera, monkeypatch):
     return WbCamera(monkeypatch, camera.snap)
 
 
-@pytest.mark.parametrize("scene", ["eBay Main", "Multi View"])
+@pytest.mark.parametrize("scene", ["eBay Main (camera 1)", "Multi View"])
 def test_wb_sets_a_preset_behind_up_next_and_comes_back(wbcam, scene):
     c = moving_d5()
     c.scene = scene
@@ -1308,7 +1308,7 @@ def test_wb_without_a_preset_reads_it_and_still_restarts_the_feed(wbcam):
     r = SF.wb(c)
     assert (r["wb"], r["choices"], r["changed"]) == ("Automatic", D5100_WB, False)
     assert wbcam.log == ["stop", "--auto-detect", "--get-config", "start"]  # nothing set
-    assert c.switches == ["Up Next", "eBay Main"] and wbcam.running
+    assert c.switches == ["Up Next", "eBay Main (camera 1)"] and wbcam.running
 
 
 def test_wb_already_set_sends_nothing(wbcam):
@@ -1338,7 +1338,7 @@ def test_an_unknown_wb_preset_lists_the_choices_and_sets_nothing(wbcam):
                                               r"the D5100 offers Automatic, Daylight, .*Preset"):
         SF.wb(c, "purple")
     assert wbcam.log == ["stop", "--auto-detect", "--get-config", "start"] and wbcam.wb == "Automatic"
-    assert c.scene == "eBay Main"  # the feed came back first, then the item view
+    assert c.scene == "eBay Main (camera 1)"  # the feed came back first, then the item view
 
 
 def test_a_wb_the_camera_refuses_is_an_error_after_the_feed_is_back(wbcam):
@@ -1346,7 +1346,7 @@ def test_a_wb_the_camera_refuses_is_an_error_after_the_feed_is_back(wbcam):
     c = moving_d5()
     with pytest.raises(obsctl.ObsError, match="refused white balance 'Flash'.*Unspecified error"):
         SF.wb(c, "flash")
-    assert wbcam.log[-1] == "start" and wbcam.running and c.scene == "eBay Main"
+    assert wbcam.log[-1] == "start" and wbcam.running and c.scene == "eBay Main (camera 1)"
 
 
 def test_wb_refuses_while_the_standin_is_on(obs):
@@ -1358,14 +1358,14 @@ def test_wb_refuses_while_the_standin_is_on(obs):
 def test_wb_on_the_closeup_sets_the_d5_without_a_cover_and_leaves_the_tg7(wbcam, monkeypatch):
     monkeypatch.setattr(SF, "tg7cam", lambda: pytest.fail("touched the TG-7"))
     c = moving_d5()
-    c.scene = "Close-up"
+    c.scene = "Close-up (camera 2)"
     assert SF.wb(c, "shade")["wb"] == "Shade"
     assert c.switches == [] and wbcam.wb == "Shade"
 
 
 def test_wb_and_refocus_share_the_lock(obs, monkeypatch):
     monkeypatch.setattr(SF, "LOCK_WAIT", 0)
-    obs.scene = "eBay Main"
+    obs.scene = "eBay Main (camera 1)"
     with SF.exclusive():
         with pytest.raises(SF.Busy, match="refocus, WB change or still is already running"):
             SF.wb(obs, "auto")

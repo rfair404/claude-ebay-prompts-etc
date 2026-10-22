@@ -6,9 +6,9 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
 
   intro   scene "Intro": the pre-show card ("Starting soon") on the dark
           background. No cameras.
-  item    scene "eBay Main": the Nikon D5100 full frame, the webcam full
+  item    scene "eBay Main (camera 1)": the Nikon D5100 full frame, the webcam full
           width across the top third.
-  closeup scene "Close-up": the OM TG-7 (over Wi-Fi, tools/live/tg7cam)
+  closeup scene "Close-up (camera 2)": the OM TG-7 (over Wi-Fi, tools/live/tg7cam)
           under the same webcam strip. `tg7 start` runs its feed.
   next    scene "Up Next": the pause / next-item card. A desktop window (the
           next lot's page, the store, ...) centered on the dark background,
@@ -131,8 +131,11 @@ FEED_SNAP = "d5100_latest.jpg"
 FEED_STALE = 10  # seconds without a new frame before status says so
 
 COLLECTION = "eBay Live"
-INTRO, PRODUCT, UPNEXT = "Intro", "eBay Main", "Up Next"
-CLOSEUP = "Close-up"
+INTRO, PRODUCT, UPNEXT = "Intro", "eBay Main (camera 1)", "Up Next"
+CLOSEUP = "Close-up (camera 2)"
+# Russell renamed these two in OBS by hand (2026-10-22). `setup` renames a
+# scene still on its old name, so no collection ends up with both.
+RENAMED = {"eBay Main": PRODUCT, "Close-up": CLOSEUP}  # old name -> current
 DESKTOP = "Desktop with Face Cam"
 WEBCAM_ONLY = "Webcam Only"
 MULTI = "Multi View"
@@ -1099,6 +1102,18 @@ def watch_run(every: float = WATCH_EVERY) -> int:
     return 0
 
 
+def rename_old_scenes(c) -> list[str]:
+    """Rename each scene still on an old name (RENAMED) to its current one,
+    unless a scene by the current name already exists. Returns what moved."""
+    scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
+    moved = []
+    for old, new in RENAMED.items():
+        if old in scenes and new not in scenes:
+            c.call("SetSceneName", {"sceneName": old, "newSceneName": new})
+            moved.append(f"{old!r} -> {new!r}")
+    return moved
+
+
 # --- commands ----------------------------------------------------------------
 def cmd_setup(c, a):
     if c.call("GetSceneCollectionList")["currentSceneCollectionName"] != COLLECTION:
@@ -1109,6 +1124,8 @@ def cmd_setup(c, a):
     if missing:
         raise obsctl.ObsError(f"scene collection {COLLECTION!r} lacks {sorted(missing)}; "
                               "install tools/live/obs/scenes/eBay_Live.json (docs/live-streaming-setup.md)")
+    for moved in rename_old_scenes(c):  # before anything below creates or edits them
+        print(f"renamed scene {moved}")
     if a.window:
         value, live = pick_window(c, a.window)
         c.call("SetInputSettings", {"inputName": WINDOW, "inputSettings": {"capture_window": value}})
