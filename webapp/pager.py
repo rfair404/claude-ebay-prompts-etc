@@ -402,6 +402,8 @@ button:disabled { opacity:.5; cursor:wait; }
 .dest .go { padding:4px 12px; border-radius:4px; border:1px solid var(--line); background:var(--panel); min-width:64px; }
 .dest.live { border-color:var(--pgm); } .dest.live .st { color:var(--pgm); font-weight:700; }
 .dest.live .go { background:var(--pgm); border-color:var(--pgm); color:#fff; }
+button.armed { background:var(--warn) !important; border-color:var(--warn) !important; color:#111 !important; }
+button.armed::after { content:"? click again"; }
 #music.on { border-color:var(--ok); } #music.on .st { color:var(--ok); }
 #music.on .go { background:var(--ok); border-color:var(--ok); color:#06150d; }
 .kpis { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; margin-top:6px; }
@@ -761,12 +763,27 @@ const ASK = {
   'twitch stop': 'Stop the Twitch stream?',
   'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
 };
+// Risky buttons take two clicks instead of confirm(): the desktop app's browser
+// pane blocks native dialogs, so confirm() said "cancel" at once and the button
+// looked dead. The first click arms it (amber, the question in the status bar)
+// for 5 s; a second click on the same action does it. The key names the action,
+// so if the state flips in between (a stream stopped elsewhere), it re-arms.
+function sure(btn, key, question) {
+  if (btn.dataset.armed === key) { disarm(btn); return true; }
+  disarm(btn);
+  btn.dataset.armed = key; btn.classList.add('armed');
+  btn._disarm = setTimeout(() => { disarm(btn); if ($('#msg').textContent === question) say(''); }, 5000);
+  $('#msg').textContent = question; $('#msg').className = 'warn';
+  return false;
+}
+function disarm(btn) { clearTimeout(btn._disarm); delete btn.dataset.armed; btn.classList.remove('armed'); }
 function streamButtons(on) { document.querySelectorAll('.dest[data-dest] .go').forEach(b => b.disabled = on); }
 async function stream(dest) {
   if (streaming) return;
   const live = document.querySelector('.dest[data-dest="' + dest + '"]').classList.contains('live');
   const action = live ? 'stop' : 'start';
-  if (!confirm(ASK[dest + ' ' + action])) return;
+  const btn = document.querySelector('.dest[data-dest="' + dest + '"] .go');
+  if (!sure(btn, dest + ' ' + action, ASK[dest + ' ' + action])) return;
   streaming = true; streamButtons(true);
   say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
   try {
@@ -841,7 +858,7 @@ async function tg7() {
   if (tg7Busy) return;
   const action = $('#tg7').textContent.startsWith('Stop') ? 'stop' : 'start';
   if (action === 'stop' && curPage === 'closeup' &&
-      !confirm('The close-up page is on air. Stop the TG-7 feed anyway?')) return;
+      !sure($('#tg7'), 'stop', 'The close-up page is on air. Stop the TG-7 feed anyway?')) return;
   tg7Busy = true; $('#tg7').disabled = true; epoch++;
   say(action === 'start' ? 'Starting the TG-7 feed...' : 'Stopping the TG-7 feed...');
   try { const st = await api('POST', '/api/pager/tg7', { action }, 15000);

@@ -445,6 +445,8 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     assert "/api/pager/tile/" in r.text and "tilesOn && !document.hidden" in r.text
     assert "filter(p => p !== curPage)" in r.text and 'id="tiletoggle"' in r.text
     assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
+    # risky buttons confirm in the page, never with confirm(): the app's browser pane blocks it
+    assert "confirm(" not in r.text and "sure(btn, dest + ' ' + action" in r.text
 
 
 # --- the Up Next window guard ----------------------------------------------

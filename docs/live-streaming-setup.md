@@ -333,7 +333,7 @@ a refocus runs; the last one pressed wins. The same pager is served as JSON for 
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
 "start"}`. The page has Start/Stop buttons for eBay and Twitch,
-each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
+each confirmed by a second click within 5 s (the button turns amber and the status bar asks; no pop-up, which the desktop app's browser pane would block). `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
 
 **Verify:** `python tools/live/obsctl.py status` prints the OBS version and
