@@ -6,7 +6,7 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop", "refocus": true}
+    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop" | "webcam", "refocus": true}
     POST /api/pager/refocus     refocus the D5100 without changing page
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
@@ -14,18 +14,22 @@ page, a phone, or another agent's web app can drive the show:
 Every answer is the state object, plus `switch` or `refocus` on a POST:
 
     {"page": "item", "scene": "eBay Main", "pages": ["intro", "item", "next"],
-     "live": true, "timecode": "00:12:03.400", "feed": true,
+     "live": true, "timecode": "00:12:03.400", "feed": true, "feed_status": "running",
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
      "switch": {"page": "item", "changed": true, "focused": true, "refocus_s": 5.2}}
 
-`page` is null when OBS is on a scene that isn't one of the three. eBay and
+`page` is null when OBS is on a scene that isn't one of the pager's.
+`feed_status` is "stopped", "running", or "running, no frames for Ns" (the
+feed loop is up but the camera sends nothing). eBay and
 Twitch start and stop independently (show_flow DESTS: eBay on OBS's stream
 output, Twitch on its recording output); a start blocks ~5 s while it
 checks that bytes are flowing, and is public on Twitch the moment it lands.
 A switch to `next` also carries `window: {"title", "shown"}`: the Up Next
-window is hidden (card + webcam only) when its live title looks private or
-is the stream itself (show_flow.PRIVATE_WINDOW). `focused: false` means the
+window is shown only when its live title is a public eBay / Pop's Games
+page (show_flow.SAFE_WINDOW) and not a private one (PRIVATE_WINDOW);
+otherwise card + webcam only. Every other page hides the window.
+`webcam` is the fallback page: the webcam alone, no D5100. `focused: false` means the
 D5100's autofocus couldn't lock (nothing with
 contrast at the center of the frame); the page still switched.
 
@@ -68,7 +72,7 @@ class StreamRequest(BaseModel):
 
 
 class PageRequest(BaseModel):
-    page: Literal["intro", "item", "next", "desktop"]
+    page: Literal["intro", "item", "next", "desktop", "webcam"]
     refocus: bool = True  # false: item without the D5100 (rehearsal, battery swap)
 
 
@@ -131,7 +135,7 @@ def pager_refocus() -> dict:
 # The control page. Plain HTML + fetch against the routes above, same
 # origin, so the guard's Origin check passes. It polls every 2 s, so a
 # switch made from the shell (show_flow.py page ...) shows up here too.
-# Keys: 1 intro, 2 item, 3 next, 4 desktop, R refocus.
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, R refocus.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -189,6 +193,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
   <button class="page" data-page="desktop"><span class="key">4</span>
     <span><b>Desktop</b><small>Desktop with face cam: app window + webcam</small></span></button>
+  <button class="page" data-page="webcam"><span class="key">5</span>
+    <span><b>Webcam only</b><small>Fallback: face cam + mic, no D5100</small></span></button>
 </div>
 <div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button></div>
 <h2>Streams</h2>
@@ -222,7 +228,7 @@ function show(st) {
   if (!busy) $('#standin').checked = !!st.standin;
   $('#refocus').hidden = !!st.standin;
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
-                           ' \\u00b7 D5100 feed: ' + (st.feed ? 'running' : 'stopped');
+                           ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped'));
 }
 
 async function api(method, path, body) {
@@ -318,7 +324,7 @@ document.querySelectorAll('.dest').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop' }[e.key];
+  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
 });
 poll();

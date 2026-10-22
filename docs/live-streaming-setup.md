@@ -11,7 +11,7 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | Piece | Lives in |
 |---|---|
 | OBS eBay profile + vertical scene (no secrets) | `tools/live/obs/` |
-| Nikon D5100 webcam feed | `tools/live/d5100-webcam.sh` |
+| Nikon D5100 webcam feed | `tools/d5100_webcam.sh` (what `show_flow.py feed start` runs) |
 | OM System TG-7 Wi-Fi control | `tools/live/tg7cam` |
 | OBS remote control, no GUI | `tools/live/obsctl.py` |
 | Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
@@ -86,6 +86,14 @@ paste `rtmp://live.twitch.tv/app/<stream key>` (Twitch dashboard > Settings
 > Stream), and click OK. The cost: no local recording while Twitch is
 live, and a second encode. The old `Untitled` profile is no longer used.
 
+**After `twitch-setup`, Record is Twitch.** In the `Ebay` profile, OBS's
+Start Recording button (or a recording hotkey) starts a *public* Twitch
+broadcast, not a file. To record to a file again, with nothing live: OBS
+Settings > Output > Recording > Type **Standard** (or `python
+tools/live/obsctl.py call SetProfileParameter
+'{"parameterCategory":"AdvOut","parameterName":"RecType","parameterValue":"Standard"}'`).
+The Twitch URL stays in the profile; `twitch-setup` switches back.
+
 Don't run Tools > Auto-Configuration Wizard on the eBay profile: its bandwidth
 test only speaks RTMP (it fails with "Unknown protocol" against the WHIP URL)
 and it rewrites the output settings.
@@ -137,10 +145,13 @@ sudo apt install gphoto2 ffmpeg
 ```
 
 **user:** USB cable in, mode dial on M or A, camera on. Then run
-`tools/live/d5100-webcam.sh` and leave it running; in OBS add Sources > Video
+`python tools/live/show_flow.py feed start` (it runs `tools/d5100_webcam.sh`
+detached and restarts it if live view drops); in OBS add Sources > Video
 Capture Device (V4L2) > "Nikon D5100".
 
-**Verify:** `gphoto2 --auto-detect` lists the D5100.
+**Verify:** `gphoto2 --auto-detect` lists the D5100, and `show_flow.py feed
+status` says `running`. `running, no frames for Ns` means the feed loop is up
+but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
 
 ## 5. OM System TG-7 (close-up camera)
 
@@ -199,20 +210,34 @@ authentication. The password stays in OBS's own config, and
 `tools/live/obsctl.py` reads it from there. The Flatpak OBS listens on every
 interface, so the password is what keeps the LAN out.
 
+Run order, from the repo root:
+
 ```bash
-python tools/live/obsctl.py launch            # OBS minimized to the tray, no window
-python tools/live/show_flow.py feed start     # tools/d5100_webcam.sh (self-restarting), detached
-python tools/live/show_flow.py setup --window "<title substring>"
-python tools/live/show_flow.py page intro       # pre-show card, before going live
-python tools/live/show_flow.py golive ebay --confirm    # and/or: golive twitch --confirm
-python tools/live/show_flow.py page item | next # the pager; also: refocus
+python tools/live/obsctl.py launch            # 1. OBS minimized to the tray, no window
+python tools/live/show_flow.py feed start     # 2. tools/d5100_webcam.sh (self-restarting), detached
+python tools/live/show_flow.py feed status    #    want "running", not "running, no frames for Ns"
+python tools/live/show_flow.py setup --window "<title substring>"   # 3. build/refresh the pages
+python tools/live/show_flow.py standin on     # 4. only if the D5100 is out (setup keeps this state)
+python tools/live/show_flow.py page intro     # 5. pre-show card, before going live
+/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
+python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
+python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
+
+`show_flow.py` and `obsctl.py` need only the standard library; the web app
+needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not
+the system Python: `python -m lib.cli serve` under system Python fails.
 
 `setup` builds the show's pages in the `eBay Live` collection (a fourth,
 **desktop** = scene `Desktop with Face Cam`, an app window such as Claude on
 white under the webcam, comes with `--desktop-window "<title>"`; `standin
-on|off` swaps the D5100 for a white panel when its battery is dead).
+on|off` swaps the D5100 for a white panel when its battery is dead, and a
+later `setup` leaves it as it was). `--window` must name a window that is
+still open: OBS's window list keeps closed ones, and setup refuses them.
+**webcam** (scene `Webcam Only`) is the fallback page: the webcam alone,
+cover-cropped to the top 1080x1350 of the dark background, with the mic. It
+never touches the D5100, so it's where to go if the camera dies mid-show.
 **intro** (scene `Intro`) is the pre-show card: `--intro-text`, default
 "Starting soon", on a dark background with no cameras. **item** (scene
 `eBay Main`) is the D5100 full frame (rotated 270 for the side-mounted
@@ -226,14 +251,21 @@ fades to the item view. `next` and `back` still work as aliases of
 Up Next shows whatever its window shows *at that moment*, and a browser
 window drifts: the store page at setup can be Twitch (a feedback loop),
 Stream manager or My eBay an hour later. So before Up Next goes on air, the
-pager reads the window's live title and hides the window if it matches
-`show_flow.PRIVATE_WINDOW` (Twitch, eBay Live, mail, private browsing, My
-eBay, orders, terminals, ...) or is closed. Viewers then get the dark card
-and the webcam strip. Keep the next lot's page in a window of its own.
+pager reads the window's live title and shows the window only if it is on
+the allowlist `show_flow.SAFE_WINDOW` (an eBay listing, search or store page,
+"... | eBay"; "Pop's Games"; "popsgames") and not vetoed by
+`show_flow.PRIVATE_WINDOW` (Twitch, eBay Live, Seller Hub, My eBay, mail,
+private browsing, orders, terminals, ...). Anything else, including a closed
+window, a full-screen desktop capture or a non-eBay site, is hidden: viewers
+get the dark card and the webcam strip. Keep the next lot's page in a window
+of its own. Up Next is the only page that ever shows that window; every
+other page (and `setup`) only hides it.
 
-The local web app (`python -m lib.cli serve`) has a control page at
+The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
+the repo venv) has a control page at
 http://localhost:8770/pager: one button per page, a Refocus button, the
-LIVE timer, and keys 1/2/3/R. The same pager is served as JSON for other
+LIVE timer, the D5100 feed status, and keys 1-5 (intro, item, next,
+desktop, webcam) and R. The same pager is served as JSON for other
 pages or agents:
 `GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus` and `POST /api/pager/stream {"dest": "twitch",
