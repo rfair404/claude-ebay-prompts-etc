@@ -408,6 +408,13 @@ def test_a_plain_switch_fades_again_after_a_cut(client, obs):
     assert obs.cuts == [("eBay Main", "Cut", 300), ("Up Next", "Fade", 300)]
 
 
+def test_a_refocus_after_a_slow_take_hides_with_the_fade_it_waits_for(client, obs):
+    obs.scene = "Intro"
+    client.post("/api/pager/take", json={"page": "item", "transition": "Swipe", "duration_ms": 800})
+    SF.refocus(obs)  # its sleep covers FADE_MS, so the hide must be that fade, not the 800 ms swipe
+    assert obs.cuts[1:] == [("Up Next", "Fade", SF.FADE_MS), ("eBay Main", "Fade", SF.FADE_MS)]
+
+
 def test_transitions_lists_the_collections(client, obs):
     assert client.get("/api/pager/transitions").json() == {
         "transitions": ["Cut", "Fade", "Swipe"], "current": "Fade", "duration_ms": 300}
@@ -575,6 +582,8 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     # preview / program: a click or 1-7 lines a page up, Enter takes it, Shift+1-7 cuts straight to air
     assert "setPreview(b.dataset.page)" in r.text and "'/api/pager/take'" in r.text
     assert "e.key === 'Enter'" in r.text and 'id="pvwshot"' in r.text and 'id="trans"' in r.text
+    # the preview monitor renders continuously only with Multiview on; a pick hands the keys back
+    assert "(tilesOn || pvwShot !== page)" in r.text and r.text.count("e.target.blur()") == 2
     assert "if (busy)" not in r.text
     # the On-air preview: one frame at a time, nothing while hidden or switched off
     assert "/api/pager/preview.jpg" in r.text and 'id="shottoggle"' in r.text

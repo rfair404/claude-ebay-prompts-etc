@@ -1176,8 +1176,7 @@ def cmd_setup(c, a):
             hide_window(c, scene)
 
     build_down_panels(c)  # last: over every camera every page above has
-    c.call("SetCurrentSceneTransition", {"transitionName": "Fade"})
-    c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": FADE_MS})
+    set_transition(c, "Fade", FADE_MS)
     print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
 
 
@@ -1745,6 +1744,7 @@ def d5_covered(c, what: str, fn):
         hide = back in D5_PAGES.values()
         if hide:
             guard_window(c)
+            set_transition(c, "Fade", FADE_MS)  # not the pager's last (an 800 ms swipe): the sleep is FADE_MS
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
             time.sleep(FADE_MS / 1000)
         try:
@@ -1827,6 +1827,7 @@ def hold(c) -> dict:
     c.call("SetInputSettings", {"inputName": HOLD_FRAME,
                                 "inputSettings": {"file": str(path), HELD: page}})
     hide_window(c, HOLD)
+    set_transition(c, "Fade", FADE_MS)  # the hold's own fade, whatever the pager took last
     c.call("SetCurrentProgramScene", {"sceneName": HOLD})
     return {"held": page, "changed": True}
 

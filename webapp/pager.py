@@ -1125,11 +1125,15 @@ function previewShown() {
   $('.bus').classList.toggle('off', !previewOn);
   $('#shottoggle').textContent = previewOn ? 'Hide monitors' : 'Show monitors';
 }
-// The preview monitor: the lined-up page's scene, a frame every ~0.7 s while
-// one is lined up (the program monitor covers it when it's the page on air).
+// The preview monitor: one frame of the lined-up page's scene when it's lined
+// up, and a fresh one every ~0.7 s only while Multiview is on: like the
+// tiles, no continuous OBS render by default (a take always leaves the old
+// program lined up). The program monitor covers it when it's the page on air.
+let pvwShot = null;  // the page the monitor last showed
 async function pvwFrame() {
   const page = pvw;
-  if (page && page !== curPage && previewOn && !document.hidden) {
+  if (page && page !== curPage && previewOn && !document.hidden && (tilesOn || pvwShot !== page)) {
+    pvwShot = page;
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
     try {
       const r = await fetch('/api/pager/tile/' + page + '.jpg?width=270', { cache: 'no-store', signal: ctl.signal });
@@ -1159,8 +1163,9 @@ pvwFrame();
     $('#dur').value = ms;
   } catch (e) { log('Transitions: ' + e.message + ' (Fade and Cut still work)', 'warn'); }
 })();
-$('#trans').addEventListener('change', () => { try { localStorage.setItem('pager.trans', $('#trans').value); } catch (e) {} });
-$('#dur').addEventListener('change', () => { try { localStorage.setItem('pager.dur', $('#dur').value); } catch (e) {} });
+// blur after a pick, so 1-7 and Enter work again at once (the key guard skips a focused list or box)
+$('#trans').addEventListener('change', e => { e.target.blur(); try { localStorage.setItem('pager.trans', e.target.value); } catch (err) {} });
+$('#dur').addEventListener('change', e => { e.target.blur(); try { localStorage.setItem('pager.dur', e.target.value); } catch (err) {} });
 $('#auto').addEventListener('click', () => take(false));
 $('#cut').addEventListener('click', () => take(true));
 async function frame() {
