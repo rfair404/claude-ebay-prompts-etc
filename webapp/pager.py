@@ -5,7 +5,7 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
-    GET  /api/pager             what's on air
+    GET  /api/pager             what's on air, plus "music": {"ready", "on", "db", "track"}
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
@@ -15,6 +15,7 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
+    POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
 
@@ -78,11 +79,16 @@ from webapp.freight import _local_only
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "live"))
 import obsctl as _obsctl          # noqa: E402
 import show_flow as _show_flow    # noqa: E402
+import show_music as _show_music  # noqa: E402
 
 router = APIRouter(dependencies=[Depends(_local_only)])
 
 
 class StandinRequest(BaseModel):
+    on: bool
+
+
+class MusicRequest(BaseModel):
     on: bool
 
 
@@ -130,7 +136,7 @@ def pager_page() -> str:
 @router.get("/api/pager")
 def pager_state() -> dict:
     with _obs() as c:
-        return _show_flow.state(c)
+        return {**_show_flow.state(c), "music": _show_music.state(c)}
 
 
 @router.get("/api/pager/preview.jpg")
@@ -160,6 +166,15 @@ def pager_standin(req: StandinRequest) -> dict:
     with _obs() as c:
         _show_flow.standin(c, req.on)
         return _show_flow.state(c)
+
+
+# Not under show_flow's lock: a fade never touches the camera or the page, so
+# it can run during a refocus. show_music has its own lock, one fade at a time.
+@router.post("/api/pager/music")
+def pager_music(req: MusicRequest) -> dict:
+    with _obs() as c:
+        r = _show_music.set_on(c, req.on)
+        return {**_show_music.state(c), "fade": r}
 
 
 @router.post("/api/pager/refocus")
@@ -215,7 +230,7 @@ def pager_tg7(req: Tg7Request) -> dict:
 # Hold / release / step join the same queue, so a step pressed during a
 # switch lands after it, never before.
 # Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
-# Space step, R refocus, C reconnect cameras.
+# Space step, R refocus, C reconnect cameras, M music on/off.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -259,6 +274,8 @@ h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 .dest.live { border-color:var(--live); } .dest.live small { color:var(--live); font-weight:600; }
 .dest .go { padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-width:86px; }
 .dest.live .go { background:var(--live); border-color:var(--live); color:#fff; }
+#music.on { border-color:var(--on); } #music.on small { color:var(--on); font-weight:600; }
+#music.on .go { background:var(--on); border-color:var(--on); color:var(--on-ink); }
 .opt { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--muted); }
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
@@ -309,6 +326,11 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
     <button class="go">Start</button></div>
 </div>
+<h2>Music</h2>
+<div class="dests">
+  <div class="dest" id="music"><span><b>Background music</b><small class="st">...</small></span>
+    <button class="go">Start</button></div>
+</div>
 <label class="opt"><input type="checkbox" id="standin"> D5100 stand-in: white panel in the item view, no refocus (dead battery, rehearsal)</label>
 <p id="msg" role="status" aria-live="polite"></p>
 <footer id="foot"></footer>
@@ -337,7 +359,7 @@ function show(st) {
   badge.classList.toggle('live', !!st.live);
   $('#monitor').classList.toggle('live', !!st.live);
   $('#shottitle').textContent = st.live ? 'On air' : 'Program (off air)';
-  for (const el of document.querySelectorAll('.dest')) {
+  for (const el of document.querySelectorAll('.dest[data-dest]')) {
     const s = (st.streams || {})[el.dataset.dest] || {};
     el.classList.toggle('live', !!s.live);
     el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
@@ -350,6 +372,7 @@ function show(st) {
   // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
   $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
+  if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
@@ -374,6 +397,28 @@ async function api(method, path, body, ms) {
   return data;
 }
 
+let musicBusy = false;
+
+function showMusic(m) {
+  const el = $('#music'), go = el.querySelector('.go');
+  el.classList.toggle('on', !!m.on);
+  el.querySelector('.st').textContent = !m.ready ? 'not set up: run show_music.py setup'
+    : m.on ? 'playing' + (m.track ? ': ' + m.track : '') + ' (' + m.db + ' dB)' : 'off';
+  go.textContent = m.on ? 'Stop' : 'Start';
+  go.disabled = musicBusy || !m.ready;
+}
+
+// Fades run on their own flag, so a fade never blocks a page switch.
+async function music() {
+  if (musicBusy) return;
+  const on = !$('#music').classList.contains('on');
+  musicBusy = true; $('#music .go').disabled = true;
+  say(on ? 'Fading music in...' : 'Fading music out...');
+  try { const m = await api('POST', '/api/pager/music', { on }, 15000); musicBusy = false; showMusic(m);
+        say(on ? 'Music on.' : 'Music off.'); }
+  catch (e) { musicBusy = false; $('#music .go').disabled = false; say(e.message, 'err'); }
+}
+
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
 const ASK = {
   'twitch start': 'Go live on Twitch? It is public the moment it connects.',
@@ -382,7 +427,7 @@ const ASK = {
   'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
 };
 
-function streamButtons(on) { document.querySelectorAll('.go').forEach(b => b.disabled = on); }
+function streamButtons(on) { document.querySelectorAll('.dest[data-dest] .go').forEach(b => b.disabled = on); }
 
 async function stream(dest) {
   if (streaming) return;
@@ -557,6 +602,7 @@ $('#reconnect').addEventListener('click', reconnect);
 $('#hold').addEventListener('click', holdKey);
 $('#step').addEventListener('click', () => go('@step'));
 $('#tg7').addEventListener('click', tg7);
+$('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
   standinBusy = true; e.target.disabled = true; epoch++;
@@ -566,7 +612,7 @@ $('#standin').addEventListener('change', async e => {
   catch (err) { e.target.checked = !on; say('Stand-in ' + (on ? 'on' : 'off') + ' failed: ' + err.message, 'err'); }
   standinBusy = false; e.target.disabled = false;
 });
-document.querySelectorAll('.dest').forEach(el =>
+document.querySelectorAll('.dest[data-dest]').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
@@ -576,6 +622,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'c' || e.key === 'C') reconnect();
   else if (e.key === 'h' || e.key === 'H') holdKey();
   else if (e.key === ' ') { e.preventDefault(); go('@step'); }  // not also a click on a focused button
+  else if (e.key === 'm' || e.key === 'M') music();
 });
 poll();
 </script>

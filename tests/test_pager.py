@@ -102,6 +102,8 @@ class FakeObs:
             return {}
         if req == "GetInputSettings":
             return {"inputSettings": {"capture_window": self.capture}}
+        if req == "GetInputList":  # show_music.state(): no music source here
+            return {"inputs": []}
         if req == "GetSourceScreenshot":
             self.shots.append(data)
             return {"imageData": "data:image/jpg;base64," + base64.b64encode(b"\xff\xd8" + data["sourceName"].encode()).decode()}
