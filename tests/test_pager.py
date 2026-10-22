@@ -370,6 +370,9 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
         assert f'data-page="{page}"' in r.text
     for dest in SF.DESTS:
         assert f'data-dest="{dest}"' in r.text
+    # each stream row links to where that show is run or watched, in a new tab
+    assert 'href="https://www.ebay.com/ebaylive/studio" target="_blank"' in r.text
+    assert 'href="https://www.twitch.tv/popebasement" target="_blank"' in r.text
     assert "/api/pager/refocus" in r.text and "/api/pager/reconnect" in r.text
     assert "'5': 'webcam'" in r.text and "'6': 'closeup'" in r.text and "feed_status" in r.text
     assert "'7': 'multi'" in r.text

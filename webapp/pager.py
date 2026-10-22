@@ -286,6 +286,7 @@ h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 .dest { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px;
         border-radius:12px; border:1px solid var(--line); background:var(--panel); }
 .dest b { display:block; } .dest small { color:var(--muted); }
+.dest a.open { font-size:13px; font-weight:400; color:var(--muted); margin-left:8px; }
 .dest.live { border-color:var(--live); } .dest.live small { color:var(--live); font-weight:600; }
 .dest .go { padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-width:86px; }
 .dest.live .go { background:var(--live); border-color:var(--live); color:#fff; }
@@ -343,9 +344,9 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <button id="wbset">Set</button></div>
 <h2>Streams</h2>
 <div class="dests">
-  <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
+  <div class="dest" data-dest="ebay"><span><b>eBay<a class="open" href="https://www.ebay.com/ebaylive/studio" target="_blank" rel="noopener">Live Studio &#8599;</a></b><small class="st">off</small></span>
     <button class="go">Start</button></div>
-  <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
+  <div class="dest" data-dest="twitch"><span><b>Twitch<a class="open" href="https://www.twitch.tv/popebasement" target="_blank" rel="noopener">twitch.tv/popebasement &#8599;</a></b><small class="st">off</small></span>
     <button class="go">Start</button></div>
 </div>
 <h2>Music</h2>
