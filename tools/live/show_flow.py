@@ -274,12 +274,23 @@ def program(c) -> str:
     return c.call("GetCurrentProgramScene")["currentProgramSceneName"]
 
 
+def scene_shot(c, scene: str, width: int, quality: int) -> bytes:
+    """A JPEG of one scene as OBS renders it now. No camera, no lock."""
+    d = c.call("GetSourceScreenshot", {"sourceName": scene, "imageFormat": "jpg",
+                                       "imageWidth": width, "imageCompressionQuality": quality})
+    return base64.b64decode(d["imageData"].split(",", 1)[1])
+
+
 def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
     """A JPEG of what's on air (the program scene), for the pager's preview.
     No camera, no lock: OBS renders the scene it is already sending."""
-    d = c.call("GetSourceScreenshot", {"sourceName": program(c), "imageFormat": "jpg",
-                                       "imageWidth": width, "imageCompressionQuality": quality})
-    return base64.b64decode(d["imageData"].split(",", 1)[1])
+    return scene_shot(c, program(c), width, quality)
+
+
+def page_shot(c, page: str, width: int = 160, quality: int = 50) -> bytes:
+    """A small JPEG of one page's scene, on air or not: the pager's multiview
+    tile. A camera OBS only opens while it is shown renders black here."""
+    return scene_shot(c, PAGES[page], width, quality)
 
 
 class Busy(obsctl.ObsError):
@@ -797,15 +808,45 @@ def _on_twitch_profile(c) -> bool:
     return c.call("GetProfileList")["currentProfileName"] == TWITCH_PROFILE
 
 
+def _outputs(c) -> dict:
+    """OBS's raw status per destination; {} for a destination with no output."""
+    out = {dest: c.call(f"Get{kind}Status") for dest, kind in DESTS.items()}
+    if _on_twitch_profile(c):  # the stream output is Twitch here, not eBay
+        out["twitch"], out["ebay"] = out["ebay"], {}
+    return out
+
+
 def streams(c) -> dict:
     out = {}
-    for dest, kind in DESTS.items():
-        st = c.call(f"Get{kind}Status")
-        out[dest] = {"live": st["outputActive"],
-                     "timecode": st["outputTimecode"] if st["outputActive"] else None}
-    if _on_twitch_profile(c):  # the stream output is Twitch here, not eBay
-        out["twitch"], out["ebay"] = out["ebay"], {"live": False, "timecode": None}
+    for dest, st in _outputs(c).items():
+        on = bool(st.get("outputActive"))
+        out[dest] = {"live": on, "timecode": st["outputTimecode"] if on else None}
     return out
+
+
+def health(c) -> dict:
+    """The pager's telemetry: OBS's render and encode counters, and bytes
+    sent per destination (the page turns two readings into kbps). Counters
+    are cumulative since OBS started (frames) or the output started (bytes);
+    `skipped`/`frames` and `congestion` are null where OBS doesn't report
+    them (its record output, which carries Twitch)."""
+    s = c.call("GetStats")
+    outs = {}
+    for dest, st in _outputs(c).items():
+        on = bool(st.get("outputActive"))
+        outs[dest] = {"live": on, "bytes": st.get("outputBytes", 0) if on else 0,
+                      "skipped": st.get("outputSkippedFrames"), "frames": st.get("outputTotalFrames"),
+                      "congestion": st.get("outputCongestion"),
+                      "reconnecting": bool(st.get("outputReconnecting"))}
+
+    def n(key, places=None):  # an OBS without the counter reads 0, not a 500
+        return round(s.get(key) or 0, places)
+
+    return {"cpu": n("cpuUsage", 1), "mem_mb": n("memoryUsage"), "fps": n("activeFps", 1),
+            "frame_ms": n("averageFrameRenderTime", 1),
+            "render_skipped": n("renderSkippedFrames"), "render_frames": n("renderTotalFrames"),
+            "encode_skipped": n("outputSkippedFrames"), "encode_frames": n("outputTotalFrames"),
+            "disk_mb": n("availableDiskSpace"), "outputs": outs}
 
 
 def _profile_param(c, name: str) -> str:

@@ -69,6 +69,10 @@ class FakeObs:
             if req == f"Stop{kind}":
                 self.active[kind] = False
                 return {}
+        if req == "GetStats":
+            return {"cpuUsage": 12.345, "memoryUsage": 512.4, "activeFps": 29.97,
+                    "averageFrameRenderTime": 3.21, "renderSkippedFrames": 2, "renderTotalFrames": 9000,
+                    "outputSkippedFrames": 1, "outputTotalFrames": 9000, "availableDiskSpace": 50000.7}
         if req == "GetProfileList":
             return {"currentProfileName": self.profile}
         if req == "SetCurrentProfile":
@@ -241,7 +245,32 @@ def test_get_reports_what_is_on_air(client, obs):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
     assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None}  # one poll, not two
+    assert r.json()["health"]["cpu"] == 12.3  # and the telemetry rides the same poll
     assert obs.closed
+
+
+def test_health_reports_obs_counters_and_bytes_per_destination(obs):
+    obs.active["Stream"] = True
+    h = SF.health(obs)
+    assert (h["cpu"], h["mem_mb"], h["fps"], h["frame_ms"]) == (12.3, 512, 30.0, 3.2)
+    assert (h["render_skipped"], h["encode_skipped"], h["disk_mb"]) == (2, 1, 50001)
+    assert h["outputs"]["ebay"] == {"live": True, "bytes": 375000, "skipped": 0, "frames": 30,
+                                    "congestion": None, "reconnecting": False}
+    # Twitch rides the record output, which counts no frames: null, not 0
+    assert h["outputs"]["twitch"] == {"live": False, "bytes": 0, "skipped": None, "frames": None,
+                                      "congestion": None, "reconnecting": False}
+    # on the Twitch profile the stream output is Twitch's, and eBay reads as off
+    obs.profile = SF.TWITCH_PROFILE
+    h = SF.health(obs)
+    assert h["outputs"]["twitch"]["bytes"] == 375000 and h["outputs"]["ebay"]["live"] is False
+    assert SF.streams(obs)["ebay"] == {"live": False, "timecode": None}
+
+
+def test_health_from_an_obs_without_a_counter_reads_zero(obs, monkeypatch):
+    real = obs.call
+    monkeypatch.setattr(obs, "call", lambda req, data=None: {"cpuUsage": 5.0} if req == "GetStats" else real(req, data))
+    h = SF.health(obs)
+    assert h["cpu"] == 5.0 and h["fps"] == 0 and h["render_skipped"] == 0
 
 
 def test_post_switches_and_returns_state_plus_switch(client, obs):
@@ -348,6 +377,31 @@ def test_preview_is_a_jpeg_of_the_program_scene(client, obs):
     assert obs.switches == [] and obs.refocused == [] and obs.closed
 
 
+def test_a_tile_is_a_small_jpeg_of_that_pages_scene_on_air_or_not(client, obs):
+    obs.scene = "Intro"
+    r = client.get("/api/pager/tile/item.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content == b"\xff\xd8eBay Main" and r.headers["cache-control"] == "no-store"
+    assert obs.shots == [{"sourceName": "eBay Main", "imageFormat": "jpg",
+                          "imageWidth": 160, "imageCompressionQuality": 50}]
+    assert obs.switches == [] and obs.refocused == []  # looking never switches or touches a camera
+    assert client.get("/api/pager/tile/outro.jpg").status_code == 422
+    assert client.get("/api/pager/tile/item.jpg", headers={"host": "evil.example"}).status_code == 403
+
+
+def test_a_tile_for_a_scene_obs_lacks_names_it(client, obs, monkeypatch):
+    real = obs.call
+
+    def no_multi(req, data=None):
+        if req == "GetSourceScreenshot" and data["sourceName"] == SF.MULTI:
+            raise obsctl.ObsError("GetSourceScreenshot failed: code 600 No source was found by the "
+                                  f"name of `{SF.MULTI}`.")
+        return real(req, data)
+    monkeypatch.setattr(obs, "call", no_multi)
+    r = client.get("/api/pager/tile/multi.jpg")
+    assert r.status_code == 502 and "No source was found" in r.json()["detail"]
+
+
 def test_preview_never_waits_on_a_refocus(client, obs, monkeypatch):
     monkeypatch.setattr(SF, "LOCK_WAIT", 0)
     with SF.exclusive():
@@ -384,6 +438,10 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     # the On-air preview: one frame at a time, nothing while hidden or switched off
     assert "/api/pager/preview.jpg" in r.text and 'id="shottoggle"' in r.text
     assert "setTimeout(frame, 500)" in r.text and "previewOn && !document.hidden" in r.text
+    # the multiview: one tile at a time, off-air pages only, nothing while hidden or switched off
+    assert "/api/pager/tile/" in r.text and "tilesOn && !document.hidden" in r.text
+    assert "filter(p => p !== curPage)" in r.text and 'id="tiletoggle"' in r.text
+    assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
 
 
 # --- the Up Next window guard ----------------------------------------------

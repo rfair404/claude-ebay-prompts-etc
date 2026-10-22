@@ -279,6 +279,12 @@ def test_overlay_and_state_flow(client):
     assert client.post("/live/demo/state", json={"lot": None}).json()["lot"] is None
 
 
+def test_lineup_json_for_the_pager(client):
+    r = client.get("/live/demo/lineup")
+    assert r.status_code == 200 and [l["lot"] for l in r.json()["lots"]] == [1, 2]
+    assert client.get("/live/nope/lineup").status_code == 404
+
+
 def test_unknown_or_bad_show_is_404(client):
     assert client.get("/live/nope").status_code == 404
     assert client.get("/live/..%2Fx").status_code == 404
