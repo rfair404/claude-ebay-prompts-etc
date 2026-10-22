@@ -154,9 +154,11 @@ the command line, never silent.
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
 it; while it is there the same hook denies pytest, `show_music.py build`,
-PREP, `single-pass` and listing runs (the 2026-10-21 show skipped 99.4% of
-its frames beside them). A flag over 8 h old is ignored; a leftover one
-clears with `rm inventory/_live/ON_AIR`. The opt-out is `# on-air-ok: <reason>`.
+PREP, `prep_sheet_html.py`, `single-pass` and listing runs (the 2026-10-21
+show skipped 99.4% of its frames beside them). A flag over 8 h old is
+ignored. A leftover one clears with `rm inventory/_live/ON_AIR`, only after
+`show_flow.py status` reads eBay and Twitch both off; never stop the stream
+to get past it. The opt-out is `# on-air-ok: <reason>`.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — a

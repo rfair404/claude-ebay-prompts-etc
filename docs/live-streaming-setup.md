@@ -258,10 +258,12 @@ its frames while the show laptop also ran pytest, a music build and other
 batch jobs. `golive` now writes `inventory/_live/ON_AIR`, and `stop` removes
 it once nothing is live. While it is there, the shell hook
 (`tools/bg_guard.py`) refuses pytest, `show_music.py build`, PREP,
-`single-pass` and listing runs, even backgrounded, with "the show is live,
-so ... waits". Build the music before the show. If OBS dies without a
-`stop`, the flag stays: the guard ignores it after 8 hours, or clear it with
-`rm inventory/_live/ON_AIR` (from the main checkout).
+`prep_sheet_html.py`, `single-pass` and listing runs, even backgrounded,
+with "the show is live, so ... waits". Build the music before the show. If
+OBS dies without a `stop`, the flag stays: the guard ignores it after 8
+hours. To clear it sooner, check `show_flow.py status` first, and only if
+eBay and Twitch both read off, `rm inventory/_live/ON_AIR` (from the main
+checkout). Never stop the stream to get past the guard.
 
 `show_flow.py` and `obsctl.py` need only the standard library; the web app
 needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not

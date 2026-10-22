@@ -154,6 +154,7 @@ BATCH = [
     ("python tools/live/show_music.py build", "show_music.py build"),
     ("python /srv/repo/tools/live/show_music.py build", "show_music.py build"),
     ('cd "C:/repo" && python -m lib.photo_prep.prep shoot --auto', "PREP"),
+    ("python tools/prep_sheet_html.py shoot", "prep_sheet_html.py"),
     ("python -m lib.cli prep shoot --auto", "a prep or listing run"),
     ("python -m lib.cli single-pass shoot", "a prep or listing run"),
     ("python -m lib.cli --store junk listing --publish x", "a prep or listing run"),
@@ -167,6 +168,15 @@ def test_on_air_denies_batch_jobs_even_backgrounded(on_air_flag, cmd, job):
     reason = verdict({"command": cmd, "run_in_background": True})
     assert reason is not None and job in reason
     assert "show is live" in reason and str(on_air_flag) in reason
+
+
+def test_on_air_message_never_points_at_stopping_the_stream(on_air_flag):
+    """An agent that misjudges "no show is on air" must not end a live
+    broadcast: the way out is check status, then rm the flag."""
+    on_air_flag.write_text("{}")
+    reason = verdict({"command": "python -m pytest", "run_in_background": True})
+    assert "show_flow.py status" in reason and f"rm {on_air_flag}" in reason
+    assert "show_flow.py stop" not in reason
 
 
 @pytest.mark.parametrize("cmd,job", BATCH)

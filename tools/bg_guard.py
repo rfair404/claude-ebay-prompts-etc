@@ -95,6 +95,7 @@ ON_AIR_JOBS = (
     (re.compile(r"^python \S*tests[/\\]run_all\.py\b"), "the test suite"),
     (re.compile(r"^python \S*show_music\.py build\b"), "show_music.py build"),
     (re.compile(r"^python -m lib\.photo_prep\.prep\b"), "PREP"),
+    (re.compile(r"^python \S*tools[/\\]prep_sheet_html\.py\b"), "prep_sheet_html.py"),  # cv2 over every photo
     (re.compile(r"^python -m lib\.cli(?:\s+--store(?:=|\s+)\S+|\s+--all-stores)*"
                 r"\s+(?:prep|single-pass|listing)(?=\s|$)"), "a prep or listing run"),
     (re.compile(r"^python \S*lib[/\\]list_edit\.py\b"), "a listing run"),
@@ -196,8 +197,9 @@ def verdict(tool_input: dict) -> str | None:
         return (
             f"the show is live, so {job} waits: run it after the show (flag: {live}).\n"
             f"Batch work beside the 2026-10-21 show skipped 99.4% of its frames.\n"
-            f"If no show is on air, the flag is left over: `python tools/live/show_flow.py "
-            f"stop` clears it, or `rm {live}`. A flag older than {ON_AIR_STALE_H} h is ignored.\n"
+            f"Never stop the stream to get past this. If you think the flag is left over, "
+            f"check `python tools/live/show_flow.py status`: only if eBay and Twitch both "
+            f"read off, `rm {live}`. A flag older than {ON_AIR_STALE_H} h is ignored.\n"
             f"One instant read of this tool (--status, --check) runs with a leading "
             f"`# on-air-ok: <reason>`."
         )
