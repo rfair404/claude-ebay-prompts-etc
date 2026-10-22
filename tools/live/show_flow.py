@@ -808,33 +808,57 @@ def _on_twitch_profile(c) -> bool:
     return c.call("GetProfileList")["currentProfileName"] == TWITCH_PROFILE
 
 
-def _outputs(c) -> dict:
-    """OBS's raw status per destination; {} for a destination with no output."""
+def outputs(c) -> dict:
+    """OBS's raw status per destination; {} for a destination with no output.
+    One read serves both state() and health() in the pager's poll."""
     out = {dest: c.call(f"Get{kind}Status") for dest, kind in DESTS.items()}
     if _on_twitch_profile(c):  # the stream output is Twitch here, not eBay
         out["twitch"], out["ebay"] = out["ebay"], {}
     return out
 
 
-def streams(c) -> dict:
+def streams(c, outs: dict | None = None) -> dict:
     out = {}
-    for dest, st in _outputs(c).items():
+    for dest, st in (outs or outputs(c)).items():
         on = bool(st.get("outputActive"))
         out[dest] = {"live": on, "timecode": st["outputTimecode"] if on else None}
     return out
 
 
-def health(c) -> dict:
-    """The pager's telemetry: OBS's render and encode counters, and bytes
-    sent per destination (the page turns two readings into kbps). Counters
-    are cumulative since OBS started (frames) or the output started (bytes);
-    `skipped`/`frames` and `congestion` are null where OBS doesn't report
-    them (its record output, which carries Twitch)."""
+# dest -> (outputBytes, outputDuration ms, kbps): health()'s last reading per output
+_LAST_OUT: dict[str, tuple[int, int, int | None]] = {}
+KBPS_MIN_MS = 500  # readings closer than this (two pages polling) reuse the last rate
+
+
+def kbps(dest: str, st: dict) -> int | None:
+    """kbit/s sent since health() last read this output, timed by OBS's own
+    outputDuration (as go_live does), so poll jitter doesn't skew it. None
+    off air, on the first reading, and after the output restarted."""
+    if not st.get("outputActive"):
+        _LAST_OUT.pop(dest, None)
+        return None
+    sent, ms = st.get("outputBytes", 0), st.get("outputDuration", 0)
+    prev = _LAST_OUT.get(dest)
+    if prev and sent >= prev[0] and 0 <= ms - prev[1] < KBPS_MIN_MS:
+        return prev[2]
+    rate = None
+    if prev and sent >= prev[0] and ms > prev[1]:
+        rate = round((sent - prev[0]) * 8 / (ms - prev[1]))  # bytes * 8 / ms = kbit/s
+    _LAST_OUT[dest] = (sent, ms, rate)
+    return rate
+
+
+def health(c, outs: dict | None = None) -> dict:
+    """The pager's telemetry: OBS's render and encode counters, and per
+    destination its bytes sent and kbps (kbps()). Counters are cumulative
+    since OBS started (frames) or the output started (bytes); `skipped`,
+    `frames` and `congestion` are null where OBS doesn't report them (its
+    record output, which carries Twitch)."""
     s = c.call("GetStats")
-    outs = {}
-    for dest, st in _outputs(c).items():
+    out = {}
+    for dest, st in (outs or outputs(c)).items():
         on = bool(st.get("outputActive"))
-        outs[dest] = {"live": on, "bytes": st.get("outputBytes", 0) if on else 0,
+        out[dest] = {"live": on, "bytes": st.get("outputBytes", 0) if on else 0, "kbps": kbps(dest, st),
                       "skipped": st.get("outputSkippedFrames"), "frames": st.get("outputTotalFrames"),
                       "congestion": st.get("outputCongestion"),
                       "reconnecting": bool(st.get("outputReconnecting"))}
@@ -846,7 +870,7 @@ def health(c) -> dict:
             "frame_ms": n("averageFrameRenderTime", 1),
             "render_skipped": n("renderSkippedFrames"), "render_frames": n("renderTotalFrames"),
             "encode_skipped": n("outputSkippedFrames"), "encode_frames": n("outputTotalFrames"),
-            "disk_mb": n("availableDiskSpace"), "outputs": outs}
+            "disk_mb": n("availableDiskSpace"), "outputs": out}
 
 
 def _profile_param(c, name: str) -> str:
@@ -1030,11 +1054,11 @@ def guard_window(c) -> dict | None:
     return {"title": title, "shown": safe}
 
 
-def state(c) -> dict:
+def state(c, outs: dict | None = None) -> dict:
     """What's on air. `page` is None when the program scene isn't one of the
     pager's (someone switched in OBS by hand)."""
     scene = program(c)
-    out = streams(c)
+    out = streams(c, outs)
     on = [s["timecode"] for s in out.values() if s["live"]]
     pids = feed_pids()
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),

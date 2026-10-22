@@ -42,6 +42,9 @@ class FakeObs:
         self.capture = "62914622\r\nThe Fair Hand \u2014 Mozilla Firefox\r\nNavigator"
         self.missing = set()  # scenes OBS doesn't have
         self.shots: list[dict] = []  # GetSourceScreenshot requests
+        self.sent, self.duration = 375000, 1000  # the stream output's bytes and ms since it started
+        self.congestion, self.reconnecting = None, False  # None: OBS leaves outputCongestion out
+        self.reads: list[str] = []  # Get{Stream,Record}Status requests
 
     def call(self, req, data=None):
         if (data or {}).get("sceneName") in self.missing:
@@ -58,10 +61,13 @@ class FakeObs:
         for kind in ("Stream", "Record"):
             if req == f"Get{kind}Status":
                 on = self.active[kind]
+                self.reads.append(req)
                 st = {"outputActive": on, "outputTimecode": "00:01:02.000" if on else "00:00:00.000",
-                      "outputBytes": 375000 if on and self.connects else 0, "outputDuration": 1000}
+                      "outputBytes": self.sent if on and self.connects else 0, "outputDuration": self.duration}
                 if kind == "Stream":
-                    st.update(outputSkippedFrames=0, outputTotalFrames=30)
+                    st.update(outputSkippedFrames=0, outputTotalFrames=30, outputReconnecting=self.reconnecting)
+                    if self.congestion is not None:
+                        st["outputCongestion"] = self.congestion
                 return st
             if req == f"Start{kind}":
                 self.active[kind] = True
@@ -139,6 +145,7 @@ def obs(tmp_path, monkeypatch):
     monkeypatch.setattr(SF, "refocus_d5", fake_refocus)
     monkeypatch.setattr(SF, "feed_pids", lambda: [123])
     monkeypatch.setattr(SF, "LOCK", tmp_path / "show_flow.lock")
+    monkeypatch.setattr(SF, "_LAST_OUT", {})  # health()'s last reading, per test
     monkeypatch.setattr(SF.time, "sleep", lambda s: None)
     fake.title = "Pop's Games | eBay Stores \u2014 Mozilla Firefox"
     monkeypatch.setattr(SF, "window_title", lambda c: fake.title)
@@ -254,16 +261,59 @@ def test_health_reports_obs_counters_and_bytes_per_destination(obs):
     h = SF.health(obs)
     assert (h["cpu"], h["mem_mb"], h["fps"], h["frame_ms"]) == (12.3, 512, 30.0, 3.2)
     assert (h["render_skipped"], h["encode_skipped"], h["disk_mb"]) == (2, 1, 50001)
-    assert h["outputs"]["ebay"] == {"live": True, "bytes": 375000, "skipped": 0, "frames": 30,
+    assert h["outputs"]["ebay"] == {"live": True, "bytes": 375000, "kbps": None, "skipped": 0, "frames": 30,
                                     "congestion": None, "reconnecting": False}
     # Twitch rides the record output, which counts no frames: null, not 0
-    assert h["outputs"]["twitch"] == {"live": False, "bytes": 0, "skipped": None, "frames": None,
+    assert h["outputs"]["twitch"] == {"live": False, "bytes": 0, "kbps": None, "skipped": None, "frames": None,
                                       "congestion": None, "reconnecting": False}
     # on the Twitch profile the stream output is Twitch's, and eBay reads as off
     obs.profile = SF.TWITCH_PROFILE
     h = SF.health(obs)
     assert h["outputs"]["twitch"]["bytes"] == 375000 and h["outputs"]["ebay"]["live"] is False
     assert SF.streams(obs)["ebay"] == {"live": False, "timecode": None}
+
+
+def test_health_passes_obs_reconnecting_and_congestion_through(obs):
+    obs.active["Stream"] = True
+    obs.reconnecting, obs.congestion = True, 0.42
+    o = SF.health(obs)["outputs"]["ebay"]
+    assert o["reconnecting"] is True and o["congestion"] == 0.42
+    obs.reconnecting, obs.congestion = False, 0.0
+    o = SF.health(obs)["outputs"]["ebay"]
+    assert o["reconnecting"] is False and o["congestion"] == 0.0  # 0 is a reading, not "none"
+
+
+def test_kbps_is_the_rate_since_the_last_reading_timed_by_obs(obs):
+    obs.active["Stream"] = True
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None  # one reading: no rate yet
+    obs.sent, obs.duration = 375000 + 600000, 2000  # 600 kB in 1000 ms of OBS's clock
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 4800
+    obs.sent, obs.duration = 375000 + 600000 + 1000, 2200  # a second page polling 200 ms later
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 4800  # too close to time: the last rate
+    obs.sent, obs.duration = 1000, 300  # the output restarted: both counters went back
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None
+    obs.sent, obs.duration = 1000 + 250000, 1300
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 2000
+    obs.active["Stream"] = False
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None and SF._LAST_OUT == {}
+
+
+def test_the_poll_reads_each_output_once(client, obs):
+    client.get("/api/pager")
+    assert sorted(obs.reads) == ["GetRecordStatus", "GetStreamStatus"]  # shared by state and health
+
+
+def test_no_telemetry_still_answers_the_poll(client, obs, monkeypatch):
+    real = obs.call
+
+    def no_stats(req, data=None):
+        if req == "GetStats":
+            raise obsctl.ObsError("GetStats failed: code 500")
+        return real(req, data)
+    monkeypatch.setattr(obs, "call", no_stats)
+    r = client.get("/api/pager")
+    assert r.status_code == 200 and r.json()["page"] == "intro"
+    assert r.json()["health"] == {"error": "GetStats failed: code 500"}
 
 
 def test_health_from_an_obs_without_a_counter_reads_zero(obs, monkeypatch):
@@ -333,7 +383,7 @@ def test_camera_failure_is_502_and_stays_on_the_current_page(client, obs, monkey
 
 
 def test_obs_going_quiet_mid_request_is_504_not_a_bare_500(client, monkeypatch):
-    def hang(c):
+    def hang(c, outs=None):
         raise TimeoutError("timed out")
     monkeypatch.setattr(SF, "state", hang)
     r = client.get("/api/pager")
@@ -446,7 +496,8 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     assert "filter(p => p !== curPage)" in r.text and 'id="tiletoggle"' in r.text
     assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
     # risky buttons confirm in the page, never with confirm(): the app's browser pane blocks it
-    assert "confirm(" not in r.text and "sure(btn, dest + ' ' + action" in r.text
+    code = "\n".join(line for line in r.text.splitlines() if not line.lstrip().startswith("//"))
+    assert "confirm(" not in code and "sure(btn, dest + ' ' + action" in code
 
 
 # --- the Up Next window guard ----------------------------------------------

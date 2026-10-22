@@ -56,12 +56,14 @@ shown may render black there. A scene OBS doesn't have is 502, naming it.
 
     {"cpu": 14.2, "mem_mb": 812, "fps": 30.0, "frame_ms": 3.1,
      "render_skipped": 0, "render_frames": 90211, "encode_skipped": 0, "encode_frames": 90211,
-     "disk_mb": 51200, "outputs": {"ebay": {"live": true, "bytes": 412004112, "skipped": 0,
+     "disk_mb": 51200, "outputs": {"ebay": {"live": true, "bytes": 412004112, "kbps": 4800, "skipped": 0,
      "frames": 21600, "congestion": 0.0, "reconnecting": false}, "twitch": {...}}}
 
-Counters are cumulative; the page turns two readings of `bytes` into kbps
-and two of the `*_skipped` counts into "dropping now". `skipped`, `frames`
-and `congestion` are null on Twitch (OBS's record output reports none).
+Counters are cumulative; `kbps` is the rate since the last poll, timed by
+OBS's outputDuration (null on the first poll and off air), and the page
+turns two of the `*_skipped` counts into "dropping now". `skipped`, `frames`
+and `congestion` are null on Twitch (OBS's record output reports none). If
+OBS refuses GetStats, `health` is {"error": ...} and the rest still answers.
 
 A page switch is one OBS scene switch (300 ms fade) and never touches the
 camera, so it answers at once, even while a refocus runs (`refocusing`
@@ -160,7 +162,12 @@ def pager_page() -> str:
 @router.get("/api/pager")
 def pager_state() -> dict:
     with _obs() as c:
-        return {**_show_flow.state(c), "music": _show_music.state(c), "health": _show_flow.health(c)}
+        outs = _show_flow.outputs(c)  # one status read for the state and the telemetry
+        try:
+            health = _show_flow.health(c, outs)
+        except _obsctl.ObsError as exc:  # no telemetry is no reason to lose the pager
+            health = {"error": str(exc)}
+        return {**_show_flow.state(c, outs), "music": _show_music.state(c), "health": health}
 
 
 @router.get("/api/pager/preview.jpg")
@@ -277,10 +284,10 @@ def pager_tg7(req: Tg7Request) -> dict:
 # by a refocus or a stream start in flight. Hold / release / step join the
 # same queue, so a step pressed during a switch lands after it, never before.
 # The program monitor fetches a frame ~2x a second (the next only after the
-# last one lands); the multiview refreshes one off-air tile every ~0.35 s,
-# round robin, so each is a few seconds old. Both stop while the tab is
-# hidden or they're switched off. kbps is computed here from two readings of
-# the output's byte counter.
+# last one lands). The multiview's pictures are off unless switched on (each
+# is an OBS render, and the show laptop is short of CPU); on, it refreshes
+# one off-air tile a second, round robin. Both stop while the tab is hidden.
+# A click's answer and every poll are diffed by changes() into the log.
 # Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
 # Space step, R refocus, C reconnect cameras, M music on/off, [ / ] previous / next lot.
 # Keys are ignored while a list or text box has focus (the white balance list's own
@@ -593,11 +600,18 @@ function feedLevel(status, onAir) {
 }
 
 // ---- state: what's on air ----
-function show(st, quiet = false) {
-  if (!quiet && prev) watch(prev, st);
+// `own`: what the click this answers reports itself (it says so in the status
+// line), so the log skips those and only those; a poll's answer passes none.
+function show(st, own = []) {
+  if (prev) for (const [text, cls] of changes(prev, st, own)) log(text, cls);
   // A click's answer has no music or telemetry: keep the last poll's, so the
   // next poll still sees a reconnect or a music change that began in between.
   prev = prev ? { ...st, music: st.music || prev.music, health: st.health || prev.health } : st;
+  for (const el of document.querySelectorAll('.dest[data-dest]')) {  // the state flipped: ask again
+    const go = el.querySelector('.go'), live = !!((st.streams || {})[el.dataset.dest] || {}).live;
+    if (go.dataset.armed && go.dataset.armed !== el.dataset.dest + (live ? ' stop' : ' start')) disarm(go);
+  }
+  if ($('#tg7').dataset.armed && st.page !== 'closeup') disarm($('#tg7'));  // nothing on air to warn about
   curPage = st.page;
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
@@ -636,33 +650,41 @@ function show(st, quiet = false) {
   srcRow('#s-tg7', st.tg7_status || '?', feedLevel(st.tg7_status, st.page === 'closeup'));
   srcRow('#s-busy', st.refocusing ? 'busy (refocus, WB or still)' : 'ready', st.refocusing ? 'warn' : 'ok');
   srcRow('#s-scene', st.scene, st.page ? 'ok' : 'warn');
-  if (st.health) showHealth(st.health);
+  if (st.health && st.health.error) {
+    if (!healthErr) log('No OBS telemetry: ' + st.health.error, 'warn');
+    healthErr = true;
+  } else if (st.health) { healthErr = false; showHealth(st.health); }
 }
+let healthErr = false;
 function srcRow(id, text, level) {
   const row = $(id); row.querySelector('em').textContent = text; setLevel(row.querySelector('.led'), level);
 }
 
-// What a poll sees change that no click here asked for: logged, so a switch
-// made in OBS or from the shell, a dropped feed or a stream ending is on record.
-function watch(a, b) {
-  if (a.page !== b.page || a.scene !== b.scene)
-    log('PGM -> ' + (b.page === 'hold' ? 'Hold (' + LABEL[b.held || 'item'] + ')' : b.page ? LABEL[b.page] : b.scene), 'sys');
+// Pure: what changed between two states, as [text, class] log lines, so a
+// switch made in OBS or from the shell, a dropped feed or a stream ending is
+// on record. Keys in `own` ('page', 'stream:ebay', 'tg7', 'standin') are
+// skipped: the click that caused them already logged its own result.
+function changes(a, b, own = []) {
+  const out = [], mine = k => own.includes(k);
+  if (!mine('page') && (a.page !== b.page || a.scene !== b.scene))
+    out.push(['PGM -> ' + (b.page === 'hold' ? 'Hold (' + LABEL[b.held || 'item'] + ')' : b.page ? LABEL[b.page] : b.scene), 'sys']);
   for (const d of Object.keys(NAMES)) {
     const was = ((a.streams || {})[d] || {}).live, now = ((b.streams || {})[d] || {}).live;
-    if (was !== now) log(NAMES[d] + (now ? ' is LIVE' : ' went off air'), now ? 'ok' : 'warn');
+    if (!mine('stream:' + d) && was !== now) out.push([NAMES[d] + (now ? ' is LIVE' : ' went off air'), now ? 'ok' : 'warn']);
     const ra = ((a.health || {}).outputs || {})[d], rb = ((b.health || {}).outputs || {})[d];
     if (ra && rb && ra.reconnecting !== rb.reconnecting)
-      log(NAMES[d] + (rb.reconnecting ? ' lost its connection: OBS is reconnecting' : ' reconnected'),
-          rb.reconnecting ? 'err' : 'ok');
+      out.push([NAMES[d] + (rb.reconnecting ? ' lost its connection: OBS is reconnecting' : ' reconnected'),
+                rb.reconnecting ? 'err' : 'ok']);
   }
-  if (a.feed_status !== b.feed_status) log('D5100 feed: ' + b.feed_status, b.feed_status === 'running' ? 'ok' : 'warn');
-  if (a.tg7_status !== b.tg7_status) log('TG-7 feed: ' + b.tg7_status, b.tg7_status === 'running' ? 'ok' : 'warn');
-  if (a.standin !== b.standin) log('D5 stand-in ' + (b.standin ? 'on' : 'off'), 'sys');
-  if (a.music && b.music && a.music.on !== b.music.on) log('Music ' + (b.music.on ? 'on' : 'off'), 'sys');
+  if (a.feed_status !== b.feed_status) out.push(['D5100 feed: ' + b.feed_status, b.feed_status === 'running' ? 'ok' : 'warn']);
+  if (!mine('tg7') && a.tg7_status !== b.tg7_status) out.push(['TG-7 feed: ' + b.tg7_status, b.tg7_status === 'running' ? 'ok' : 'warn']);
+  if (!mine('standin') && a.standin !== b.standin) out.push(['D5 stand-in ' + (b.standin ? 'on' : 'off'), 'sys']);
+  if (a.music && b.music && a.music.on !== b.music.on) out.push(['Music ' + (b.music.on ? 'on' : 'off'), 'sys']);
+  return out;
 }
 
 // ---- telemetry ----
-const HIST = 120, hist = { ebay: [], twitch: [], cpu: [] }, last = {};
+const HIST = 120, hist = { ebay: [], twitch: [], cpu: [] };
 let lastStats = null, dropLogged = 0;
 function push(a, v) { a.push(v); if (a.length > HIST) a.shift(); }
 function spark(cv, data, color, max) {
@@ -682,14 +704,10 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 function showHealth(h) {
   const now = performance.now();
   for (const el of document.querySelectorAll('.dest[data-dest]')) {
-    const d = el.dataset.dest, o = (h.outputs || {})[d] || {}, p = last[d];
-    let kbps = null;
-    // bytes * 8 / ms = kbit/s, from two readings; a restarted counter starts over
-    if (o.live && p && p.live && o.bytes >= p.bytes && now > p.t) kbps = (o.bytes - p.bytes) * 8 / (now - p.t);
-    last[d] = { ...o, t: now };
+    const d = el.dataset.dest, o = (h.outputs || {})[d] || {}, kbps = o.kbps ?? null;  // show_flow.kbps()
     push(hist[d], kbps || 0);
     const k = el.querySelectorAll('.kpi');
-    kpi(k[0], !o.live ? '-' : kbps === null ? '...' : Math.round(kbps).toLocaleString(),
+    kpi(k[0], !o.live ? '-' : kbps === null ? '...' : kbps.toLocaleString(),
         !o.live || kbps === null ? '' : kbps < 300 ? 'crit' : kbps < 1500 ? 'warn' : 'ok');
     const pct = o.live && o.frames ? 100 * o.skipped / o.frames : null;
     kpi(k[1], pct === null ? '-' : pct.toFixed(pct < 1 ? 2 : 1) + '%', pct === null ? '' : pct > 2 ? 'crit' : pct > 0.5 ? 'warn' : 'ok');
@@ -768,8 +786,9 @@ const ASK = {
 // looked dead. The first click arms it (amber, the question in the status bar)
 // for 5 s; a second click on the same action does it. The key names the action,
 // so if the state flips in between (a stream stopped elsewhere), it re-arms.
+function armStep(armed, key) { return armed === key ? 'fire' : 'arm'; }  // pure: the second click on the same action fires
 function sure(btn, key, question) {
-  if (btn.dataset.armed === key) { disarm(btn); return true; }
+  if (armStep(btn.dataset.armed, key) === 'fire') { disarm(btn); return true; }
   disarm(btn);
   btn.dataset.armed = key; btn.classList.add('armed');
   btn._disarm = setTimeout(() => { disarm(btn); if ($('#msg').textContent === question) say(''); }, 5000);
@@ -788,7 +807,7 @@ async function stream(dest) {
   say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
   try {
     const st = await api('POST', '/api/pager/stream', { dest, action }, 30000);
-    if (!switching) show(st, true);
+    if (!switching) show(st, ['stream:' + dest]);
     const r = st.stream;
     say(action === 'start' ? (r.changed ? NAMES[dest] + ' is live: ' + r.kbps + ' kbps.' : NAMES[dest] + ' was already live.')
                            : NAMES[dest] + ' stopped.', action === 'start' ? 'ok' : 'warn');
@@ -831,7 +850,7 @@ async function drain() {
     try {
       const st = await api('POST', '/api/pager', { page }, 12000);
       epoch++;
-      if (!pending) { show(st, true); switched(page, st); }
+      if (!pending) { show(st, ['page']); switched(page, st); }
     } catch (e) { say(LABEL[page] + ' did not go on air: ' + e.message, 'err'); }
   }
   buttons.forEach(b => b.classList.remove('pending'));
@@ -843,7 +862,7 @@ async function act(name) {
     const st = await api('POST', path, body, 12000);
     epoch++;
     if (pending) return;
-    show(st, true);
+    show(st, ['page']);
     const r = st.hold || st.step || st.switch || {};
     if (st.page === 'hold') say('Holding a still of ' + LABEL[st.held || r.held] +
                                 ': turn the item, then Step or Release.', 'warn');
@@ -862,7 +881,7 @@ async function tg7() {
   tg7Busy = true; $('#tg7').disabled = true; epoch++;
   say(action === 'start' ? 'Starting the TG-7 feed...' : 'Stopping the TG-7 feed...');
   try { const st = await api('POST', '/api/pager/tg7', { action }, 15000);
-        tg7Busy = false; if (!switching) show(st, true);
+        tg7Busy = false; if (!switching) show(st, ['tg7']);
         say(action === 'start' ? 'TG-7 feed started (it waits for the camera Wi-Fi if needed).'
                                : 'TG-7 feed stopped.'); }
   catch (e) { say('TG-7 feed ' + action + ' failed: ' + e.message, 'err'); }
@@ -875,7 +894,7 @@ async function refocus() {
                             : 'Refocusing the D5100 (about 5 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/refocus', null, 60000);
         refocusing = false;
-        if (!switching) show(st, true);
+        if (!switching) show(st);
         say(focusText(st.refocus), st.refocus.focused ? 'ok' : 'warn'); }
   catch (e) { say('Refocus failed: ' + e.message.replace(/^refocus failed: /, ''), 'err'); }
   refocusing = false; $('#refocus').disabled = false;
@@ -889,7 +908,7 @@ async function setWb() {
   say('Setting the D5100 white balance (5-12 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/wb', { preset }, 60000);
         wbBusy = false;
-        if (!switching) show(st, true);
+        if (!switching) show(st);
         say('D5100 white balance: ' + st.wb.wb + (st.wb.changed ? '.' : ' (already).'), 'ok'); }
   catch (e) { say('White balance failed: ' + e.message.replace(/^wb failed: /, ''), 'err'); }
   wbBusy = false; $('#wbset').disabled = false;
@@ -900,7 +919,7 @@ async function reconnect() {
   reconnecting = true; $('#reconnect').disabled = true; epoch++;
   say('Reconnecting the cameras in OBS...');
   try { const st = await api('POST', '/api/pager/reconnect', null, 12000);
-        if (!switching) show(st, true);
+        if (!switching) show(st);
         const r = Object.entries(st.reconnect), bad = r.filter(([, v]) => !v.ok);
         say(bad.length ? 'Reconnect: ' + bad.map(([k, v]) => k + ': ' + v.error).join('; ')
                        : 'Reconnected: ' + r.map(([k]) => k).join(', ') + '.', bad.length ? 'err' : 'ok'); }
@@ -964,9 +983,9 @@ previewShown();
 frame();
 
 // ---- the multiview: one off-air page's tile at a time, round robin ----
-let tilesOn = true, tileNext = 0;
+let tilesOn = false, tileNext = 0;  // off unless switched on: each tile is an OBS render, and the show laptop is short of CPU
 const tileUrls = {};
-try { tilesOn = localStorage.getItem('pager.tiles') !== 'off'; } catch (e) {}
+try { tilesOn = localStorage.getItem('pager.tiles') === 'on'; } catch (e) {}
 function tilesShown() {
   $('#mv').classList.toggle('off', !tilesOn);
   $('#tiletoggle').textContent = tilesOn ? 'Multiview off' : 'Multiview on';
@@ -988,7 +1007,7 @@ async function tiles() {
       t.classList.add(/No source was found/.test(e.message) ? 'missing' : 'stale');
     } finally { clearTimeout(timer); }
   }
-  setTimeout(tiles, 350);
+  setTimeout(tiles, 1000);
 }
 $('#tiletoggle').addEventListener('click', () => {
   tilesOn = !tilesOn; tilesShown();
@@ -1084,7 +1103,7 @@ $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
   standinBusy = true; e.target.disabled = true; epoch++;
   try { const st = await api('POST', '/api/pager/standin', { on }, 12000);
-        if (!switching) show(st, true);
+        if (!switching) show(st, ['standin']);
         say(on ? 'Stand-in on: the item view shows white.' : 'Stand-in off: the item view shows the D5100.'); }
   catch (err) { e.target.checked = !on; say('Stand-in ' + (on ? 'on' : 'off') + ' failed: ' + err.message, 'err'); }
   standinBusy = false; e.target.disabled = false;

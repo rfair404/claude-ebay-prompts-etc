@@ -312,8 +312,10 @@ stacks into one column on a phone):
   on-screen lot as the `/live/<show>` host page; eBay draws its own lot
   overlay, so none of it goes on air.
 - **Switcher:** a multiview tile per page, the on-air one tallied red.
-  Click a tile or press its number to take it. Off-air tiles refresh one at
-  a time, so each is a few seconds old; Multiview off stops them. The Hold
+  Click a tile or press its number to take it. Tile pictures are off by
+  default, since each is an extra OBS render and the show laptop is short of
+  CPU; **Multiview on** shows them (one off-air tile refreshed a second, so
+  each is several seconds old) and the choice is remembered. The Hold
   tile freezes the camera page (H). Under it: Step, Refocus, Reconnect
   cameras, the TG-7 feed, the D5 stand-in and the D5100 white balance.
 - **Telemetry:** per destination kbps (with a 2-minute sparkline), dropped

@@ -282,6 +282,12 @@ def test_overlay_and_state_flow(client):
 def test_lineup_json_for_the_pager(client):
     r = client.get("/live/demo/lineup")
     assert r.status_code == 200 and [l["lot"] for l in r.json()["lots"]] == [1, 2]
+    # what the pager's lineup panel reads (lotMeta / renderLot)
+    first, second = r.json()["lots"]
+    assert (first["title"], first["item_id"], first["format"], first["price"]) == (
+        "Brass <b>lamp</b>", "111", "FIXED_PRICE", "10.00")
+    assert first["auction_start_price"] is None and first["flags"] == []
+    assert second["flags"] == [LS.BEST_OFFER_FLAG]
     assert client.get("/live/nope/lineup").status_code == 404
 
 
