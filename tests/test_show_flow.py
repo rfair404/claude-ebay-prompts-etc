@@ -19,6 +19,7 @@ import show_flow as SF  # noqa: E402
 
 STORE = "Pop's Games | eBay Stores — Mozilla Firefox"
 REAL_LIVE_TITLE = SF.live_title  # the fixture below stubs it
+REAL_TG7_SOURCE = SF.tg7_source  # and this
 
 
 class SceneObs:
@@ -34,6 +35,7 @@ class SceneObs:
         self.windows = [{"itemName": "Pop's Games | eBay Stores — Mozilla Firefox",
                          "itemValue": "111\r\nPop's Games | eBay Stores — Mozilla Firefox\r\nfirefox"}]
         self.settings = {}
+        self.kinds = {}  # inputName -> inputKind, for inputs this fake created
         self.transforms = {}
         self.program = SF.INTRO
 
@@ -48,7 +50,13 @@ class SceneObs:
         if req == "GetSceneCollectionList":
             return {"currentSceneCollectionName": SF.COLLECTION}
         if req == "GetInputList":
-            return {"inputs": [{"inputName": n} for n in sorted(self.inputs)]}
+            return {"inputs": [{"inputName": n, "inputKind": self.kinds.get(n)} for n in sorted(self.inputs)]}
+        if req == "RemoveInput":
+            self.inputs.discard(d["inputName"])
+            self.kinds.pop(d["inputName"], None)
+            for stack in self.scenes.values():
+                stack[:] = [i for i in stack if i["sourceName"] != d["inputName"]]
+            return {}
         if req == "GetInputPropertiesListPropertyItems":
             return {"propertyItems": self.windows}
         if req == "SetInputSettings":
@@ -57,7 +65,10 @@ class SceneObs:
         if req == "GetInputSettings":
             return {"inputSettings": self.settings.get(d["inputName"], {})}
         if req == "CreateInput":
+            assert d["inputName"] not in self.inputs, d
             self.inputs.add(d["inputName"])
+            self.kinds[d["inputName"]] = d["inputKind"]
+            self.settings[d["inputName"]] = dict(d.get("inputSettings") or {})
             it = self._new(d["inputName"])
             self.scenes[d["sceneName"]].append(it)
             return {"sceneItemId": it["sceneItemId"]}
@@ -118,7 +129,7 @@ def live_obs():
 
 def args(**kw):
     return SimpleNamespace(**{"window": None, "intro_text": "Starting\\nsoon", "desktop_window": None,
-                              "desktop_crop_left": None, "d5_rotation": 270, **kw})
+                              "desktop_crop_left": None, "d5_rotation": 270, "tg7_rotation": 0, **kw})
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +137,7 @@ def no_x(monkeypatch):
     titles = {"111": STORE}
     monkeypatch.setattr(SF, "live_title", lambda v: titles.get((v or "").split("\r\n")[0]))
     monkeypatch.setattr(SF.time, "sleep", lambda s: None)
+    monkeypatch.setattr(SF, "tg7_source", lambda: ("v4l2_input", {"device_id": "/dev/video11"}))
     return titles
 
 
@@ -313,3 +325,85 @@ def test_feed_status_cli_never_starts_the_feed(monkeypatch, capsys):
     monkeypatch.setattr(SF, "feed_stop", lambda: pytest.fail("stopped the feed"))
     SF.cmd_feed(None, SimpleNamespace(action="status"))
     assert "D5100 feed: running, no frames for 12s" in capsys.readouterr().out
+
+
+# --- the close-up page and the hold still ---------------------------------------
+def test_setup_builds_the_closeup_and_hold_pages_idempotently():
+    c = live_obs()
+    SF.cmd_setup(c, args())
+    SF.cmd_setup(c, args())
+    assert c.order(SF.CLOSEUP) == [SF.BG, SF.TG7, SF.WEBCAM, SF.MIC]  # webcam over the TG-7
+    assert c.kinds[SF.TG7] == "v4l2_input" and c.settings[SF.TG7] == {"device_id": "/dev/video11"}
+    box = c.transforms[(SF.CLOSEUP, SF.TG7)]
+    # below the webcam strip, cover-cropped
+    assert (box["boundsWidth"], box["boundsHeight"]) == (SF.W, SF.H - SF.TG7_TOP)
+    assert box["positionY"] == SF.TG7_TOP + (SF.H - SF.TG7_TOP) / 2 and box["cropToBounds"] is True
+    assert c.transforms[(SF.CLOSEUP, SF.WEBCAM)] == SF.WEBCAM_BOX
+    # Hold: the still under the live webcam strip, which lands where it sat in the still
+    assert c.order(SF.HOLD) == [SF.HOLD_FRAME, SF.WEBCAM, SF.MIC]
+    assert c.kinds[SF.HOLD_FRAME] == "image_source"
+    assert c.transforms[(SF.HOLD, SF.WEBCAM)] == SF.WEBCAM_BOX
+    assert c.transforms[(SF.HOLD, SF.HOLD_FRAME)]["boundsWidth"] == SF.W
+    assert all(c.enabled(SF.HOLD, s) and c.enabled(SF.CLOSEUP, s) for s in (SF.WEBCAM, SF.MIC))
+
+
+def test_setup_turns_the_tg7_bounds_with_its_rotation():
+    c = live_obs()
+    SF.cmd_setup(c, args(tg7_rotation=270))
+    box = c.transforms[(SF.CLOSEUP, SF.TG7)]
+    assert box["rotation"] == 270 and (box["boundsWidth"], box["boundsHeight"]) == (SF.H - SF.TG7_TOP, SF.W)
+
+
+def test_setup_swaps_the_tg7_source_when_the_feed_output_changes(monkeypatch):
+    c = live_obs()
+    monkeypatch.setattr(SF, "tg7_source", lambda: ("ffmpeg_source", {"input": "udp://127.0.0.1:5011"}))
+    SF.cmd_setup(c, args())
+    assert c.kinds[SF.TG7] == "ffmpeg_source"
+    # the loopback device appears (sudo modprobe): the next setup makes it a v4l2 camera
+    monkeypatch.setattr(SF, "tg7_source", lambda: ("v4l2_input", {"device_id": "/dev/video11"}))
+    SF.cmd_setup(c, args())
+    assert c.kinds[SF.TG7] == "v4l2_input" and c.count(SF.CLOSEUP, SF.TG7) == 1
+
+
+def test_tg7_source_follows_the_feed_output(monkeypatch):
+    monkeypatch.setattr(SF.tg7cam(), "default_out", lambda: "/dev/video11")
+    assert REAL_TG7_SOURCE() == ("v4l2_input", {"device_id": "/dev/video11"})
+    monkeypatch.setattr(SF.tg7cam(), "default_out", lambda: "udp://127.0.0.1:5011")
+    kind, settings = REAL_TG7_SOURCE()
+    assert kind == "ffmpeg_source" and settings["input"] == "udp://127.0.0.1:5011"
+    assert settings["is_local_file"] is False and settings["input_format"] == "mpegts"
+
+
+def test_setup_keeps_the_window_out_of_the_hold_page():
+    c = live_obs()
+    SF.cmd_setup(c, args())
+    c.scenes[SF.HOLD].append(c._new(SF.WINDOW, True))  # added by hand in OBS
+    SF.cmd_setup(c, args())
+    assert c.enabled(SF.HOLD, SF.WINDOW) is False
+
+
+def test_tg7_feed_start_is_detached_and_stop_asks_it_to_finish(monkeypatch):
+    started, killed, pids = [], [], []
+    monkeypatch.setattr(SF, "tg7_pids", lambda: list(pids))
+    monkeypatch.setattr(SF.subprocess, "Popen", lambda cmd, **kw: started.append((cmd, kw)))
+    assert SF.tg7_start() is True
+    (cmd, kw), = started
+    assert cmd[1:] == [str(SF.TG7_CAM), "stream", "--size", SF.TG7_SIZE] and kw["start_new_session"]
+    pids.append(4242)
+    assert SF.tg7_start() is False and len(started) == 1  # one feed only
+
+    def kill(pid, sig):
+        killed.append((pid, sig))
+        pids.clear()  # it stops the camera's live view and exits on Ctrl+C
+    monkeypatch.setattr(SF.os, "kill", kill)
+    SF.tg7_stop()
+    assert killed == [(4242, 2)]
+
+
+def test_tg7_pattern_matches_the_feed_and_nothing_else():
+    import re
+    pat = re.compile(SF.TG7_PATTERN)
+    assert pat.search("/usr/bin/python3 /home/russ/EBAYBIZ/tools/live/tg7cam stream --size 0640x0480")
+    assert pat.search("python3 /home/russ/bin/tg7cam stream")
+    assert not pat.search("python3 /home/russ/bin/tg7cam shoot")
+    assert not pat.search("bash -c tg7cam stream")
