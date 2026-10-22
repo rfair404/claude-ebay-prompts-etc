@@ -24,8 +24,8 @@ visibility in show_flow): turn it in OBS and the next fade lands there.
 `setup` starts it at LEVEL_DB. While Russell talks, a sidechain compressor on
 the music (keyed by the mic) pulls it down a further ~8 dB.
 
-webapp/pager.py serves the same on/off/state as /api/pager/music, with a
-button on the pager page.
+webapp/pager.py serves the same on/off as POST /api/pager/music and the state
+under `music` in GET /api/pager, with a button on the pager page.
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ def setup(c, music_dir: Path = MUSIC_DIR) -> None:
     settings = {"is_local_file": True, "local_file": str(mix), "looping": True,
                 "restart_on_activate": False, "close_when_inactive": False}
     inputs = {i["inputName"] for i in c.call("GetInputList")["inputs"]}
-    scenes = list(show_flow.PAGES.values())
+    scenes = [*show_flow.PAGES.values(), show_flow.HOLD]
     if MUSIC in inputs:
         c.call("SetInputSettings", {"inputName": MUSIC, "inputSettings": settings})
     else:

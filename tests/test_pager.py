@@ -100,6 +100,8 @@ class FakeObs:
             return {}
         if req == "GetInputSettings":
             return {"inputSettings": {"capture_window": self.capture}}
+        if req == "GetInputList":  # show_music.state(): no music source here
+            return {"inputs": []}
         raise AssertionError(f"unexpected request {req}")
 
     def close(self):

@@ -360,8 +360,8 @@ python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: toggle,
   and the next fade-in lands on the new level. `off` fades to -45 dB, then
   mutes and pauses, so `on` resumes mid-track.
 - On the pager page, **Music > Start/Stop** (key **M**) does the same fade
-  and shows the current track. `GET /api/pager/music` and
-  `POST /api/pager/music {"on": true}` serve it as JSON. A fade doesn't take
+  and shows the current track. `GET /api/pager` reports it under `music`
+  and `POST /api/pager/music {"on": true}` fades it. A fade doesn't take
   the page lock, so it never holds up a page switch or refocus.
 
 Free alternative, not used: StreamBeats is free and Twitch-safe, but its

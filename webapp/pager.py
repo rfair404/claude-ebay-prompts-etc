@@ -5,7 +5,7 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
-    GET  /api/pager             what's on air
+    GET  /api/pager             what's on air, plus "music": {"ready", "on", "db", "track"}
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
@@ -14,7 +14,6 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
-    GET  /api/pager/music       background music: {"ready", "on", "db", "track"}
     POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
@@ -131,7 +130,7 @@ def pager_page() -> str:
 @router.get("/api/pager")
 def pager_state() -> dict:
     with _obs() as c:
-        return _show_flow.state(c)
+        return {**_show_flow.state(c), "music": _show_music.state(c)}
 
 
 @router.post("/api/pager")
@@ -154,12 +153,6 @@ def pager_standin(req: StandinRequest) -> dict:
     with _obs() as c:
         _show_flow.standin(c, req.on)
         return _show_flow.state(c)
-
-
-@router.get("/api/pager/music")
-def pager_music_state() -> dict:
-    with _obs() as c:
-        return _show_music.state(c)
 
 
 # Not under show_flow's lock: a fade never touches the camera or the page, so
@@ -347,6 +340,7 @@ function show(st) {
   // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
   $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
+  if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
@@ -529,7 +523,6 @@ async function poll() {
     const mine = epoch;
     try { const st = await api('GET', '/api/pager', null, 5000);
           if (mine === epoch && !switching) show(st);
-          if (!musicBusy) showMusic(await api('GET', '/api/pager/music', null, 5000));
           if ($('#msg').textContent.startsWith('OBS')) say(''); }
     catch (e) { $('#badge').textContent = 'No OBS'; $('#badge').classList.remove('live');
                 say('OBS: ' + e.message, 'err'); }
