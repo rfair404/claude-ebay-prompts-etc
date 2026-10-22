@@ -205,6 +205,7 @@ def d5(camera, monkeypatch):
 def test_still_d5_hides_behind_up_next_and_restarts_the_feed(d5, tmp_path):
     d5.saved = [str(tmp_path / "D5_20261021_214112.JPG"), str(tmp_path / "D5_20261021_214112.NEF")]
     c = CamObs(["old", "new"])
+    c.active["Stream"] = True  # streaming: viewers would see the freeze
     r = SF.still_d5(c, tmp_path / "item")
     assert r["files"] == d5.saved
     assert d5.log[:3] == ["stop", "--auto-detect", "capture"] and d5.running
