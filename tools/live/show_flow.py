@@ -590,7 +590,7 @@ def wb_d5(c, preset: str | None = None) -> dict:
         raise obsctl.ObsError(f"unknown white balance {preset!r}; the D5100 offers {', '.join(choices)} "
                               f"(or {', '.join(WB_ALIASES)})")
     if put and put.returncode:
-        raise obsctl.ObsError(f"the D5100 refused white balance {label!r} (dial on M or A?): "
+        raise obsctl.ObsError(f"the D5100 refused white balance {label!r} (dial on P, S, A or M?): "
                               f"{put.stderr.strip()}")
     return {**out, "wb": label, "changed": True} if put else out
 
