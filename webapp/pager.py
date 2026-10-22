@@ -563,7 +563,7 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
   <div class="src" id="s-d5"><i class="led"></i><span>D5100</span><em>-</em></div>
   <div class="src" id="s-tg7"><i class="led"></i><span>TG-7</span><em>-</em></div>
   <div class="src" id="s-webcam"><i class="led"></i><span>Webcam</span><em>-</em></div>
-  <div class="src" id="s-busy"><i class="led"></i><span>D5100 camera</span><em>-</em></div>
+  <div class="src" id="s-busy"><i class="led"></i><span>D5100 refocus / WB</span><em>-</em></div>
   <div class="src" id="s-scene"><i class="led"></i><span>OBS scene</span><em>-</em></div>
   <h2>Audio</h2>
   <div class="dest" id="music"><div class="dh"><b>Music</b><span class="st">...</span><button class="go">Start</button></div></div>
