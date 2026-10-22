@@ -56,7 +56,7 @@ D5100's autofocus couldn't lock (nothing with contrast at the center of the
 frame); focus is unchanged. A refocus while another is running (shell or
 web) is 409 at once, not queued. A failed refocus leaves the D5100 feed
 running. White balance answers `wb: {"wb", "choices", "changed", "wb_s"}`
-and works like a refocus: ~5 s with the D5100 frozen, hidden the same way,
+and works like a refocus: 5-12 s with the D5100 frozen, hidden the same way,
 the same lock (409 while either runs; `refocusing` is true meanwhile). An
 unknown preset is 502, naming the camera's choices. Reconnect answers
 `reconnect: {source: {"ok", "device" | "error"}}` per camera; it never
@@ -565,7 +565,7 @@ async function setWb() {
   if (wbBusy) return;
   if (!preset) return say('Pick a white balance to set first.', 'warn');
   wbBusy = true; $('#wbset').disabled = true; epoch++;
-  say('Setting the D5100 white balance (about 5 s; a D5100 view hides behind Next)...');
+  say('Setting the D5100 white balance (5-12 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/wb', { preset }, 60000);
         wbBusy = false;
         if (!switching) show(st);

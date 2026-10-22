@@ -105,10 +105,10 @@ One command puts any page on air:
   `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
   `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
   them). It needs the USB connection, so it freezes the D5 like a refocus
-  (~5 s, hidden behind Up Next on item/multi), takes the same lock and
+  (5–12 s, hidden behind Up Next on item/multi), takes the same lock and
   refuses while the stand-in is on. D5100 only; the TG-7 isn't touched.
-  Unverified on hardware: whether the live-view feed (not just stills)
-  changes. Look at `obsctl.py shot program` after setting it.
+  Confirmed on hardware: the live-view feed follows it, not just stills
+  (2026-10-22: red/blue 1.13 Auto, 1.04 Tungsten, 1.13 Auto again).
 - `page item --refocus` refocuses first, behind the current page, then
   switches (fails fast, staying put, if the camera isn't on USB).
 - `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
@@ -183,5 +183,7 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what
   helps the stream. `show_flow.py wb` handles the stop and restart itself.
+- `D5100 not found on USB` usually means the camera went to sleep (it drops
+  off `lsusb`): half-press the shutter to wake it, then retry.
 - Twitch runs on OBS's recording output, so `obsctl.py quit` refuses while
   it's live, and there's no local recording during a Twitch stream.
