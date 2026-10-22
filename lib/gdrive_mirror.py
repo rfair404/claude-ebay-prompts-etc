@@ -13,8 +13,8 @@ identify.txt, reports — never photos, never config.yaml).
 
 It runs on its own two ways:
 
-  * After every ledger write — a draft, sync, publish, end, delete, price
-    edit, sale or shipment (list_edit.upsert_listing), a sales-ledger merge
+  * After every ledger write — a draft, sync, publish, end, delete, sale or
+    shipment (list_edit.upsert_listing), a sales-ledger merge
     (sync_actuals) and `reconcile --apply` — ledger_changed() starts a
     detached background push of the ledger files. It waits DEBOUNCE seconds
     first, so a pick-list run that marks 30 items SHIPPED uploads once. It

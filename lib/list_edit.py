@@ -317,11 +317,10 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
 
     Status only advances sensibly: a re-sync of an already-PUBLISHED item
     keeps PUBLISHED; DRAFTED never overwrites a later status; ENDED/DELETED
-    are explicit and always apply. An empty `status` leaves the status alone
-    (a price edit on a live listing). Only fields that are provided are
-    written (so a later update never blanks an earlier value). Each write
-    nudges the Google Drive copy (lib/gdrive_mirror.py). Best-effort — never
-    raises (ledger bookkeeping must not break a sync/publish)."""
+    are explicit and always apply. Only fields that are provided are written
+    (so a later update never blanks an earlier value). Each write nudges the
+    Google Drive copy (lib/gdrive_mirror.py). Best-effort — never raises
+    (ledger bookkeeping must not break a sync/publish)."""
     if not sku:
         return None
     import csv
@@ -342,9 +341,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             if v:
                 row[k] = str(v)
         cur = row.get("status") or ""
-        if not status:
-            pass
-        elif status == "DRAFTED":
+        if status == "DRAFTED":
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
@@ -2225,10 +2222,6 @@ def update_listing_fields(draft_path: Path, fields,
 
     if not dry_run:
         update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
-        if "price" in changed:
-            # The ledger's price column follows the live offer; status unchanged.
-            upsert_listing(sku, "", price=_to_decimal_str(draft.get("price")) or "",
-                           store=creds.store)
     return changed
 
 

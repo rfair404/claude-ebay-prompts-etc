@@ -173,7 +173,7 @@ def test_worker_batches_writes_and_cleans_up():
     assert not (root / gm.LOCK_FILE).exists()
 
 
-def test_upsert_listing_nudges_drive_and_empty_status_keeps_status():
+def test_upsert_listing_nudges_drive():
     import list_edit
     root = _tree([])
     ledger = root / "listings_ledger.csv"
@@ -183,15 +183,13 @@ def test_upsert_listing_nudges_drive_and_empty_status_keeps_status():
     try:
         with _Patch(list_edit, ledger_changed=seen.append):
             list_edit.upsert_listing("SKU1", "PUBLISHED", price="10.00")
-            list_edit.upsert_listing("SKU1", "", price="8.50")
     finally:
         if old_env is None:
             os.environ.pop("EBAYBIZ_LISTINGS_LEDGER", None)
         else:
             os.environ["EBAYBIZ_LISTINGS_LEDGER"] = old_env
-    assert seen == [ledger, ledger]
-    text = ledger.read_text()
-    assert "PUBLISHED" in text and "8.50" in text and "10.00" not in text
+    assert seen == [ledger]
+    assert "PUBLISHED" in ledger.read_text()
 
 
 def test_unit_files():
