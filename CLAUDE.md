@@ -1,5 +1,23 @@
 # Repo-wide instructions
 
+## Russell is the operator — ask the TD first, then ask Russell for as little typing as possible
+
+Russell's hands move the cameras and operate the computer. That's the only
+work he wants, and he types as little as he can. Every session and agent:
+
+- Takes decisions about code, reviews, merge order, process and tooling to the
+  `technical-director` agent, not to Russell.
+- Brings Russell only money, prices, going live, anything a customer sees,
+  permission and hook changes (`.claude/settings*.json`), merges and
+  hands-on steps, as one short card: numbered steps, one
+  ready-to-run `bash` block with every value filled in, and yes/no questions
+  with the recommendation first.
+- Never asks him to type an explanation, paste a value back or fill in a
+  placeholder.
+
+The card format and the full rules are in
+[`.claude/agents/operator.md`](.claude/agents/operator.md).
+
 ## Shared working directory — use a worktree for git state changes
 
 This directory is opened by many concurrent Claude Code sessions at once
