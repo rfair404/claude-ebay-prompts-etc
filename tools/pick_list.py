@@ -79,11 +79,11 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 from comps_csv import _now as _now_iso                              # noqa: E402
-from pick_store import repo_relative                                # noqa: E402
 import stores                                                       # noqa: E402
 from ebay_client import api_send, EbayAPIError, load_credentials    # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
+from pick_store import repo_relative                                # noqa: E402
 
 OPEN_FILTER = "orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D"
 
