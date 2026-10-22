@@ -1948,18 +1948,20 @@ def d5_covered(c, what: str, fn):
     never with the frozen D5 on air. A page that doesn't show the D5 (not
     in D5_PAGES: the TG-7 still, hold, Up Next, closeup, ...) is its own
     cover: nothing switches, and it stays on air afterwards (the TG-7 still
-    is made for this). A page showing the D5
+    is made for this). While a stream is live, a page showing the D5
     (item, multi) hides behind Up Next for the ~5 s the camera is frozen,
     then fades back to that page, also when fn fails (the feed is left
     running), but not if someone asked for a page meanwhile (Next included,
-    though it's already on air): that page stays.
+    though it's already on air): that page stays. Off air nobody sees the
+    freeze, so the page is left alone.
     Errors start with "<what> failed:"."""
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
         _mark_switch(clear=True)
         back = program(c)
-        hide = back in D5_PAGES.values()
+        # off air nobody sees the freeze, so the host's page selection is left alone
+        hide = back in D5_PAGES.values() and any(s["live"] for s in streams(c).values())
         if hide:
             guard_window(c)
             set_transition(c, "Fade", FADE_MS)  # not the pager's last (an 800 ms swipe): the sleep is FADE_MS
@@ -1976,7 +1978,7 @@ def d5_covered(c, what: str, fn):
 
 def refocus(c) -> dict:
     """Refocus the D5100 without changing page, hidden as d5_covered says
-    (behind Up Next on item or multi; behind the TG-7 still when it's up).
+    (behind Up Next on item or multi while live; behind the TG-7 still when it's up).
 
     On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
     no lock, no cover, the D5 is left alone."""
