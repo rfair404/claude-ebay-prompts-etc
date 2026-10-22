@@ -34,7 +34,7 @@ Do:
 Run:
 cd /home/russ/EBAYBIZ && d=inventory/_live/preflight/$(date +%Y%m%d-%H%M) && mkdir -p "$d" \
  && python tools/live/obsctl.py shot "Nikon D5100" -o "$d/d5.jpg" --width 960 \
- && python tools/live/tg7cam shoot --to "$d" \
+ && python tools/live/tg7cam shoot --to "$d" > "$d/tg7.txt" \
  && python tools/live/obsctl.py shot "Webcam" -o "$d/face.jpg" --width 960 \
  && echo "HOLD THE SHEET beside your face" && sleep 5 \
  && python tools/live/obsctl.py shot "Webcam" -o "$d/face-white.jpg" --width 960 \
@@ -55,7 +55,7 @@ the gates in section 3 decide.
    face should be the same kind (all daylight-colored or all warm). Daylight
    from a window and a warm lamp together give two whites, and no white
    balance setting fixes both at once. At night the window doesn't matter;
-   by day, close the blinds or let the window be the only light.
+   by day, close the blinds.
 2. **Podium lamp: to one side and above the item.** About 45 degrees to the
    side and above is the usual starting point for product light (a
    convention). Keep it out from behind the D5: a lamp next to the lens
@@ -95,9 +95,9 @@ px on its long side. "Clipped" means luma 250 or more.
 
 | # | Picture | Gate | Pass |
 |---|---|---|---|
-| G1 | TG-7 still | shutter (EXIF `ExposureTime`) | 1/30 s or faster |
+| G1 | TG-7 still | shutter (EXIF `ExposureTime`) against that still's 35 mm-equivalent zoom (EXIF `FocalLengthIn35mmFilm`) | 1 / the equivalent focal length or faster: 1/30 s at this morning's zoom |
 | G2 | TG-7 still | ISO (EXIF `ISOSpeedRatings`) | 200 or lower |
-| G3 | TG-7 still | focus | `tg7cam shoot` printed `focus ok` |
+| G3 | TG-7 still | focus, from `tg7.txt` (what `tg7cam shoot` printed) | it says `focus ok` |
 | G4 | D5, TG-7 | glare: split the frame into a 4x6 grid (6x4 for landscape) and take the cell with the most clipped pixels | 5% or less clipped in that cell |
 | G5 | D5, TG-7 | white exposure: the frame's 98th-percentile luma (the white sheet) | 200 to 245 |
 | G6 | D5, TG-7, webcam (`face-white.jpg`) | white balance of the sheet: mean R/B and G/((R+B)/2) of the pixels between the 95th-percentile luma and clipping | R/B 0.95 to 1.08, G 0.96 to 1.04, and the three cameras' R/B within 0.06 of each other |
@@ -107,11 +107,15 @@ px on its long side. "Clipped" means luma 250 or more.
 
 ### Why these numbers
 
-- **G1 and G2, the TG-7.** The TG-7's 5.4 mm lens is a 30 mm equivalent (EXIF
-  `FocalLengthIn35mmFilm` 30). The handheld rule of thumb, "shutter at least
-  1 / the 35 mm-equivalent focal length", is a photographers' convention, not
-  a measured limit for this camera. It puts the floor at 1/30 s, and a TG-7
-  on a mount with a still item is safe there. In P mode this morning the TG-7
+- **G1 and G2, the TG-7.** The TG-7 zooms, so its equivalent focal length
+  changes with the zoom. This morning both frames were shot at 5.4 mm, which
+  their EXIF records as a 30 mm equivalent (`FocalLengthIn35mmFilm` 30). The
+  handheld rule of thumb, "shutter at least 1 / the 35 mm-equivalent focal
+  length", is a photographers' convention, not a measured limit for this
+  camera. At this morning's zoom it puts the floor at 1/30 s. That floor only
+  holds at that zoom: zoomed in, the floor rises, and the recipe reads it
+  from each still's EXIF. A TG-7 on a mount with a still item is safe at the
+  floor. In P mode this morning the TG-7
   held 1/30 s and only moved ISO: 400 before Russell added light, 200 after.
   ISO is the setting that actually answers to light, so it carries the gate.
   The cost of ISO 400 was measured at 100% on the same patch of handwriting:
@@ -175,12 +179,13 @@ are to feather the podium lamp (G4, G5) and to pull the face light back (G7).
 
 ### Grading recipe (until the `preflight` command exists)
 
-Run from the main checkout. `FACE` is the face box as fractions of
+Run from the main checkout with the repo's venv (it needs numpy). It grades
+the newest pre-flight folder. `FACE` is the face box as fractions of
 `face.jpg` (left, top, right, bottom); the agent reads the picture and fills
 it in. The face box needs eyes, which is why it isn't automatic yet.
 
 ```bash
-cd /home/russ/EBAYBIZ && DIR=inventory/_live/preflight/<folder> FACE=0.40,0.15,0.60,0.60 python - <<'EOF'
+cd /home/russ/EBAYBIZ && DIR=$(ls -d inventory/_live/preflight/*/ | tail -1) FACE=0.40,0.15,0.60,0.60 /home/russ/EBAYBIZ/.venv/bin/python - <<'EOF'
 import glob, os
 import numpy as np
 from PIL import Image
@@ -204,8 +209,10 @@ for name, p in (("d5", f"{d}/d5.jpg"), ("tg7", tg[-1] if tg else "")):
     if not os.path.exists(p): print(name, "missing"); continue
     a, ex = load(p); g = glare(a); p98, r, gg = white(a); rb[name] = r
     if name == "tg7":
-        t, iso = ex[0x829A], ex[0x8827]
-        print(f"G1 tg7 shutter 1/{1/t:.0f} {ok(t <= 1/30 + 1e-4)}  G2 ISO {iso} {ok(iso <= 200)}")
+        t, iso, f35 = ex[0x829A], ex[0x8827], ex.get(0xA405) or 30
+        fo = open(f"{d}/tg7.txt").read() if os.path.exists(f"{d}/tg7.txt") else ""
+        print(f"G1 tg7 shutter 1/{1/t:.0f} at {f35}mm-eq {ok(t <= 1/f35 + 1e-4)}  "
+              f"G2 ISO {iso} {ok(iso <= 200)}  G3 focus {ok('focus ok' in fo)}")
     print(f"G4 {name} glare {g:.1f}% {ok(g <= 5)}  G5 white {p98:.0f} {ok(200 <= p98 <= 245)}  "
           f"G6 R/B {r:.2f} G {gg:.2f} {ok(0.95 <= r <= 1.08 and 0.96 <= gg <= 1.04)}")
 if os.path.exists(f"{d}/face-white.jpg"):
@@ -222,8 +229,9 @@ print(f"G7 face {m:.0f}, {clip:.1f}% clipped {ok(110 <= m <= 200 and clip <= 3)}
 EOF
 ```
 
-`G3` comes from the block's own output (`focus ok`). After grading, the
-agent also reads the D5 and TG-7 shots itself. A number never signs off a
+G3 reads `tg7.txt`, which the card's block writes, so nobody pastes
+anything back. After grading, the agent also reads the D5 and TG-7 shots
+itself. A number never signs off a
 picture nobody has looked at.
 
 ## 4. When a gate fails: one fix each
@@ -231,19 +239,22 @@ picture nobody has looked at.
 The agent turns each failed gate into one line on Russell's fix card,
 worded as below.
 
-| Gate | Fix (Russell's hands) |
-|---|---|
-| G1 TG-7 slower than 1/30 s | Move the podium lamp closer to the item. |
-| G2 TG-7 ISO over 200 | Move the podium lamp closer to the item. For a matte close-up, the agent can also turn on the TG-7 LED (`tg7cam light on`), with no hands needed. |
-| G3 TG-7 focus didn't lock | Move the TG-7 a little further from the item and center it. |
-| G4 glare | Slide the podium lamp sideways until you can't see it reflected in the item from the D5's lens. |
-| G5 white over 245 | Aim the podium lamp past the item, so the item sits in the edge of the beam. |
-| G5 white under 200 | Move the podium lamp closer to the item. |
-| G6 white balance off, or cameras disagree | Switch off every light that isn't the podium lamp or the face light, and close the blinds. (If the lights are already all one kind, the agent sets the D5 preset with `show_flow.py wb`, with no hands needed.) |
-| G7 face clipped, or over 200 | Pull the face light back, or turn it so the beam passes just in front of your face. |
-| G7 face under 110 | Move the face light closer, or turn it on. |
-| G8 face not brighter than the room | Turn the face light off the wall and onto your face. |
-| A1 sides over 2.0 (only if you want it even) | Hold a white board on the dark side of your face, just out of frame. |
+The third column is for the agent: it does that first, with no hands
+needed, and puts the line on the card only if the gate still fails.
+
+| Gate | Fix (Russell's hands, on the card) | Agent first, no hands |
+|---|---|---|
+| G1 TG-7 shutter below its floor | Move the podium lamp closer to the item. | |
+| G2 TG-7 ISO over 200 | Move the podium lamp closer to the item. | Matte close-up: `tg7cam light on`. |
+| G3 TG-7 focus didn't lock | Move the TG-7 a little further from the item and center it. | |
+| G4 glare | Slide the podium lamp sideways until you can't see it reflected in the item from the D5's lens. | |
+| G5 white over 245 | Aim the podium lamp past the item, so the item sits in the edge of the beam. | |
+| G5 white under 200 | Move the podium lamp closer to the item. | |
+| G6 white balance off, or cameras disagree | Switch off every light that isn't the podium lamp or the face light, and close the blinds. | If the lights are already all one kind: set the D5 preset with `show_flow.py wb`. |
+| G7 face clipped, or over 200 | Pull the face light back, or turn it so the beam passes just in front of your face. | |
+| G7 face under 110 | Move the face light closer, or turn it on. | |
+| G8 face not brighter than the room | Turn the face light off the wall and onto your face. | |
+| A1 sides over 2.0 (only if you want it even) | Hold a white board on the dark side of your face, just out of frame. | |
 
 ## 5. The look
 
@@ -275,8 +286,5 @@ cart design (2026-10-14) chose no LED lights on the cart. Once the list
 exists, this doc names each lamp's place (podium, face) instead of "the
 podium lamp".
 
-| Light | Used for | Color | Dims | Source |
-|---|---|---|---|---|
-| TG-7 lens LED | matte close-ups | TODO | no control in `tg7cam` beyond on/off | `tools/live/tg7cam` |
-| TODO: podium lamp(s) | podium | TODO | TODO | TODO |
-| TODO: face light | face | TODO | TODO | TODO |
+To fill it in without typing, Russell holds each lamp he uses up to the
+webcam once, and an agent writes the list from the pictures.
