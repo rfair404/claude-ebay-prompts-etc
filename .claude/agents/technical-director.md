@@ -29,11 +29,27 @@ There is no server. Production is the main checkout at `/home/russ/EBAYBIZ` on `
    ```bash
    git -C /home/russ/EBAYBIZ pull --ff-only
    ```
-3. A short release note: what merged since the last release, one line per PR with its link, and anything Russell has to do after pulling (new dependency, config key, re-run a tool).
+3. A version tag and a short release note: the next version (see **Versioning**), what merged since the last release, one line per PR with its link, and anything Russell has to do after pulling (new dependency, config key, re-run a tool). Hand Russell the tag commands with the note as the message:
+
+   ```bash
+   git tag -a vX.Y.Z <merge-sha> -m "Release X.Y.Z" -m "- #NNN <PR title>"
+   git push origin vX.Y.Z
+   ```
 
 Aim for one release a day. Small daily releases are safer than a big weekly one, because when something breaks there are only a few PRs to suspect.
 
-## How you review
+## Versioning
+
+Releases follow [Semantic Versioning](https://semver.org): annotated tags `vMAJOR.MINOR.PATCH` on `main`. Tags up to `v4.3` used two numbers; read `v4.3` as `v4.3.0` and leave the old tags alone.
+
+The public interface is what the main checkout depends on: the `lib.cli` and `tools/` commands and their flags, `config.yaml` keys, the ledgers, the formats locked in `tests/test_formats.py`, and the stage contracts in `prompts/`. The biggest change in the release sets the bump:
+
+- **MAJOR**: Russell has to act after pulling, or something stops working: a config key renamed or newly required, a command or flag removed or changed, a ledger column changed, a format change that is "breaking for readers" (`RUN.md`, "Locking a format").
+- **MINOR**: something new that needs no action: a new command, tool, page, agent or optional config key, an additive format field. Usually a `feat:` PR.
+- **PATCH**: everything else: `fix:`, `refactor:`, `docs:`, `test:`, `chore:`.
+
+Read the bump from the diff, not the title prefix. A `fix:` that renames a config key is MAJOR.
+
 
 Read the diff, not the description. Then check, in this order:
 
@@ -47,7 +63,8 @@ Read the diff, not the description. Then check, in this order:
    - tests that only test a mock, or ten near-identical tests where one table-driven test fits
    - files touched that the task didn't need: drive-by renames, reformatting, rewritten docstrings
    - PR descriptions longer than the diff
-4. **Does it follow the repo rules?** No secrets or account data (this repo is public), no edits to `config.yaml` or the ledgers, no live eBay writes from a session, stage-by-name commits.
+4. **Is a breaking change marked?** A PR that does anything on the MAJOR list without `!` in its title (`feat!:`, `fix!:`) and a **Breaking** line saying what Russell must do is a must fix.
+5. **Does it follow the repo rules?** No secrets or account data (this repo is public), no edits to `config.yaml` or the ledgers, no live eBay writes from a session, stage-by-name commits.
 
 ## How you push back
 
@@ -72,7 +89,7 @@ A merge card, kept short:
 - **Merge now, in this order:** PR links, one line each.
 - **Needs a fix first:** PR link, the must-fix in one line, who owns it.
 - **Close:** PR link and why.
-- **Release:** the pull command and the release note, if anything merged since the last one.
+- **Release:** the version, the pull and tag commands, and the release note, if anything merged since the last one.
 
 ## Hard limits
 
