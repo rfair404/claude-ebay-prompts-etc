@@ -497,6 +497,22 @@ def test_setup_builds_the_tg7_still_page_idempotently():
     assert c.enabled(SF.STILL, SF.WINDOW) is False
 
 
+def test_setup_builds_the_off_air_tg7_preview_in_the_stills_slot():
+    c = live_obs()
+    SF.cmd_setup(c, args())
+    SF.cmd_setup(c, args())
+    # the TG-7 live on the dark card and nothing else: no webcam, no mic, no black panel
+    assert c.order(SF.TG7_PREVIEW) == [SF.BG, SF.TG7]
+    prev, still = c.transforms[(SF.TG7_PREVIEW, SF.TG7)], c.transforms[(SF.STILL, SF.STILL_FRAME)]
+    same = ("positionX", "positionY", "boundsType", "boundsWidth", "boundsHeight", "cropToBounds")
+    assert {k: prev[k] for k in same} == {k: still[k] for k in same}  # framed as the still will show it
+    assert SF.TG7_PREVIEW not in SF.SLOTS and SF.page_of(SF.TG7_PREVIEW) is None  # never a page
+    SF.cmd_setup(c, args(tg7_rotation=90))  # on its side: the live view turns, its bounds with it
+    prev = c.transforms[(SF.TG7_PREVIEW, SF.TG7)]
+    assert prev["rotation"] == 90 and (prev["boundsWidth"], prev["boundsHeight"]) == (SF.H - SF.TG7_TOP, SF.W)
+    assert c.program == SF.INTRO  # setup never puts it on air
+
+
 def test_setup_turns_the_tg7_bounds_with_its_rotation():
     c = live_obs()
     SF.cmd_setup(c, args(tg7_rotation=270))
@@ -857,3 +873,14 @@ def test_a_second_watch_exits_at_once(monkeypatch, capsys):
         SF._lock_nb(f)  # a watch is running
         assert SF.main(["watch", "run"]) == 0
     assert "camera watch already running" in capsys.readouterr().out
+
+
+def test_a_stopped_tg7_feed_never_blacks_the_preview_or_the_still(watch):
+    # the preview ended and stopped the feed: the TG-7 is "off", not "down", and
+    # its panel only covers the pages that show it live (close-up, multi)
+    watch.tg7 = []
+    cams = watch.tick(4)
+    assert cams["tg7"]["state"] == "off"
+    touched = {scene for scene, src, _ in watch.c.writes if src == SF.DOWN[SF.TG7]}
+    assert touched == {SF.CLOSEUP, SF.MULTI}
+    assert SF.DOWN[SF.TG7] not in watch.c.order(SF.TG7_PREVIEW) + watch.c.order(SF.STILL)

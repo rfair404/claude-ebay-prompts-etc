@@ -205,12 +205,8 @@ def capture(d: Path, st: dict, camera: str, note: str | None) -> dict:
         finally:
             c.close()
     else:
-        tg7 = show_flow.tg7cam()
-        try:
-            path, af = tg7.shoot(to=item)
-        except tg7.CamError as e:
-            raise ShootError(f"TG-7: {e}") from e
-        got, focus = [path], af != "ng"
+        path, focus = show_flow.tg7_shot(item)  # CamError -> ObsError "TG-7: ..."
+        got = [path]
     looks = [thumb(f) for f in got if f.suffix.lower() in FRAME_EXT]
     flag = ", focus didn't lock" if focus is False else ""
     log(item, f"capture **{' + '.join(f.name for f in got)}** ({camera}{flag})"

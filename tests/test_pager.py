@@ -217,7 +217,7 @@ def test_state_maps_scene_to_page(obs):
         "live": True, "timecode": "00:01:02.000", "feed": True, "feed_status": "running",
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
                     "twitch": {"live": False, "timecode": None}}, "standin": False,
-        "refocusing": False, "held": None, "tg7_status": "stopped", "watch": False,
+        "refocusing": False, "held": None, "tg7_status": "stopped", "tg7_preview": False, "watch": False,
         "cameras": {cam: {"state": "unknown", "reason": "", "since": None, "blacked": False}
                     for cam in ("d5", "webcam", "tg7")}}
     obs.scene = "Desktop"  # switched by hand in OBS
@@ -1215,6 +1215,15 @@ def test_a_tg7_refocus_failure_is_an_obs_error_for_the_pager(obs, monkeypatch):
         SF.refocus(obs)
 
 
+@pytest.mark.parametrize("af, locked", [("ok", True), ("ng", False), (None, True)])
+def test_one_focus_rule_for_every_tg7_capture(tg7, tmp_path, af, locked):
+    # the still, `shoot.py capture tg7` and the TG-7 refocus all read affocus through tg7_shot / tg7_focused
+    tg7.tg7.focus = af
+    assert SF.tg7_shot(tmp_path)[1] is locked
+    tg7.tg7.autofocus = lambda: af
+    assert SF.tg7_refocus()["focused"] is locked
+
+
 def test_closeup_page_is_a_plain_switch(obs):
     obs.scene = "eBay Main (camera 1)"
     assert SF.go(obs, "closeup")["changed"] is True
@@ -1455,6 +1464,92 @@ def test_still_route_and_cli(tg7, monkeypatch, capsys):
     assert SF.main(["still", "--refocus"]) == 1  # the still is up; the refocus behind it failed
     out = capsys.readouterr()
     assert "D5100 refocus failed: refocus failed: no USB" in out.out and tg7.scene == "TG-7 Still"
+
+
+# --- the TG-7 preview: framing the next still, off air ---------------------------
+@pytest.fixture
+def preview(tg7, monkeypatch, no_tg7_feed):
+    """tg7 plus the TG-7 feed's start and stop, stubbed on no_tg7_feed's pids."""
+    calls = []
+    monkeypatch.setattr(SF, "tg7_start", lambda: calls.append("start") or (
+        not no_tg7_feed and (no_tg7_feed.append(77) or True)))
+    real_stop = SF.tg7_stop
+    monkeypatch.setattr(SF.os, "kill", lambda pid, sig: no_tg7_feed.clear())
+    monkeypatch.setattr(SF, "tg7_stop", lambda: calls.append("stop") or real_stop())
+    tg7.feed_calls, tg7.pids = calls, no_tg7_feed
+    return tg7
+
+
+def test_preview_starts_the_feed_off_air_and_ending_it_stops_what_it_started(preview):
+    assert SF.tg7_preview(preview, True) == {"preview": True, "started": True}
+    assert SF.state(preview)["tg7_preview"] is True and preview.pids == [77]
+    assert SF.tg7_preview(preview, True)["started"] is False  # already up: one feed
+    assert preview.switches == [] and preview.scene == "eBay Main (camera 1)"  # never on program
+    assert SF.tg7_preview(preview, False) == {"preview": False, "stopped": True}
+    assert preview.pids == [] and SF.state(preview)["tg7_preview"] is False
+    assert preview.feed_calls == ["start", "start", "stop"]
+    assert SF.tg7_preview(preview, False) == {"preview": False, "stopped": False}  # nothing to end
+
+
+def test_ending_the_preview_leaves_a_feed_it_did_not_start(preview):
+    preview.pids.append(5)  # `tg7 start` by hand, for the close-up fallback
+    SF.tg7_preview(preview, True)
+    assert SF.tg7_preview(preview, False)["stopped"] is False and preview.pids == [5]
+
+
+def test_ending_the_preview_never_stops_a_tg7_on_air(preview):
+    SF.tg7_preview(preview, True)
+    preview.scene = "Close-up (camera 2)"  # the live close-up went on air meanwhile
+    assert SF.tg7_preview(preview, False)["stopped"] is False and preview.pids == [77]
+
+
+def test_the_still_shoots_from_the_preview_and_ends_it(preview):
+    SF.tg7_preview(preview, True)
+    r = SF.still(preview)
+    assert preview.switches == ["TG-7 Still"] and r["preview"] == {"stopped": True}
+    assert preview.pids == [] and SF.state(preview)["tg7_preview"] is False
+
+
+def test_a_failed_still_keeps_the_preview_up_to_reframe(preview):
+    SF.tg7_preview(preview, True)
+    preview.tg7.focus = "ng"
+    with pytest.raises(obsctl.ObsError, match="focus didn't lock"):
+        SF.still(preview)
+    assert preview.pids == [77] and SF.state(preview)["tg7_preview"] is True and preview.switches == []
+
+
+def test_step_with_the_preview_up_shoots_and_ends_it(preview):
+    SF.tg7_preview(preview, True)
+    assert SF.step(preview)["action"] == "still" and preview.pids == []
+    assert SF.step(preview)["page"] == "item"  # and back: the preview never joins the loop
+
+
+def test_tg7_stop_by_hand_ends_the_preview_too(preview):
+    SF.tg7_preview(preview, True)
+    SF.tg7_stop()
+    assert SF.state(preview)["tg7_preview"] is False
+    assert SF.tg7_preview(preview, True)["started"] is True  # a fresh preview owns its feed again
+    assert SF.tg7_preview(preview, False)["stopped"] is True
+
+
+def test_preview_routes_and_cli(preview, monkeypatch, capsys):
+    monkeypatch.setattr(SF, "connect", lambda: preview)
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as client:
+        body = client.post("/api/pager/tg7preview", json={"on": True}).json()
+        assert body["tg7_preview"] is True and body["tg7preview"]["started"] is True
+        r = client.get("/api/pager/tg7preview.jpg")
+        assert r.status_code == 200 and r.content == b"\xff\xd8TG-7 Preview"
+        assert r.headers["content-type"] == "image/jpeg" and preview.switches == []  # rendered, not switched
+        assert client.get("/api/pager/tg7preview.jpg", headers={"host": "evil.example"}).status_code == 403
+        r = client.post("/api/pager/tg7preview", json={"on": False}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403 and preview.pids == [77]
+        body = client.post("/api/pager/tg7preview", json={"on": False}).json()
+        assert body["tg7_preview"] is False and body["tg7preview"]["stopped"] is True
+        page = client.get("/pager").text
+        assert "/api/pager/tg7preview" in page and 'id="tg7mon"' in page
+    assert SF.main(["tg7", "preview", "on"]) == 0 and "TG-7 preview on" in capsys.readouterr().out
+    assert SF.main(["tg7", "preview", "off"]) == 0
+    assert "TG-7 feed stopped" in capsys.readouterr().out and preview.switches == []
 
 
 # --- the D5100's white balance: refocus's cover, lock and feed restart -------
