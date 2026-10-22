@@ -304,9 +304,9 @@ http://localhost:8770/pager: a small On-air preview of what OBS is sending
 off), one button per page, Hold and Step buttons,
 Refocus and Reconnect cameras buttons, a TG-7 feed button, the LIVE timer,
 both feeds' status, and keys 1-7 (intro, item, next, desktop, webcam,
-close-up, multi), H (hold/release), Space (step), R (refocus) and C
-(reconnect). Page clicks switch at once, even while a refocus runs; the last
-one pressed wins. The same pager is served as JSON for other pages or agents:
+close-up, multi), H (hold/release), Space (step), R (refocus), C
+(reconnect) and M (music, section 7). Page clicks switch at once, even while
+a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
 `GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
@@ -325,6 +325,52 @@ covers it with Up Next (and `page item --refocus` with the current page);
 a plain page switch no longer refocuses. Live-view brightness on the D5100 is
 automatic: ISO and shutter only change stills, so add light for a cleaner
 stream.
+
+## 7. Background music (CC0, no cost)
+
+eBay Live's policy only allows music you "own the rights or have explicit,
+written consent to use"
+([eBay Live policy](https://www.ebay.com/help/policies/member-behavior-policies/ebay-live-policy?id=5478));
+breaking it can get the stream or replay removed. Twitch has the same rule.
+So the show plays **public-domain (CC0) music from a local file**, never an
+internet radio or someone else's 24/7 stream: with a file, every track has a
+license on record.
+
+The music is HoliznaCC0's lo-fi. The artist dedicated the whole catalog to
+the public domain and asks for no credit (https://holiznacc0.bandcamp.com).
+Two packs from OpenGameArt, 13 tracks, about 37 minutes, looped:
+[Chill Beats](https://opengameart.org/content/chill-beats-collection) and
+[Happy Lo-Fi](https://opengameart.org/content/happy-lo-fi-lofi-collection).
+
+```bash
+python tools/live/show_music.py fetch    # once per machine: ~163 MB into ~/Music/show-bgm/src
+python tools/live/show_music.py build    # one shuffled, levelled file (~5 min of ffmpeg)
+python tools/live/show_music.py setup    # OBS: "Show Music" in every page, muted, ducked
+python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: toggle, status
+```
+
+- `build` levels each track to -16 LUFS, crossfades them (3 s) and writes
+  `~/Music/show-bgm/show-mix.ogg`, `tracklist.json` (for the "now playing"
+  title) and `LICENSE.md`, the record of each track's source and license.
+  Keep `LICENSE.md`: it's the proof if a stream or replay is ever questioned.
+  Rebuild for a new running order.
+- `setup` adds one media source, `Show Music`, to every page, so a page
+  switch never cuts or restarts it. It loops, starts muted and paused, and has
+  a `Duck under mic` compressor keyed by `Mic/Aux` (ratio 2, threshold
+  -26 dB, release 600 ms) that takes it down about 8 dB while you talk.
+- The fader sits at -20 dB, roughly 18-20 dB under speech. Move it in OBS
+  and the next fade-in lands on the new level. `off` fades to -45 dB, then
+  mutes and pauses, so `on` resumes mid-track.
+- On the pager page, **Music > Start/Stop** (key **M**) does the same fade
+  and shows the current track. `GET /api/pager` reports it under `music`
+  and `POST /api/pager/music {"on": true}` fades it. A fade doesn't take
+  the page lock, so it never holds up a page switch or refocus.
+
+Free alternative, not used: StreamBeats is free and Twitch-safe, but its
+license names "Twitch, YouTube, podcasts, or equivalent platforms" and its
+FAQ calls it free for *personal* streaming, so it isn't clearly cleared for
+a business selling on eBay Live. Ask licensing@streambeats.com in writing
+before using it there.
 
 ## Open items
 

@@ -97,6 +97,7 @@ from typing import Optional
 
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
+from gdrive_mirror import ledger_changed
 from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
@@ -317,8 +318,9 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
     Status only advances sensibly: a re-sync of an already-PUBLISHED item
     keeps PUBLISHED; DRAFTED never overwrites a later status; ENDED/DELETED
     are explicit and always apply. Only fields that are provided are written
-    (so a later update never blanks an earlier value). Best-effort — never
-    raises (ledger bookkeeping must not break a sync/publish)."""
+    (so a later update never blanks an earlier value). Each write nudges the
+    Google Drive copy (lib/gdrive_mirror.py). Best-effort — never raises
+    (ledger bookkeeping must not break a sync/publish)."""
     if not sku:
         return None
     import csv
@@ -354,6 +356,7 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             w.writeheader()
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in _LEDGER_FIELDS})
+        ledger_changed(path)
         return str(path)
     except (OSError, csv.Error):
         return None

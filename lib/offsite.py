@@ -87,13 +87,16 @@ REPO = Path(__file__).resolve().parent.parent
 # below (so images never go up). "dir/**/name" takes files called `name`
 # at any depth under dir/. Other entries match one path level each, "*"
 # never crossing a "/". The regenerable class-3 caches are left out.
-DEFAULT_INCLUDE = (
-    # ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies
+# The ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies.
+# Also what lib/gdrive_mirror.py pushes after each ledger write.
+LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",
+)
+DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # eBay exports: the live-listing sheets built from the eBay APIs
     "inventory_sheet*.csv",
     "inventory_sheet*.json",
