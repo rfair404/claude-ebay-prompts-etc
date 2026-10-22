@@ -253,6 +253,16 @@ the pager): wide (item) -> close-up -> hold, turn the item -> wide again,
 and so on. From a hold it releases to the *other* camera; from any
 non-camera page it starts at item.
 
+**Show mode: no batch jobs on air.** The 2026-10-21 show skipped 99.4% of
+its frames while the show laptop also ran pytest, a music build and other
+batch jobs. `golive` now writes `inventory/_live/ON_AIR`, and `stop` removes
+it once nothing is live. While it is there, the shell hook
+(`tools/bg_guard.py`) refuses pytest, `show_music.py build`, PREP,
+`single-pass` and listing runs, even backgrounded, with "the show is live,
+so ... waits". Build the music before the show. If OBS dies without a
+`stop`, the flag stays: the guard ignores it after 8 hours, or clear it with
+`rm inventory/_live/ON_AIR` (from the main checkout).
+
 `show_flow.py` and `obsctl.py` need only the standard library; the web app
 needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not
 the system Python: `python -m lib.cli serve` under system Python fails.
