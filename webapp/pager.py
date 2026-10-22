@@ -6,6 +6,7 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
+    GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
@@ -39,6 +40,11 @@ otherwise card + webcam only. Every other page hides the window.
 `webcam` is the fallback page: the webcam alone, no D5100. `multi` shows
 the D5100, the webcam and the desktop page's window at once.
 
+The preview is OBS's own render of the program scene, 360 px wide, so it
+works on or off air and shows the same frame for eBay and Twitch. It takes
+no lock and never touches a camera; the control page asks for one about
+twice a second while the tab is visible and the preview is shown.
+
 A page switch is one OBS scene switch (300 ms fade) and never touches the
 camera, so it answers at once, even while a refocus runs (`refocusing`
 in the state). Refocus is its own call, POST /api/pager/refocus (on the item
@@ -64,7 +70,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from webapp.freight import _local_only
@@ -125,6 +131,13 @@ def pager_page() -> str:
 def pager_state() -> dict:
     with _obs() as c:
         return _show_flow.state(c)
+
+
+@router.get("/api/pager/preview.jpg")
+def pager_preview() -> Response:
+    with _obs() as c:
+        jpg = _show_flow.program_shot(c)
+    return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/pager")
@@ -197,6 +210,8 @@ def pager_tg7(req: Tg7Request) -> dict:
 # Page clicks are sent one at a time, latest wins: clicking 2 then 3 fast
 # ends on 3, never on whichever request OBS happened to get last. A page
 # click is never blocked by a refocus or a stream start in flight.
+# The On-air preview fetches a frame ~2x a second (the next only after the
+# last one lands), and nothing while the tab is hidden or the preview is off.
 # Hold / release / step join the same queue, so a step pressed during a
 # switch lands after it, never before.
 # Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
@@ -248,9 +263,24 @@ h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
 footer { margin-top:22px; font-size:13px; color:var(--muted); }
+.monitor { display:flex; gap:14px; align-items:flex-start; margin-bottom:18px; }
+.monitor img { flex:none; width:108px; aspect-ratio:9/16; object-fit:contain; background:#000;
+               border-radius:8px; border:2px solid var(--line); }
+.monitor.live img { border-color:var(--live); }
+.monitor.stale img { opacity:.35; }
+.monitor b { display:block; } .monitor small { display:block; color:var(--muted); margin-bottom:8px; }
+.monitor.stale small { color:var(--warn); }
+.monitor button { padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); font-size:14px; }
+.monitor.off img, .monitor.off small { display:none; }
 </style></head>
 <body><main>
 <header><h1>Show Pager</h1><span id="badge" class="badge">connecting...</span></header>
+<div class="monitor" id="monitor">
+  <img id="shot" alt="What OBS is sending now"
+       src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">
+  <div><b id="shottitle">Program</b><small id="shotnote">waiting for OBS...</small>
+    <button id="shottoggle">Hide preview</button></div>
+</div>
 <div class="pages">
   <button class="page" data-page="intro"><span class="key">1</span>
     <span><b>Intro</b><small>Pre-show card, no cameras</small></span></button>
@@ -305,6 +335,8 @@ function show(st) {
   const badge = $('#badge');
   badge.textContent = st.live ? 'LIVE ' + (st.timecode || '').split('.')[0] : 'Off air';
   badge.classList.toggle('live', !!st.live);
+  $('#monitor').classList.toggle('live', !!st.live);
+  $('#shottitle').textContent = st.live ? 'On air' : 'Program (off air)';
   for (const el of document.querySelectorAll('.dest')) {
     const s = (st.streams || {})[el.dataset.dest] || {};
     el.classList.toggle('live', !!s.live);
@@ -484,6 +516,40 @@ async function poll() {
   }
   setTimeout(poll, 1000);
 }
+
+// The On-air preview: OBS's render of the program scene. One frame at a time,
+// so a slow OBS just lowers the frame rate instead of piling up requests.
+let previewOn = true, shotUrl = null;
+try { previewOn = localStorage.getItem('pager.preview') !== 'off'; } catch (e) {}
+function previewShown() {
+  $('#monitor').classList.toggle('off', !previewOn);
+  $('#shottoggle').textContent = previewOn ? 'Hide preview' : 'Show preview';
+}
+async function frame() {
+  if (previewOn && !document.hidden) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const r = await fetch('/api/pager/preview.jpg', { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'HTTP ' + r.status);
+      const url = URL.createObjectURL(await r.blob());
+      $('#shot').src = url;
+      if (shotUrl) URL.revokeObjectURL(shotUrl);
+      shotUrl = url;
+      $('#monitor').classList.remove('stale');
+      $('#shotnote').textContent = 'What OBS is sending, a few frames a second. No sound.';
+    } catch (e) {
+      $('#monitor').classList.add('stale');
+      $('#shotnote').textContent = 'No picture from OBS: ' + (e.name === 'AbortError' ? 'no answer after 5 s' : e.message);
+    } finally { clearTimeout(timer); }
+  }
+  setTimeout(frame, 500);
+}
+$('#shottoggle').addEventListener('click', () => {
+  previewOn = !previewOn; previewShown();
+  try { localStorage.setItem('pager.preview', previewOn ? 'on' : 'off'); } catch (e) {}
+});
+previewShown();
+frame();
 
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
