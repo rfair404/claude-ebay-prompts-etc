@@ -327,6 +327,52 @@ def test_feed_status_cli_never_starts_the_feed(monkeypatch, capsys):
     assert "D5100 feed: running, no frames for 12s" in capsys.readouterr().out
 
 
+# --- the multi page: D5100 + webcam + desktop window ----------------------------
+def test_setup_without_a_desktop_window_builds_no_multi_page():
+    c = live_obs()
+    SF.cmd_setup(c, args())
+    assert SF.MULTI not in c.scenes and SF.DESKTOP not in c.scenes
+
+
+def test_setup_builds_the_multi_page_idempotently():
+    c = live_obs()
+    SF.cmd_setup(c, args(desktop_window="Pop's Games", desktop_crop_left=216))
+    SF.cmd_setup(c, args())  # later runs keep it, the window already picked
+    assert c.order(SF.MULTI) == [SF.BG, SF.D5, SF.WEBCAM, SF.DESKTOP_WIN, SF.MIC]
+    assert all(c.enabled(SF.MULTI, s) for s in c.order(SF.MULTI))
+    d5, cam = c.transforms[(SF.MULTI, SF.D5)], c.transforms[(SF.MULTI, SF.WEBCAM)]
+    # side by side in the top row, the D5 on its side: its bounds turn with it
+    assert (d5["positionX"], d5["positionY"], d5["rotation"]) == (270, 405, 270)
+    assert (d5["boundsWidth"], d5["boundsHeight"]) == (SF.MULTI_ROW, SF.W / 2) and d5["cropToBounds"]
+    assert (cam["positionX"], cam["positionY"]) == (810, 405)
+    assert (cam["boundsWidth"], cam["boundsHeight"]) == (SF.W / 2, SF.MULTI_ROW) and cam["cropToBounds"]
+    win = c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]
+    assert (win["positionY"], win["boundsHeight"]) == (SF.MULTI_ROW, SF.H - SF.MULTI_ROW)
+    assert win["alignment"] == win["boundsAlignment"] == 4  # hung from the row
+    assert "cropLeft" not in win  # the second run didn't pass a crop: the first one's stays in OBS
+    SF.cmd_setup(c, args(desktop_crop_left=100))
+    assert c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]["cropLeft"] == 100
+    assert c.count(SF.MULTI, SF.D5) == 1 and c.count(SF.MULTI, SF.WEBCAM) == 1
+
+
+def test_the_standin_darkens_the_multi_pages_d5_too():
+    c = live_obs()
+    SF.cmd_setup(c, args(desktop_window="Pop's Games"))
+    SF.standin(c, True)
+    assert c.enabled(SF.MULTI, SF.D5) is False and c.enabled(SF.PRODUCT, SF.D5) is False
+    SF.cmd_setup(c, args())  # setup keeps it that way
+    assert c.enabled(SF.MULTI, SF.D5) is False
+    SF.standin(c, False)
+    assert c.enabled(SF.MULTI, SF.D5) is True
+
+
+def test_multi_page_keeps_the_up_next_window_out():
+    c = live_obs()
+    c.scenes[SF.MULTI] = [c._new(SF.WINDOW, True)]  # stray, as one once turned up in Intro
+    SF.cmd_setup(c, args(desktop_window="Pop's Games"))
+    assert c.enabled(SF.MULTI, SF.WINDOW) is False
+
+
 # --- the close-up page and the hold still ---------------------------------------
 def test_setup_builds_the_closeup_and_hold_pages_idempotently():
     c = live_obs()
