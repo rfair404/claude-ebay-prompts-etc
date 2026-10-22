@@ -87,6 +87,7 @@ One command puts any page on air:
 | "everything at once", "both cameras and the screen", "multi view" | `show_flow.py page multi` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
+| "too orange", "too blue", "white balance", "set WB to daylight" | `show_flow.py wb` (read) / `show_flow.py wb daylight` |
 | "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 | "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
@@ -100,6 +101,14 @@ One command puts any page on air:
   unless the user asked for a page meanwhile (that page stays). A second
   refocus while one runs is refused (`Busy`), not queued. If it fails, the
   feed is left running and the error starts with `refocus failed:`.
+- `wb [PRESET]` reads or sets the D5100's white balance: `auto`,
+  `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
+  `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
+  them). It needs the USB connection, so it freezes the D5 like a refocus
+  (~5 s, hidden behind Up Next on item/multi), takes the same lock and
+  refuses while the stand-in is on. D5100 only; the TG-7 isn't touched.
+  Unverified on hardware: whether the live-view feed (not just stills)
+  changes. Look at `obsctl.py shot program` after setting it.
 - `page item --refocus` refocuses first, behind the current page, then
   switches (fails fast, staying put, if the camera isn't on USB).
 - `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
@@ -173,6 +182,6 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what
-  helps the stream.
+  helps the stream. `show_flow.py wb` handles the stop and restart itself.
 - Twitch runs on OBS's recording output, so `obsctl.py quit` refuses while
   it's live, and there's no local recording during a Twitch stream.
