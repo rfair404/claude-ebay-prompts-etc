@@ -593,7 +593,9 @@ function feedLevel(status, onAir) {
 // ---- state: what's on air ----
 function show(st, quiet = false) {
   if (!quiet && prev) watch(prev, st);
-  prev = st;
+  // A click's answer has no music or telemetry: keep the last poll's, so the
+  // next poll still sees a reconnect or a music change that began in between.
+  prev = prev ? { ...st, music: st.music || prev.music, health: st.health || prev.health } : st;
   curPage = st.page;
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
