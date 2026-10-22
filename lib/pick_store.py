@@ -121,6 +121,40 @@ def _meta_path(token: str, store_dir: Path) -> Path:
     return store_dir / f"{token}.json"
 
 
+def repo_relative(path: Path, *, root: Path | None = None) -> str | None:
+    """`path` as a repo-relative posix string, or None if it resolves outside
+    the repo. This is the containment check for every file a pick sheet is
+    written to or served from.
+
+    "Inside the repo" means under ROOT once resolved, or under what
+    ROOT/inventory resolves to. In a worktree, inventory/ is a symlink (a
+    junction on Windows) to the main checkout's inventory/. tools/
+    worktree_link.py sets that up, and CLAUDE.md explains why. An item folder
+    resolves through that link to a path outside the worktree. Without the
+    second base, every sheet in a worktree was refused and the link fell back
+    to a stored copy. The exemption covers inventory/ only, the same scope as
+    the link. A symlink *inside* inventory/ that points elsewhere still resolves
+    outside both bases and is refused.
+
+    `root` defaults to ROOT read at call time, for the reasons given on
+    _resolve_source()."""
+    root = root if root is not None else ROOT
+    try:
+        resolved = path.resolve()
+        bases = ((root.resolve(), None), ((root / "inventory").resolve(), "inventory"))
+    except OSError:
+        return None
+    for base, prefix in bases:
+        try:
+            rel = resolved.relative_to(base).as_posix()
+        except ValueError:
+            continue
+        if prefix is None:
+            return rel
+        return prefix if rel == "." else f"{prefix}/{rel}"
+    return None
+
+
 def _resolve_source(raw: str, *, root: Path | None = None) -> Path | None:
     """A `source` path — as passed to publish(), or as read back out of a meta
     file — resolved absolute, or None if it lands outside the repo.
@@ -143,12 +177,9 @@ def _resolve_source(raw: str, *, root: Path | None = None) -> Path | None:
     candidate = Path(raw)
     if not candidate.is_absolute():
         candidate = root / candidate
-    try:
-        resolved = candidate.resolve()
-        resolved.relative_to(root.resolve())
-    except (OSError, ValueError):
+    if repo_relative(candidate, root=root) is None:
         return None
-    return resolved
+    return candidate.resolve()
 
 
 def _rel_to_root(path: Path, *, root: Path | None = None) -> str:
@@ -162,9 +193,13 @@ def _rel_to_root(path: Path, *, root: Path | None = None) -> str:
     real path and breaks where it isn't: on Windows a root carrying an 8.3
     short component ("C:/Users/RUNNER~1/...") expands under resolve() to its
     long form, and relative_to() then rejects a child of that very directory.
-    A junction or symlink anywhere in ROOT does the same thing."""
-    root = root if root is not None else ROOT
-    return path.resolve().relative_to(root.resolve()).as_posix()
+    A junction or symlink anywhere in ROOT does the same thing. Both checks go
+    through repo_relative(), so a linked inventory/ is recorded as
+    "inventory/..." and read back through the same link."""
+    rel = repo_relative(path, root=root)
+    if rel is None:
+        raise ValueError(f"{path} is not inside {root if root is not None else ROOT}")
+    return rel
 
 
 def _read_meta(meta_path: Path) -> Sheet | None:
