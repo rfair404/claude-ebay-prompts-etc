@@ -332,7 +332,7 @@ stream.
 `fluorescent`, `flash`, checked against the list the camera reports). It
 stops and restarts the feed like `refocus`, hidden the same way; the pager
 page has a white balance list and a Set button. **Confirmed:** the D5100's
-USB live view (what OBS shows) follows white balance, unlike ISO and shutter
+USB live view (what OBS shows) follows white balance
 (2026-10-22, static scene: red/blue 1.13 Auto, 1.04 Tungsten, 1.13 Auto again).
 A `wb` call freezes the D5 for about 5–12 s. "D5100 not found on USB" usually
 means the camera went to sleep: half-press the shutter.
