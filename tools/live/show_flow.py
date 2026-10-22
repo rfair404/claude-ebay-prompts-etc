@@ -31,7 +31,8 @@ connection: live view has to stop, autofocus, restart), then fades back. `page i
 --refocus` does both in one go, refocusing behind the current page first.
 A failed refocus never leaves the D5 feed stopped. On the closeup page,
 `refocus` is the TG-7's half-press instead: its live view keeps running, so
-nothing is hidden.
+nothing is hidden. `wb` reads or sets the D5100's white balance the same
+way, hidden like a refocus; it never touches the TG-7.
 
 `hold` freezes the camera page on air (item or closeup) as a still, with the
 live webcam strip still on top, so the host can turn the item without
@@ -60,6 +61,7 @@ cameras button) reopens the D5 and the webcam by hand.
     python tools/live/show_flow.py release [--to item|closeup] [--json]
     python tools/live/show_flow.py step [--json]     # item -> closeup -> hold -> item ...
     python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
+    python tools/live/show_flow.py wb [PRESET] [--json]  # D5100 white balance: auto, daylight, tungsten, ...
     python tools/live/show_flow.py standin on|off    # white panel for the D5100 (dead battery)
     python tools/live/show_flow.py golive ebay|twitch --confirm   # each independently; both can run
     python tools/live/show_flow.py stop [ebay|twitch]               # default: both
@@ -67,7 +69,7 @@ cameras button) reopens the D5 and the webcam by hand.
     python tools/live/show_flow.py status [--json]
 
 `--json` prints the same objects webapp/pager.py serves at /api/pager, for
-scripts and agents. A refocus takes a lock ($XDG_RUNTIME_DIR/show_flow.lock),
+scripts and agents. A refocus or `wb` takes a lock ($XDG_RUNTIME_DIR/show_flow.lock),
 so the shell and the web app never drive the camera at the same time; a
 second refocus is refused at once (Busy), never queued. Page switches don't
 take it: a switch made during a refocus goes on air immediately, and the
@@ -212,6 +214,14 @@ GPHOTO_TIMEOUT = 15  # a wedged camera mustn't hold the lock (and the feed) fore
 REOPEN_GRACE = 3  # seconds after reopen_d5 before the feed's own frame is taken as proof
 FEED_START_WAIT = 15  # `feed start`: seconds to wait for frames before reopening in OBS
 D5_DEVICE = "/dev/video10"  # the feed's v4l2loopback device (tools/d5100_webcam.sh DEV)
+# The D5100's white balance (PTP 0x5005). `wb` checks a preset against the
+# choices the camera reports; libgphoto2 labels the D5100's as Automatic,
+# Daylight, Fluorescent, Tungsten, Flash, Cloudy, Shade, Preset
+# (camlibs/ptp2/config.c whitebalance[], camlibs/ptp2/cameras/nikon-d5100.txt).
+WB_CONFIG = "whitebalance"
+WB_ALIASES = {"auto": "Automatic", "daylight": "Daylight", "cloudy": "Cloudy", "shade": "Shade",
+              "tungsten": "Tungsten", "incandescent": "Tungsten", "fluorescent": "Fluorescent",
+              "flash": "Flash"}
 # The v4l2 cameras `reconnect` reopens -> device to use if OBS's setting is empty
 # (the webcam's own device_id is read from OBS; it has no safe default).
 CAMERAS = {D5: D5_DEVICE, WEBCAM: None}
@@ -271,7 +281,7 @@ def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
 
 
 class Busy(obsctl.ObsError):
-    """A refocus is already running (from the shell or the web app)."""
+    """A refocus or WB change is already running (from the shell or the web app)."""
 
 
 @contextmanager
@@ -287,7 +297,7 @@ def exclusive():
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
-                    raise Busy("a D5100 refocus is already running (pager or shell); "
+                    raise Busy("a D5100 refocus or WB change is already running (pager or shell); "
                                "it takes about 5 s, try again when it's done")
                 time.sleep(0.05)
         try:
@@ -501,11 +511,10 @@ def wait_d5_frames(c, frozen: str | None, since: float, snaps: list[Path], wait:
         time.sleep(0.1)
 
 
-def refocus_d5(c) -> tuple[bool, float]:
-    """Stop live view, autofocus, restart; returns (focus locked, seconds until
-    OBS shows moving D5 frames again). The D5100 refuses autofocus ("Unspecified
-    error") when its AF point sees nothing with contrast, e.g. an empty podium;
-    focus then stays where it was.
+def d5_usb(c, fn):
+    """Stop live view, run fn() (gphoto2 calls: the camera takes one USB
+    connection), restart; returns (fn's result, seconds until OBS shows
+    moving D5 frames again).
 
     Whatever fails, this never leaves the feed stopped: it's restarted if it
     was running before or the camera answered on USB (the feed loop then
@@ -519,7 +528,7 @@ def refocus_d5(c) -> tuple[bool, float]:
         if "usb:" not in found:  # fail now, not after the wait for frames below
             raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
         restart = True
-        af = _gphoto2("--set-config", "autofocusdrive=1")
+        r = fn()
         time.sleep(0.2)
         frozen = d5_hash(c)
         since = time.time()
@@ -527,10 +536,63 @@ def refocus_d5(c) -> tuple[bool, float]:
         started = True
         wait_d5_frames(c, frozen, since, feed_snaps(feed_pids()))
         time.sleep(0.25)  # let live view settle its exposure before it goes on air
-        return af.returncode == 0, time.monotonic() - t
+        return r, time.monotonic() - t
     finally:
         if restart and not started:
             feed_start()
+
+
+def refocus_d5(c) -> tuple[bool, float]:
+    """Autofocus behind d5_usb; returns (focus locked, seconds until OBS shows
+    moving D5 frames again). The D5100 refuses autofocus ("Unspecified
+    error") when its AF point sees nothing with contrast, e.g. an empty podium;
+    focus then stays where it was."""
+    af, secs = d5_usb(c, lambda: _gphoto2("--set-config", "autofocusdrive=1"))
+    return af.returncode == 0, secs
+
+
+def wb_parse(out: str) -> tuple[str | None, list[str]]:
+    """(Current, [Choice labels]) from `gphoto2 --get-config whitebalance`."""
+    current, choices = None, []
+    for line in out.splitlines():
+        if line.startswith("Current:"):
+            current = line.split(":", 1)[1].strip()
+        elif line.startswith("Choice:"):  # "Choice: 3 Tungsten"
+            choices.append(line.split(None, 2)[2].strip())
+    return current, choices
+
+
+def wb_choice(preset: str, choices: list[str]) -> str | None:
+    """The camera's label for `preset` (an alias or a label, any case), or None."""
+    want = WB_ALIASES.get(preset.lower(), preset).lower()
+    return next((ch for ch in choices if ch.lower() == want), None)
+
+
+def wb_d5(c, preset: str | None = None) -> dict:
+    """Read the D5100's white balance and, with `preset`, set it, behind
+    d5_usb. An unknown preset or one the camera refuses is raised once the
+    feed is back, so a cover never lifts on a stopped D5."""
+    def usb():
+        r = _gphoto2("--get-config", WB_CONFIG, text=True)
+        current, choices = wb_parse(r.stdout)
+        if not choices:
+            raise obsctl.ObsError(f"the D5100 reported no white balance choices: "
+                                  f"{(r.stderr or r.stdout).strip() or 'no output'}")
+        label = wb_choice(preset, choices) if preset else None
+        put = None
+        if label and label != current:
+            put = _gphoto2("--set-config", f"{WB_CONFIG}={label}", text=True)
+        return current, choices, label, put
+
+    (current, choices, label, put), secs = d5_usb(c, usb)
+    out = {"wb": current, "choices": choices, "changed": False, "wb_s": round(secs, 1)}
+    if preset and not label:
+        raise obsctl.ObsError(f"unknown white balance {preset!r}; the D5100 offers {', '.join(choices)} "
+                              f"(or {', '.join(WB_ALIASES)})")
+    if put and put.returncode:
+        raise obsctl.ObsError(f"the D5100 refused white balance {label!r} (dial on M or A?): "
+                              f"{put.stderr.strip()}")
+    return {**out, "wb": label, "changed": True} if put else out
 
 
 # --- OM TG-7 (tools/live/tg7cam) ---------------------------------------------
@@ -1122,17 +1184,13 @@ def go(c, page: str, refocus: bool = False) -> dict:
     return out
 
 
-def refocus(c) -> dict:
-    """Refocus the D5100 without changing page. If a page showing it (item,
-    multi) is on air it hides behind Up Next for the ~5 s the camera is
-    frozen, then fades back to that page, also when the refocus fails (the
-    feed is left running), but not if someone asked for a page meanwhile
-    (Next included, though it's already on air): that page stays.
-
-    On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
-    no lock, no cover, the D5 is left alone."""
-    if program(c) == CLOSEUP:
-        return tg7_refocus()
+def d5_covered(c, what: str, fn):
+    """Run fn(c), D5100 camera work that freezes its picture, under the lock.
+    If a page showing the D5 (item, multi) is on air it hides behind Up Next
+    for the ~5 s the camera is frozen, then fades back to that page, also when
+    fn fails (the feed is left running), but not if someone asked for a page
+    meanwhile (Next included, though it's already on air): that page stays.
+    Errors start with "<what> failed:"."""
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
@@ -1144,13 +1202,32 @@ def refocus(c) -> dict:
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
             time.sleep(FADE_MS / 1000)
         try:
-            locked, secs = refocus_d5(c)
+            return fn(c)
         except obsctl.ObsError as e:
-            raise obsctl.ObsError(f"refocus failed: {e}") from e
+            raise obsctl.ObsError(f"{what} failed: {e}") from e
         finally:
             if hide and not _switch_asked() and program(c) == UPNEXT:
                 c.call("SetCurrentProgramScene", {"sceneName": back})
-        return {"focused": locked, "refocus_s": round(secs, 1)}
+
+
+def refocus(c) -> dict:
+    """Refocus the D5100 without changing page, hidden as d5_covered says.
+
+    On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
+    no lock, no cover, the D5 is left alone."""
+    if program(c) == CLOSEUP:
+        return tg7_refocus()
+    locked, secs = d5_covered(c, "refocus", refocus_d5)
+    return {"focused": locked, "refocus_s": round(secs, 1)}
+
+
+def wb(c, preset: str | None = None) -> dict:
+    """The D5100's white balance: {"wb", "choices", "changed", "wb_s"}. With
+    `preset` (WB_ALIASES or one of the camera's labels) it's set. Reading
+    needs the USB connection too, so both freeze the D5 like a refocus,
+    hidden the same way (d5_covered). The D5 only: on the closeup page it
+    isn't on air, so nothing is hidden, and the TG-7 is never touched."""
+    return d5_covered(c, "wb", lambda c: wb_d5(c, preset))
 
 
 def held_page(c) -> str | None:
@@ -1246,6 +1323,17 @@ def cmd_refocus(c, a):
         print(json.dumps({**state(c), "refocus": r}))
     else:
         print(f"{focus_note(r['focused'])} ({r['refocus_s']}s); on air: {program(c)}")
+
+
+def cmd_wb(c, a):
+    r = wb(c, a.preset)
+    if a.json:
+        print(json.dumps({**state(c), "wb": r}))
+        return
+    print(f"D5100 white balance: {r['wb']}" + (" (already)" if a.preset and not r["changed"] else "")
+          + f" ({r['wb_s']}s); on air: {program(c)}")
+    if not a.preset:
+        print("choices: " + ", ".join(r["choices"]))
 
 
 def cmd_hold(c, a):
@@ -1374,6 +1462,10 @@ def main(argv=None) -> int:
     s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item/multi is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)
+    s = sub.add_parser("wb", help="D5100 white balance: show it, or set PRESET (hidden like refocus)")
+    s.add_argument("preset", nargs="?", help=f"{', '.join(WB_ALIASES)}, or one of the camera's labels")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_wb)
     s = sub.add_parser("golive", help="start one destination (the other keeps running)")
     s.add_argument("dest", choices=list(DESTS))
     s.add_argument("--confirm", action="store_true", help="required: this broadcasts")
