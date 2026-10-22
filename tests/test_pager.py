@@ -135,9 +135,8 @@ def obs(tmp_path, monkeypatch):
     return fake
 
 
-def test_pages_are_the_seven_in_running_order():
-    assert list(SF.PAGES) == ["intro", "item", "closeup", "next", "desktop", "webcam", "multi"]
-    assert SF.PAGES["multi"] == "Multi View"
+def test_pages_are_the_six_in_running_order():
+    assert list(SF.PAGES) == ["intro", "item", "closeup", "next", "desktop", "webcam"]
     assert SF.PAGES["closeup"] == "Close-up"
     assert SF.PAGES["webcam"] == "Webcam Only"
     assert SF.PAGES["item"] == SF.PRODUCT and SF.PAGES["next"] == SF.UPNEXT
@@ -150,7 +149,7 @@ def test_state_maps_scene_to_page(obs):
     obs.snap.write_bytes(b"jpeg")
     assert SF.state(obs) == {
         "page": "intro", "scene": "Intro",
-        "pages": ["intro", "item", "closeup", "next", "desktop", "webcam", "multi"],
+        "pages": ["intro", "item", "closeup", "next", "desktop", "webcam"],
         "live": True, "timecode": "00:01:02.000", "feed": True, "feed_status": "running",
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
                     "twitch": {"live": False, "timecode": None}}, "standin": False,
@@ -307,12 +306,6 @@ def test_a_missing_scene_is_named(obs):
         SF.go(obs, "webcam")
 
 
-def test_a_missing_multi_page_says_it_needs_the_desktop_window(obs):
-    obs.missing = {"Multi View"}
-    with pytest.raises(obsctl.ObsError, match="no scene 'Multi View'.*setup --desktop-window"):
-        SF.go(obs, "multi")
-
-
 def test_refocus_fails_fast_when_the_camera_is_off(monkeypatch):
     calls = []
 
@@ -337,7 +330,6 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
         assert f'data-dest="{dest}"' in r.text
     assert "/api/pager/refocus" in r.text and "/api/pager/reconnect" in r.text
     assert "'5': 'webcam'" in r.text and "'6': 'closeup'" in r.text and "feed_status" in r.text
-    assert "'7': 'multi'" in r.text
     assert "/api/pager/hold" in r.text and "/api/pager/step" in r.text and "/api/pager/tg7" in r.text
     assert "e.key === ' '" in r.text and "e.preventDefault()" in r.text  # Space steps, never clicks
     assert client.get("/pager", headers={"host": "evil.example"}).status_code == 403
@@ -436,7 +428,7 @@ def test_intro_never_shows_the_window_even_a_safe_one(obs):
     assert "window" not in r and obs.window_shown is False and obs.scene == "Intro"
 
 
-@pytest.mark.parametrize("page", ["item", "desktop", "webcam", "multi"])
+@pytest.mark.parametrize("page", ["item", "desktop", "webcam"])
 def test_other_pages_only_ever_hide_the_window(obs, page):
     obs.window_scenes.add(SF.PAGES[page])
     SF.go(obs, page, refocus=False)
@@ -564,24 +556,6 @@ def test_desktop_page_switches_without_camera_or_window_guard(obs):
     r = SF.go(obs, "desktop")
     assert obs.scene == "Desktop with Face Cam" and r["focused"] is None
     assert "window" not in r and obs.refocused == []
-
-
-def test_multi_page_is_a_plain_switch_and_refocuses_only_when_asked(obs, client):
-    obs.scene = "Up Next"
-    r = SF.go(obs, "multi")
-    assert r == {"page": "multi", "changed": True, "focused": None, "refocus_s": None}
-    assert obs.scene == "Multi View" and obs.refocused == []
-    obs.scene = "Intro"
-    body = client.post("/api/pager", json={"page": "multi", "refocus": True}).json()
-    assert body["page"] == "multi" and body["switch"]["focused"] is True
-    assert obs.refocused == ["Intro"]  # behind the page that was on air
-
-
-def test_refocus_on_multi_hides_behind_up_next_and_comes_back(obs):
-    obs.scene = "Multi View"
-    assert SF.refocus(obs) == {"focused": True, "refocus_s": 5.0}
-    assert obs.refocused == ["Up Next"]
-    assert obs.switches == ["Up Next", "Multi View"]
 
 
 # --- refocus vs. the host's own switches -----------------------------------
@@ -867,7 +841,7 @@ def test_hold_takes_turns_between_two_files_and_never_holds_twice(held):
     assert [Path(p).name for _, p, *_ in held.shots] == ["hold-a.jpg", "hold-b.jpg"]
 
 
-@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam", "multi"])
+@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam"])
 def test_hold_is_only_for_camera_pages(held, page):
     held.scene = SF.PAGES[page]
     with pytest.raises(obsctl.ObsError, match="hold freezes a camera page"):
@@ -908,7 +882,7 @@ def test_step_from_a_hold_of_the_wide_view_goes_to_the_closeup(held):
     assert SF.step(held)["page"] == "closeup"
 
 
-@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam", "multi"])
+@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam"])
 def test_step_from_any_other_page_starts_at_item(held, page):
     held.scene = SF.PAGES[page]
     assert SF.step(held) == {"page": "item", "changed": True, "focused": None, "refocus_s": None,
