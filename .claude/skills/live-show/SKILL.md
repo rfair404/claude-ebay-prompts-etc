@@ -29,21 +29,32 @@ camera over USB, so in a sandboxed session they need the sandbox off.
 
 ## Start of show
 
+In this order:
+
 ```bash
 python tools/live/obsctl.py launch                    # OBS, no window (no-op if running)
-python tools/live/show_flow.py feed start              # D5100 live view -> OBS
-python tools/live/show_flow.py setup --window "<title>" # build the intro, item and next pages
+python tools/live/show_flow.py feed start              # D5100 live view -> OBS (runs tools/d5100_webcam.sh)
+python tools/live/show_flow.py feed status             # "running"; "running, no frames for Ns" = camera not sending
+python tools/live/show_flow.py setup --window "<title>" # build the intro, item, next and webcam pages
+python tools/live/show_flow.py standin on              # only if the D5100 is out; setup keeps this state
 python tools/live/show_flow.py page intro              # pre-show card while you get ready
 python tools/live/show_flow.py status
 ```
+
+The web pager needs FastAPI, which only the repo venv has:
+`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve` (system `python -m
+lib.cli serve` fails). `show_flow.py` itself runs on any Python 3.
 
 `setup --intro-text "..."` changes the pre-show card's text (default
 "Starting soon").
 
 `--window` picks the desktop window shown in Up Next by title substring
 (`obsctl.py call GetInputPropertiesListPropertyItems '{"inputName":"Window Capture (Xcomposite)","propertyName":"capture_window"}'`
-lists them). Avoid windows that could show private things (email, social
-media, terminals) and the stream's own dashboard (it feeds back into itself).
+lists them, but that list keeps closed windows; setup refuses one that has
+closed). Up Next only shows a window whose live title is on the allowlist
+(`show_flow.SAFE_WINDOW`: an eBay listing/store page "... | eBay", "Pop's
+Games", "popsgames"), so pick the next lot's eBay page; setup warns if the
+window it picked will be hidden.
 
 Then, after the user says yes:
 
@@ -56,12 +67,16 @@ It prints kbps (and skipped frames for eBay) after 5 s. Healthy is roughly
 `stop ebay` / `stop twitch` end one. Each start is its own yes from the
 user. Twitch needs a one-time `twitch-setup` plus the user pasting the
 Twitch URL into OBS (docs/live-streaming-setup.md step 2); `golive twitch`
-says so if that's missing.
+says so if that's missing. After `twitch-setup`, OBS's **Record is Twitch**
+in the `Ebay` profile: Start Recording is a public Twitch broadcast. Never
+start a recording to "save a copy". To record to a file, with nothing live,
+set OBS Settings > Output > Recording > Type back to Standard (the doc has
+the `obsctl.py call` for it); `twitch-setup` switches back.
 
 ## During the show: the pager
 
-A show has four pages. One command puts any of them on air:
-`show_flow.py page intro|item|next|desktop`.
+A show has five pages. One command puts any of them on air:
+`show_flow.py page intro|item|next|desktop|webcam`.
 
 | User says | Run |
 |---|---|
@@ -69,21 +84,35 @@ A show has four pages. One command puts any of them on air:
 | "next item", "swap", "pause", "show what's coming up" | `show_flow.py page next` |
 | "back to the product", "ready", "item view" | `show_flow.py page item` |
 | "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
+| "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
+| "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 | "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
-- `page item` refocuses the D5100 *while the current page is still on air*
-  (about 5 s: live view stops, autofocus, restarts), then fades to the item
-  view. Viewers never see the freeze. It starts the feed if it's off, and
-  fails right away, staying on the current page, if the camera isn't on USB.
-- `refocus` on the item view hides itself behind Up Next for those ~5 s.
+- Every `page` is one scene switch; it never refocuses or waits for the
+  camera. `page item` fades straight to the item view with whatever the D5
+  shows, so after an item swap run `refocus` once the item is on the podium.
+- `refocus` takes about 5 s (live view stops, autofocus, restarts). On the
+  item view it hides behind Up Next for those seconds, then fades back,
+  unless the user asked for a page meanwhile (that page stays). A second
+  refocus while one runs is refused (`Busy`), not queued. If it fails, the
+  feed is left running and the error starts with `refocus failed:`.
+- `page item --refocus` refocuses first, behind the current page, then
+  switches (fails fast, staying put, if the camera isn't on USB).
+- `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
+  when a camera's picture is black or frozen but `feed status` says
+  `running`. Viewers see a blink of black on that camera.
 - Before Up Next goes on air the pager checks the captured window's *live*
-  title and hides the window (card + webcam only) if it looks private or is
-  the stream itself (Twitch, eBay Live, mail, My eBay, terminals, ...). The
-  result says `window hidden`; tell the user to open the next lot in a
-  window of its own and re-run `setup --window`.
+  title and shows the window only if it's on the allowlist (a public eBay
+  page or Pop's Games) and not vetoed (Twitch, eBay Live, Seller Hub, My
+  eBay, mail, terminals, ...); otherwise card + webcam only. The result
+  says `window hidden`; tell the user to open the next lot's eBay page in a
+  window of its own and re-run `setup --window`. Up Next is the only page
+  that ever shows that window; every other page hides it.
+- `page webcam` (scene `Webcam Only`) is the fallback: the webcam alone with
+  the mic. It never touches the D5100, so use it if the camera dies mid-show.
 - `next` / `back` are aliases of `page next` / `page item`.
 - `show_music.py on|off` fades the CC0 background music in or out over 2 s
   (`off` mutes and pauses it). It's the only music allowed on the show: never
@@ -91,16 +120,18 @@ A show has four pages. One command puts any of them on air:
   says to run `setup`, run `show_music.py setup` (and `build` first if the
   file is missing); docs/live-streaming-setup.md section 7.
 - `standin on` puts a white panel in the item view in place of the D5100;
-  while it's on, `page item` skips the refocus and `refocus` refuses. The
+  while it's on, `page item --refocus` skips the refocus and `refocus` refuses. The
   pager page has the same switch, and it stays on through reloads (it lives
   in OBS).
 - `page desktop` shows the window picked with `setup --desktop-window
   "<title>" [--desktop-crop-left <px>]` under the webcam. The privacy guard
   doesn't check it (the host chose it), so remind the user that whatever is
   in that window is on air.
-- Web: the local app (`python -m lib.cli serve`) has a button page at
-  http://localhost:8770/pager (keys 1/2/3/R) and serves the same pager at
-  `/api/pager` (`GET` state, `POST {"page": ...}`, `POST /api/pager/refocus`).
+- Web: the local app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli
+  serve`) has a button page at http://localhost:8770/pager (keys 1-5 for
+  intro/item/next/desktop/webcam, R refocus, C reconnect cameras) and serves
+  the same pager at `/api/pager` (`GET` state, `POST {"page": ...}`, `POST
+  /api/pager/refocus`, `POST /api/pager/reconnect`).
   A switch made there shows up in `status` here, and vice versa.
 - "autofocus couldn't lock" means the center AF point sees nothing with
   contrast, usually an empty podium. Focus stays where it was. Ask the user to
@@ -126,8 +157,10 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
 
 - `can't reach obs-websocket`: OBS isn't running (`obsctl.py launch`), or its
   WebSocket server is off (OBS Tools menu).
-- D5 black or frozen: `show_flow.py feed status`; check that the camera is on
-  and in M or A mode. The feed script restarts itself if live view drops. Log:
+- D5 black or frozen: `show_flow.py feed status`. `running, no frames for
+  Ns` means the loop is alive but the camera sends nothing: check that it is
+  on, awake, plugged in and in M or A mode. Meanwhile `page webcam`. If it
+  says `running` but OBS's picture is still black or frozen, `reconnect d5`. The feed script restarts itself if live view drops. Log:
   `$TMPDIR/d5100_feed.log`.
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100

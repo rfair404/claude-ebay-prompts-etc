@@ -512,8 +512,11 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     eBay Live: an order inside an open show's shopping window (scheduled
     start + 8 h, lib/live_show.py) is held — not rendered, not marked
     printed — so the buyer's later purchases can still join the same box.
-    `state["held"]` lists this poll's held orders and when each window
-    closes; the next poll after that picks them up. `reprint` overrides.
+    `state["held"]` lists this poll's held orders, when each window closes
+    and the buyer's username (when the order carries one); the next poll
+    after that picks them up. `reprint` overrides, and an order already
+    recorded as printed is never held: it keeps its "already printed" line
+    and link instead of vanishing from the poll.
     """
     orders = tag_orders(fetch() if fetch is not None else fetch_open(store), store)
     st = state if state is not None else _load_state(store)
@@ -522,10 +525,15 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     held: dict[str, dict] = {}
     kept = []
     for o in orders:
-        w = live_show.holding_window(o, live_windows)
-        if w and o["orderId"] != reprint:
-            held[o["orderId"]] = {"show": w["show"],
-                                  "until": w["closes"].strftime("%Y-%m-%dT%H:%M:%SZ")}
+        oid = o["orderId"]
+        w = (None if oid == reprint or oid in st["printed"]
+             else live_show.holding_window(o, live_windows))
+        if w:
+            held[oid] = {"show": w["show"],
+                         "until": w["closes"].strftime("%Y-%m-%dT%H:%M:%SZ")}
+            buyer = (o.get("buyer") or {}).get("username")
+            if buyer:
+                held[oid]["buyer"] = buyer
         else:
             kept.append(o)
     orders = kept
@@ -703,9 +711,23 @@ def cmd_poll(args) -> int:
     with its own credentials, ledger and state file, each verdict prefixed
     with its store label. The queues are never merged."""
     rc = 0
+    for line in live_overlap_warnings():
+        print(line)
     for store in stores.stores_from_args(args):
         rc = max(rc, _poll_one_store(args, store))
     return rc
+
+
+def live_overlap_warnings(windows: list[dict] | None = None) -> list[str]:
+    """One warning line per pair of eBay Live shows on different stores whose
+    shopping windows overlap. Each store's poll holds only its own show's
+    orders, so the ship board should know two are running. Warning only."""
+    if windows is None:
+        windows = live_show.open_windows(None)
+    return [f"[!] eBay Live shows on two stores overlap: "
+            f"{live_show.describe_window(a)} and {live_show.describe_window(b)}"
+            f"; each store's poll holds only its own show's orders"
+            for a, b in live_show.cross_store_overlaps(windows)]
 
 
 def _poll_one_store(args, store: str) -> int:
@@ -720,9 +742,14 @@ def _poll_one_store(args, store: str) -> int:
     held = state.get("held") or {}
     if held:
         for show, until in sorted({(h["show"], h["until"]) for h in held.values()}):
-            n = sum(1 for h in held.values() if h["show"] == show)
-            print(f"[..] {tag}{n} order(s) from eBay Live show {show!r} held until "
-                  f"{until} (8 h combined-shipping window)")
+            oids = [oid for oid, h in held.items()
+                    if h["show"] == show and h["until"] == until]
+            print(f"[..] {tag}{len(oids)} order(s) from eBay Live show {show!r} held until "
+                  f"{live_show.fmt_et(until)} (8 h combined-shipping window)")
+            for oid in oids:
+                buyer = held[oid].get("buyer")
+                print(f"  held {oid}" + (f"  {buyer}" if buyer else "")
+                      + f"  until {live_show.fmt_et(until)}")
     if not new_ids and not skipped_ids:
         print(f"[OK] {tag}nothing {'else ' if held else ''}awaiting shipment")
         return 0

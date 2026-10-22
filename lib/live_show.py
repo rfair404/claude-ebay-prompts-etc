@@ -47,6 +47,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parent.parent
 LIVE_DIR = REPO / "inventory" / "_live"
@@ -57,6 +58,11 @@ MAX_LOTS = 750   # Stream manager's per-event listing cap (help page)
 # Live orders stay "Paid - wait to ship" this long after the event's
 # scheduled start, so later purchases can be combined (help id=5762).
 SHOPPING_WINDOW = timedelta(hours=8)
+# A lineup lot holds an order only if it was bought this close to the
+# scheduled start, or later. Earlier sales are ordinary store orders: they
+# may already be printed or packed, and holding them would hide them.
+PRE_SHOW_MARGIN = timedelta(hours=2)
+EASTERN = ZoneInfo("America/New_York")
 BEST_OFFER_FLAG = "Best Offer is on (not allowed on eBay Live)"
 
 
@@ -246,6 +252,17 @@ def _parse_utc(text: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def fmt_et(when) -> str:
+    """A UTC ISO string or aware datetime as 'Tue Oct 20 04:00 AM ET'."""
+    if isinstance(when, str):
+        when = _parse_utc(when)
+    return f"{when.astimezone(EASTERN):%a %b %d %I:%M %p} ET"
+
+
+def _utc_text(dt: Optional[datetime]) -> Optional[str]:
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if dt else None
+
+
 def shopping_window(lineup: dict) -> Optional[tuple[datetime, datetime]]:
     """(scheduled start, window close) for a lineup with a scheduled start."""
     start = lineup.get("scheduled_start")
@@ -255,9 +272,10 @@ def shopping_window(lineup: dict) -> Optional[tuple[datetime, datetime]]:
     return s, s + SHOPPING_WINDOW
 
 
-def open_windows(store: str, now: Optional[datetime] = None,
+def open_windows(store: Optional[str], now: Optional[datetime] = None,
                  base: Optional[Path] = None) -> list[dict]:
-    """Every show on `store` whose shopping window hasn't closed yet."""
+    """Every show on `store` (None: on any store) whose shopping window
+    hasn't closed yet."""
     now = now or datetime.now(timezone.utc)
     root = base or LIVE_DIR
     out: list[dict] = []
@@ -269,10 +287,12 @@ def open_windows(store: str, now: Optional[datetime] = None,
             win = shopping_window(lu)
         except (OSError, ValueError):
             continue
-        if lu.get("store") != store or not win or now >= win[1]:
+        if (store is not None and lu.get("store") != store) or not win \
+                or now >= win[1]:
             continue
         lots = lu.get("lots") or []
         out.append({"show": lu.get("show") or p.parent.name,
+                    "store": lu.get("store"),
                     "start": win[0], "closes": win[1],
                     "item_ids": {l["item_id"] for l in lots if l.get("item_id")},
                     "skus": {l["sku"] for l in lots if l.get("sku")}})
@@ -283,9 +303,10 @@ def holding_window(order: dict, windows: list[dict]) -> Optional[dict]:
     """The open shopping window that should hold `order` back, if any.
 
     An order is held when it was placed before the window closes and either
-    has a line item from the show's lineup, or was placed after the show's
-    scheduled start. The second rule catches lots Stream manager changed to
-    auction: those run under a new Item ID that isn't in our lineup.
+    was placed after the show's scheduled start, or has a line item from the
+    show's lineup and was placed no earlier than PRE_SHOW_MARGIN before the
+    start. The first rule catches lots Stream manager changed to auction:
+    those run under a new Item ID that isn't in our lineup.
     """
     created = order.get("creationDate")
     if not created:
@@ -296,13 +317,32 @@ def holding_window(order: dict, windows: list[dict]) -> Optional[dict]:
         return None
     lines = order.get("lineItems") or []
     for w in windows:
-        if at >= w["closes"]:
+        if at >= w["closes"] or at < w["start"] - PRE_SHOW_MARGIN:
             continue
         if at >= w["start"] or any(
                 li.get("legacyItemId") in w["item_ids"] or li.get("sku") in w["skus"]
                 for li in lines):
             return w
     return None
+
+
+def cross_store_overlaps(windows: list[dict]) -> list[tuple[dict, dict]]:
+    """Pairs of shopping windows on different stores that overlap in time.
+    Each store's pick list holds only its own show's orders, so two stores
+    live at once is worth a warning; nothing here changes what is held."""
+    out = []
+    for i, a in enumerate(windows):
+        for b in windows[i + 1:]:
+            if (a.get("store") != b.get("store")
+                    and a["start"] < b["closes"] and b["start"] < a["closes"]):
+                out.append((a, b))
+    return out
+
+
+def describe_window(w: dict) -> str:
+    """e.g. show 'oct-20' on store 'junk' (Mon Oct 19 08:00 PM ET - Tue Oct 20 04:00 AM ET)"""
+    return (f"show {w['show']!r} on store {w.get('store')!r} "
+            f"({fmt_et(w['start'])} - {fmt_et(w['closes'])})")
 
 
 # ---------------------------------------------------------------------------
@@ -329,14 +369,24 @@ def save_lineup(name: str, store: str, lots: list[dict],
     d = show_dir(name, base)
     doc = {"show": name, "store": store,
            "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-           "scheduled_start": (scheduled_start.astimezone(timezone.utc)
-                               .strftime("%Y-%m-%dT%H:%M:%SZ")
-                               if scheduled_start else None),
+           "scheduled_start": _utc_text(scheduled_start),
            "lots": lots}
     _atomic_write(d / "lineup.json", json.dumps(doc, indent=1) + "\n")
     ids = eligible_ids(lots, keep_flagged)
     _atomic_write(d / "item_ids.txt", "".join(f"{i}\n" for i in ids))
     return d
+
+
+def set_scheduled_start(name: str, scheduled_start: Optional[datetime],
+                        base: Optional[Path] = None) -> dict:
+    """Rewrite only lineup.json's scheduled_start (None clears it). Lots,
+    built_at and item_ids.txt are left as they are."""
+    lu = load_lineup(name, base)
+    if lu is None:
+        raise LookupError(f"show {name!r} has no lineup — run tools/live_lineup.py")
+    lu["scheduled_start"] = _utc_text(scheduled_start)
+    _atomic_write(show_dir(name, base) / "lineup.json", json.dumps(lu, indent=1) + "\n")
+    return lu
 
 
 def load_lineup(name: str, base: Optional[Path] = None) -> Optional[dict]:

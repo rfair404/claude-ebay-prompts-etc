@@ -212,18 +212,30 @@ Still manual, in Live Studio:
 
 - **`--start`** is the event's scheduled start in Live Studio, in Eastern
   time unless the value carries an offset. It's stored in `lineup.json` as
-  UTC, and later builds keep it.
+  UTC, and later builds keep it. **`--no-start`** clears it: on a rebuild,
+  or alone (`--store junk --show <show> --no-start`), which changes nothing
+  else and makes no eBay calls. Renaming the show folder doesn't clear it;
+  every `*/lineup.json` counts.
 - **Pick-list hold.** eBay keeps a show's orders in "Paid – wait to ship"
   until 8 h after the scheduled start, and shipping early stops combined
   shipping. `tools/pick_list.py --poll` therefore holds an order while that
   window is open if either:
-  - it has a lot from the lineup, or
+  - it has a lot from the lineup and was placed no more than 2 h before
+    the scheduled start (`PRE_SHOW_MARGIN` in `lib/live_show.py`). Earlier
+    sales are ordinary store orders and ship normally; or
   - it was placed after the scheduled start. This rule catches converted
     auctions, which sell under a new Item ID.
 
-  Held orders aren't rendered or marked printed, so the first poll after
-  the window closes picks them up together with the rest of that buyer's
-  box. A show with no `--start` holds nothing.
+  An order already recorded as printed is never held. It keeps its
+  "already printed" count and link. Held orders aren't rendered or marked
+  printed, so the first poll after the window closes picks them up
+  together with the rest of that buyer's box. The poll lists each held
+  order on its own line (order ID, buyer username when eBay sends one,
+  release time in ET). A show with no `--start` holds nothing.
+- **Two stores at once.** If shows on different stores have overlapping
+  windows, `--poll` and `live_lineup.py` (when it saves a start) print a
+  `[!]` line naming both. Each store's poll still holds only its own
+  show's orders; the line is a warning only.
 
 ## Not built: open questions to answer in the eBay UI first
 
