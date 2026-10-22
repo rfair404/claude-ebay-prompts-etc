@@ -44,7 +44,7 @@ class _Patch:
 def test_copy_args_never_deletes_and_keeps_history():
     args = gm.copy_args(CFG, Path("/data"), Path("/tmp/list.txt"), "20261018T000000Z",
                         apply=True, few=False)
-    assert args[:4] == ["rclone", "copy", "/data", "gdrive:EBAYBIZ-backup/data"]
+    assert args[:4] == ["rclone", "copy", str(Path("/data")), "gdrive:EBAYBIZ-backup/data"]
     assert "sync" not in args
     i = args.index("--backup-dir")
     assert args[i + 1] == "gdrive:EBAYBIZ-backup/history/20261018T000000Z"
@@ -198,5 +198,5 @@ def test_unit_files():
     u = gm.unit_files("/py", Path("/repo"))
     svc, timer = u["ebaybiz-gdrive.service"], u["ebaybiz-gdrive.timer"]
     assert "ExecStart=/py -m lib.cli gdrive push --apply" in svc
-    assert "WorkingDirectory=/repo" in svc
+    assert f"WorkingDirectory={Path('/repo')}" in svc
     assert "Persistent=true" in timer and "OnCalendar=" in timer

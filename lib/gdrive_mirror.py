@@ -186,7 +186,32 @@ def check(cfg: GdriveConfig, run=subprocess.run) -> None:
 # Automatic push after a ledger write
 # ---------------------------------------------------------------------------
 
+def _pid_alive(pid: int) -> bool:
+    if os.name == "posix":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        return True
+    # Windows: os.kill(pid, 0) would terminate the process, so ask for a handle.
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    h = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return k32.GetLastError() == 5         # access denied: exists, not ours
+    try:
+        code = ctypes.c_ulong()
+        k32.GetExitCodeProcess(h, ctypes.byref(code))
+        return code.value == 259               # STILL_ACTIVE
+    finally:
+        k32.CloseHandle(h)
+
+
 def _lock_alive(lock: Path) -> bool:
+    """A crashed worker's lock must not stop the next push: the lock is live
+    only while its pid runs, and never past LOCK_STALE."""
     try:
         pid = int(lock.read_text().strip() or 0)
         age = time.time() - lock.stat().st_mtime
@@ -194,14 +219,7 @@ def _lock_alive(lock: Path) -> bool:
         return False
     if age > LOCK_STALE:
         return False
-    if os.name == "posix" and pid:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            pass
-    return True
+    return _pid_alive(pid) if pid else True
 
 
 def _take_lock(lock: Path) -> bool:
