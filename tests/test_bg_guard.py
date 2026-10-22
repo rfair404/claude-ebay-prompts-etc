@@ -6,15 +6,19 @@ every repo call is actually issued, which is exactly why a naive startswith
 guard would have caught none of them.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))
 
-from bg_guard import SLOW_PREFIXES, offending_prefix, segments, verdict  # noqa: E402
+from bg_guard import (ON_AIR_STALE_H, SLOW_PREFIXES, offending_prefix, on_air,  # noqa: E402
+                      on_air_job, segments, verdict)
 
 
 def test_bare_slow_command_is_caught():
@@ -138,3 +142,105 @@ def test_malformed_input_never_blocks():
         input="not json", capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0
     assert proc.stdout == ""
+
+
+# --- show mode: batch jobs wait while the show is on air ---------------------
+VENV_PYTEST = 'cd "/srv/repo" && /srv/repo/.venv/bin/python -m pytest -q'
+BATCH = [
+    ("python -m pytest", "pytest"),
+    (VENV_PYTEST, "pytest"),
+    ("pytest tests/test_bg_guard.py", "pytest"),
+    ("python tests/run_all.py --fast", "the test suite"),
+    ("python tools/live/show_music.py build", "show_music.py build"),
+    ("python /srv/repo/tools/live/show_music.py build", "show_music.py build"),
+    ('cd "C:/repo" && python -m lib.photo_prep.prep shoot --auto', "PREP"),
+    ("python tools/prep_sheet_html.py shoot", "prep_sheet_html.py"),
+    ("python -m lib.cli prep shoot --auto", "a prep or listing run"),
+    ("python -m lib.cli single-pass shoot", "a prep or listing run"),
+    ("python -m lib.cli --store junk listing --publish x", "a prep or listing run"),
+    ("python lib/list_edit.py --update inventory/x", "a listing run"),
+]
+
+
+@pytest.mark.parametrize("cmd,job", BATCH)
+def test_on_air_denies_batch_jobs_even_backgrounded(on_air_flag, cmd, job):
+    on_air_flag.write_text("{}")
+    reason = verdict({"command": cmd, "run_in_background": True})
+    assert reason is not None and job in reason
+    assert "show is live" in reason and str(on_air_flag) in reason
+
+
+def test_on_air_message_never_points_at_stopping_the_stream(on_air_flag):
+    """An agent that misjudges "no show is on air" must not end a live
+    broadcast: the way out is check status, then rm the flag."""
+    on_air_flag.write_text("{}")
+    reason = verdict({"command": "python -m pytest", "run_in_background": True})
+    assert "show_flow.py status" in reason and f"rm {on_air_flag}" in reason
+    assert "show_flow.py stop" not in reason
+
+
+@pytest.mark.parametrize("cmd,job", BATCH)
+def test_off_air_the_same_jobs_only_need_backgrounding(cmd, job):
+    assert verdict({"command": cmd, "run_in_background": True}) is None
+
+
+@pytest.mark.parametrize("cmd", [
+    "python tools/live/show_flow.py page item",
+    "python tools/live/show_music.py on",
+    "python -m lib.cli status shoot",
+    "python -m lib.cli serve",
+    "git status",
+    "grep -n 'python -m pytest' RUN.md",
+])
+def test_on_air_leaves_show_controls_and_reads_alone(on_air_flag, cmd):
+    on_air_flag.write_text("{}")
+    assert on_air_job(cmd) is None
+    assert verdict({"command": cmd, "run_in_background": True}) is None
+
+
+def test_a_stale_flag_no_longer_blocks(on_air_flag):
+    on_air_flag.write_text("{}")
+    old = on_air_flag.stat().st_mtime - ON_AIR_STALE_H * 3600 - 1
+    os.utime(on_air_flag, (old, old))
+    assert on_air() is None
+    assert verdict({"command": "python -m pytest", "run_in_background": True}) is None
+    assert on_air(now=old + 60) == on_air_flag  # the same flag, when fresh, counts
+
+
+def test_on_air_escape_must_lead_and_fg_ok_does_not_open_it(on_air_flag):
+    on_air_flag.write_text("{}")
+    ok = "# on-air-ok: --status is instant\npython -m lib.photo_prep.prep shoot --status"
+    assert verdict({"command": ok, "run_in_background": True}) is None
+    assert verdict({"command": "python -m pytest  # on-air-ok: no",
+                    "run_in_background": True}) is not None
+    fg = "# fg-ok: instant\npython -m lib.photo_prep.prep shoot --status"
+    assert "show is live" in verdict({"command": fg})
+
+
+def test_venv_python_is_the_same_runner_for_the_background_rule():
+    """The repo's real pytest call names the venv's python by path."""
+    assert offending_prefix(VENV_PYTEST) == "python -m pytest"
+    assert offending_prefix("C:/repo/.venv/Scripts/python.exe -m pytest") == "python -m pytest"
+    assert offending_prefix("/usr/bin/python3.13 tools/ledger_reconcile.py") == \
+        "python tools/ledger_reconcile.py"
+    assert offending_prefix("./tools/fast.py --x") is None
+
+
+def test_hook_denies_on_air_over_stdin(on_air_flag):
+    """The real hook, finding the flag through SHOW_ON_AIR_FLAG (conftest)."""
+    payload = {"tool_name": "Bash",
+               "tool_input": {"command": VENV_PYTEST, "run_in_background": True}}
+    assert _hook(payload) == ""
+    on_air_flag.write_text("{}")
+    decision = json.loads(_hook(payload))["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    assert str(on_air_flag) in decision["permissionDecisionReason"]
+
+
+def test_show_flow_and_bg_guard_agree_on_the_flag(monkeypatch):
+    sys.path.insert(0, str(ROOT / "tools" / "live"))
+    import bg_guard
+    import show_flow
+    monkeypatch.delenv("SHOW_ON_AIR_FLAG")
+    assert show_flow.on_air_flag() == bg_guard.on_air_flag() == \
+        ROOT / "inventory" / "_live" / "ON_AIR"

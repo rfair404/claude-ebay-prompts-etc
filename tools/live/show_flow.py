@@ -860,6 +860,34 @@ def show_profile(c) -> None:
                                     "outputHeight": H, "fpsNumerator": 30, "fpsDenominator": 1})
 
 
+# On air: go_live writes this flag and stop_dest removes it once nothing is
+# live, so tools/bg_guard.py can refuse batch work (pytest, the music build,
+# PREP, listing runs) during a show by reading one file, never OBS. The
+# 2026-10-21 show skipped 99.4% of its frames with those running beside it.
+# The worktree link (tools/worktree_link.py) makes every checkout's
+# inventory/_live/ the main one's. A flag a crash leaves behind goes stale
+# after bg_guard.ON_AIR_STALE_H; any golive refreshes it, and `stop` clears it.
+def on_air_flag() -> Path:
+    """Keep in step with bg_guard.on_air_flag(); tests/test_bg_guard.py checks."""
+    return Path(os.environ.get("SHOW_ON_AIR_FLAG") or REPO / "inventory" / "_live" / "ON_AIR")
+
+
+def mark_on_air(c) -> None:
+    """Write the flag while any destination is live, remove it when none is.
+    Never raises: the flag is advisory and must not stop a go-live or a stop."""
+    try:
+        live = sorted(d for d, s in streams(c).items() if s["live"])
+        flag = on_air_flag()
+        if live:
+            flag.parent.mkdir(parents=True, exist_ok=True)
+            flag.write_text(json.dumps({"live": live, "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                        "pid": os.getpid()}) + "\n", encoding="utf-8")
+        else:
+            flag.unlink(missing_ok=True)
+    except (OSError, obsctl.ObsError):
+        pass
+
+
 def go_live(c, dest: str, check: float = 5) -> dict:
     """Start one destination, leaving the other as it is, and check that
     bytes are flowing. Not under the camera lock: a 5 s check mustn't hold
@@ -867,6 +895,7 @@ def go_live(c, dest: str, check: float = 5) -> dict:
     if dest not in DESTS:
         raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
     if streams(c)[dest]["live"]:
+        mark_on_air(c)
         return {"dest": dest, "changed": False}
     kind = DESTS[dest]
     if _on_twitch_profile(c) and not c.call("GetStreamStatus")["outputActive"]:
@@ -888,6 +917,7 @@ def go_live(c, dest: str, check: float = 5) -> dict:
     if not st["outputActive"] or not st.get("outputBytes"):
         raise obsctl.ObsError(f"{dest} didn't connect: {obsctl.redact(st)}")
     kbps = st["outputBytes"] * 8 / 1000 / max(st["outputDuration"] / 1000, 0.001)
+    mark_on_air(c)
     return {"dest": dest, "changed": True, "kbps": round(kbps), "profile": c.call(
                 "GetProfileList")["currentProfileName"],
             "skipped": (f"{st['outputSkippedFrames']}/{st['outputTotalFrames']}"
@@ -908,12 +938,14 @@ def stop_dest(c, dest: str) -> dict:
     if dest not in DESTS:
         raise ValueError(f"unknown destination {dest!r}; {', '.join(DESTS)}")
     if not streams(c)[dest]["live"]:
+        mark_on_air(c)  # a flag left by a crash goes with the next `stop`
         return {"dest": dest, "changed": False}
     kind = "Stream" if dest == "twitch" and _on_twitch_profile(c) else DESTS[dest]
     c.call(f"Stop{kind}")
     deadline = time.monotonic() + 10
     while c.call(f"Get{kind}Status")["outputActive"] and time.monotonic() < deadline:
         time.sleep(0.25)
+    mark_on_air(c)
     return {"dest": dest, "changed": True}
 
 
