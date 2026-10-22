@@ -6,7 +6,9 @@ looks at a small copy of each frame, and logs what it sees. "Done for now"
 closes the item and the next one starts. The cameras and pages are
 show_flow's (D5100 stills pause live view behind Up Next, like a refocus;
 TG-7 stills don't pause anything); this adds the shoot's folders and log on
-top. Nothing here streams, so it runs the same on air or off.
+top. Nothing here streams, so it runs the same on air or off. On air,
+`show_flow.py still` (and `step` from the item view) is `capture tg7` that
+also puts the photo on air: with an item open its frame lands here, logged.
 
   inventory/<shoot>/              the shoot; a bucket, so its context.txt
     shoot.json                    (lib/dir_context.py) reaches every item
@@ -90,6 +92,17 @@ def save(d: Path, st: dict) -> None:
     tmp = d / "shoot.json.tmp"
     tmp.write_text(json.dumps(st, indent=2) + "\n")
     tmp.replace(d / "shoot.json")
+
+
+def open_shoot() -> tuple[Path, dict] | None:
+    """(shoot dir, its state) when a shoot is started and has an item open,
+    else None. show_flow.py's `still` saves its TG-7 frame there if so."""
+    try:
+        d = shoot_dir()
+        st = load(d)
+    except (ShootError, ValueError):  # ValueError: a shoot.json that isn't JSON
+        return None
+    return (d, st) if st.get("current") else None
 
 
 def open_item(d: Path, st: dict) -> Path:
