@@ -273,7 +273,7 @@ def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
 
 
 class Busy(obsctl.ObsError):
-    """A refocus is already running (from the shell or the web app)."""
+    """The D5100 is busy: a refocus or a still is running (from the shell or the web app)."""
 
 
 @contextmanager
@@ -289,8 +289,8 @@ def exclusive():
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
-                    raise Busy("a D5100 refocus is already running (pager or shell); "
-                               "it takes about 5 s, try again when it's done")
+                    raise Busy("the D5100 is busy with a refocus or a still (pager or shell); "
+                               "it takes about 5-10 s, try again when it's done")
                 time.sleep(0.05)
         try:
             yield
@@ -558,8 +558,10 @@ def still_d5(c, dest: Path) -> dict:
     files = [Path(f.strip()) for f in SAVED.findall(r.stdout or "")]
     if r.returncode or not files:
         why = (r.stderr or r.stdout or "").strip().splitlines()
-        raise obsctl.ObsError(f"the D5100 didn't take the still: {why[-1] if why else 'no file saved'}"
-                              " (autofocus can't lock on an empty or low-contrast frame)")
+        why = why[-1] if why else "no file saved"
+        if re.search(r"out of focus|unspecified error", why, re.I):
+            why += " (autofocus can't lock on an empty or low-contrast frame)"
+        raise obsctl.ObsError(f"the D5100 didn't take the still: {why}")
     return {"camera": "d5", "files": [str(f) for f in files], "still_s": round(secs, 1)}
 
 

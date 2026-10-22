@@ -112,6 +112,12 @@ def test_tg7_unreachable_is_an_error_line(inv, capsys, monkeypatch):
     assert rc == 1 and "TG-7: camera not reachable" in err
 
 
+def test_shoot_flag_takes_the_name_start_was_given(inv, capsys):
+    run(capsys, "start", "Oct 21 Shoot")
+    assert run(capsys, "--shoot", "Oct 21 Shoot", "item", "lamp")[0] == 0
+    assert (inv / "oct-21-shoot" / "01-lamp").is_dir()
+
+
 def test_commands_need_a_shoot_and_an_open_item(inv, capsys):
     rc, _, err = run(capsys, "status")
     assert rc == 1 and "no shoot started" in err
@@ -148,9 +154,8 @@ class StillCamera(Camera):
 
 
 @pytest.fixture
-def d5(camera, monkeypatch, tmp_path):
-    cam = StillCamera(monkeypatch, tmp_path / "d5100_latest.jpg")
-    return cam
+def d5(camera, monkeypatch):
+    return StillCamera(monkeypatch, camera.snap)
 
 
 def test_still_d5_hides_behind_up_next_and_restarts_the_feed(d5, tmp_path):
@@ -165,6 +170,6 @@ def test_still_d5_hides_behind_up_next_and_restarts_the_feed(d5, tmp_path):
 def test_a_still_that_fails_says_why_and_leaves_the_feed_running(d5, tmp_path):
     d5.saved = []
     c = CamObs(["old", "new"])
-    with pytest.raises(obsctl.ObsError, match="Out of Focus"):
+    with pytest.raises(obsctl.ObsError, match=r"Out of Focus \*\*\* \(autofocus can't lock"):
         SF.still_d5(c, tmp_path / "item")
     assert d5.running and c.scene == "eBay Main"

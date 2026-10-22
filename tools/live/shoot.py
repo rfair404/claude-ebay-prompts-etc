@@ -76,7 +76,7 @@ def shoot_dir(name: str | None = None) -> Path:
             name = ""
         if not name:
             raise ShootError("no shoot started; run `shoot.py start [NAME]`")
-    return INVENTORY / name
+    return INVENTORY / slug(name)
 
 
 def load(d: Path) -> dict:
@@ -198,8 +198,7 @@ def capture(d: Path, st: dict, camera: str, note: str | None) -> dict:
         except tg7.CamError as e:
             raise ShootError(f"TG-7: {e}") from e
         got, focus = [path], af != "ng"
-    shots = [f for f in got if f.suffix.lower() in FRAME_EXT] or got
-    looks = [thumb(f) for f in shots if f.suffix.lower() in FRAME_EXT]
+    looks = [thumb(f) for f in got if f.suffix.lower() in FRAME_EXT]
     flag = ", focus didn't lock" if focus is False else ""
     log(item, f"capture **{' + '.join(f.name for f in got)}** ({camera}{flag})"
               + (f" — {note}" if note else ""))
@@ -302,10 +301,7 @@ def main(argv=None) -> int:
                 print(f"frames: {r['frames']}/{TARGET}")
                 for ln in r["recent"]:
                     print(f"  {ln}")
-    except (ShootError, obsctl.ObsError) as e:
-        print(f"shoot: {e}", file=sys.stderr)
-        return 1
-    except OSError as e:  # the OBS socket dropped, or the camera's Wi-Fi did
+    except (ShootError, obsctl.ObsError, OSError) as e:  # OSError: OBS's socket or the TG-7's Wi-Fi dropped
         print(f"shoot: {e}", file=sys.stderr)
         return 1
     return 0
