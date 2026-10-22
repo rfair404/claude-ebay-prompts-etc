@@ -676,7 +676,10 @@ function changes(a, b, own = []) {
       out.push([NAMES[d] + (rb.reconnecting ? ' lost its connection: OBS is reconnecting' : ' reconnected'),
                 rb.reconnecting ? 'err' : 'ok']);
   }
-  if (a.feed_status !== b.feed_status) out.push(['D5100 feed: ' + b.feed_status, b.feed_status === 'running' ? 'ok' : 'warn']);
+  // "running, no frames for 245s" ticks every poll: a change of kind is news, the count isn't
+  const kind = s => (s || '').replace(/\d+s\b/, 'Ns');
+  if (kind(a.feed_status) !== kind(b.feed_status))
+    out.push(['D5100 feed: ' + b.feed_status, b.feed_status === 'running' ? 'ok' : 'warn']);
   if (!mine('tg7') && a.tg7_status !== b.tg7_status) out.push(['TG-7 feed: ' + b.tg7_status, b.tg7_status === 'running' ? 'ok' : 'warn']);
   if (!mine('standin') && a.standin !== b.standin) out.push(['D5 stand-in ' + (b.standin ? 'on' : 'off'), 'sys']);
   if (a.music && b.music && a.music.on !== b.music.on) out.push(['Music ' + (b.music.on ? 'on' : 'off'), 'sys']);
