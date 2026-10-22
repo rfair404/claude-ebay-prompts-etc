@@ -1123,7 +1123,7 @@ def test_wb_and_refocus_share_the_lock(obs, monkeypatch):
     monkeypatch.setattr(SF, "LOCK_WAIT", 0)
     obs.scene = "eBay Main"
     with SF.exclusive():
-        with pytest.raises(SF.Busy, match="refocus or WB change is already running"):
+        with pytest.raises(SF.Busy, match="refocus, WB change or still is already running"):
             SF.wb(obs, "auto")
     assert obs.switches == []
 
