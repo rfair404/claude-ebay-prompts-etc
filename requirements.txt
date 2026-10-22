@@ -51,3 +51,7 @@ pytesseract>=0.3.13            # page-orientation detection wrapper
 # beyond loopback; see docs/webapp-architecture.md's "Hosting" answer.
 fastapi>=0.121.0
 uvicorn>=0.38.0                # ASGI server `serve` runs FastAPI under
+
+# --- Live show: spoken shoot cues (tools/live/director_cue.py) ---
+# Makes the "set"/"done" clips once; only the cue words go to Google TTS.
+gTTS>=2.5.0

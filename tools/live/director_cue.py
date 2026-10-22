@@ -18,7 +18,6 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import obsctl  # noqa: E402
 import show_flow  # noqa: E402
 
 CUE = "Director Cue"
@@ -72,7 +71,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("say")
     p.add_argument("words", nargs="+")
     a = ap.parse_args(argv)
-    c = obsctl._connect("127.0.0.1", 4455)
+    c = show_flow.connect()
     if a.cmd == "setup":
         setup(c)
         print(f"{CUE}: ready ({', '.join(WORDS)}) from {CUE_DIR}")
