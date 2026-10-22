@@ -48,14 +48,34 @@ two Linux substitutions:
 |---|---|---|
 | Output Mode Advanced, Rescale Disabled | same | |
 | CBR, 3000 Kbps, keyframe 1 s | same | |
-| CPU Usage: superfast | x264 `superfast`, `bframes=0` | WebRTC/WHIP can't carry B-frames |
+| CPU Usage: superfast | **VAAPI H.264** (`ffmpeg_vaapi_tex`), High, B-frames 0 | x264 superfast can't keep up on the show laptop (below); WebRTC/WHIP can't carry B-frames |
 | Audio 128 Kbps | same | |
 | Audio encoder CoreAudio AAC | **Opus** | CoreAudio is macOS-only; WHIP requires Opus (eBay: accept OBS's Opus prompt) |
 | 1080x1920 base + output, 30 FPS | same | |
 | Service | **WHIP**, Bearer Token blank | eBay's "No delay (WHIP)" option |
 
-If x264 drops frames on a weak CPU, switch Encoder to `ffmpeg_vaapi_tex`
-(FFmpeg VAAPI H.264) in Settings > Output > Streaming and keep CBR 3000.
+The eBay encode runs on the Intel GPU. On the show laptop (i7-8665U, 4
+cores, UHD 620) x264 `superfast` at 1080x1920 plus the Twitch encode skipped
+69,199 of 69,627 frames ("Encoding overloaded", show of 2026-10-21). The
+Flatpak's own Intel driver (iHD 26.x from `org.freedesktop.Platform.VAAPI.Intel`)
+does CBR H.264 at 1080x1920 faster than real time with the CPU pegged. Two
+notes:
+
+- The *host's* Debian `intel-media-va-driver` only offers CQP (no CBR) on
+  this GPU, so `ffmpeg -c:v h264_vaapi -b:v 3000k` fails outside the
+  Flatpak. That doesn't affect OBS, which uses the Flatpak's driver.
+- On a machine whose OBS log has no `FFmpeg VAAPI H264 encoding supported`
+  line, set `Encoder=obs_x264` in `basic.ini`. `streamEncoder.json` keeps
+  the x264 keys (`superfast`, `bframes=0`) for that case.
+
+OBS reads the encoder type only when it starts. To change it with OBS
+running, write it, then restart OBS with nothing live (`obsctl.py quit`
+refuses while either destination is on):
+
+```bash
+python tools/live/obsctl.py call SetProfileParameter '{"parameterCategory":"AdvOut","parameterName":"Encoder","parameterValue":"ffmpeg_vaapi_tex"}'
+python tools/live/obsctl.py quit && python tools/live/obsctl.py launch
+```
 
 Install (OBS must be **closed** — it rewrites these files on exit):
 
@@ -80,7 +100,10 @@ every event.
 once and start/stop independently. OBS has one stream output (eBay's WHIP),
 and Debian's ffmpeg 7.1 has no WHIP muxer for a relay, so Twitch goes out
 on the *recording* output: Custom Output (FFmpeg) > Output to URL, flv, x264
-veryfast 3000k, AAC. With nothing live, run `python
+superfast 3000k rescaled to 720x1280, AAC. (Custom Output can't use VAAPI, so
+this encode is on the CPU. 44% of the pixels at a faster preset is roughly
+a quarter of the old veryfast-at-1080x1920 work, an estimate, not a
+measurement.) With nothing live, run `python
 tools/live/show_flow.py twitch-setup` to set all of that except the URL.
 Then (**user**): OBS Settings > Output > Recording > "File path or URL",
 paste `rtmp://live.twitch.tv/app/<stream key>` (Twitch dashboard > Settings
@@ -153,6 +176,12 @@ Capture Device (V4L2) > "Nikon D5100".
 **Verify:** `gphoto2 --auto-detect` lists the D5100, and `show_flow.py feed
 status` says `running`. `running, no frames for Ns` means the feed loop is up
 but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
+
+**Clock:** live view dies when the D5100's date resets, so every feed
+(re)start sets the camera clock to the computer's time first (`gphoto2
+--set-config datetime=now`, best effort). A reset date (before 2020) is
+logged in `$TMPDIR/d5100_feed.log` and the watch's reason becomes `clock
+reset (camera said <date>)`.
 
 ## 5. OM System TG-7 (close-up camera)
 
@@ -227,6 +256,7 @@ python tools/live/obsctl.py launch            # 1. OBS minimized to the tray, no
 python tools/live/show_flow.py feed start     # 2. tools/d5100_webcam.sh (self-restarting), detached
 python tools/live/show_flow.py feed status    #    want "running", not "running, no frames for Ns"
 python tools/live/show_flow.py setup --window "<title substring>"   # 3. build/refresh the pages
+python tools/live/show_flow.py watch start   #    black panel over any camera that drops
 python tools/live/show_flow.py standin on     # 4. only if the D5100 is out (setup keeps this state)
 python tools/live/show_flow.py page intro     # 5. pre-show card, before going live
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
@@ -238,12 +268,48 @@ python tools/live/show_flow.py hold | release # freeze the camera page while the
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
+**"Encoding overloaded" / skipped frames.** `obsctl.py status` prints
+`render skipped` (the GPU/compositor missed frames) and `output skipped`
+(the encoders couldn't keep up). Both should stay near 0. If they climb:
+check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
+(section 2), then check the power and what else is running.
+
+- **Power.** The laptop (ThinkPad X1 Yoga, 4 cores, 16 GB) needs a proper
+  USB-C charger. On 2026-10-22 it was powered through the Targus dock at a
+  5 V x 3 A (15 W) contract, and every core sat at 1.2 GHz under load. Before
+  a show, this should print `20000000` (20 V) for the charging port, and
+  the clocks should rise well above 1200 under load:
+
+  ```bash
+  cat /sys/class/power_supply/ucsi-source-psy-*/voltage_now; awk '/MHz/{printf "%d ", $4}' /proc/cpuinfo; echo
+  ```
+
+- **Other jobs.** During a Twitch run on 2026-10-22 the load average was
+  65, swap was full, and OBS took 71 ms to render each frame (the budget at
+  30 FPS is 33 ms). The cause was about 25 parallel ffmpeg loudness scans,
+  a test suite and several browser and Claude windows. Keep batch jobs
+  (music analysis, pytest, listing runs) off this machine while a show is
+  live.
+
 **closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
 (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
 source is a v4l2 camera on /dev/video11 when that loopback device exists,
 else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
 the device and it switches. `refocus` on the closeup page is the TG-7's
 half-press (0.3 s, live view keeps running), so nothing is hidden.
+
+**watch** (`watch start|stop|status`) is the camera watch, a background
+process (log `$TMPDIR/show_flow_watch.log`). Every 2 seconds it looks at the
+D5100, the webcam and the TG-7. A camera that stays bad for 3 looks (feed
+stopped, no frames from the camera, no picture or a frozen one in OBS) gets
+a black panel (`D5 Down`, `Webcam Down`, `TG-7 Down`, which `setup` builds,
+hidden) over its slot on every page that shows it. The panel comes off after
+5 good looks in a row. While a panel is on and the device has frames, the
+watch reopens the camera in OBS like `reconnect`, at most every 15 s. It
+skips the D5 during a refocus, WB change or still, and while the stand-in
+is on. The panels are only on while the watch runs: it clears them when it
+ends, and `watch stop` clears them too. A camera slot went black:
+`watch status` says why; `reconnect` or `page webcam` meanwhile.
 
 **hold** (scene `Hold`) freezes the camera page on air: OBS screenshots the
 scene, and the Hold page shows that still under the live webcam strip, so
@@ -252,6 +318,18 @@ back to the live camera. **step** is the item sequence on one key (Space on
 the pager): wide (item) -> close-up -> hold, turn the item -> wide again,
 and so on. From a hold it releases to the *other* camera; from any
 non-camera page it starts at item.
+
+**Show mode: no batch jobs on air.** The 2026-10-21 show skipped 99.4% of
+its frames while the show laptop also ran pytest, a music build and other
+batch jobs. `golive` now writes `inventory/_live/ON_AIR`, and `stop` removes
+it once nothing is live. While it is there, the shell hook
+(`tools/bg_guard.py`) refuses pytest, `show_music.py build`, PREP,
+`prep_sheet_html.py`, `single-pass` and listing runs, even backgrounded,
+with "the show is live, so ... waits". Build the music before the show. If
+OBS dies without a `stop`, the flag stays: the guard ignores it after 8
+hours. To clear it sooner, check `show_flow.py status` first, and only if
+eBay and Twitch both read off, `rm inventory/_live/ON_AIR` (from the main
+checkout). Never stop the stream to get past the guard.
 
 `show_flow.py` and `obsctl.py` need only the standard library; the web app
 needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not
@@ -303,15 +381,16 @@ the repo venv) has a control page at
 http://localhost:8770/pager: a small On-air preview of what OBS is sending
 (its program scene, a few frames a second, no sound; Hide preview turns it
 off), one button per page, Hold and Step buttons,
-Refocus and Reconnect cameras buttons, a TG-7 feed button, the LIVE timer,
-both feeds' status, and keys 1-7 (intro, item, next, desktop, webcam,
+Refocus and Reconnect cameras buttons, a TG-7 feed button, a Start/Stop
+camera watch button with a chip per camera (live, down, off, busy; "black
+on air" when its panel is on), the LIVE timer, both feeds' status, and keys 1-7 (intro, item, next, desktop, webcam,
 close-up, multi), H (hold/release), Space (step), R (refocus), C
 (reconnect) and M (music, section 7). Page clicks switch at once, even while
 a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
 `GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
-"start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
+"start"}`, `POST /api/pager/watch {"action": "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
 "start"}`. The page has Start/Stop buttons for eBay and Twitch,
 each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
@@ -347,24 +426,38 @@ So the show plays **public-domain (CC0) music from a local file**, never an
 internet radio or someone else's 24/7 stream: with a file, every track has a
 license on record.
 
-The music is HoliznaCC0's lo-fi. The artist dedicated the whole catalog to
-the public domain and asks for no credit (https://holiznacc0.bandcamp.com).
-Two packs from OpenGameArt, 13 tracks, about 37 minutes, looped:
-[Chill Beats](https://opengameart.org/content/chill-beats-collection) and
-[Happy Lo-Fi](https://opengameart.org/content/happy-lo-fi-lofi-collection).
+Each show picks one of two **presets** (`show_music.PRESETS`), and you can
+switch between them mid-show:
+
+- **`lofi`**: HoliznaCC0's lo-fi beats, shuffled. The artist dedicated the
+  whole catalog to the public domain and asks for no credit
+  (https://holiznacc0.bandcamp.com). 13 tracks, about 37 minutes, from
+  [Chill Beats](https://opengameart.org/content/chill-beats-collection) and
+  [Happy Lo-Fi](https://opengameart.org/content/happy-lo-fi-lofi-collection).
+- **`folk`**: solo acoustic guitar, in the sound-editor's running order
+  (`show_music.FOLK`). It draws on Monplaisir's
+  [Bonjour From Paris, Nantes And Montreal](https://freemusicarchive.org/music/Monplaisir/Bonjour_from_Paris_Nantes_and_Montreal)
+  and [Fifty Seconds Of Rain](https://freemusicarchive.org/music/Monplaisir/Fifty_seconds_of_rain),
+  with two tracks from jomusic's
+  [Chasing the Leviathan](https://opengameart.org/content/chasing-the-leviathan-adventure-world-music-album)
+  as a bridge. All CC0. Fifty Seconds' cover photo is CC-BY, so it never goes
+  on stream.
 
 ```bash
-python tools/live/show_music.py fetch    # once per machine: ~163 MB into ~/Music/show-bgm/src
-python tools/live/show_music.py build    # one shuffled, levelled file (~5 min of ffmpeg)
-python tools/live/show_music.py setup    # OBS: "Show Music" in every page, muted, ducked
-python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: status
+python tools/live/show_music.py fetch folk    # once per machine (lofi: ~163 MB, folk: the 17 tracks)
+python tools/live/show_music.py build folk    # levelled, crossfaded, looping file (~5 min of ffmpeg)
+python tools/live/show_music.py setup         # OBS: "Show Music" in every page, muted, ducked
+python tools/live/show_music.py use folk      # switch preset: fades out, swaps, fades back in if on
+python tools/live/show_music.py on|off        # 2 s fade in / fade out; also: status
 ```
 
-- `build` levels each track to -16 LUFS, crossfades them (3 s) and writes
-  `~/Music/show-bgm/show-mix.ogg`, `tracklist.json` (for the "now playing"
-  title) and `LICENSE.md`, the record of each track's source and license.
-  Keep `LICENSE.md`: it's the proof if a stream or replay is ever questioned.
-  Rebuild for a new running order.
+- `build <preset>` levels each track on its own (lofi -16 LUFS; folk -18
+  LUFS, with the silent intro and tail trimmed and 2:1 compression for the
+  plucked attacks), crossfades them (3 s), and writes
+  `~/Music/show-bgm/presets/<preset>.ogg`, `<preset>.tracklist.json` (for the
+  "now playing" title) and `<preset>.LICENSE.md`, the record of each track's
+  source and license. Keep the LICENSE files: they're the proof if a stream or
+  replay is ever questioned. Rebuild for a new running order.
 - `setup` adds one media source, `Show Music`, to every page and Hold, so a
   page switch never cuts or restarts it. It loops, starts muted and paused, and
   has a `Duck under mic` compressor keyed by `Mic/Aux` (settings:
@@ -373,9 +466,11 @@ python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: status
   and the next fade-in lands on the new level. `off` fades to -45 dB, then
   mutes and pauses, so `on` resumes mid-track.
 - On the pager page, **Music > Start/Stop** (key **M**) does the same fade
-  and shows the current track. `GET /api/pager` carries its state as `music`;
-  `POST /api/pager/music {"on": true}` fades it. A fade doesn't take the page
-  lock, so it never holds up a page switch or refocus.
+  and shows the current track. Under it there's one button per built preset;
+  the lit one is playing. `GET /api/pager` carries the state as `music`
+  (`preset`, `presets`). `POST /api/pager/music {"on": true}` fades it, and
+  `{"preset": "folk"}` switches. A fade doesn't take the page lock, so it
+  never holds up a page switch or refocus.
 
 ## Open items
 
