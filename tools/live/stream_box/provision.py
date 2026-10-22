@@ -69,6 +69,8 @@ REMOTE_DIR = ".cache/pops-stream-box"  # under the box user's home
 WS_PORT = 4455
 TG7_CAMERA, TG7_RTP_PORT = "192.168.0.10", 40000  # tools/live/tg7cam CAM, DEFAULT_PORT
 EXIT_REBOOT, EXIT_OBS_RUNNING, EXIT_UNSUPPORTED = 100, 3, 2
+# v4l2loopback v0.15.4 ('v0.15.4^{}' on 2026-10-22); its dkms.conf says 0.15.4
+V4L2LOOPBACK_COMMIT = "0f9ee86760b7f2bea174b7e3e7a1d38845da0ab4"
 MAX_PASSES = 3
 REBOOT_WAIT = 420  # seconds for the box to come back after a reboot
 VENDORS = {"10de": "nvidia", "1002": "amd", "8086": "intel"}
@@ -124,20 +126,6 @@ def detect_gpu(lspci: str) -> Gpu | None:
     return found[0] if found else None
 
 
-def detect_gpu_sysfs(pci: str) -> Gpu | None:
-    """Fallback when lspci isn't installed: lines "<slot> <class> <vendor>"
-    from /sys/bus/pci/devices."""
-    found = []
-    for line in pci.splitlines():
-        parts = line.split()
-        if len(parts) == 3 and parts[1].lower().startswith("0x03"):
-            vendor = VENDORS.get(parts[2].lower().removeprefix("0x"))
-            if vendor:
-                found.append(Gpu(vendor, f"{vendor} GPU (lspci not installed)", _full_slot(parts[0])))
-    found.sort(key=lambda g: PREFERENCE.index(g.vendor))
-    return found[0] if found else None
-
-
 def render_node_for(slot: str, drm: str) -> str | None:
     """/dev/dri/renderD* of the GPU in `slot`, from lines "renderD128
     0000:01:00.0". With two GPUs, VAAPI must open the right one."""
@@ -159,12 +147,22 @@ def lan_cidr(route: str, addr: str) -> str:
     for line in addr.splitlines():
         fields = line.split()
         if len(fields) > 3 and fields[1] == dev and fields[2] == "inet":
-            net = ipaddress.ip_interface(fields[3]).network
-            if not net.is_private or net.prefixlen < 16:
-                raise ProvisionError(f"the box's network {net} isn't a private LAN of /16 or "
-                                     "narrower; pass --lan explicitly")
-            return str(net)
+            return check_private_lan(ipaddress.ip_interface(fields[3]).network)
     raise ProvisionError(f"no IPv4 address on {dev}")
+
+
+def check_private_lan(net) -> str:
+    """The firewall opens SSH and obs-websocket to this network, so it must
+    be a private LAN of /16 or narrower: never the internet, whether it was
+    read from the box or typed as --lan."""
+    try:
+        net = ipaddress.ip_network(net)
+    except ValueError as e:
+        raise ProvisionError(f"--lan: {e}") from e
+    if not net.is_private or net.prefixlen < 16:
+        raise ProvisionError(f"{net} isn't a private LAN of /16 or narrower; the firewall only "
+                             "opens to one (e.g. --lan 192.168.1.0/24)")
+    return str(net)
 
 
 def check_lan(lan: str, client: str | None) -> None:
@@ -192,7 +190,6 @@ def parse_facts(text: str) -> dict[str, str]:
 FACTS = r"""
 echo '##os'; cat /etc/os-release
 echo '##lspci'; lspci -nn 2>/dev/null || true
-echo '##pci'; for d in /sys/bus/pci/devices/*; do echo "$(basename "$d") $(cat "$d/class") $(cat "$d/vendor")"; done
 echo '##drm'; for d in /sys/class/drm/renderD*; do [ -e "$d/device" ] && echo "$(basename "$d") $(basename "$(readlink -f "$d/device")")"; done; true
 echo '##route'; ip -o -4 route show default
 echo '##addr'; ip -o -4 addr show
@@ -211,9 +208,8 @@ def make_plan(facts: dict[str, str], user: str, port: int = WS_PORT, lan: str | 
     if gpu:
         g = Gpu(gpu, f"{gpu} (from --gpu)", "") if gpu != "none" else None
     else:
-        g = detect_gpu(facts.get("lspci", "")) or detect_gpu_sysfs(facts.get("pci", ""))
-    lan = str(ipaddress.ip_network(lan)) if lan else lan_cidr(facts.get("route", ""),
-                                                               facts.get("addr", ""))
+        g = detect_gpu(facts.get("lspci", ""))
+    lan = check_private_lan(lan) if lan else lan_cidr(facts.get("route", ""), facts.get("addr", ""))
     client = facts.get("client") or None
     if client:
         client = str(ipaddress.ip_address(client))
@@ -224,7 +220,7 @@ def make_plan(facts: dict[str, str], user: str, port: int = WS_PORT, lan: str | 
     os_name = re.search(r'^PRETTY_NAME="?([^"\n]*)', facts.get("os", ""), re.M)
     return {"user": user, "port": int(port), "lan": lan, "client": client,
             "vendor": g.vendor if g else "none", "gpu_name": g.name if g else None,
-            "render_node": node or ("/dev/dri/renderD128" if g and g.vendor != "nvidia" else None),
+            "render_node": node or (box_apply.DEFAULT_RENDER_NODE if g and g.vendor != "nvidia" else None),
             "wifi": facts.get("wifi", "").split(), "os": os_name.group(1) if os_name else None}
 
 
@@ -334,6 +330,9 @@ fi
 if ! modinfo v4l2loopback >/dev/null 2>&1; then
   {APT} git
   [ -d /usr/src/v4l2loopback-0.15.4 ] || git clone -q --depth 1 -b v0.15.4 https://github.com/v4l2loopback/v4l2loopback /usr/src/v4l2loopback-0.15.4
+  # a tag can move: build (as root, into the kernel) only the commit pinned in provision.py
+  [ "$(git -C /usr/src/v4l2loopback-0.15.4 rev-parse HEAD)" = @V4L2_COMMIT@ ] \
+    || {{ echo "v4l2loopback checkout doesn't match the pinned commit; not building it"; exit 1; }}
   dkms install v4l2loopback/0.15.4
 fi
 if [ ! -e /dev/video10 ] || [ ! -e /dev/video11 ]; then modprobe -r v4l2loopback 2>/dev/null || true; modprobe v4l2loopback; fi
@@ -383,8 +382,9 @@ systemctl restart display-manager 2>/dev/null || systemctl restart lightdm \
     ]
     subs = {"@USER@": plan["user"], "@LAN@": plan["lan"], "@PORT@": str(plan["port"]),
             "@TG7@": TG7_CAMERA, "@TG7PORT@": str(TG7_RTP_PORT),
-            "@RENDER@": plan.get("render_node") or "/dev/dri/renderD128",
+            "@RENDER@": plan.get("render_node") or box_apply.DEFAULT_RENDER_NODE,
             "@REBOOT_OK@": "1" if reboot_ok else "0", "@REMOTE@": REMOTE_DIR,
+            "@V4L2_COMMIT@": V4L2LOOPBACK_COMMIT,
             "@EXIT_REBOOT@": str(EXIT_REBOOT), "@EXIT_UNSUP@": str(EXIT_UNSUPPORTED)}
     return [Step(s.title, _sub(s.script, subs)) for s in steps]
 
@@ -477,11 +477,17 @@ def laptop_keys(obs_dir: Path) -> dict:
 
 def check_local_target(path: Path) -> Path:
     """The password file must sit outside the repo and outside the laptop's
-    own OBS config: that config is the fallback and this never touches it."""
+    own OBS config: that config is the fallback and this never touches it.
+    The real Flatpak config is always guarded, also when OBS_CONFIG_DIR
+    points somewhere else (e.g. at the box's folder, as docs/stream-box.md
+    shows; that folder itself is where the password file belongs)."""
     p = path.expanduser().resolve()
-    for guarded in (REPO, laptop_obs_dir().expanduser().resolve()):
-        if p == guarded or guarded in p.parents:
-            raise ProvisionError(f"refusing to write {p}: it's inside {guarded}")
+    box_dir = password_file().parents[2].resolve()  # .../pops-stream-box/obs-config
+    guarded = {REPO, obsctl.DEFAULT_CONFIG_DIR.expanduser().resolve(),
+               laptop_obs_dir().expanduser().resolve()} - {box_dir}
+    for g in sorted(guarded):
+        if p == g or g in p.parents:
+            raise ProvisionError(f"refusing to write {p}: it's inside {g}")
     return p
 
 
@@ -566,12 +572,12 @@ def check_obs(host: str, port: int, pw_file: Path, tries: int = 12, sleep=time.s
 
 
 def provision(a, ssh, say=print, sleep=time.sleep) -> int:
-    pw_file = check_local_target(a.password_file)
+    pw_file = check_local_target(password_file())
     offline = ssh is None
     for attempt in range(MAX_PASSES):
         facts = {} if offline else gather(ssh)
         if facts.get("obs") == "running":
-            live = box_obs_live(a.host, a.port, pw_file)
+            live = box_obs_live(a.host, WS_PORT, pw_file)
             if not a.stop_obs:
                 raise ProvisionError("OBS is running on the box, and this run would change its config "
                                      "and drivers. If nothing is live, add --stop-obs.")
@@ -582,7 +588,7 @@ def provision(a, ssh, say=print, sleep=time.sleep) -> int:
                             "sleep 0.5; done; exit 1")
                 if r.returncode != 0:
                     raise ProvisionError("OBS on the box didn't stop within 20 s; nothing was changed")
-        plan = make_plan(facts, a.user, a.port, a.lan, a.gpu)
+        plan = make_plan(facts, a.user, lan=a.lan, gpu=a.gpu)
         steps = root_steps(plan, reboot_ok=not a.no_reboot, reset_scenes=a.reset_scenes)
         if a.dry_run:
             say(describe(plan, steps, a.copy_keys, pw_file, script=True))
@@ -620,7 +626,7 @@ def provision(a, ssh, say=print, sleep=time.sleep) -> int:
     r = ssh.run(f"cat {obs_cfg}/plugin_config/obs-websocket/config.json")
     if r.returncode != 0:
         raise ProvisionError("couldn't read the box's obs-websocket config back")
-    path = write_password_file(a.password_file, json.loads(r.stdout))
+    path = write_password_file(pw_file, json.loads(r.stdout))
     say(f"\nobs-websocket password saved to {path} (0600)")
     r = ssh.run(f"cat ~/{REMOTE_DIR}/result.json")
     if r.returncode == 0:
@@ -628,9 +634,9 @@ def provision(a, ssh, say=print, sleep=time.sleep) -> int:
         say(f"Encoders: eBay {res['ebay_encoder']}, Twitch {res['twitch_encoder']}")
         for n in res.get("notes", []):
             say(f"  {n}")
-    version = check_obs(a.host, a.port, path, sleep=sleep)
-    say(f"OBS {version} answers on {a.host}:{a.port}" if version else
-        f"OBS didn't answer on {a.host}:{a.port} yet; on the box see ~/{REMOTE_DIR}/obs.log")
+    version = check_obs(a.host, WS_PORT, path, sleep=sleep)
+    say(f"OBS {version} answers on {a.host}:{WS_PORT}" if version else
+        f"OBS didn't answer on {a.host}:{WS_PORT} yet; on the box see ~/{REMOTE_DIR}/obs.log")
     say(f"\nTry it: OBS_WS_HOST={a.host} OBS_CONFIG_DIR={path.parents[2]} "
         "python tools/live/obsctl.py status")
     return 0
@@ -697,7 +703,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--user", default=os.environ.get("USER") or "russ",
                    help="the box's user (default: the same name as on the laptop)")
     p.add_argument("--ssh-key", type=Path, default=default_key(), help="default ~/.ssh/gh")
-    p.add_argument("--port", type=int, default=WS_PORT, help="obs-websocket port")
     p.add_argument("--lan", help="the LAN to allow, e.g. 192.168.1.0/24 (default: the box's own)")
     p.add_argument("--gpu", choices=["nvidia", "amd", "intel", "none"], help="skip GPU detection")
     p.add_argument("--copy-keys", action="store_true",
@@ -706,7 +711,6 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--reset-scenes", action="store_true",
                    help="overwrite the box's scene collection with the repo template")
     p.add_argument("--no-reboot", action="store_true", help="stop and say so instead of rebooting")
-    p.add_argument("--password-file", type=Path, default=password_file())
     p.add_argument("--dry-run", action="store_true",
                    help="read the box (if given) and print every step; change nothing")
     return p

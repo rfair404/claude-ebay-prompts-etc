@@ -77,6 +77,7 @@ TWITCH_COMMON = {"RecType": "FFmpeg", "FFOutputToFile": "false", "FFFormat": "fl
                  "FFVBitrate": "3000", "FFVGOPSize": "60", "FFABitrate": "160",
                  "FFAudioMixes": "1"}
 H264_ID = "27"  # AV_CODEC_ID_H264
+DEFAULT_RENDER_NODE = "/dev/dri/renderD128"  # the first GPU's VAAPI node
 TWITCH_NVENC = {**TWITCH_COMMON, "FFVEncoder": "h264_nvenc", "FFVEncoderId": H264_ID,
                 "FFVCustom": "preset=p5", "FFRescale": "false"}
 TWITCH_X264 = {**TWITCH_COMMON, "FFVEncoder": "libx264", "FFVEncoderId": H264_ID,
@@ -98,7 +99,7 @@ def choose_encoders(vendor: str, probe: dict, render_node: str | None = None) ->
                 "twitch": TWITCH_NVENC, "notes": ["eBay and Twitch both encode on the NVIDIA GPU"]}
     if vendor in ("intel", "amd") and probe.get("vaapi"):
         return {"kind": "vaapi", "ebay_encoder": "ffmpeg_vaapi_tex",
-                "ebay_settings": {**VAAPI_EBAY, "vaapi_device": render_node or "/dev/dri/renderD128"},
+                "ebay_settings": {**VAAPI_EBAY, "vaapi_device": render_node or DEFAULT_RENDER_NODE},
                 "twitch": TWITCH_X264,
                 "notes": ["eBay encodes on the GPU (VAAPI)",
                           "Twitch is libx264 superfast 720x1280 on the box's CPU: "

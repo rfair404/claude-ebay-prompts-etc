@@ -25,6 +25,10 @@ import provision  # noqa: E402
 import show_flow  # noqa: E402
 
 TEMPLATES = ROOT / "tools" / "live" / "obs"
+# The box and the laptop are Linux. These tests need bash (Windows' `bash`
+# is the WSL stub), POSIX file modes and LF files. The rest, the no-box
+# pins included, run on both OSes.
+linux_only = pytest.mark.skipif(sys.platform == "win32", reason="the box and the laptop are Linux")
 
 LSPCI_NVIDIA_ON_INTEL = """\
 00:00.0 Host bridge [0600]: Intel Corporation 8th Gen Core Processor Host Bridge/DRAM Registers [8086:3ec2] (rev 07)
@@ -47,8 +51,6 @@ ID=ubuntu
 ID_LIKE=debian
 ##lspci
 {lspci}
-##pci
-0000:00:02.0 0x030000 0x8086
 ##drm
 renderD128 0000:00:02.0
 renderD129 0000:01:00.0
@@ -88,12 +90,6 @@ def test_amd_and_intel_and_3d_controllers_are_found():
 def test_a_server_bmc_chip_is_not_a_gpu_to_encode_on():
     assert provision.detect_gpu(LSPCI_BMC_ONLY) is None
     assert provision.detect_gpu("") is None
-
-
-def test_sysfs_fallback_when_lspci_is_missing():
-    g = provision.detect_gpu_sysfs("0000:00:02.0 0x030000 0x8086\n0000:01:00.0 0x030000 0x10de\n"
-                                   "0000:00:1f.3 0x040300 0x8086\n")
-    assert (g.vendor, g.slot) == ("nvidia", "0000:01:00.0")
 
 
 def test_render_node_is_the_chosen_gpus_own():
@@ -233,6 +229,7 @@ def _extract_bundle(tmp_path, plan):
     return out
 
 
+@linux_only
 def test_apply_writes_the_boxs_obs_config(tmp_path, monkeypatch):
     home = tmp_path / "home"
     plan = provision.make_plan({}, "russ", 4455, "192.168.1.0/24", "nvidia")
@@ -259,6 +256,7 @@ def test_apply_writes_the_boxs_obs_config(tmp_path, monkeypatch):
     assert r2["websocket_password"] == "kept" and r2["scene_collection"].startswith("kept")
 
 
+@linux_only
 def test_keys_land_in_the_profile_and_survive_apply(tmp_path):
     home = tmp_path / "home"
     service = {"type": "whip_custom", "settings": {"server": "https://whip.example/SECRET", "bearer_token": ""}}
@@ -301,6 +299,7 @@ def test_steps_have_no_placeholders_left_and_honour_flags():
     assert "/dev/video10" in s and "video_nr=10,11" in s
 
 
+@linux_only
 @pytest.mark.skipif(not shutil.which("bash"), reason="needs bash")
 @pytest.mark.parametrize("vendor", ["nvidia", "intel", "amd", "none"])
 def test_generated_script_is_valid_bash(vendor):
@@ -360,6 +359,7 @@ def laptop(tmp_path, monkeypatch):
     (obs / "plugin_config/obs-websocket").mkdir(parents=True)
     (obs / "plugin_config/obs-websocket/config.json").write_text('{"server_password": "laptop-pw"}')
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Path.home() on Windows: never the runner's real home
     monkeypatch.setenv("OBS_CONFIG_DIR", str(obs))
     monkeypatch.setattr(provision, "check_obs", lambda *a, **k: "32.2.2")
     return home
@@ -386,6 +386,7 @@ def test_dry_run_reads_the_box_and_changes_nothing(laptop, capsys):
     assert "GeForce GTX 1050 Ti" in out and "LAPTOP-SECRET" not in out
 
 
+@linux_only
 def test_a_full_run_writes_only_the_password_file_on_the_laptop(laptop, capsys):
     before, templates = _tree(laptop), _tree(TEMPLATES)
     box = FakeBox()
@@ -510,3 +511,29 @@ def test_a_provisioning_reboot_keeps_obs_off_until_the_run_finishes():
     reboot = s.index('if [ "$REBOOT" = 1 ]')
     assert s.index('rm -f "$H/.cache/pops-stream-box/ready"', reboot) < s.index("systemctl reboot", reboot)
     assert s.index('touch "$H/.cache/pops-stream-box/ready"') > s.index("box_apply.py")
+
+
+@pytest.mark.parametrize("lan", ["0.0.0.0/0", "8.8.8.0/24", "10.0.0.0/8", "not-a-network"])
+def test_an_explicit_lan_gets_the_same_private_check(lan):
+    with pytest.raises(provision.ProvisionError):
+        provision.make_plan({}, "russ", lan=lan, gpu="none")
+    assert provision.make_plan({}, "russ", lan="192.168.1.0/24", gpu="none")["lan"] == "192.168.1.0/24"
+
+
+def test_v4l2loopback_fallback_builds_only_the_pinned_commit():
+    s = _script("intel")
+    clone = s.index("git clone")
+    check = s.index(f'rev-parse HEAD)" = {provision.V4L2LOOPBACK_COMMIT} ]')
+    assert clone < check < s.index("dkms install v4l2loopback/0.15.4")
+
+
+def test_the_real_flatpak_obs_config_is_guarded_even_with_obs_config_dir_moved(laptop, monkeypatch):
+    monkeypatch.setenv("OBS_CONFIG_DIR", str(laptop / ".config/pops-stream-box/obs-config"))
+    real = provision.obsctl.DEFAULT_CONFIG_DIR / "plugin_config/obs-websocket/config.json"
+    with pytest.raises(provision.ProvisionError):
+        provision.check_local_target(real)
+
+
+def test_password_file_is_still_writable_with_obs_config_dir_on_the_box_folder(laptop, monkeypatch):
+    monkeypatch.setenv("OBS_CONFIG_DIR", str(provision.password_file().parents[2]))
+    assert provision.check_local_target(provision.password_file()) == provision.password_file().resolve()

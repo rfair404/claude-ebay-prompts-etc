@@ -14,7 +14,7 @@ changes the laptop's OBS, scenes, Flatpak or virtual cameras.
 ## Architecture
 
 ```
- laptop (192.168.1.137)                          stream box (same /24)
+ laptop                                          stream box (same /24)
  ---------------------------------------         -------------------------------------------
  Claude, browser, pager (lib.cli serve)          OBS (Flatpak), auto-login X session
  show_flow.py / obsctl.py  --- obs-websocket --> :4455, password, firewalled to the /24
@@ -69,7 +69,8 @@ waits for the box to come back and then finishes.
    never sleeps.
 5. v4l2loopback with /dev/video10 ("Nikon D5100") and /dev/video11 ("OM
    TG-7") at boot. If the distro's DKMS package doesn't build, it falls back
-   to upstream 0.15.4.
+   to upstream 0.15.4, built only if the checkout is the pinned commit
+   (`V4L2LOOPBACK_COMMIT` in provision.py).
 6. OBS from Flathub, per user, as on the laptop. On NVIDIA this adds the
    matching GL extension; on Intel, the VAAPI extension.
 7. Firewall: SSH and obs-websocket allowed only from the box's own /24,
@@ -159,9 +160,24 @@ is the wiring PR from #249, after #246, #245 and #243 land:
 - `twitch-setup` follows the box's encoder instead of writing `libx264`
 - launching and quitting OBS on the box (`obsctl.py launch|quit` are local
   only)
-- the window-capture pages. The recommendation in #249 is a browser on the
-  box for Up Next, keeping the `SAFE_WINDOW`/`PRIVATE_WINDOW` guard, and a
-  low-fps window stream from the laptop for Desktop/Multi.
+- the window-capture pages, as decided below
 - the background-music file and photo-shoot stills copied between the
   machines
 - this guide folded into `live-streaming-setup.md` and the live-show skill
+
+## Decisions (technical director, 2026-10-22)
+
+- **Up Next** shows a browser on the box, in a profile that is never logged
+  in to anything. The pager's title check (`SAFE_WINDOW` /
+  `PRIVATE_WINDOW`) runs on the box over SSH and **fails closed**: if the
+  SSH call errors or times out, Up Next stays hidden (card and webcam only).
+- **Desktop and Multi** are unavailable in box mode. NDI is rejected,
+  because it puts the encoding load back on the laptop. A low-fps window
+  stream from the laptop (x11grab) is not built until a show needs those
+  pages on the box and its laptop CPU cost has been measured.
+- **Twitch on an AMD/Intel box** stays on libx264 superfast 720x1280 on the
+  box's CPU. No obs-multi-rtmp plugin: that would be a second way to send
+  Twitch. Revisit only if the box's stats drop frames on a real show.
+- **`--copy-keys`** stays. Russell has the final yes (recommended: yes). The
+  alternative is pasting the eBay WHIP URL and the Twitch key into OBS on
+  the box with its keyboard.
