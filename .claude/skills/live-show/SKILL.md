@@ -172,7 +172,7 @@ One command puts any page on air:
   center the item and run `refocus` again.
 
 Reframing (digital zoom/pan of the D5 shot): set the `Nikon D5100` item's
-transform in `eBay Main` with `obsctl.py call SetSceneItemTransform`. Keep
+transform in `eBay Main (camera 1)` with `obsctl.py call SetSceneItemTransform`. Keep
 `rotation` 270 and `cropToBounds` true. Scale the bounds (base 1920x1080) by
 the zoom and shift the position so the target point lands at canvas center
 (540, 960). Ease it over ~3 s in small steps rather than jumping. The live view

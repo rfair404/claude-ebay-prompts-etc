@@ -291,8 +291,8 @@ check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
   (music analysis, pytest, listing runs) off this machine while a show is
   live.
 
-**closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
-(`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
+**closeup** (scene `Close-up (camera 2)`) is the TG-7 below the same
+webcam strip (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
 source is a v4l2 camera on /dev/video11 when that loopback device exists,
 else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
 the device and it switches. `refocus` on the closeup page is the TG-7's
@@ -344,12 +344,14 @@ comes with it: the D5100 and the webcam side by side in the top 1080x810
 (each 540x810, the D5's on-its-side live view uncropped), that same app
 window full width under them). `--window` must name a window that is
 still open: OBS's window list keeps closed ones, and setup refuses them.
+A collection still on the old scene names (`eBay Main`, `Close-up`) has
+them renamed first, unless a scene by the new name is already there.
 **webcam** (scene `Webcam Only`) is the fallback page: the webcam alone,
 cover-cropped to the top 1080x1350 of the dark background, with the mic. It
 never touches the D5100, so it's where to go if the camera dies mid-show.
 **intro** (scene `Intro`) is the pre-show card: `--intro-text`, default
 "Starting soon", on a dark background with no cameras. **item** (scene
-`eBay Main`) is the D5100 full frame (rotated 270 for the side-mounted
+`eBay Main (camera 1)`) is the D5100 full frame (rotated 270 for the side-mounted
 camera) with the webcam full width across the top. **next** (scene `Up Next`)
 is the pause / next-item card: a desktop window centered on the dark
 background, under the same webcam strip. Every `page` is one scene switch
