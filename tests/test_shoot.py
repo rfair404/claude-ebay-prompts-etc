@@ -217,3 +217,74 @@ def test_a_still_that_fails_says_why_and_leaves_the_feed_running(d5, tmp_path):
     with pytest.raises(obsctl.ObsError, match=r"Out of Focus \*\*\* \(autofocus can't lock"):
         SF.still_d5(c, tmp_path / "item")
     assert d5.running and c.scene == "eBay Main (camera 1)"
+
+
+# --- a shoot inside a lot folder (inventory/ES/MON1020-M) ---------------------------
+sys.path.insert(0, str(ROOT / "lib"))
+import dir_context  # noqa: E402
+import source_report  # noqa: E402
+
+LOT_CONTEXT = "kind: event\nspend: 800\n\nAn estate in one house.\n"
+
+
+@pytest.fixture
+def lot(inv):
+    """The lot as the producer left it: a context.txt and three items moved
+    in by hand from another shoot, none of them in a shoot.json."""
+    d = inv / "ES" / "MON1020-M"
+    for item in ("02-playboy-trump-cover", "03-cedar-bible-box", "04-10kt-zrw-reversible-necklace"):
+        (d / item).mkdir(parents=True)
+    (d / "context.txt").write_text(LOT_CONTEXT)
+    return d
+
+
+def test_start_takes_a_path_into_a_lot_and_keeps_its_folder_case(inv, lot, capsys):
+    rc, out, _ = run(capsys, "start", "es/mon1020-m")  # typed in any case: the lot's own names win
+    assert rc == 0 and "started: ES/MON1020-M" in out
+    assert (inv / ".current_shoot").read_text().strip() == "ES/MON1020-M"
+    st = json.loads((lot / "shoot.json").read_text())
+    assert st["shoot"] == "ES/MON1020-M" and st["items"] == [] and st["current"] is None
+    assert [p.name for p in inv.iterdir() if p.is_dir()] == ["ES"]  # no lowercase twin made
+    assert S.shoot_dir() == lot  # CURRENT resolves to the lot
+    rc, out, _ = run(capsys, "start", "ES/MON1020-M")
+    assert "resumed: ES/MON1020-M" in out
+
+
+def test_new_segments_are_slugged_under_existing_ones(inv, lot, capsys):
+    run(capsys, "start", "ES/Second Day!")
+    assert (inv / "ES" / "second-day" / "shoot.json").is_file()
+
+
+@pytest.mark.parametrize("bad", ["/tmp/x", "../outside", "ES/../../x", "C:/x", "C:\\x", "/"])
+def test_a_path_out_of_inventory_is_refused(inv, capsys, bad):
+    rc, _, err = run(capsys, "start", bad)
+    assert rc == 1 and "inside inventory/" in err
+    assert not (inv / ".current_shoot").exists()
+
+
+def test_items_number_on_after_the_lots_existing_folders(inv, lot, capsys):
+    run(capsys, "start", "ES/MON1020-M")
+    rc, out, _ = run(capsys, "item", "brass lamp")
+    assert rc == 0 and "open: 05-brass-lamp" in out
+    run(capsys, "item")
+    assert (lot / "06").is_dir()
+    (lot / "09-moved-in-later").mkdir()  # another hand move mid-shoot
+    run(capsys, "item", "vase")
+    assert (lot / "10-vase").is_dir()
+    assert sorted(p.name for p in lot.iterdir() if p.is_dir()) == [
+        "02-playboy-trump-cover", "03-cedar-bible-box", "04-10kt-zrw-reversible-necklace",
+        "05-brass-lamp", "06", "09-moved-in-later", "10-vase"]
+
+
+def test_a_lot_item_inherits_the_lots_context_and_bucket(inv, lot, capsys, on_air_still):
+    run(capsys, "start", "ES/MON1020-M")
+    run(capsys, "item", "lamp")
+    item = lot / "05-lamp"
+    ctx = dir_context.load(item, root=inv)
+    assert ctx.keys["kind"] == "event" and ctx.keys["spend"] == "800"
+    assert source_report.bucket_for(item, root=inv) == lot.resolve()
+    assert source_report.bucket_label(lot, root=inv) == "ES/MON1020-M"
+    assert source_report.load_context(source_report.bucket_for(item, root=inv))["spend"] == 800
+    # and a TG-7 still on air lands there, through the same resolver
+    r = SF.still(on_air_still)
+    assert Path(r["file"]).parent == item and r["item"] == "05-lamp"

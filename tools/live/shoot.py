@@ -10,7 +10,7 @@ top. Nothing here streams, so it runs the same on air or off. On air,
 `show_flow.py still` (and `step` from the item view) is `capture tg7` that
 also puts the photo on air: with an item open its frame lands here, logged.
 
-  inventory/<shoot>/              the shoot; a bucket, so its context.txt
+  inventory/<shoot>/              the shoot (or a lot folder: `start ES/MON1020-M`); its context.txt
     shoot.json                    (lib/dir_context.py) reaches every item
     01-brass-lamp/                one item: its full-size frames, as shot
       D5_20261021_214112.jpg
@@ -18,7 +18,7 @@ also puts the photo on air: with an item open its frame lands here, logged.
       shoot_log.md                what Russell said and what the agent saw
       .shoot/                     small copies for looking: <frame>.jpg, look.jpg
 
-    python tools/live/shoot.py start [NAME]               # new or resume; default shoot-YYYYMMDD
+    python tools/live/shoot.py start [NAME|PATH]          # new or resume; default shoot-YYYYMMDD
     python tools/live/shoot.py item [SLUG] [--note TEXT]  # the next item (closes the open one)
     python tools/live/shoot.py name SLUG                  # rename the open item once it's known
     python tools/live/shoot.py capture d5|tg7 [--note TEXT]
@@ -64,6 +64,39 @@ def slug(text: str) -> str:
     return s[:48]
 
 
+def shoot_path(name: str) -> str:
+    """The shoot's folder under inventory/ for NAME, as a relative POSIX
+    path. NAME may be a path into a lot (`ES/MON1020-M`): each segment is
+    slugged, but where a folder by that slug already exists its own name is
+    kept (case included), so `es/mon1020-m` finds `ES/MON1020-M`. Absolute
+    paths and `..` are refused: a shoot never leaves inventory/."""
+    raw = name.replace("\\", "/")
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:", raw) or Path(name).is_absolute():
+        raise ShootError(f"{name!r} is absolute; give a path inside inventory/ (e.g. ES/MON1020-M)")
+    parts = [seg for seg in raw.split("/") if seg not in ("", ".")]
+    if ".." in parts:
+        raise ShootError(f"{name!r} climbs out with '..'; give a path inside inventory/")
+    if not parts:
+        raise ShootError(f"{name!r} names no folder")
+    cur, out = INVENTORY, []
+    for seg in parts:
+        want = slug(seg)
+        have = sorted(c.name for c in cur.iterdir() if c.is_dir()) if cur.is_dir() else []
+        same = [h for h in have if slug(h) == want]
+        out.append(seg if seg in same else same[0] if same else want)
+        cur = cur / out[-1]
+    return "/".join(out)
+
+
+def next_number(d: Path, st: dict) -> int:
+    """The next item's number: one past the highest NN of the shoot's items
+    and of any NN-... folder already in `d` (items moved in by hand), so a
+    new item never lands on an existing number."""
+    names = [c.name for c in d.iterdir() if c.is_dir()] + [it["dir"] for it in st["items"]]
+    nums = [int(m.group(1)) for n in names if (m := re.match(r"^(\d+)(?:-|$)", n))]
+    return max(nums, default=0) + 1
+
+
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -78,14 +111,21 @@ def shoot_dir(name: str | None = None) -> Path:
             name = ""
         if not name:
             raise ShootError("no shoot started; run `shoot.py start [NAME]`")
-    return INVENTORY / slug(name)
+    return INVENTORY / shoot_path(name)
 
 
 def load(d: Path) -> dict:
     try:
         return json.loads((d / "shoot.json").read_text())
     except FileNotFoundError:
-        raise ShootError(f"{d} has no shoot.json; run `shoot.py start {d.name}`") from None
+        raise ShootError(f"{d} has no shoot.json; run `shoot.py start {_rel(d)}`") from None
+
+
+def _rel(d: Path) -> str:
+    try:
+        return d.relative_to(INVENTORY).as_posix()
+    except ValueError:
+        return d.name
 
 
 def save(d: Path, st: dict) -> None:
@@ -135,7 +175,7 @@ def thumb(frame: Path) -> Path:
 # --- commands --------------------------------------------------------------------
 
 def start(name: str | None) -> dict:
-    name = slug(name) if name else f"shoot-{datetime.now():%Y%m%d}"
+    name = shoot_path(name) if name else f"shoot-{datetime.now():%Y%m%d}"
     d = INVENTORY / name
     d.mkdir(parents=True, exist_ok=True)
     resumed = (d / "shoot.json").exists()
@@ -164,7 +204,7 @@ def done(d: Path, st: dict) -> dict | None:
 
 def new_item(d: Path, st: dict, name: str | None, note: str | None) -> dict:
     closed = done(d, st)
-    n = len(st["items"]) + 1
+    n = next_number(d, st)
     folder = f"{n:02d}-{slug(name)}" if name else f"{n:02d}"
     item = d / folder
     item.mkdir()
@@ -252,7 +292,8 @@ def report_done(r: dict | None) -> None:
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--shoot", help="the shoot's folder name under inventory/ (default: the current one)")
+    p.add_argument("--shoot", help="the shoot's folder under inventory/, a name or a path like ES/MON1020-M "
+                                   "(default: the current one)")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("start", help="start a shoot, or resume one")
     s.add_argument("name", nargs="?")
