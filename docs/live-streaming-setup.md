@@ -269,12 +269,14 @@ other page (and `setup`) only hides it.
 
 The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
 the repo venv) has a control page at
-http://localhost:8770/pager: one button per page, Refocus and Reconnect
+http://localhost:8770/pager: a small On-air preview of what OBS is sending
+(its program scene, a few frames a second, no sound; Hide preview turns it
+off), one button per page, Refocus and Reconnect
 cameras buttons, the LIVE timer, the D5100 feed status, and keys 1-5
 (intro, item, next, desktop, webcam), R (refocus) and C (reconnect). Page
 clicks switch at once, even while a refocus runs; the last one pressed
 wins. The same pager is served as JSON for other pages or agents:
-`GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
+`GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus`, `POST /api/pager/reconnect` and `POST /api/pager/stream {"dest": "twitch",
 "action": "start"}`. The page has Start/Stop buttons for eBay and Twitch,
 each with a confirmation. `webapp/pager.py` documents the JSON and error codes.

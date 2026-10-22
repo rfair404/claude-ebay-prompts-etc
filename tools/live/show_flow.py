@@ -60,6 +60,7 @@ DESTS below). The keys stay in OBS's own config, never here.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -204,6 +205,14 @@ def stack(c, scene, sources_bottom_up):
 
 def program(c) -> str:
     return c.call("GetCurrentProgramScene")["currentProgramSceneName"]
+
+
+def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
+    """A JPEG of what's on air (the program scene), for the pager's preview.
+    No camera, no lock: OBS renders the scene it is already sending."""
+    d = c.call("GetSourceScreenshot", {"sourceName": program(c), "imageFormat": "jpg",
+                                       "imageWidth": width, "imageCompressionQuality": quality})
+    return base64.b64decode(d["imageData"].split(",", 1)[1])
 
 
 class Busy(obsctl.ObsError):

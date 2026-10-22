@@ -122,7 +122,8 @@ A show has five pages. One command puts any of them on air:
   doesn't check it (the host chose it), so remind the user that whatever is
   in that window is on air.
 - Web: the local app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli
-  serve`) has a button page at http://localhost:8770/pager (keys 1-5 for
+  serve`) has a button page at http://localhost:8770/pager (an On-air
+  preview of OBS's program scene, keys 1-5 for
   intro/item/next/desktop/webcam, R refocus, C reconnect cameras) and serves
   the same pager at `/api/pager` (`GET` state, `POST {"page": ...}`, `POST
   /api/pager/refocus`, `POST /api/pager/reconnect`).
