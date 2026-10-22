@@ -18,7 +18,7 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/wb          {"preset": "daylight"}: the D5100's white balance (no preset: read it)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
-    POST /api/pager/still       {"refocus": false, "note": null}: a TG-7 photo on air (the TG-7
+    POST /api/pager/still       {"refocus": false}: a TG-7 photo on air (the TG-7
                                 still), covering the D5; refocus: then refocus the D5 behind it
     POST /api/pager/step        the item sequence: item -> still (the TG-7 shoots) -> item -> ...
     POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
@@ -176,7 +176,6 @@ class HoldRequest(BaseModel):
 
 class StillRequest(BaseModel):
     refocus: bool = False  # then refocus the D5100 behind the still (~5 s)
-    note: str | None = None  # for the open photo shoot's log
 
 
 class MusicRequest(BaseModel):
@@ -341,7 +340,7 @@ def pager_hold(req: HoldRequest) -> dict:
 @router.post("/api/pager/still")
 def pager_still(req: StillRequest) -> dict:
     with _obs() as c:
-        r = _show_flow.still(c, refocus=req.refocus, note=req.note)
+        r = _show_flow.still(c, refocus=req.refocus)
         return {**_show_flow.state(c), "still": r}
 
 

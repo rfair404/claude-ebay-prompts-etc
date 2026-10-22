@@ -100,7 +100,7 @@ def open_shoot() -> tuple[Path, dict] | None:
     try:
         d = shoot_dir()
         st = load(d)
-    except (ShootError, ValueError):  # ValueError: a shoot.json that isn't JSON
+    except ShootError:
         return None
     return (d, st) if st.get("current") else None
 

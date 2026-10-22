@@ -1832,17 +1832,12 @@ def _blacked(c, page: str, out: dict) -> dict:
     return out
 
 
-def shows_d5(scene: str) -> bool:
-    """Does this scene put the live D5100 on air (item, multi)? Every other
-    scene (the TG-7 still, hold, Up Next, closeup, ...) covers it."""
-    return scene in D5_PAGES.values()
-
-
 def d5_covered(c, what: str, fn):
     """Run fn(c), D5100 camera work that freezes its picture, under the lock,
-    never with the frozen D5 on air. A page that doesn't show the D5
-    (shows_d5) is its own cover: nothing switches, and it stays on air
-    afterwards (the TG-7 still is made for this). A page showing the D5
+    never with the frozen D5 on air. A page that doesn't show the D5 (not
+    in D5_PAGES: the TG-7 still, hold, Up Next, closeup, ...) is its own
+    cover: nothing switches, and it stays on air afterwards (the TG-7 still
+    is made for this). A page showing the D5
     (item, multi) hides behind Up Next for the ~5 s the camera is frozen,
     then fades back to that page, also when fn fails (the feed is left
     running), but not if someone asked for a page meanwhile (Next included,
@@ -1853,7 +1848,7 @@ def d5_covered(c, what: str, fn):
     with exclusive():
         _mark_switch(clear=True)
         back = program(c)
-        hide = shows_d5(back)
+        hide = back in D5_PAGES.values()
         if hide:
             guard_window(c)
             set_transition(c, "Fade", FADE_MS)  # not the pager's last (an 800 ms swipe): the sleep is FADE_MS

@@ -1389,12 +1389,14 @@ def test_d5_work_with_the_still_on_air_hides_behind_it_and_leaves_it_up(tg7, mon
 
 
 def test_a_d5_still_behind_the_tg7_still_leaves_it_up(tg7, monkeypatch, tmp_path):
+    shot = tmp_path / "D5_1.JPG"
+
     def fake_usb(c, fn):
         tg7.refocused.append(c.scene)
-        return SF.subprocess.CompletedProcess([], 0, stdout=f"Saving file as {tmp_path}/D5_1.JPG\n"), 6.0
+        return SF.subprocess.CompletedProcess([], 0, stdout=f"Saving file as {shot}\n"), 6.0
     monkeypatch.setattr(SF, "d5_usb", fake_usb)
     SF.still(tg7)
-    assert SF.still_d5(tg7, tmp_path)["files"] == [f"{tmp_path}/D5_1.JPG"]
+    assert SF.still_d5(tg7, tmp_path)["files"] == [str(shot)]
     assert tg7.refocused == ["TG-7 Still"] and tg7.switches == ["TG-7 Still"]
 
 
