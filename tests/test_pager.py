@@ -582,6 +582,27 @@ def test_a_switch_made_during_a_refocus_wins(obs, monkeypatch):
     assert r["changed"] is False and r["superseded_by"] == "intro" and obs.scene == "Intro"
 
 
+def test_next_asked_for_during_a_refocus_stays_on_next(obs, monkeypatch):
+    # Up Next is already on air (the refocus hides behind it), so the host's
+    # "next item" changes nothing in OBS; the refocus must still not fade to item
+    def host_clicks_next(c):
+        assert SF.go(c, "next")["changed"] is False
+        return True, 5.0
+    monkeypatch.setattr(SF, "refocus_d5", host_clicks_next)
+    obs.scene = "eBay Main"
+    SF.refocus(obs)
+    assert obs.scene == "Up Next" and obs.switches == ["Up Next"]
+    r = SF.go(obs, "item", refocus=True)  # from Up Next: the host asks for Next again
+    assert r["changed"] is False and r["superseded_by"] == "next" and obs.scene == "Up Next"
+
+
+def test_a_refocus_with_no_switch_meanwhile_fades_back_to_item(obs, monkeypatch):
+    SF.go(obs, "intro")  # an earlier switch's mark doesn't count
+    obs.scene = "eBay Main"
+    SF.refocus(obs)
+    assert obs.scene == "eBay Main"
+
+
 # --- the D5100: a refocus never strands the feed; OBS reopens the source ----
 class CamObs(FakeObs):
     """FakeObs plus the v4l2 cameras: what the D5's screenshots show (None:
@@ -817,7 +838,7 @@ def test_hold_takes_turns_between_two_files_and_never_holds_twice(held):
     assert SF.hold(held) == {"held": "item", "changed": False}  # already on hold: no new still
     SF.release(held)
     SF.hold(held)
-    assert [p.rsplit("/", 1)[1] for _, p, *_ in held.shots] == ["hold-a.jpg", "hold-b.jpg"]
+    assert [Path(p).name for _, p, *_ in held.shots] == ["hold-a.jpg", "hold-b.jpg"]
 
 
 @pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam"])

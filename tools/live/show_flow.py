@@ -300,6 +300,28 @@ def refocusing() -> bool:
     return False
 
 
+# Every go() leaves this mark and a refocus clears it when it starts, so the
+# refocus can tell the host asked for a page meanwhile, even one already on
+# air (Next, while the refocus hides behind Up Next). Next to LOCK, so the
+# shell and the web app see each other's.
+def _switch_mark() -> Path:
+    return LOCK.with_name(LOCK.name + ".switched")
+
+
+def _mark_switch(clear: bool = False) -> None:
+    try:
+        if clear:
+            _switch_mark().unlink(missing_ok=True)
+        else:
+            _switch_mark().touch()
+    except OSError:
+        pass
+
+
+def _switch_asked() -> bool:
+    return _switch_mark().exists()
+
+
 def d5_hash(c) -> str | None:
     """A hash of the D5 source's picture, or None when OBS can't render one
     (code 702 "Failed to render screenshot": no frames, e.g. right after the
@@ -1011,12 +1033,13 @@ def go(c, page: str, refocus: bool = False) -> dict:
 
     refocus=True (item only) refocuses the D5100 first, while the current
     page still hides it. If that fails, the feed is left running and the
-    current page stays on air (the error says why). If someone switches page
-    during that refocus, their switch wins and this one isn't made
+    current page stays on air (the error says why). If someone asks for a
+    page during that refocus, their switch wins and this one isn't made
     (`superseded_by`). A page that's already on air is left alone."""
     if page not in PAGES:
         raise ValueError(f"unknown page {page!r}; pages: {', '.join(PAGES)}")
     scene = PAGES[page]
+    _mark_switch()
     out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
     before = program(c)
     if before == scene:
@@ -1032,10 +1055,12 @@ def go(c, page: str, refocus: bool = False) -> dict:
         raise _no_scene(e, page) from e
     if page == "item" and refocus and not standin_on(c):
         with exclusive():
+            _mark_switch(clear=True)
             out["focused"], secs = refocus_d5(c)
+            asked = _switch_asked()
         out["refocus_s"] = round(secs, 1)
         now = program(c)
-        if now != before:
+        if now != before or asked:
             out["superseded_by"] = page_of(now) or now
             return out
     try:
@@ -1050,7 +1075,8 @@ def refocus(c) -> dict:
     """Refocus the D5100 without changing page. If the item view is on air
     it hides behind Up Next for the ~5 s the camera is frozen, then fades
     back to item, also when the refocus fails (the feed is left running),
-    but not if someone switched page meanwhile: that page stays.
+    but not if someone asked for a page meanwhile (Next included, though
+    it's already on air): that page stays.
 
     On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
     no lock, no cover, the D5 is left alone."""
@@ -1059,6 +1085,7 @@ def refocus(c) -> dict:
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
+        _mark_switch(clear=True)
         hide = program(c) == PRODUCT
         if hide:
             guard_window(c)
@@ -1069,7 +1096,7 @@ def refocus(c) -> dict:
         except obsctl.ObsError as e:
             raise obsctl.ObsError(f"refocus failed: {e}") from e
         finally:
-            if hide and program(c) == UPNEXT:
+            if hide and not _switch_asked() and program(c) == UPNEXT:
                 c.call("SetCurrentProgramScene", {"sceneName": PRODUCT})
         return {"focused": locked, "refocus_s": round(secs, 1)}
 
