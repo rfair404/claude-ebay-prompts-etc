@@ -253,7 +253,7 @@ the device and it switches. `refocus` on the closeup page is the TG-7's
 half-press (0.3 s, live view keeps running), so nothing is hidden.
 
 **watch** (`watch start|stop|status`) is the camera watch, a background
-process (log `$TMPDIR/show_flow_watch.log`). Once a second it looks at the
+process (log `$TMPDIR/show_flow_watch.log`). Every 2 seconds it looks at the
 D5100, the webcam and the TG-7. A camera that stays bad for 3 looks (feed
 stopped, no frames from the camera, no picture or a frozen one in OBS) gets
 a black panel (`D5 Down`, `Webcam Down`, `TG-7 Down`, which `setup` builds,

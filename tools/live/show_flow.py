@@ -19,8 +19,8 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
   webcam  scene "Webcam Only": the fallback. The webcam alone, filling the
           frame, with the mic. Never touches the D5100.
   multi   scene "Multi View": everything at once. The D5100 (left) and the
-          webcam (right) side by side in the top 1080x810, the desktop
-          page's window under them. Built with the desktop page.
+          webcam (right) side by side in the top 1080x810, the TG-7 under
+          them, then the desktop page's window. Built with the desktop page.
 
 Every `page` is one scene switch (300 ms fade): it never waits for the
 camera. `page next` fades to Up Next while the host swaps the item on the
@@ -50,7 +50,7 @@ OBS can sit black or frozen on a v4l2 camera whose device has frames again.
 frames but OBS's picture doesn't move; `reconnect` (the pager's Reconnect
 cameras button) reopens the D5 and the webcam by hand.
 
-`watch start` runs the camera watch in the background. Once a second it
+`watch start` runs the camera watch in the background. Every 2 seconds it
 looks at the D5100, the webcam and the TG-7. A camera that stays bad for 3
 looks (feed stopped, no frames, no picture in OBS, or a frozen one) gets a
 black panel over its slot on every page that shows it, so viewers see
@@ -253,6 +253,10 @@ WEBCAM_ONLY_BOX = {"positionX": 0, "positionY": 0, "alignment": 5,
 # the multi page: the top row's height. Each camera gets half the width, so
 # 540x810 is 2:3, the D5's live view (640x426) on its side, uncropped.
 MULTI_ROW = 810
+# Under the top row, the TG-7 (4:3, fit whole, so 720x540) across the next
+# MULTI_TG7 rows; the desktop window gets what's left below it.
+MULTI_TG7 = 540
+MULTI_DESK = MULTI_ROW + MULTI_TG7
 
 # The camera watch (`watch run`): a black panel over a camera that drops.
 # Camera ids as the JSON and the pager name them -> OBS source.
@@ -263,7 +267,8 @@ DOWN = {D5: "D5 Down", WEBCAM: "Webcam Down", TG7: "TG-7 Down"}
 STRIP = WEBCAM_BOX["boundsHeight"]  # the webcam strip across the top
 # Each camera's slot per scene, (x, y, w, h) from the top left: what its panel covers.
 SLOTS = {PRODUCT: {D5: (0, 0, W, H), WEBCAM: (0, 0, W, STRIP)},
-         MULTI: {D5: (0, 0, W / 2, MULTI_ROW), WEBCAM: (W / 2, 0, W / 2, MULTI_ROW)},
+         MULTI: {D5: (0, 0, W / 2, MULTI_ROW), WEBCAM: (W / 2, 0, W / 2, MULTI_ROW),
+                 TG7: (0, MULTI_ROW, W, MULTI_TG7)},
          CLOSEUP: {TG7: (0, TG7_TOP, W, H - TG7_TOP), WEBCAM: (0, 0, W, STRIP)},
          UPNEXT: {WEBCAM: (0, 0, W, STRIP)},
          DESKTOP: {WEBCAM: (0, 0, W, STRIP)},
@@ -271,8 +276,8 @@ SLOTS = {PRODUCT: {D5: (0, 0, W, H), WEBCAM: (0, 0, W, STRIP)},
          WEBCAM_ONLY: {WEBCAM: (0, 0, W, WEBCAM_ONLY_BOX["boundsHeight"])}}
 # The cameras each page puts on air.
 PAGE_CAMS = {"intro": [], "item": ["d5", "webcam"], "closeup": ["tg7", "webcam"], "next": ["webcam"],
-             "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam"]}
-WATCH_EVERY = 1.0  # seconds between looks
+             "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam", "tg7"]}
+WATCH_EVERY = 2.0  # seconds between looks (each takes up to 3 OBS screenshots)
 DOWN_AFTER = 3  # bad looks in a row before the panel goes on
 UP_AFTER = 5  # good looks in a row before it comes off
 D5_STALE = 5  # seconds without a feed frame (FEED_SNAP, every 2 s) before the D5 counts as sending nothing
@@ -1157,11 +1162,11 @@ def cmd_setup(c, a):
     c.call("SetSceneItemIndex", {"sceneName": WEBCAM_ONLY, "sceneItemId": item(c, WEBCAM_ONLY, WEBCAM),
                                  "sceneItemIndex": n - 1})  # on top of anything hand-added
 
+    build_closeup(c, a.tg7_rotation)  # before multi, which shows the TG-7 too
     if a.desktop_window or DESKTOP_WIN in inputs:
         build_desktop(c, a.desktop_window, a.desktop_crop_left)
         build_multi(c, a.d5_rotation, a.desktop_crop_left)
 
-    build_closeup(c, a.tg7_rotation)
     build_hold(c)
 
     # Only Up Next may show the desktop window (a stray one turned up in Intro)
@@ -1512,9 +1517,10 @@ def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> 
 
 def build_multi(c, d5_rotation: float = 270, crop_left: int | None = None) -> None:
     """The multi page: the D5100 and the webcam side by side in the top
-    MULTI_ROW, each cover-cropped into half the width, and DESKTOP_WIN (the
-    desktop page's window, so build_desktop first) full width under them,
-    hung from the row. The D5 follows the stand-in, like the item view."""
+    MULTI_ROW, each cover-cropped into half the width, the TG-7 whole and
+    centered in the MULTI_TG7 rows under them, and DESKTOP_WIN (the desktop
+    page's window, so build_desktop first) full width below that. The D5
+    follows the stand-in, like the item view."""
     if MULTI not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
         c.call("CreateScene", {"sceneName": MULTI})
     w, h = W / 2, MULTI_ROW
@@ -1529,14 +1535,17 @@ def build_multi(c, d5_rotation: float = 270, crop_left: int | None = None) -> No
                                "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_OUTER",
                                "boundsAlignment": 0, "boundsWidth": W / 2, "boundsHeight": MULTI_ROW,
                                "cropToBounds": True})
-    box = {"positionX": W / 2, "positionY": MULTI_ROW, "alignment": 4, "rotation": 0,  # 4: top center
+    set_box(c, MULTI, TG7, {"positionX": W / 2, "positionY": MULTI_ROW, "alignment": 4,  # 4: top center
+                            "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+                            "boundsWidth": W, "boundsHeight": MULTI_TG7, "cropToBounds": False})
+    box = {"positionX": W / 2, "positionY": MULTI_DESK, "alignment": 4, "rotation": 0,
            "scaleX": 1, "scaleY": 1, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 4,
-           "boundsWidth": W, "boundsHeight": H - MULTI_ROW}
+           "boundsWidth": W, "boundsHeight": H - MULTI_DESK}
     if crop_left is not None:
         box["cropLeft"] = crop_left
     set_box(c, MULTI, DESKTOP_WIN, box)
     item(c, MULTI, MIC)
-    stack(c, MULTI, [BG, D5, WEBCAM, DESKTOP_WIN])
+    stack(c, MULTI, [BG, D5, WEBCAM, TG7, DESKTOP_WIN])
 
 
 def build_closeup(c, rotation: float = 0) -> None:

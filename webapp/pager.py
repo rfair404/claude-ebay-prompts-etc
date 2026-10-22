@@ -590,7 +590,7 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
     <button class="tile page" data-page="closeup"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">6</span><span class="name">Close-up</span></span><span class="sub">TG-7 + webcam (R: TG-7 AF)</span></button>
     <button class="tile page" data-page="multi"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
-      <span class="lab"><span class="key">7</span><span class="name">Multi</span></span><span class="sub">D5100 + webcam + window</span></button>
+      <span class="lab"><span class="key">7</span><span class="name">Multi</span></span><span class="sub">D5100 + webcam + TG-7 + window</span></button>
     <button class="tile" id="hold"><span class="flag">ON AIR</span><img alt="">
       <span class="lab"><span class="key">H</span><span class="name">Hold still</span></span><span class="sub">Freeze the camera page</span></button>
   </div>
@@ -664,7 +664,7 @@ const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
 const CAM_LABEL = { d5: 'D5100', webcam: 'Webcam', tg7: 'TG-7' };
 // the cameras each page puts on air (show_flow.PAGE_CAMS)
 const PAGE_CAMS = { intro: [], item: ['d5', 'webcam'], closeup: ['tg7', 'webcam'], next: ['webcam'],
-                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam'] };
+                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam', 'tg7'] };
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
 // Hold, release and step ride the page queue as actions: one at a time, in order.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
@@ -714,7 +714,7 @@ function show(st, own = []) {
     const go = el.querySelector('.go'), live = !!((st.streams || {})[el.dataset.dest] || {}).live;
     if (go.dataset.armed && go.dataset.armed !== el.dataset.dest + (live ? ' stop' : ' start')) disarm(go);
   }
-  if ($('#tg7').dataset.armed && st.page !== 'closeup') disarm($('#tg7'));  // nothing on air to warn about
+  if ($('#tg7').dataset.armed && !(PAGE_CAMS[st.page] || []).includes('tg7')) disarm($('#tg7'));  // nothing on air to warn about
   curPage = st.page;
   if ('preview' in st) showPreview(st.preview);
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
@@ -754,7 +754,7 @@ function show(st, own = []) {
   const onAir = PAGE_CAMS[st.page] || [];
   // the camera watch's verdict when it has one (show_flow.py watch), else the feed's own status
   camRow('#s-d5', st, 'd5', st.standin ? 'stand-in' : fs, st.standin ? 'warn' : feedLevel(fs, d5Air), onAir);
-  camRow('#s-tg7', st, 'tg7', st.tg7_status || '?', feedLevel(st.tg7_status, st.page === 'closeup'), onAir);
+  camRow('#s-tg7', st, 'tg7', st.tg7_status || '?', feedLevel(st.tg7_status, onAir.includes('tg7')), onAir);
   camRow('#s-webcam', st, 'webcam', 'no camera watch', '', onAir);
   if (!watchBusy) $('#watch').textContent = st.watch ? 'Stop camera watch' : 'Start camera watch';
   srcRow('#s-busy', st.refocusing ? 'busy (refocus, WB or still)' : 'ready', st.refocusing ? 'warn' : 'ok');
@@ -1035,8 +1035,8 @@ function holdKey() { go(held ? '@release' : '@hold'); }
 async function tg7() {
   if (tg7Busy) return;
   const action = $('#tg7').textContent.startsWith('Stop') ? 'stop' : 'start';
-  if (action === 'stop' && curPage === 'closeup' &&
-      !sure($('#tg7'), 'stop', 'The close-up page is on air. Stop the TG-7 feed anyway?')) return;
+  if (action === 'stop' && (PAGE_CAMS[curPage] || []).includes('tg7') &&
+      !sure($('#tg7'), 'stop', 'The TG-7 is on air (' + LABEL[curPage] + '). Stop its feed anyway?')) return;
   tg7Busy = true; $('#tg7').disabled = true; epoch++;
   say(action === 'start' ? 'Starting the TG-7 feed...' : 'Stopping the TG-7 feed...');
   try { const st = await api('POST', '/api/pager/tg7', { action }, 15000);
