@@ -129,3 +129,58 @@ def test_prep_chooses_compliant_or_fixable_items_in_order():
     kept, skipped = live_prep.choose([rec("4"), rec("5")], lots, limit=5)
     assert [r["item_id"] for r in kept] == ["5"]
     assert "no active offer" in skipped[0][1]
+
+
+def test_start_and_no_start_are_mutually_exclusive_and_a_mode_is_required():
+    with pytest.raises(SystemExit) as e:
+        live_lineup.main(["--store", "junk", "--show", "s", "--all",
+                          "--start", "2026-10-19 20:00", "--no-start"])
+    assert e.value.code == 2
+    with pytest.raises(SystemExit) as e:
+        live_lineup.main(["--store", "junk", "--show", "s"])
+    assert e.value.code == 2
+
+
+def test_no_start_alone_clears_the_saved_start_and_nothing_else(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(LS, "LIVE_DIR", tmp_path)
+    monkeypatch.setattr(live_lineup, "fetch_entries",
+                        lambda *a, **k: pytest.fail("--no-start alone must not read eBay"))
+    lots = LS.build_lineup([(_offer("1", best_offer=False), "A", None)])
+    LS.save_lineup("s", "junk", lots, scheduled_start=datetime(2026, 10, 20, tzinfo=timezone.utc))
+    assert live_lineup.main(["--store", "junk", "--show", "s", "--no-start"]) == 0
+    lu = LS.load_lineup("s")
+    assert lu["scheduled_start"] is None and lu["lots"] == lots
+    # wrong store: refused, start untouched elsewhere
+    with pytest.raises(SystemExit, match="no lineup"):
+        live_lineup.main(["--store", "default", "--show", "s", "--no-start"])
+
+
+def test_a_rebuild_keeps_the_start_unless_no_start(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setattr(LS, "LIVE_DIR", tmp_path)
+    entries = [(_offer("1", best_offer=False), "A", None)]
+    live_lineup.build("junk", "s", entries, [],
+                      start=datetime(2026, 10, 20, tzinfo=timezone.utc))
+    live_lineup.build("junk", "s", entries, [])
+    assert LS.load_lineup("s")["scheduled_start"] == "2026-10-20T00:00:00Z"
+    monkeypatch.setattr(live_lineup, "fetch_entries", lambda store, ids: (entries, []))
+    assert live_lineup.main(["--store", "junk", "--show", "s", "--items", "1",
+                             "--no-start"]) == 0
+    assert LS.load_lineup("s")["scheduled_start"] is None
+
+
+def test_saving_a_start_that_overlaps_another_stores_show_warns(tmp_path, monkeypatch, capsys):
+    from datetime import datetime, timedelta, timezone
+    monkeypatch.setattr(LS, "LIVE_DIR", tmp_path)
+    soon = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=1)
+    LS.save_lineup("main-show", "default", [], scheduled_start=soon + timedelta(hours=3))
+    LS.save_lineup("later", "default", [], scheduled_start=soon + timedelta(hours=9))
+    LS.save_lineup("same-store", "junk", [], scheduled_start=soon)
+    entries = [(_offer("1", best_offer=False), "A", None)]
+    live_lineup.build("junk", "s", entries, [], start=soon)
+    out = capsys.readouterr().out
+    assert "[!] overlaps eBay Live show 'main-show' on store 'default'" in out
+    assert "'later'" not in out and "'same-store'" not in out
+    live_lineup.build("junk", "s", entries, [], start=soon + timedelta(days=2))
+    assert "[!] overlaps" not in capsys.readouterr().out

@@ -37,7 +37,10 @@ marquee.
 --start is the event's scheduled start as set in Live Studio (Eastern unless
 it carries an offset). eBay keeps a show's orders in "Paid - wait to ship"
 for 8 hours after it so buyers can combine shipping, and tools/pick_list.py
---poll holds them until then.
+--poll holds them until then. A rebuild without --start keeps the saved
+start; --no-start clears it, on a rebuild or on its own:
+
+    python tools/live_lineup.py --store junk --show oct-20 --no-start
 
 --items resolves Item IDs through the store's listings ledger (Item ID ->
 SKU) and fetches just those offers; IDs the ledger doesn't know are found by
@@ -275,12 +278,24 @@ def restore_best_offer(store: str, lots: list[dict], confirm: bool) -> int:
     return done
 
 
+def overlap_warnings(store: str, show: str) -> list[str]:
+    """Warnings for other stores' shows whose shopping windows overlap this
+    show's saved one. Each store's pick list holds only its own orders."""
+    me = (show, store)
+    return [f"[!] overlaps eBay Live "
+            f"{LS.describe_window(b if (a['show'], a['store']) == me else a)}"
+            f"; each store's pick list holds only its own show's orders"
+            for a, b in LS.cross_store_overlaps(LS.open_windows(None))
+            if me in ((a["show"], a["store"]), (b["show"], b["store"]))]
+
+
 def build(store: str, show: str, entries, missing, *, append: bool = False,
           keep_flagged: bool = False, start: datetime | None = None,
-          confirm: bool = False) -> tuple[Path, list[dict]]:
+          confirm: bool = False, clear_start: bool = False) -> tuple[Path, list[dict]]:
     """Number the lots, fix what can be fixed (Best Offer, with `confirm`),
     save lineup.json and item_ids.txt, and print the report. Shared with
-    tools/live_prep.py."""
+    tools/live_prep.py. Without `start` the saved start is kept, unless
+    `clear_start`."""
     existing = LS.load_lineup(show)
     if existing and existing.get("store") != store:
         raise SystemExit(f"[X] show {show!r} was built for store "
@@ -301,7 +316,7 @@ def build(store: str, show: str, entries, missing, *, append: bool = False,
                   f"(use --append to add instead)")
     if len(lots) > LS.MAX_LOTS:
         print(f"[!] {len(lots)} lots — Stream manager takes {LS.MAX_LOTS} per event")
-    if start is None and existing and existing.get("scheduled_start"):
+    if start is None and not clear_start and existing and existing.get("scheduled_start"):
         start = parse_start(existing["scheduled_start"])
 
     clear_best_offer(store, lots, confirm=confirm)
@@ -326,6 +341,10 @@ def build(store: str, show: str, entries, missing, *, append: bool = False,
         print(f"\nScheduled start {start.astimezone(EASTERN):%a %b %d %I:%M %p} ET; "
               f"pick lists hold this show's orders until "
               f"{closes.astimezone(EASTERN):%a %I:%M %p} ET.")
+        for line in overlap_warnings(store, show):
+            print(line)
+    elif clear_start:
+        print("\nScheduled start cleared: pick lists no longer hold this show's orders.")
     else:
         print("\n[!] no --start: pick lists won't wait out the 8-hour "
               "combined-shipping window for this show")
@@ -350,7 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     stores.add_store_args(ap)
     ap.add_argument("--show", required=True, help="show name (folder under inventory/_live/)")
-    pick = ap.add_mutually_exclusive_group(required=True)
+    pick = ap.add_mutually_exclusive_group()
     pick.add_argument("--items", nargs="+", metavar="ITEM_ID", help="Item IDs, in show order")
     pick.add_argument("--all", action="store_true", help="every active listing on the store")
     pick.add_argument("--from-marquee", action="store_true",
@@ -362,12 +381,20 @@ def main(argv: list[str] | None = None) -> int:
                     help="add to an existing lineup (mid-show) instead of replacing it")
     ap.add_argument("--keep-flagged", action="store_true",
                     help="include flagged lots in item_ids.txt anyway")
-    ap.add_argument("--start", metavar="'YYYY-MM-DD HH:MM'",
-                    help="event's scheduled start (Eastern unless it has an offset)")
+    when = ap.add_mutually_exclusive_group()
+    when.add_argument("--start", metavar="'YYYY-MM-DD HH:MM'",
+                      help="event's scheduled start (Eastern unless it has an offset)")
+    when.add_argument("--no-start", action="store_true",
+                      help="clear the saved scheduled start, so pick lists stop "
+                           "holding this show's orders (alone: changes nothing else)")
     ap.add_argument("--confirm", action="store_true",
                     help="really edit live listings (Best Offer off, or back on "
                          "with --restore-best-offer); without it, a dry run")
     args = ap.parse_args(argv)
+    if not (args.items or args.all or args.from_marquee or args.restore_best_offer
+            or args.no_start):
+        ap.error("one of --items --all --from-marquee --restore-best-offer is "
+                 "required (or --no-start on its own)")
 
     store = stores.resolve_store_name(args.store)
     try:
@@ -375,6 +402,17 @@ def main(argv: list[str] | None = None) -> int:
         start = parse_start(args.start) if args.start else None
     except ValueError as exc:
         raise SystemExit(f"[X] {exc}")
+
+    if args.no_start and not (args.items or args.all or args.from_marquee
+                              or args.restore_best_offer):
+        lineup = LS.load_lineup(args.show)
+        if not lineup or lineup.get("store") != store:
+            raise SystemExit(f"[X] no lineup for show {args.show!r} on store {store!r}")
+        LS.set_scheduled_start(args.show, None)
+        print(f"Show {args.show!r}: scheduled start cleared (was "
+              f"{lineup.get('scheduled_start') or 'not set'}); pick lists no "
+              f"longer hold its orders.")
+        return 0
 
     if args.restore_best_offer:
         lineup = LS.load_lineup(args.show)
@@ -385,12 +423,16 @@ def main(argv: list[str] | None = None) -> int:
             LS.save_lineup(args.show, store, lineup["lots"], keep_flagged=args.keep_flagged,
                            scheduled_start=(parse_start(lineup["scheduled_start"])
                                             if lineup.get("scheduled_start") else None))
+        if args.no_start:
+            LS.set_scheduled_start(args.show, None)
+            print(f"Show {args.show!r}: scheduled start cleared")
         return 0
 
     ids = marquee_ids(args.show) if args.from_marquee else args.items
     entries, missing = fetch_entries(store, None if args.all else ids)
     build(store, args.show, entries, missing, append=args.append,
-          keep_flagged=args.keep_flagged, start=start, confirm=args.confirm)
+          keep_flagged=args.keep_flagged, start=start, confirm=args.confirm,
+          clear_start=args.no_start)
     return 0
 
 
