@@ -86,14 +86,23 @@ A show has five pages. One command puts any of them on air:
 | "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
+| "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
-- `page item` refocuses the D5100 *while the current page is still on air*
-  (about 5 s: live view stops, autofocus, restarts), then fades to the item
-  view. Viewers never see the freeze. It starts the feed if it's off, and
-  fails right away, staying on the current page, if the camera isn't on USB.
-- `refocus` on the item view hides itself behind Up Next for those ~5 s.
+- Every `page` is one scene switch; it never refocuses or waits for the
+  camera. `page item` fades straight to the item view with whatever the D5
+  shows, so after an item swap run `refocus` once the item is on the podium.
+- `refocus` takes about 5 s (live view stops, autofocus, restarts). On the
+  item view it hides behind Up Next for those seconds, then fades back,
+  unless the user asked for a page meanwhile (that page stays). A second
+  refocus while one runs is refused (`Busy`), not queued. If it fails, the
+  feed is left running and the error starts with `refocus failed:`.
+- `page item --refocus` refocuses first, behind the current page, then
+  switches (fails fast, staying put, if the camera isn't on USB).
+- `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
+  when a camera's picture is black or frozen but `feed status` says
+  `running`. Viewers see a blink of black on that camera.
 - Before Up Next goes on air the pager checks the captured window's *live*
   title and shows the window only if it's on the allowlist (a public eBay
   page or Pop's Games) and not vetoed (Twitch, eBay Live, Seller Hub, My
@@ -105,7 +114,7 @@ A show has five pages. One command puts any of them on air:
   the mic. It never touches the D5100, so use it if the camera dies mid-show.
 - `next` / `back` are aliases of `page next` / `page item`.
 - `standin on` puts a white panel in the item view in place of the D5100;
-  while it's on, `page item` skips the refocus and `refocus` refuses. The
+  while it's on, `page item --refocus` skips the refocus and `refocus` refuses. The
   pager page has the same switch, and it stays on through reloads (it lives
   in OBS).
 - `page desktop` shows the window picked with `setup --desktop-window
@@ -114,8 +123,9 @@ A show has five pages. One command puts any of them on air:
   in that window is on air.
 - Web: the local app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli
   serve`) has a button page at http://localhost:8770/pager (keys 1-5 for
-  intro/item/next/desktop/webcam, R refocus) and serves the same pager at
-  `/api/pager` (`GET` state, `POST {"page": ...}`, `POST /api/pager/refocus`).
+  intro/item/next/desktop/webcam, R refocus, C reconnect cameras) and serves
+  the same pager at `/api/pager` (`GET` state, `POST {"page": ...}`, `POST
+  /api/pager/refocus`, `POST /api/pager/reconnect`).
   A switch made there shows up in `status` here, and vice versa.
 - "autofocus couldn't lock" means the center AF point sees nothing with
   contrast, usually an empty podium. Focus stays where it was. Ask the user to
@@ -143,7 +153,8 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
   WebSocket server is off (OBS Tools menu).
 - D5 black or frozen: `show_flow.py feed status`. `running, no frames for
   Ns` means the loop is alive but the camera sends nothing: check that it is
-  on, awake, plugged in and in M or A mode. Meanwhile `page webcam`. The feed script restarts itself if live view drops. Log:
+  on, awake, plugged in and in M or A mode. Meanwhile `page webcam`. If it
+  says `running` but OBS's picture is still black or frozen, `reconnect d5`. The feed script restarts itself if live view drops. Log:
   `$TMPDIR/d5100_feed.log`.
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100
