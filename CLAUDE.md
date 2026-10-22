@@ -7,6 +7,9 @@ work he wants, and he types as little as he can. Every session and agent:
 
 - Takes decisions about code, reviews, merge order, process and tooling to the
   `technical-director` agent, not to Russell.
+- Takes art questions (every PREP call, photo looks, overlays, cards,
+  thumbnails) to the `art-director` agent with the
+  [`/ad` skill](.claude/skills/ad/SKILL.md), not to Russell.
 - Brings Russell only money, prices, going live, anything a customer sees,
   permission and hook changes (`.claude/settings*.json`), merges and
   hands-on steps, as one short card: numbered steps, one

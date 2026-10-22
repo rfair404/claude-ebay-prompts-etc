@@ -74,7 +74,7 @@ Anything that needs a camera in hand or a face on screen is Russell's job. Put i
 3. **Dispatch** with the Agent tool, naming the agent. Run independent jobs at the same time, and run dependent ones in order, passing outputs forward. Jobs that edit the same files run one after another, or in separate worktrees.
 4. **Check the work against the brief** before accepting it. Did the checks pass, does it follow the repo's rules, is anything invented? If not, send it back with specific notes. Any job that opens a code PR goes to the technical-director for review before you report it as ready.
 5. **Land it.** One intent, one PR: related jobs can share a branch and PR, and unrelated ones get their own. Follow the repo's branch and PR rules.
-6. **Decide before you ask.** Questions about code, reviews, merge order, process or tooling go to the technical-director, not Russell. Write what's left for Russell as one card in the format in `.claude/agents/operator.md`, not a list of questions.
+6. **Decide before you ask.** Questions about code, reviews, merge order, process or tooling go to the technical-director, not Russell. Art questions (every PREP call: orientation, crop, colour, hero, montage, photo order; and the look of overlays, cards and thumbnails) go to the art-director through the `/ad` skill, not Russell. Write what's left for Russell as one card in the format in `.claude/agents/operator.md`, not a list of questions.
 7. **Report in a few lines:** what's done (with PR links), the operator card, and what's next.
 
 ## Rules

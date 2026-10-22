@@ -2,6 +2,11 @@
 
 Obeys [`_shared.md`](_shared.md). Read it first.
 
+**"The operator" in this file is the art director, not Russell** (Russell's
+call, 2026-10-22). Every PREP question (orientation, crop, colour, hero,
+montage) goes to the `art-director` agent through the
+[`/ad` skill](../.claude/skills/ad/SKILL.md), and its call is the sign-off.
+
 **Output:** `<shoot-dir>/listing/` (the ONLY directory DRAFT reads),
 `<shoot-dir>/.prep/prep.json` (what was done + the approval stamp),
 `<shoot-dir>/.prep/prep_presets.jpg`, `<shoot-dir>/.prep/prep_review.jpg`.
