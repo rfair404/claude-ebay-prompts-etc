@@ -6,8 +6,11 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "next" | "desktop" | "webcam", "refocus": false}
-    POST /api/pager/refocus     refocus the D5100 without changing page
+    POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam", "refocus": false}
+    POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
+    POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
+    POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
+    POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
@@ -20,10 +23,12 @@ Every answer is the state object, plus `switch` or `refocus` on a POST:
      "live": true, "timecode": "00:12:03.400", "feed": true, "feed_status": "running",
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
-     "standin": false, "refocusing": false,
+     "standin": false, "refocusing": false, "held": null, "tg7_status": "running",
      "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null}}
 
-`page` is null when OBS is on a scene that isn't one of the pager's.
+`page` is null when OBS is on a scene that isn't one of the pager's, and
+"hold" on the hold still; `held` then names the page the still was taken of.
+A hold or step answers with `hold` / `step` (show_flow.hold() / step()).
 `feed_status` is "stopped", "running", or "running, no frames for Ns" (the
 feed loop is up but the camera sends nothing). eBay and
 Twitch start and stop independently (show_flow DESTS: eBay on OBS's stream
@@ -87,8 +92,16 @@ class StreamRequest(BaseModel):
 
 
 class PageRequest(BaseModel):
-    page: Literal["intro", "item", "next", "desktop", "webcam"]
+    page: Literal["intro", "item", "closeup", "next", "desktop", "webcam"]
     refocus: bool = False  # true: item refocuses the D5100 first, behind the current page (~5 s)
+
+
+class HoldRequest(BaseModel):
+    on: bool
+
+
+class Tg7Request(BaseModel):
+    action: Literal["start", "stop"]
 
 
 @contextmanager
@@ -171,6 +184,33 @@ def pager_reconnect() -> dict:
         return {**_show_flow.state(c), "reconnect": r}
 
 
+@router.post("/api/pager/hold")
+def pager_hold(req: HoldRequest) -> dict:
+    with _obs() as c:
+        if req.on:
+            r = _show_flow.hold(c)
+            return {**_show_flow.state(c), "hold": r}
+        r = _show_flow.release(c)
+        return {**_show_flow.state(c), "switch": r}
+
+
+@router.post("/api/pager/step")
+def pager_step() -> dict:
+    with _obs() as c:
+        r = _show_flow.step(c)
+        return {**_show_flow.state(c), "step": r}
+
+
+@router.post("/api/pager/tg7")
+def pager_tg7(req: Tg7Request) -> dict:
+    with _obs() as c:
+        if req.action == "start":
+            _show_flow.tg7_start()
+        else:
+            _show_flow.tg7_stop()
+        return _show_flow.state(c)
+
+
 # The control page. Plain HTML + fetch against the routes above, same
 # origin, so the guard's Origin check passes. It polls every 1 s while the
 # tab is visible (not at all while hidden: OBS is short of CPU during a
@@ -178,7 +218,10 @@ def pager_reconnect() -> dict:
 # Page clicks are sent one at a time, latest wins: clicking 2 then 3 fast
 # ends on 3, never on whichever request OBS happened to get last. A page
 # click is never blocked by a refocus or a stream start in flight.
-# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, R refocus, C reconnect cameras, M music on/off.
+# Hold / release / step join the same queue, so a step pressed during a
+# switch lands after it, never before.
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, H hold/release,
+# Space step, R refocus, C reconnect cameras, M music on/off.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -213,6 +256,7 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .row button:disabled, .go:disabled, #standin:disabled { opacity:.55; cursor:wait; }
 .row { display:flex; gap:12px; margin-top:12px; }
 .row button { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+.row button.on { background:var(--warn); border-color:var(--warn); color:#fff; }
 h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:22px 2px 8px; }
 .dests { display:grid; gap:10px; }
 .dest { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 14px;
@@ -235,6 +279,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Intro</b><small>Pre-show card, no cameras</small></span></button>
   <button class="page" data-page="item"><span class="key">2</span>
     <span><b>Item</b><small>D5100 + webcam (R to refocus)</small></span></button>
+  <button class="page" data-page="closeup"><span class="key">6</span>
+    <span><b>Close-up</b><small>TG-7 + webcam (R: TG-7 autofocus)</small></span></button>
   <button class="page" data-page="next"><span class="key">3</span>
     <span><b>Next</b><small>Pause / next item: window + webcam</small></span></button>
   <button class="page" data-page="desktop"><span class="key">4</span>
@@ -242,8 +288,11 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <button class="page" data-page="webcam"><span class="key">5</span>
     <span><b>Webcam only</b><small>Fallback: face cam + mic, no D5100</small></span></button>
 </div>
-<div class="row"><button id="refocus">Refocus D5100 <small>(R)</small></button>
-  <button id="reconnect">Reconnect cameras <small>(C)</small></button></div>
+<div class="row"><button id="hold">Hold still <small>(H)</small></button>
+  <button id="step">Step <small>(Space)</small></button></div>
+<div class="row"><button id="refocus">Refocus <small>(R)</small></button>
+  <button id="reconnect">Reconnect cameras <small>(C)</small></button>
+  <button id="tg7">TG-7 feed</button></div>
 <h2>Streams</h2>
 <div class="dests">
   <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
@@ -262,7 +311,12 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
 </main>
 <script>
 const $ = s => document.querySelector(s), buttons = [...document.querySelectorAll('.page')];
-const LABEL = { intro: 'Intro', item: 'Item', next: 'Next', desktop: 'Desktop', webcam: 'Webcam only' };
+const LABEL = { intro: 'Intro', item: 'Item', closeup: 'Close-up', next: 'Next', desktop: 'Desktop',
+                webcam: 'Webcam only', hold: 'Hold' };
+// Hold, release and step ride the page queue as actions: one at a time, in order.
+const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
+                 '@step': ['/api/pager/step', null] };
+let held = null, tg7Busy = false;
 // Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
 let pending = null, switching = false, refocusing = false, streaming = false, standinBusy = false;
 let epoch = 0;  // bumped by every action, so a poll answer from before it can't undo it
@@ -270,6 +324,7 @@ let epoch = 0;  // bumped by every action, so a poll answer from before it can't
 function say(text, cls = '') { const m = $('#msg'); m.textContent = text; m.className = cls; }
 
 function show(st) {
+  curPage = st.page;
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
   const badge = $('#badge');
@@ -282,10 +337,16 @@ function show(st) {
     el.querySelector('.go').textContent = s.live ? 'Stop' : 'Start';
   }
   if (!standinBusy) $('#standin').checked = !!st.standin;
-  $('#refocus').hidden = !!st.standin;
+  held = st.page === 'hold' ? (st.held || 'item') : null;
+  $('#hold').classList.toggle('on', !!held);
+  $('#hold').firstChild.textContent = held ? 'Release to ' + LABEL[held] + ' ' : 'Hold still ';
+  // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
+  $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
+  if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
+                           ' \\u00b7 TG-7 feed: ' + (st.tg7_status || '?') +
                            (st.refocusing ? ' \\u00b7 refocusing' : '');
 }
 
@@ -386,6 +447,7 @@ async function drain() {
   switching = true;
   while (pending) {
     const page = pending; pending = null;
+    if (ACTION[page]) { await act(page); continue; }
     say('Switching to ' + LABEL[page] + '...');
     try {
       const st = await api('POST', '/api/pager', { page }, 12000);
@@ -397,10 +459,44 @@ async function drain() {
   switching = false;
 }
 
+async function act(name) {
+  const [path, body] = ACTION[name];
+  try {
+    const st = await api('POST', path, body, 12000);
+    epoch++;
+    if (pending) return;
+    show(st);
+    const r = st.hold || st.step || st.switch || {};
+    if (st.page === 'hold') say('Holding a still of ' + LABEL[st.held || r.held] +
+                                ': turn the item, then Step or Release.', 'warn');
+    else if (r.changed === false && name === '@release') say('Not on hold.');
+    else say('On air: ' + LABEL[st.page] + '.');
+  } catch (e) { say({ '@hold': 'Hold', '@release': 'Release', '@step': 'Step' }[name] + ' failed: ' + e.message, 'err'); }
+}
+
+let curPage = null;
+function holdKey() { go(held ? '@release' : '@hold'); }
+
+async function tg7() {
+  if (tg7Busy) return;
+  const action = $('#tg7').textContent.startsWith('Stop') ? 'stop' : 'start';
+  if (action === 'stop' && curPage === 'closeup' &&
+      !confirm('The close-up page is on air. Stop the TG-7 feed anyway?')) return;
+  tg7Busy = true; $('#tg7').disabled = true; epoch++;
+  say(action === 'start' ? 'Starting the TG-7 feed...' : 'Stopping the TG-7 feed...');
+  try { const st = await api('POST', '/api/pager/tg7', { action }, 15000);
+        tg7Busy = false; if (!switching) show(st);
+        say(action === 'start' ? 'TG-7 feed started (it waits for the camera Wi-Fi if needed).'
+                               : 'TG-7 feed stopped.'); }
+  catch (e) { say('TG-7 feed ' + action + ' failed: ' + e.message, 'err'); }
+  tg7Busy = false; $('#tg7').disabled = false;
+}
+
 async function refocus() {
   if (refocusing || $('#refocus').hidden) return;
   refocusing = true; $('#refocus').disabled = true; epoch++;
-  say('Refocusing the D5100 (about 5 s; the item view hides behind Next)...');
+  say(curPage === 'closeup' ? 'TG-7 autofocus...'
+                            : 'Refocusing the D5100 (about 5 s; the item view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/refocus', null, 60000);
         refocusing = false;
         if (!switching) show(st);
@@ -440,6 +536,9 @@ async function poll() {
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
 $('#reconnect').addEventListener('click', reconnect);
+$('#hold').addEventListener('click', holdKey);
+$('#step').addEventListener('click', () => go('@step'));
+$('#tg7').addEventListener('click', tg7);
 $('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
@@ -454,9 +553,11 @@ document.querySelectorAll('.dest[data-dest]').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam' }[e.key];
+  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam', '6': 'closeup' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
   else if (e.key === 'c' || e.key === 'C') reconnect();
+  else if (e.key === 'h' || e.key === 'H') holdKey();
+  else if (e.key === ' ') { e.preventDefault(); go('@step'); }  // not also a click on a focused button
   else if (e.key === 'm' || e.key === 'M') music();
 });
 poll();
