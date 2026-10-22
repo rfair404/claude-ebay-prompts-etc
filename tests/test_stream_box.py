@@ -493,3 +493,20 @@ def test_with_no_box_configured_obsctl_talks_to_the_laptops_obs(monkeypatch):
     monkeypatch.setattr(obsctl, "_connect", fake_connect)
     assert obsctl.main(["status"]) == 1
     assert seen == [("127.0.0.1", 4455)]
+
+
+def test_stop_obs_stops_an_idle_obs_then_carries_on(laptop, monkeypatch):
+    box = FakeBox(obs="running")
+    monkeypatch.setattr(provision, "box_obs_live", lambda *a: False)
+    assert provision.provision(_args("--stop-obs"), box, sleep=lambda s: None) == 0
+    commands = [c[0] for c in box.calls]
+    assert any(c.startswith("pkill -TERM -x obs") for c in commands)
+    assert commands.index(next(c for c in commands if c.startswith("pkill"))) < \
+        commands.index(next(c for c in commands if "root.sh" in c))
+
+
+def test_a_provisioning_reboot_keeps_obs_off_until_the_run_finishes():
+    s = _script("nvidia")
+    reboot = s.index('if [ "$REBOOT" = 1 ]')
+    assert s.index('rm -f "$H/.cache/pops-stream-box/ready"', reboot) < s.index("systemctl reboot", reboot)
+    assert s.index('touch "$H/.cache/pops-stream-box/ready"') > s.index("box_apply.py")

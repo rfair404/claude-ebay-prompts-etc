@@ -364,6 +364,7 @@ ufw status"""),
              'chown "$U:" "$B/probe.json"'),
         Step("Reboot if the new driver or display needs it",
              r"""if [ "$REBOOT" = 1 ]; then
+  rm -f "$H/@REMOTE@/ready"   # OBS stays off after this reboot, so the next pass can finish
   if [ @REBOOT_OK@ = 1 ]; then
     echo "Rebooting the box; provision.py waits for it and finishes."
     systemd-run --on-active=3 --quiet systemctl reboot
@@ -577,8 +578,10 @@ def provision(a, ssh, say=print, sleep=time.sleep) -> int:
             if live is not False:
                 raise ProvisionError("OBS on the box is live (or can't be asked); not stopping it")
             if not a.dry_run:
-                ssh.run("pkill -TERM -x obs; for i in $(seq 40); do pgrep -x obs >/dev/null || exit 0; "
-                        "sleep 0.5; done; exit 1")
+                r = ssh.run("pkill -TERM -x obs; for i in $(seq 40); do pgrep -x obs >/dev/null || exit 0; "
+                            "sleep 0.5; done; exit 1")
+                if r.returncode != 0:
+                    raise ProvisionError("OBS on the box didn't stop within 20 s; nothing was changed")
         plan = make_plan(facts, a.user, a.port, a.lan, a.gpu)
         steps = root_steps(plan, reboot_ok=not a.no_reboot, reset_scenes=a.reset_scenes)
         if a.dry_run:
