@@ -47,6 +47,8 @@ class FakeObs:
         if (data or {}).get("sceneName") in self.missing:
             raise obsctl.ObsError(f"{req} failed: code 600 No source was found by the name of "
                                   f"`{data['sceneName']}`.")
+        if req == "GetInputList":  # show_music.state: no Show Music source here
+            return {"inputs": []}
         if req == "GetCurrentProgramScene":
             return {"currentProgramSceneName": self.scene}
         if req == "SetCurrentProgramScene":
@@ -102,6 +104,8 @@ class FakeObs:
             return {}
         if req == "GetInputSettings":
             return {"inputSettings": {"capture_window": self.capture}}
+        if req == "GetInputList":  # show_music.state(): no music source here
+            return {"inputs": []}
         if req == "GetSourceScreenshot":
             self.shots.append(data)
             return {"imageData": "data:image/jpg;base64," + base64.b64encode(b"\xff\xd8" + data["sourceName"].encode()).decode()}
@@ -236,6 +240,7 @@ def client(obs, monkeypatch):
 def test_get_reports_what_is_on_air(client, obs):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
+    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None}  # one poll, not two
     assert obs.closed
 
 
@@ -1004,3 +1009,153 @@ def test_hold_release_and_step_on_the_cli(held, monkeypatch, capsys):
     assert SF.main(["release", "--to", "item"]) == 0 and "on air: item" in capsys.readouterr().out
     assert SF.main(["page", "next"]) == 0
     assert SF.main(["hold"]) == 1 and "camera page" in capsys.readouterr().err
+
+
+# --- the D5100's white balance: refocus's cover, lock and feed restart -------
+# the D5100's choices, in its order (show_flow.WB_CONFIG has the source)
+D5100_WB = ["Automatic", "Daylight", "Fluorescent", "Tungsten", "Flash", "Cloudy", "Shade", "Preset"]
+
+
+class WbCamera(Camera):
+    """Camera plus `gphoto2 --get-config/--set-config whitebalance`."""
+
+    def __init__(self, monkeypatch, snap):
+        super().__init__(monkeypatch, snap)
+        self.wb, self.refuses = "Automatic", False
+
+    def run(self, cmd, **kw):
+        if cmd[1:] == ["--get-config", "whitebalance"]:
+            self.log.append(cmd[1])
+            out = ("Label: WhiteBalance\nReadonly: 0\nType: RADIO\nCurrent: " + self.wb + "\n"
+                   + "".join(f"Choice: {i} {w}\n" for i, w in enumerate(D5100_WB)) + "END\n")
+            return SF.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+        if cmd[1] == "--set-config" and cmd[2].startswith("whitebalance="):
+            self.log.append(cmd[2])
+            if self.refuses:
+                return SF.subprocess.CompletedProcess(cmd, 1, stdout="", stderr="*** Error (-1: 'Unspecified error') ***")
+            self.wb = cmd[2].split("=", 1)[1]
+            return SF.subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return super().run(cmd, **kw)
+
+
+def moving_d5():
+    """A CamObs whose D5 picture changes on every screenshot, for several calls in a row."""
+    return CamObs([f"frame{i}" for i in range(500)])
+
+
+@pytest.fixture
+def wbcam(camera, monkeypatch):
+    return WbCamera(monkeypatch, camera.snap)
+
+
+@pytest.mark.parametrize("scene", ["eBay Main", "Multi View"])
+def test_wb_sets_a_preset_behind_up_next_and_comes_back(wbcam, scene):
+    c = moving_d5()
+    c.scene = scene
+    r = SF.wb(c, "tungsten")
+    assert r == {"wb": "Tungsten", "choices": D5100_WB, "changed": True, "wb_s": r["wb_s"]}
+    assert wbcam.wb == "Tungsten"
+    assert wbcam.log == ["stop", "--auto-detect", "--get-config", "whitebalance=Tungsten", "start"]
+    assert c.switches == ["Up Next", scene]  # hidden for the freeze, then back
+
+
+def test_wb_without_a_preset_reads_it_and_still_restarts_the_feed(wbcam):
+    c = moving_d5()
+    r = SF.wb(c)
+    assert (r["wb"], r["choices"], r["changed"]) == ("Automatic", D5100_WB, False)
+    assert wbcam.log == ["stop", "--auto-detect", "--get-config", "start"]  # nothing set
+    assert c.switches == ["Up Next", "eBay Main"] and wbcam.running
+
+
+def test_wb_already_set_sends_nothing(wbcam):
+    wbcam.wb = "Daylight"
+    r = SF.wb(moving_d5(), "Daylight")
+    assert r["wb"] == "Daylight" and r["changed"] is False
+    assert not any(e.startswith("whitebalance=") for e in wbcam.log)
+
+
+@pytest.mark.parametrize("preset, label", [
+    ("auto", "Automatic"), ("DayLight", "Daylight"), ("incandescent", "Tungsten"), ("preset", "Preset"),
+])
+def test_wb_aliases_map_to_the_d5100s_labels(preset, label):
+    assert SF.wb_choice(preset, D5100_WB) == label
+
+
+def test_wb_parse_reads_current_and_choices():
+    out = "Label: WhiteBalance\nReadonly: 0\nType: RADIO\nCurrent: Color Temperature\n" \
+          "Choice: 0 Automatic\nChoice: 1 Color Temperature\nEND\n"
+    assert SF.wb_parse(out) == ("Color Temperature", ["Automatic", "Color Temperature"])
+    assert SF.wb_parse("") == (None, [])
+
+
+def test_an_unknown_wb_preset_lists_the_choices_and_sets_nothing(wbcam):
+    c = moving_d5()
+    with pytest.raises(obsctl.ObsError, match=r"^wb failed: unknown white balance 'purple'; "
+                                              r"the D5100 offers Automatic, Daylight, .*Preset"):
+        SF.wb(c, "purple")
+    assert wbcam.log == ["stop", "--auto-detect", "--get-config", "start"] and wbcam.wb == "Automatic"
+    assert c.scene == "eBay Main"  # the feed came back first, then the item view
+
+
+def test_a_wb_the_camera_refuses_is_an_error_after_the_feed_is_back(wbcam):
+    wbcam.refuses = True
+    c = moving_d5()
+    with pytest.raises(obsctl.ObsError, match="refused white balance 'Flash'.*Unspecified error"):
+        SF.wb(c, "flash")
+    assert wbcam.log[-1] == "start" and wbcam.running and c.scene == "eBay Main"
+
+
+def test_wb_refuses_while_the_standin_is_on(obs):
+    obs.standin_shown = True
+    with pytest.raises(obsctl.ObsError, match="stand-in is on"):
+        SF.wb(obs, "daylight")
+
+
+def test_wb_on_the_closeup_sets_the_d5_without_a_cover_and_leaves_the_tg7(wbcam, monkeypatch):
+    monkeypatch.setattr(SF, "tg7cam", lambda: pytest.fail("touched the TG-7"))
+    c = moving_d5()
+    c.scene = "Close-up"
+    assert SF.wb(c, "shade")["wb"] == "Shade"
+    assert c.switches == [] and wbcam.wb == "Shade"
+
+
+def test_wb_and_refocus_share_the_lock(obs, monkeypatch):
+    monkeypatch.setattr(SF, "LOCK_WAIT", 0)
+    obs.scene = "eBay Main"
+    with SF.exclusive():
+        with pytest.raises(SF.Busy, match="refocus, WB change or still is already running"):
+            SF.wb(obs, "auto")
+    assert obs.switches == []
+
+
+def test_wb_route(client, wbcam, monkeypatch):
+    c = moving_d5()
+    monkeypatch.setattr(SF, "connect", lambda: c)
+    body = client.post("/api/pager/wb", json={"preset": "daylight"}).json()
+    assert body["wb"]["wb"] == "Daylight" and body["wb"]["changed"] and body["page"] == "item"
+    body = client.post("/api/pager/wb", json={}).json()
+    assert body["wb"]["wb"] == "Daylight" and body["wb"]["choices"] == D5100_WB
+    r = client.post("/api/pager/wb", json={"preset": "purple"})
+    assert r.status_code == 502 and "offers Automatic" in r.json()["detail"]
+    monkeypatch.setattr(SF, "LOCK_WAIT", 0)
+    with SF.exclusive():
+        assert client.post("/api/pager/wb", json={"preset": "auto"}).status_code == 409
+
+
+def test_wb_on_the_cli(wbcam, monkeypatch, capsys):
+    c = moving_d5()
+    monkeypatch.setattr(SF, "connect", lambda: c)
+    assert SF.main(["wb"]) == 0
+    out = capsys.readouterr().out
+    assert "D5100 white balance: Automatic (" in out and "choices: " + ", ".join(D5100_WB) in out
+    assert SF.main(["wb", "tungsten"]) == 0
+    assert "D5100 white balance: Tungsten (" in capsys.readouterr().out
+    assert SF.main(["wb", "tungsten"]) == 0 and "Tungsten (already)" in capsys.readouterr().out
+    assert SF.main(["wb", "purple"]) == 1 and "the D5100 offers" in capsys.readouterr().err
+
+
+def test_control_page_has_a_d5_white_balance_control(client):
+    r = client.get("/pager")
+    assert "/api/pager/wb" in r.text and 'id="wb"' in r.text and 'id="wbset"' in r.text
+    for alias in ("auto", "daylight", "tungsten"):
+        assert f'<option value="{alias}">' in r.text

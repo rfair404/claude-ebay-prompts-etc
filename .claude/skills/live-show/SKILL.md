@@ -87,8 +87,10 @@ One command puts any page on air:
 | "everything at once", "both cameras and the screen", "multi view" | `show_flow.py page multi` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
+| "too orange", "too blue", "white balance", "set WB to daylight" | `show_flow.py wb` (read) / `show_flow.py wb daylight` |
 | "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
+| "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
 - Every `page` is one scene switch; it never refocuses or waits for the
@@ -99,6 +101,14 @@ One command puts any page on air:
   unless the user asked for a page meanwhile (that page stays). A second
   refocus while one runs is refused (`Busy`), not queued. If it fails, the
   feed is left running and the error starts with `refocus failed:`.
+- `wb [PRESET]` reads or sets the D5100's white balance: `auto`,
+  `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
+  `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
+  them). It needs the USB connection, so it freezes the D5 like a refocus
+  (~5 s, hidden behind Up Next on item/multi), takes the same lock and
+  refuses while the stand-in is on. D5100 only; the TG-7 isn't touched.
+  Unverified on hardware: whether the live-view feed (not just stills)
+  changes. Look at `obsctl.py shot program` after setting it.
 - `page item --refocus` refocuses first, behind the current page, then
   switches (fails fast, staying put, if the camera isn't on USB).
 - `reconnect` makes OBS reopen the D5 and the webcam (one or both); use it
@@ -114,6 +124,11 @@ One command puts any page on air:
 - `page webcam` (scene `Webcam Only`) is the fallback: the webcam alone with
   the mic. It never touches the D5100, so use it if the camera dies mid-show.
 - `next` / `back` are aliases of `page next` / `page item`.
+- `show_music.py on|off` fades the CC0 background music in or out over 2 s
+  (`off` mutes and pauses it). It's the only music allowed on the show: never
+  play anything else (eBay Live only allows music we hold rights to). If it
+  says to run `setup`, run `show_music.py setup` (and `build` first if the
+  file is missing); docs/live-streaming-setup.md section 7.
 - `standin on` puts a white panel in the item view in place of the D5100;
   while it's on, `page item --refocus` skips the refocus and `refocus` refuses. The
   pager page has the same switch, and it stays on through reloads (it lives
@@ -167,6 +182,6 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what
-  helps the stream.
+  helps the stream. `show_flow.py wb` handles the stop and restart itself.
 - Twitch runs on OBS's recording output, so `obsctl.py quit` refuses while
   it's live, and there's no local recording during a Twitch stream.

@@ -5,18 +5,20 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
-    GET  /api/pager             what's on air
+    GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track"}
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
+    POST /api/pager/wb          {"preset": "daylight"}: the D5100's white balance (no preset: read it)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
     POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
     POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
+    POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
 
-Every answer is the state object, plus `switch` or `refocus` on a POST:
+Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
 
     {"page": "item", "scene": "eBay Main", "pages": ["intro", "item", "next"],
      "live": true, "timecode": "00:12:03.400", "feed": true, "feed_status": "running",
@@ -53,9 +55,13 @@ refocuses first, behind the current page. `focused: false` means the
 D5100's autofocus couldn't lock (nothing with contrast at the center of the
 frame); focus is unchanged. A refocus while another is running (shell or
 web) is 409 at once, not queued. A failed refocus leaves the D5100 feed
-running. Reconnect answers `reconnect: {source: {"ok", "device" | "error"}}`
-per camera; it never waits on a refocus, and viewers see a blink of black
-on each camera as OBS reopens it. 503 means OBS isn't reachable, 504 that it stopped answering
+running. White balance answers `wb: {"wb", "choices", "changed", "wb_s"}`
+and works like a refocus: ~5 s with the D5100 frozen, hidden the same way,
+the same lock (409 while either runs; `refocusing` is true meanwhile). An
+unknown preset is 502, naming the camera's choices. Reconnect answers
+`reconnect: {source: {"ok", "device" | "error"}}` per camera; it never
+waits on a refocus, and viewers see a blink of black on each camera as OBS
+reopens it. 503 means OBS isn't reachable, 504 that it stopped answering
 mid-call; 502 is any other OBS or camera failure, with the reason as the
 detail.
 
@@ -78,6 +84,7 @@ from webapp.freight import _local_only
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "live"))
 import obsctl as _obsctl          # noqa: E402
 import show_flow as _show_flow    # noqa: E402
+import show_music as _show_music  # noqa: E402
 
 router = APIRouter(dependencies=[Depends(_local_only)])
 
@@ -102,6 +109,10 @@ class HoldRequest(BaseModel):
 
 class Tg7Request(BaseModel):
     action: Literal["start", "stop"]
+
+
+class WbRequest(BaseModel):
+    preset: str | None = None  # an alias (show_flow.WB_ALIASES) or a camera label; none: read it
 
 
 @contextmanager
@@ -130,7 +141,7 @@ def pager_page() -> str:
 @router.get("/api/pager")
 def pager_state() -> dict:
     with _obs() as c:
-        return _show_flow.state(c)
+        return {**_show_flow.state(c), "music": _show_music.state(c)}
 
 
 @router.get("/api/pager/preview.jpg")
@@ -162,11 +173,27 @@ def pager_standin(req: StandinRequest) -> dict:
         return _show_flow.state(c)
 
 
+# Not under show_flow's lock: a fade never touches the camera or the page, so
+# it can run during a refocus. The pager disables the button while one runs.
+@router.post("/api/pager/music")
+def pager_music(req: HoldRequest) -> dict:  # {"on": bool}
+    with _obs() as c:
+        r = _show_music.set_on(c, req.on)
+        return {**_show_music.state(c), "fade": r}
+
+
 @router.post("/api/pager/refocus")
 def pager_refocus() -> dict:
     with _obs() as c:
         r = _show_flow.refocus(c)
         return {**_show_flow.state(c), "refocus": r}
+
+
+@router.post("/api/pager/wb")
+def pager_wb(req: WbRequest) -> dict:
+    with _obs() as c:
+        r = _show_flow.wb(c, req.preset)
+        return {**_show_flow.state(c), "wb": r}
 
 
 @router.post("/api/pager/reconnect")
@@ -215,7 +242,8 @@ def pager_tg7(req: Tg7Request) -> dict:
 # Hold / release / step join the same queue, so a step pressed during a
 # switch lands after it, never before.
 # Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
-# Space step, R refocus, C reconnect cameras.
+# Space step, R refocus, C reconnect cameras, M music on/off. Keys are ignored
+# while the white balance list has focus (its own letters pick a preset).
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -227,6 +255,7 @@ PAGE_HTML = """<!doctype html>
   :root { --bg:#161616; --panel:#202020; --ink:#ececea; --muted:#9a9994; --line:#333;
           --on:#2f9e66; --on-ink:#fff; --live:#ef5350; --warn:#e0a040; } }
 * { box-sizing:border-box; }
+[hidden] { display:none !important; }  /* else .row's flex shows a hidden #wbrow */
 body { margin:0; background:var(--bg); color:var(--ink);
        font:16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width:560px; margin:0 auto; padding:20px 16px 40px; }
@@ -249,7 +278,8 @@ button { font:inherit; color:inherit; cursor:pointer; }
 .page.pending { border-color:var(--on); border-style:dashed; }
 .row button:disabled, .go:disabled, #standin:disabled { opacity:.55; cursor:wait; }
 .row { display:flex; gap:12px; margin-top:12px; }
-.row button { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel); }
+.row button, .row select { flex:1; padding:14px; border-radius:12px; border:1px solid var(--line); background:var(--panel);
+                           font:inherit; color:inherit; }
 .row button.on { background:var(--warn); border-color:var(--warn); color:#fff; }
 h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:22px 2px 8px; }
 .dests { display:grid; gap:10px; }
@@ -259,6 +289,8 @@ h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 .dest.live { border-color:var(--live); } .dest.live small { color:var(--live); font-weight:600; }
 .dest .go { padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-width:86px; }
 .dest.live .go { background:var(--live); border-color:var(--live); color:#fff; }
+#music.on { border-color:var(--on); } #music.on small { color:var(--on); font-weight:600; }
+#music.on .go { background:var(--on); border-color:var(--on); color:var(--on-ink); }
 .opt { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--muted); }
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
@@ -302,11 +334,23 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
 <div class="row"><button id="refocus">Refocus <small>(R)</small></button>
   <button id="reconnect">Reconnect cameras <small>(C)</small></button>
   <button id="tg7">TG-7 feed</button></div>
+<div class="row" id="wbrow"><select id="wb" aria-label="Set the D5100 white balance to">
+    <option value="" selected disabled>Set D5100 WB to...</option>
+    <option value="auto">Auto</option><option value="daylight">Daylight</option>
+    <option value="cloudy">Cloudy</option><option value="shade">Shade</option>
+    <option value="tungsten">Tungsten</option><option value="fluorescent">Fluorescent</option>
+    <option value="flash">Flash</option></select>
+  <button id="wbset">Set</button></div>
 <h2>Streams</h2>
 <div class="dests">
   <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
     <button class="go">Start</button></div>
   <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
+    <button class="go">Start</button></div>
+</div>
+<h2>Music</h2>
+<div class="dests">
+  <div class="dest" id="music"><span><b>Background music</b><small class="st">...</small></span>
     <button class="go">Start</button></div>
 </div>
 <label class="opt"><input type="checkbox" id="standin"> D5100 stand-in: white panel in the item view, no refocus (dead battery, rehearsal)</label>
@@ -337,7 +381,7 @@ function show(st) {
   badge.classList.toggle('live', !!st.live);
   $('#monitor').classList.toggle('live', !!st.live);
   $('#shottitle').textContent = st.live ? 'On air' : 'Program (off air)';
-  for (const el of document.querySelectorAll('.dest')) {
+  for (const el of document.querySelectorAll('.dest[data-dest]')) {
     const s = (st.streams || {})[el.dataset.dest] || {};
     el.classList.toggle('live', !!s.live);
     el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
@@ -350,11 +394,14 @@ function show(st) {
   // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
   $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
+  $('#wbrow').hidden = !!st.standin;  // the D5's, not the TG-7's
+  $('#wbset').disabled = wbBusy || !!st.refocusing;
+  if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
                            ' \\u00b7 TG-7 feed: ' + (st.tg7_status || '?') +
-                           (st.refocusing ? ' \\u00b7 refocusing' : '');
+                           (st.refocusing ? ' \\u00b7 D5100 busy (refocus, WB or still)' : '');
 }
 
 // Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
@@ -374,6 +421,28 @@ async function api(method, path, body, ms) {
   return data;
 }
 
+let musicBusy = false;
+
+function showMusic(m) {
+  const el = $('#music'), go = el.querySelector('.go');
+  el.classList.toggle('on', !!m.on);
+  el.querySelector('.st').textContent = !m.ready ? 'not set up: run show_music.py setup'
+    : m.on ? 'playing' + (m.track ? ': ' + m.track : '') + ' (' + m.db + ' dB)' : 'off';
+  go.textContent = m.on ? 'Stop' : 'Start';
+  go.disabled = musicBusy || !m.ready;
+}
+
+// Fades run on their own flag, so a fade never blocks a page switch.
+async function music() {
+  if (musicBusy) return;
+  const on = !$('#music').classList.contains('on');
+  musicBusy = true; $('#music .go').disabled = true;
+  say(on ? 'Fading music in...' : 'Fading music out...');
+  try { const m = await api('POST', '/api/pager/music', { on }, 15000); musicBusy = false; showMusic(m);
+        say(on ? 'Music on.' : 'Music off.'); }
+  catch (e) { musicBusy = false; $('#music .go').disabled = false; say(e.message, 'err'); }
+}
+
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
 const ASK = {
   'twitch start': 'Go live on Twitch? It is public the moment it connects.',
@@ -382,7 +451,7 @@ const ASK = {
   'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
 };
 
-function streamButtons(on) { document.querySelectorAll('.go').forEach(b => b.disabled = on); }
+function streamButtons(on) { document.querySelectorAll('.dest[data-dest] .go').forEach(b => b.disabled = on); }
 
 async function stream(dest) {
   if (streaming) return;
@@ -414,7 +483,7 @@ function switched(page, st) {
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
   else if (D5_PAGES.includes(page) && st.refocusing)
-    say('On air: ' + LABEL[page] + '. The D5100 is still refocusing: its picture is frozen for a few seconds.', 'warn');
+    say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus, WB or still): its picture is frozen for a few seconds.', 'warn');
   else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
     say('On air: ' + LABEL[page] + ', but the D5100 feed is ' + st.feed_status + '.', 'warn');
   else say('On air: ' + LABEL[page] + '.');
@@ -490,6 +559,21 @@ async function refocus() {
   refocusing = false; $('#refocus').disabled = false;
 }
 
+let wbBusy = false;
+async function setWb() {
+  const preset = $('#wb').value;
+  if (wbBusy) return;
+  if (!preset) return say('Pick a white balance to set first.', 'warn');
+  wbBusy = true; $('#wbset').disabled = true; epoch++;
+  say('Setting the D5100 white balance (about 5 s; a D5100 view hides behind Next)...');
+  try { const st = await api('POST', '/api/pager/wb', { preset }, 60000);
+        wbBusy = false;
+        if (!switching) show(st);
+        say('D5100 white balance: ' + st.wb.wb + (st.wb.changed ? '.' : ' (already).')); }
+  catch (e) { say('White balance failed: ' + e.message.replace(/^wb failed: /, ''), 'err'); }
+  wbBusy = false; $('#wbset').disabled = false;
+}
+
 let reconnecting = false;
 async function reconnect() {
   if (reconnecting) return;
@@ -554,9 +638,11 @@ frame();
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
 $('#reconnect').addEventListener('click', reconnect);
+$('#wbset').addEventListener('click', setWb);
 $('#hold').addEventListener('click', holdKey);
 $('#step').addEventListener('click', () => go('@step'));
 $('#tg7').addEventListener('click', tg7);
+$('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
   standinBusy = true; e.target.disabled = true; epoch++;
@@ -566,16 +652,17 @@ $('#standin').addEventListener('change', async e => {
   catch (err) { e.target.checked = !on; say('Stand-in ' + (on ? 'on' : 'off') + ' failed: ' + err.message, 'err'); }
   standinBusy = false; e.target.disabled = false;
 });
-document.querySelectorAll('.dest').forEach(el =>
+document.querySelectorAll('.dest[data-dest]').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.target.tagName === 'SELECT') return;
   const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam', '6': 'closeup',
               '7': 'multi' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
   else if (e.key === 'c' || e.key === 'C') reconnect();
   else if (e.key === 'h' || e.key === 'H') holdKey();
   else if (e.key === ' ') { e.preventDefault(); go('@step'); }  // not also a click on a focused button
+  else if (e.key === 'm' || e.key === 'M') music();
 });
 poll();
 </script>

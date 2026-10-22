@@ -129,5 +129,5 @@ frames.
   camera is off.
 - `look` shows Up Next or the intro card: put a camera page up first
   (`page item` or `page closeup`).
-- `a D5100 refocus or still is already running`: the pager or another
-  session is using the camera. Wait 5 to 10 s and retry.
+- `a D5100 refocus, WB change or still is already running`: the pager
+  or another session is using the camera. Wait 5 to 10 s and retry.
