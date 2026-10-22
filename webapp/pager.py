@@ -338,12 +338,13 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
 <div class="row"><button id="refocus">Refocus <small>(R)</small></button>
   <button id="reconnect">Reconnect cameras <small>(C)</small></button>
   <button id="tg7">TG-7 feed</button></div>
-<div class="row" id="wbrow"><select id="wb" aria-label="D5100 white balance">
-    <option value="auto">Auto WB</option><option value="daylight">Daylight</option>
+<div class="row" id="wbrow"><select id="wb" aria-label="Set the D5100 white balance to">
+    <option value="" selected disabled>Set D5100 WB to...</option>
+    <option value="auto">Auto</option><option value="daylight">Daylight</option>
     <option value="cloudy">Cloudy</option><option value="shade">Shade</option>
     <option value="tungsten">Tungsten</option><option value="fluorescent">Fluorescent</option>
     <option value="flash">Flash</option></select>
-  <button id="wbset">Set D5100 WB</button></div>
+  <button id="wbset">Set</button></div>
 <h2>Streams</h2>
 <div class="dests">
   <div class="dest" data-dest="ebay"><span><b>eBay</b><small class="st">off</small></span>
@@ -404,7 +405,7 @@ function show(st) {
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
                            ' \\u00b7 TG-7 feed: ' + (st.tg7_status || '?') +
-                           (st.refocusing ? ' \\u00b7 refocusing' : '');
+                           (st.refocusing ? ' \\u00b7 D5100 busy (refocus or WB)' : '');
 }
 
 // Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
@@ -486,7 +487,7 @@ function switched(page, st) {
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
   else if (D5_PAGES.includes(page) && st.refocusing)
-    say('On air: ' + LABEL[page] + '. The D5100 is still refocusing: its picture is frozen for a few seconds.', 'warn');
+    say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus or WB): its picture is frozen for a few seconds.', 'warn');
   else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
     say('On air: ' + LABEL[page] + ', but the D5100 feed is ' + st.feed_status + '.', 'warn');
   else say('On air: ' + LABEL[page] + '.');
@@ -564,8 +565,9 @@ async function refocus() {
 
 let wbBusy = false;
 async function setWb() {
-  if (wbBusy) return;
   const preset = $('#wb').value;
+  if (wbBusy) return;
+  if (!preset) return say('Pick a white balance to set first.', 'warn');
   wbBusy = true; $('#wbset').disabled = true; epoch++;
   say('Setting the D5100 white balance (about 5 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/wb', { preset }, 60000);
