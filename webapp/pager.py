@@ -6,7 +6,7 @@ page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
     GET  /api/pager             what's on air
-    POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam", "refocus": false}
+    POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
     POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
@@ -36,12 +36,13 @@ A switch to `next` also carries `window: {"title", "shown"}`: the Up Next
 window is shown only when its live title is a public eBay / Pop's Games
 page (show_flow.SAFE_WINDOW) and not a private one (PRIVATE_WINDOW);
 otherwise card + webcam only. Every other page hides the window.
-`webcam` is the fallback page: the webcam alone, no D5100.
+`webcam` is the fallback page: the webcam alone, no D5100. `multi` shows
+the D5100, the webcam and the desktop page's window at once.
 
 A page switch is one OBS scene switch (300 ms fade) and never touches the
 camera, so it answers at once, even while a refocus runs (`refocusing`
 in the state). Refocus is its own call, POST /api/pager/refocus (on the item
-view it hides behind Up Next for ~5 s); `{"page": "item", "refocus": true}`
+or multi view it hides behind Up Next for ~5 s); `{"page": "item", "refocus": true}`
 refocuses first, behind the current page. `focused: false` means the
 D5100's autofocus couldn't lock (nothing with contrast at the center of the
 frame); focus is unchanged. A refocus while another is running (shell or
@@ -85,8 +86,8 @@ class StreamRequest(BaseModel):
 
 
 class PageRequest(BaseModel):
-    page: Literal["intro", "item", "closeup", "next", "desktop", "webcam"]
-    refocus: bool = False  # true: item refocuses the D5100 first, behind the current page (~5 s)
+    page: Literal["intro", "item", "closeup", "next", "desktop", "webcam", "multi"]
+    refocus: bool = False  # true: item/multi refocus the D5100 first, behind the current page (~5 s)
 
 
 class HoldRequest(BaseModel):
@@ -198,7 +199,7 @@ def pager_tg7(req: Tg7Request) -> dict:
 # click is never blocked by a refocus or a stream start in flight.
 # Hold / release / step join the same queue, so a step pressed during a
 # switch lands after it, never before.
-# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, H hold/release,
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
 # Space step, R refocus, C reconnect cameras.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -263,6 +264,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
     <span><b>Desktop</b><small>Desktop with face cam: app window + webcam</small></span></button>
   <button class="page" data-page="webcam"><span class="key">5</span>
     <span><b>Webcam only</b><small>Fallback: face cam + mic, no D5100</small></span></button>
+  <button class="page" data-page="multi"><span class="key">7</span>
+    <span><b>Multi view</b><small>D5100 + webcam + desktop window, all at once</small></span></button>
 </div>
 <div class="row"><button id="hold">Hold still <small>(H)</small></button>
   <button id="step">Step <small>(Space)</small></button></div>
@@ -283,7 +286,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
 <script>
 const $ = s => document.querySelector(s), buttons = [...document.querySelectorAll('.page')];
 const LABEL = { intro: 'Intro', item: 'Item', closeup: 'Close-up', next: 'Next', desktop: 'Desktop',
-                webcam: 'Webcam only', hold: 'Hold' };
+                webcam: 'Webcam only', multi: 'Multi view', hold: 'Hold' };
+const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
 // Hold, release and step ride the page queue as actions: one at a time, in order.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
                  '@step': ['/api/pager/step', null] };
@@ -377,10 +381,10 @@ function switched(page, st) {
   else if (sw.window && !sw.window.shown)
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
-  else if (page === 'item' && st.refocusing)
-    say('On air: Item. The D5100 is still refocusing: its picture is frozen for a few seconds.', 'warn');
-  else if (page === 'item' && !st.standin && st.feed_status !== 'running')
-    say('On air: Item, but the D5100 feed is ' + st.feed_status + '.', 'warn');
+  else if (D5_PAGES.includes(page) && st.refocusing)
+    say('On air: ' + LABEL[page] + '. The D5100 is still refocusing: its picture is frozen for a few seconds.', 'warn');
+  else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
+    say('On air: ' + LABEL[page] + ', but the D5100 feed is ' + st.feed_status + '.', 'warn');
   else say('On air: ' + LABEL[page] + '.');
 }
 
@@ -445,7 +449,7 @@ async function refocus() {
   if (refocusing || $('#refocus').hidden) return;
   refocusing = true; $('#refocus').disabled = true; epoch++;
   say(curPage === 'closeup' ? 'TG-7 autofocus...'
-                            : 'Refocusing the D5100 (about 5 s; the item view hides behind Next)...');
+                            : 'Refocusing the D5100 (about 5 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/refocus', null, 60000);
         refocusing = false;
         if (!switching) show(st);
@@ -500,7 +504,8 @@ document.querySelectorAll('.dest').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam', '6': 'closeup' }[e.key];
+  const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam', '6': 'closeup',
+              '7': 'multi' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
   else if (e.key === 'c' || e.key === 'C') reconnect();
   else if (e.key === 'h' || e.key === 'H') holdKey();
