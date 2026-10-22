@@ -18,13 +18,16 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
           white under the webcam strip; `setup --desktop-window` picks it.
   webcam  scene "Webcam Only": the fallback. The webcam alone, filling the
           frame, with the mic. Never touches the D5100.
+  multi   scene "Multi View": everything at once. The D5100 (left) and the
+          webcam (right) side by side in the top 1080x810, the desktop
+          page's window under them. Built with the desktop page.
 
 Every `page` is one scene switch (300 ms fade): it never waits for the
 camera. `page next` fades to Up Next while the host swaps the item on the
 podium; `page item` fades straight back. Refocusing is its own command,
-`refocus` (key R on the pager page): on the item view it covers the camera
-with Up Next for the ~5 s freeze (the camera takes one USB connection: live
-view has to stop, autofocus, restart), then fades back. `page item
+`refocus` (key R on the pager page): on the item or multi view it covers
+the camera with Up Next for the ~5 s freeze (the camera takes one USB
+connection: live view has to stop, autofocus, restart), then fades back. `page item
 --refocus` does both in one go, refocusing behind the current page first.
 A failed refocus never leaves the D5 feed stopped. On the closeup page,
 `refocus` is the TG-7's half-press instead: its live view keeps running, so
@@ -50,7 +53,7 @@ cameras button) reopens the D5 and the webcam by hand.
     python tools/live/show_flow.py feed start|stop|status
     python tools/live/show_flow.py reconnect [d5|webcam]  # OBS reopens a black/frozen camera
     python tools/live/show_flow.py tg7 start|stop|status   # TG-7 live view -> OBS (tg7cam stream)
-    python tools/live/show_flow.py page intro|item|closeup|next|desktop|webcam [--json] [--refocus]
+    python tools/live/show_flow.py page intro|item|closeup|next|desktop|webcam|multi [--json] [--refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py hold [--json]     # freeze the camera page on air
@@ -116,9 +119,12 @@ INTRO, PRODUCT, UPNEXT = "Intro", "eBay Main", "Up Next"
 CLOSEUP = "Close-up"
 DESKTOP = "Desktop with Face Cam"
 WEBCAM_ONLY = "Webcam Only"
+MULTI = "Multi View"
 # The pager's pages, in running order: what callers say -> OBS scene name.
 PAGES = {"intro": INTRO, "item": PRODUCT, "closeup": CLOSEUP, "next": UPNEXT,
-         "desktop": DESKTOP, "webcam": WEBCAM_ONLY}
+         "desktop": DESKTOP, "webcam": WEBCAM_ONLY, "multi": MULTI}
+# Pages with the D5100 on air: a refocus there hides behind Up Next.
+D5_PAGES = {"item": PRODUCT, "multi": MULTI}
 D5, WEBCAM, WINDOW, MIC = "Nikon D5100", "Webcam", "Window Capture (Xcomposite)", "Mic/Aux"
 
 # The OM TG-7 close-up camera, over its own Wi-Fi (tools/live/tg7cam). Its
@@ -218,6 +224,9 @@ WEBCAM_BOX = {"positionX": 0, "positionY": 0, "alignment": 5, "rotation": 0,
 WEBCAM_ONLY_BOX = {"positionX": 0, "positionY": 0, "alignment": 5,
                    "boundsType": "OBS_BOUNDS_SCALE_OUTER", "boundsWidth": W, "boundsHeight": 1350,
                    "cropToBounds": True}
+# the multi page: the top row's height. Each camera gets half the width, so
+# 540x810 is 2:3, the D5's live view (640x426) on its side, uncropped.
+MULTI_ROW = 810
 
 
 # --- OBS helpers -------------------------------------------------------------
@@ -638,6 +647,7 @@ def cmd_setup(c, a):
 
     if a.desktop_window or DESKTOP_WIN in inputs:
         build_desktop(c, a.desktop_window, a.desktop_crop_left)
+        build_multi(c, a.d5_rotation, a.desktop_crop_left)
 
     build_closeup(c, a.tg7_rotation)
     build_hold(c)
@@ -930,6 +940,35 @@ def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> 
     stack(c, DESKTOP, [STANDIN, DESKTOP_WIN, WEBCAM])
 
 
+def build_multi(c, d5_rotation: float = 270, crop_left: int | None = None) -> None:
+    """The multi page: the D5100 and the webcam side by side in the top
+    MULTI_ROW, each cover-cropped into half the width, and DESKTOP_WIN (the
+    desktop page's window, so build_desktop first) full width under them,
+    hung from the row. The D5 follows the stand-in, like the item view."""
+    if MULTI not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        c.call("CreateScene", {"sceneName": MULTI})
+    w, h = W / 2, MULTI_ROW
+    if d5_rotation % 180:  # mounted on its side: the bounds turn with it
+        w, h = h, w
+    set_box(c, MULTI, BG)
+    set_box(c, MULTI, D5, {"positionX": W / 4, "positionY": MULTI_ROW / 2, "alignment": 0,
+                           "rotation": d5_rotation, "boundsType": "OBS_BOUNDS_SCALE_OUTER",
+                           "boundsAlignment": 0, "boundsWidth": w, "boundsHeight": h,
+                           "cropToBounds": True}, enabled=not standin_on(c))
+    set_box(c, MULTI, WEBCAM, {"positionX": W * 3 / 4, "positionY": MULTI_ROW / 2, "alignment": 0,
+                               "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_OUTER",
+                               "boundsAlignment": 0, "boundsWidth": W / 2, "boundsHeight": MULTI_ROW,
+                               "cropToBounds": True})
+    box = {"positionX": W / 2, "positionY": MULTI_ROW, "alignment": 4, "rotation": 0,  # 4: top center
+           "scaleX": 1, "scaleY": 1, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 4,
+           "boundsWidth": W, "boundsHeight": H - MULTI_ROW}
+    if crop_left is not None:
+        box["cropLeft"] = crop_left
+    set_box(c, MULTI, DESKTOP_WIN, box)
+    item(c, MULTI, MIC)
+    stack(c, MULTI, [BG, D5, WEBCAM, DESKTOP_WIN])
+
+
 def build_closeup(c, rotation: float = 0) -> None:
     """The closeup page: the TG-7 cover-cropped into the canvas below the
     webcam strip, on the dark background. The source matches the feed's
@@ -995,13 +1034,16 @@ def standin(c, on: bool) -> None:
                 enabled=on)
         stack(c, PRODUCT, [STANDIN, D5, WEBCAM])
     set_box(c, PRODUCT, D5, enabled=not on)
+    if MULTI in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        set_box(c, MULTI, D5, enabled=not on)  # the multi page's D5 slot goes dark
 
 
 def _no_scene(e: obsctl.ObsError, page: str) -> obsctl.ObsError:
     """OBS's "code 600" (not found) on a page's scene, said plainly."""
     if "code 600" in str(e):
+        how = "setup --desktop-window <title>" if page in ("desktop", "multi") else "setup"
         return obsctl.ObsError(f"OBS has no scene {PAGES[page]!r} for the {page} page "
-                               f"(collection {COLLECTION!r}); run `show_flow.py setup`")
+                               f"(collection {COLLECTION!r}); run `show_flow.py {how}`")
     return e
 
 
@@ -1009,7 +1051,7 @@ def go(c, page: str, refocus: bool = False) -> dict:
     """Put a page on air: one scene switch with OBS's 300 ms fade. No camera
     work and no lock, so it never waits behind a refocus.
 
-    refocus=True (item only) refocuses the D5100 first, while the current
+    refocus=True (item and multi) refocuses the D5100 first, while the current
     page still hides it. If that fails, the feed is left running and the
     current page stays on air (the error says why). If someone switches page
     during that refocus, their switch wins and this one isn't made
@@ -1030,7 +1072,7 @@ def go(c, page: str, refocus: bool = False) -> dict:
             hide_window(c, scene)
     except obsctl.ObsError as e:
         raise _no_scene(e, page) from e
-    if page == "item" and refocus and not standin_on(c):
+    if page in D5_PAGES and refocus and not standin_on(c):
         with exclusive():
             out["focused"], secs = refocus_d5(c)
         out["refocus_s"] = round(secs, 1)
@@ -1047,10 +1089,11 @@ def go(c, page: str, refocus: bool = False) -> dict:
 
 
 def refocus(c) -> dict:
-    """Refocus the D5100 without changing page. If the item view is on air
-    it hides behind Up Next for the ~5 s the camera is frozen, then fades
-    back to item, also when the refocus fails (the feed is left running),
-    but not if someone switched page meanwhile: that page stays.
+    """Refocus the D5100 without changing page. If a page showing it (item,
+    multi) is on air it hides behind Up Next for the ~5 s the camera is
+    frozen, then fades back to that page, also when the refocus fails (the
+    feed is left running), but not if someone switched page meanwhile: that
+    page stays.
 
     On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
     no lock, no cover, the D5 is left alone."""
@@ -1059,7 +1102,8 @@ def refocus(c) -> dict:
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
     with exclusive():
-        hide = program(c) == PRODUCT
+        back = program(c)
+        hide = back in D5_PAGES.values()
         if hide:
             guard_window(c)
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
@@ -1070,7 +1114,7 @@ def refocus(c) -> dict:
             raise obsctl.ObsError(f"refocus failed: {e}") from e
         finally:
             if hide and program(c) == UPNEXT:
-                c.call("SetCurrentProgramScene", {"sceneName": PRODUCT})
+                c.call("SetCurrentProgramScene", {"sceneName": back})
         return {"focused": locked, "refocus_s": round(secs, 1)}
 
 
@@ -1250,10 +1294,10 @@ def cmd_status(c, a):
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("setup", help="build/refresh the intro, item, next and webcam pages")
+    s = sub.add_parser("setup", help="build/refresh the pages (desktop and multi need --desktop-window once)")
     s.add_argument("--window", help="title substring of the desktop window for Up Next")
     s.add_argument("--intro-text", default="Starting\nsoon", help="the pre-show card's text; \\n breaks a line")
-    s.add_argument("--desktop-window", help="title substring of the app window for the desktop page")
+    s.add_argument("--desktop-window", help="title substring of the app window for the desktop and multi pages")
     s.add_argument("--desktop-crop-left", type=int, help="source pixels to trim off that window's left")
     s.add_argument("--d5-rotation", type=float, default=270, help="D5100 mounted on its side: 270")
     s.add_argument("--tg7-rotation", type=float, default=0, help="TG-7 on its side: 90 or 270")
@@ -1269,7 +1313,7 @@ def main(argv=None) -> int:
     s.add_argument("page", choices=list(PAGES))
     s.add_argument("--json", action="store_true")
     s.add_argument("--refocus", action="store_true",
-                   help="item: refocus the D5 first, hidden behind the current page (~5 s)")
+                   help="item, multi: refocus the D5 first, hidden behind the current page (~5 s)")
     s.add_argument("--no-refocus", action="store_true", help=argparse.SUPPRESS)  # now the default
     s.set_defaults(fn=cmd_page)
     sub.add_parser("next", help="= page next").set_defaults(fn=cmd_page, page="next", json=False,
@@ -1292,7 +1336,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("standin", help="white panel instead of the D5100 in the item view")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn=cmd_standin)
-    s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item is on air)")
+    s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item/multi is on air)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)
     s = sub.add_parser("golive", help="start one destination (the other keeps running)")

@@ -260,7 +260,10 @@ the system Python: `python -m lib.cli serve` under system Python fails.
 **desktop** = scene `Desktop with Face Cam`, an app window such as Claude on
 white under the webcam, comes with `--desktop-window "<title>"`; `standin
 on|off` swaps the D5100 for a white panel when its battery is dead, and a
-later `setup` leaves it as it was). `--window` must name a window that is
+later `setup` leaves it as it was; a fifth, **multi** = scene `Multi View`,
+comes with it: the D5100 and the webcam side by side in the top 1080x810
+(each 540x810, the D5's on-its-side live view uncropped), that same app
+window full width under them). `--window` must name a window that is
 still open: OBS's window list keeps closed ones, and setup refuses them.
 **webcam** (scene `Webcam Only`) is the fallback page: the webcam alone,
 cover-cropped to the top 1080x1350 of the dark background, with the mic. It
@@ -292,7 +295,7 @@ The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
 the repo venv) has a control page at
 http://localhost:8770/pager: one button per page, Hold and Step buttons, a
 Refocus button, a TG-7 feed button, the LIVE timer, both feeds' status, and
-keys 1-6 (intro, item, next, desktop, webcam, close-up), H (hold/release),
+keys 1-7 (intro, item, next, desktop, webcam, close-up, multi), H (hold/release),
 Space (step) and R. The same pager is served as JSON for other
 pages or agents:
 `GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
