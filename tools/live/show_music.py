@@ -69,7 +69,9 @@ LICENSE_NOTE = (
     "https://holiznacc0.bandcamp.com: \"I am dedicating my archive of music to the creative\n"
     "commons via CC0 ... you are not required to credit me either!\"\n")
 
-# The folk preset: the sound-editor's running order (2026-10-22), all CC0 1.0.
+# The folk preset: the sound-editor's final running order (2026-10-22), all CC0 1.0.
+# Dropped on measurements: Spell me your love (swings ~12 LU throughout), Blood
+# in the fridge (bright noise layer), and the album tracks with big swells.
 # FMA is the license of record for Monplaisir (the archive.org copy of Fifty
 # Seconds was uploaded by another account); the Wayback snapshots date it.
 FOLK_SOURCES = {
@@ -96,19 +98,23 @@ FOLK = [  # (title, source, file under src/<source dir>/, download name if diffe
     ("Hélice", "bonjour", _B + "01 Hélice.mp3", None),
     ("Skysand", "fifty", _F + "04 Skysand.mp3", None),
     ("Ce flou entre nous", "bonjour", _B + "05 Ce flou entre nous.mp3", None),
+    ("Improvisation n°8818", "bonjour", _B + "03 Improvisation n°8818.mp3", None),
     ("Close to you", "fifty", _F + "02 Close to you.mp3", None),
     ("Un creux loin", "bonjour", _B + "14 Un creux loin.mp3", None),
     ("Sun Cave Village", "leviathan", "03-0x2A723-Sun_Cave_Village.ogg", "03-0x2a723-sun_cave_village_1.ogg"),
     ("Waves", "fifty", _F + "06 Waves.mp3", None),
+    ("Improvisation n°807713", "bonjour", _B + "08 Improvisation n°807713.mp3", None),
     ("Juillet", "bonjour", _B + "06 Juillet.mp3", None),
-    ("Spell me your love", "fifty", _F + "05 Spell me your love.mp3", None),
     ("Dormir rien de plus", "bonjour", _B + "04 Dormir rien de plus.mp3", None),
+    ("Improvisation n°15978", "bonjour", _B + "11 Improvisation n°15978.mp3", None),
+    ("Narcissus smells like headache", "fifty", _F + "03 Narcissus smells like headache.mp3", None),
     ("Moon Cave", "leviathan", "05-0x2A725-Moon_Cave.ogg", "05-0x2a725-moon_cave.ogg"),
     ("Se recourber", "bonjour", _B + "16 Se recourber.mp3", None),
-    ("Narcissus smells like headache", "fifty", _F + "03 Narcissus smells like headache.mp3", None),
-    ("Blood in the fridge", "bonjour", _B + "07 Blood in the fridge.mp3", None),
     ("Poing Dauphin", "bonjour", _B + "12 Poing Dauphin.mp3", None),
+    ("Improvisation n°5077153", "bonjour", _B + "13 Improvisation n°5077153.mp3", None),  # leads back into Hélice
 ]
+# Tracks faded out early (seconds): Un creux loin's last fifth drops to about -22 LUFS.
+FOLK_CUT = {"Un creux loin": 175}
 
 PLAYING = "OBS_MEDIA_STATE_PLAYING"
 ACTION = "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_"
@@ -183,14 +189,15 @@ def plan(items: list[tuple[str, float]], xfade: float = XFADE_S) -> list[dict]:
     return out
 
 
-def track_filter(preset: str) -> str:
+def track_filter(preset: str, cut_s: float | None = None) -> str:
     """One track's chain: level it, and for acoustic presets trim the silent ends
-    and tame the plucked attacks."""
+    and tame the plucked attacks. `cut_s` ends the track there with a 4 s fade."""
+    cut = f"atrim=end={cut_s},afade=t=out:st={cut_s - 4}:d=4," if cut_s else ""  # on the original timeline
     level = f"loudnorm={PRESETS[preset]['loudness']},aresample=48000"
     if not PRESETS[preset]["acoustic"]:
-        return level
+        return cut + level
     trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.3"
-    return (f"aresample=48000,aformat=channel_layouts=stereo,{trim},areverse,{trim},areverse,"
+    return (f"{cut}aresample=48000,aformat=channel_layouts=stereo,{trim},areverse,{trim},areverse,"
             f"{level},acompressor=ratio=2:threshold=-24dB:attack=20:release=250")
 
 
@@ -233,9 +240,10 @@ def build(preset: str, music_dir: Path = MUSIC_DIR) -> dict:
     work.mkdir(parents=True, exist_ok=True)
     try:
         parts = []  # each track levelled on its own, so its real length is known
-        for i, (p, _) in enumerate(found):
+        for i, (p, title) in enumerate(found):
             part = work / f"{i:02d}.wav"
-            subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(p), "-af", track_filter(preset),
+            cut = FOLK_CUT.get(title) if preset == "folk" else None
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(p), "-af", track_filter(preset, cut),
                             "-ac", "2", "-c:a", "pcm_s16le", str(part)], check=True)
             parts.append(part)
         order = plan([(title, duration(part)) for part, (_, title) in zip(parts, found)])

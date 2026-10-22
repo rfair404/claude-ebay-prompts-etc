@@ -115,6 +115,7 @@ def test_acoustic_presets_trim_and_compress_each_track_lofi_only_levels():
     assert SM.track_filter("lofi").startswith("loudnorm=I=-16") and "acompressor" not in SM.track_filter("lofi")
     folk = SM.track_filter("folk")
     assert "silenceremove" in folk and "areverse" in folk and "loudnorm=I=-18" in folk and "acompressor=ratio=2" in folk
+    assert SM.track_filter("folk", 175).startswith("atrim=end=175,afade=t=out:st=171:d=4,")
 
 
 def test_mix_chains_crossfades_and_limits_only_acoustic():
@@ -128,7 +129,8 @@ def test_mix_chains_crossfades_and_limits_only_acoustic():
 
 def test_folk_plays_in_the_sound_editors_order_and_every_track_has_a_cc0_source(tmp_path):
     order = SM.preset_tracks("folk", tmp_path)
-    assert [t for _, t in order][:3] == ["Hélice", "Skysand", "Ce flou entre nous"] and len(order) == 15
+    assert [t for _, t in order][:3] == ["Hélice", "Skysand", "Ce flou entre nous"] and len(order) == 17
+    assert "Spell me your love" not in [t for _, t in order] and "Blood in the fridge" not in [t for _, t in order]
     assert all(src in SM.FOLK_SOURCES for _, src, _, _ in SM.FOLK)
 
 
