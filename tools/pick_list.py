@@ -84,6 +84,7 @@ import stores                                                       # noqa: E402
 from ebay_client import api_send, EbayAPIError, load_credentials    # noqa: E402
 from sync_actuals import (fetch_orders, load_hand_locations, load_listings_ledger,  # noqa: E402
                           match_sale, scan_drafts)
+from pick_store import repo_relative                                # noqa: E402
 
 OPEN_FILTER = "orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D"
 
@@ -382,8 +383,9 @@ def drop_in_item_folders(order: dict, html: str, drafts: list[dict],
     ever yields paths under inventory/, so nothing reaches that branch today;
     it is here because this is the one place a value out of the ledger becomes
     a file write, and a sheet with a buyer's name on it is not the thing to
-    find out with. lib/pick_store._resolve_source() guards the read side the
-    same way.
+    find out with. The check is lib/pick_store.repo_relative(), which also
+    guards the read side. It treats a linked inventory/ (a worktree's link to
+    the main checkout's) as inside `root`.
     """
     # ROOT read at CALL time, never as a default argument. A default would
     # capture whatever ROOT was at import, which is right in production and
@@ -395,9 +397,7 @@ def drop_in_item_folders(order: dict, html: str, drafts: list[dict],
     written: list[Path] = []
     for folder in item_folders(order, drafts, ledger):
         d = root / folder
-        try:
-            d.resolve().relative_to(root.resolve())
-        except (OSError, ValueError):
+        if repo_relative(d, root=root) is None:
             print(f"  ! refusing to write a pick sheet outside {root.name}/: {folder}")
             continue
         if not d.is_dir():

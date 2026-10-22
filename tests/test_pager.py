@@ -4,6 +4,7 @@ state()/go()/refocus() and webapp/pager.py's /api/pager routes over them.
 OBS is a fake that records scene switches, and the D5100 refocus is stubbed
 (or, for refocus_d5 itself, the feed and gphoto2 are), so nothing here needs
 OBS, the camera, or a stream."""
+import base64
 import os
 import sys
 import time
@@ -40,6 +41,7 @@ class FakeObs:
         self.window_scenes = {"Up Next"}
         self.capture = "62914622\r\nThe Fair Hand \u2014 Mozilla Firefox\r\nNavigator"
         self.missing = set()  # scenes OBS doesn't have
+        self.shots: list[dict] = []  # GetSourceScreenshot requests
 
     def call(self, req, data=None):
         if (data or {}).get("sceneName") in self.missing:
@@ -100,6 +102,9 @@ class FakeObs:
             return {}
         if req == "GetInputSettings":
             return {"inputSettings": {"capture_window": self.capture}}
+        if req == "GetSourceScreenshot":
+            self.shots.append(data)
+            return {"imageData": "data:image/jpg;base64," + base64.b64encode(b"\xff\xd8" + data["sourceName"].encode()).decode()}
         raise AssertionError(f"unexpected request {req}")
 
     def close(self):
@@ -328,6 +333,31 @@ def test_refocus_fails_fast_when_the_camera_is_off(monkeypatch):
     assert calls == [["gphoto2", "--auto-detect"]]
 
 
+def test_preview_is_a_jpeg_of_the_program_scene(client, obs):
+    obs.scene = "eBay Main"
+    r = client.get("/api/pager/preview.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content == b"\xff\xd8eBay Main" and r.headers["cache-control"] == "no-store"
+    assert obs.shots == [{"sourceName": "eBay Main", "imageFormat": "jpg",
+                          "imageWidth": 360, "imageCompressionQuality": 60}]
+    assert obs.switches == [] and obs.refocused == [] and obs.closed
+
+
+def test_preview_never_waits_on_a_refocus(client, obs, monkeypatch):
+    monkeypatch.setattr(SF, "LOCK_WAIT", 0)
+    with SF.exclusive():
+        assert client.get("/api/pager/preview.jpg").status_code == 200
+
+
+def test_preview_is_local_only_and_says_when_obs_cannot_render(client, obs, monkeypatch):
+    assert client.get("/api/pager/preview.jpg", headers={"host": "evil.example"}).status_code == 403
+    def no_picture(c, data=None):
+        raise obsctl.ObsError("GetSourceScreenshot failed: code 702 Failed to render screenshot.")
+    monkeypatch.setattr(obs, "call", no_picture)
+    r = client.get("/api/pager/preview.jpg")
+    assert r.status_code == 502 and "702" in r.json()["detail"]
+
+
 def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     r = client.get("/pager")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
@@ -346,6 +376,9 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     assert "AbortController" in r.text and "refocuses first" not in r.text
     assert "{ page }" in r.text and "refocus: true" not in r.text  # the page never asks for a refocus switch
     assert "if (busy)" not in r.text
+    # the On-air preview: one frame at a time, nothing while hidden or switched off
+    assert "/api/pager/preview.jpg" in r.text and 'id="shottoggle"' in r.text
+    assert "setTimeout(frame, 500)" in r.text and "previewOn && !document.hidden" in r.text
 
 
 # --- the Up Next window guard ----------------------------------------------

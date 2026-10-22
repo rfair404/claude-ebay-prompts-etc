@@ -299,13 +299,15 @@ other page (and `setup`) only hides it.
 
 The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
 the repo venv) has a control page at
-http://localhost:8770/pager: one button per page, Hold and Step buttons,
+http://localhost:8770/pager: a small On-air preview of what OBS is sending
+(its program scene, a few frames a second, no sound; Hide preview turns it
+off), one button per page, Hold and Step buttons,
 Refocus and Reconnect cameras buttons, a TG-7 feed button, the LIVE timer,
 both feeds' status, and keys 1-7 (intro, item, next, desktop, webcam,
 close-up, multi), H (hold/release), Space (step), R (refocus), C
 (reconnect) and M (music, section 7). Page clicks switch at once, even while
 a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
-`GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
+`GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
