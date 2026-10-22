@@ -365,7 +365,7 @@ switch between them mid-show:
   on stream.
 
 ```bash
-python tools/live/show_music.py fetch folk    # once per machine (lofi: ~163 MB, folk: the 15 tracks)
+python tools/live/show_music.py fetch folk    # once per machine (lofi: ~163 MB, folk: the 17 tracks)
 python tools/live/show_music.py build folk    # levelled, crossfaded, looping file (~5 min of ffmpeg)
 python tools/live/show_music.py setup         # OBS: "Show Music" in every page, muted, ducked
 python tools/live/show_music.py use folk      # switch preset: fades out, swaps, fades back in if on
