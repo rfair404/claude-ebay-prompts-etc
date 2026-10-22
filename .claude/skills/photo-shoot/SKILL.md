@@ -47,7 +47,8 @@ python tools/live/obsctl.py launch                  # no-op if OBS is up
 python tools/live/show_flow.py feed start           # D5100 live view (the viewfinder)
 # the TG-7 needs only its Wi-Fi joined for stills; `tg7 start` (live close-up) is a fallback
 python tools/live/show_flow.py setup                # pages; add --window/--desktop-window as live-show says
-python tools/live/shoot.py start [NAME]             # default shoot-YYYYMMDD; same NAME resumes
+python tools/live/shoot.py start [NAME|PATH]        # default shoot-YYYYMMDD; same NAME resumes
+                                                    # PATH: a lot folder, e.g. ES/MON1020-M (items number on after its NN-)
 ```
 
 If Russell says where the batch came from (an estate, a sale, one house),
