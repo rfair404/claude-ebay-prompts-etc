@@ -64,7 +64,7 @@ def test_start_item_capture_done_round_trip(inv, capsys, monkeypatch):
     rc, out, _ = run(capsys, "item", "tin-robot")  # closes the lamp on its way
     assert "done: 01-brass-desk-lamp: 1 frames  (house target 10)" in out and "open: 02-tin-robot" in out
 
-    lamp = (d / "01-brass-desk-lamp" / "shoot_log.md").read_text()
+    lamp = (d / "01-brass-desk-lamp" / "shoot_log.md").read_text(encoding="utf-8")
     for line in ("**Russell:** brass lamp, sticky switch", "capture **D5_1.jpg** (d5) — hero",
                  "renamed from 01", "**Claude:** maker stamp on the base", "done: 1 frames (house target 10)"):
         assert line in lamp
@@ -95,7 +95,7 @@ def test_tg7_capture_flags_a_focus_miss(inv, capsys, monkeypatch):
     run(capsys, "item")
     rc, out, _ = run(capsys, "capture", "tg7")
     assert rc == 0 and "FOCUS DIDN'T LOCK" in out
-    assert "(tg7, focus didn't lock)" in (inv / "s1" / "01" / "shoot_log.md").read_text()
+    assert "(tg7, focus didn't lock)" in (inv / "s1" / "01" / "shoot_log.md").read_text(encoding="utf-8")
 
 
 def test_tg7_unreachable_is_an_error_line(inv, capsys, monkeypatch):
