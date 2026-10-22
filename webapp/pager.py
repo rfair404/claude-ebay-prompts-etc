@@ -10,6 +10,8 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/refocus     refocus the D5100 without changing page
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
+    GET  /api/pager/music       background music: {"ready", "on", "db", "track"}
+    POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
 
@@ -54,11 +56,16 @@ from webapp.freight import _local_only
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "live"))
 import obsctl as _obsctl          # noqa: E402
 import show_flow as _show_flow    # noqa: E402
+import show_music as _show_music  # noqa: E402
 
 router = APIRouter(dependencies=[Depends(_local_only)])
 
 
 class StandinRequest(BaseModel):
+    on: bool
+
+
+class MusicRequest(BaseModel):
     on: bool
 
 
@@ -121,6 +128,21 @@ def pager_standin(req: StandinRequest) -> dict:
         return _show_flow.state(c)
 
 
+@router.get("/api/pager/music")
+def pager_music_state() -> dict:
+    with _obs() as c:
+        return _show_music.state(c)
+
+
+# Not under show_flow's lock: a fade never touches the camera or the page, so
+# it can run during a refocus. show_music has its own lock, one fade at a time.
+@router.post("/api/pager/music")
+def pager_music(req: MusicRequest) -> dict:
+    with _obs() as c:
+        r = _show_music.set_on(c, req.on)
+        return {**_show_music.state(c), "fade": r}
+
+
 @router.post("/api/pager/refocus")
 def pager_refocus() -> dict:
     with _obs() as c:
@@ -131,7 +153,7 @@ def pager_refocus() -> dict:
 # The control page. Plain HTML + fetch against the routes above, same
 # origin, so the guard's Origin check passes. It polls every 2 s, so a
 # switch made from the shell (show_flow.py page ...) shows up here too.
-# Keys: 1 intro, 2 item, 3 next, 4 desktop, R refocus.
+# Keys: 1 intro, 2 item, 3 next, 4 desktop, R refocus, M music on/off.
 PAGE_HTML = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -173,6 +195,8 @@ h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(-
 .dest.live { border-color:var(--live); } .dest.live small { color:var(--live); font-weight:600; }
 .dest .go { padding:9px 16px; border-radius:10px; border:1px solid var(--line); background:var(--bg); min-width:86px; }
 .dest.live .go { background:var(--live); border-color:var(--live); color:#fff; }
+#music.on { border-color:var(--on); } #music.on small { color:var(--on); font-weight:600; }
+#music.on .go { background:var(--on); border-color:var(--on); color:var(--on-ink); }
 .opt { display:flex; gap:8px; align-items:center; margin-top:12px; font-size:14px; color:var(--muted); }
 #msg { min-height:1.4em; margin:16px 2px 0; color:var(--muted); }
 #msg.err { color:var(--live); } #msg.warn { color:var(--warn); }
@@ -198,6 +222,11 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <div class="dest" data-dest="twitch"><span><b>Twitch</b><small class="st">off</small></span>
     <button class="go">Start</button></div>
 </div>
+<h2>Music</h2>
+<div class="dests">
+  <div class="dest" id="music"><span><b>Background music</b><small class="st">...</small></span>
+    <button class="go">Start</button></div>
+</div>
 <label class="opt"><input type="checkbox" id="standin"> D5100 stand-in: white panel in the item view, no refocus (dead battery, rehearsal)</label>
 <p id="msg"></p>
 <footer id="foot"></footer>
@@ -213,7 +242,7 @@ function show(st) {
   const badge = $('#badge');
   badge.textContent = st.live ? 'LIVE ' + (st.timecode || '').split('.')[0] : 'Off air';
   badge.classList.toggle('live', !!st.live);
-  for (const el of document.querySelectorAll('.dest')) {
+  for (const el of document.querySelectorAll('.dest[data-dest]')) {
     const s = (st.streams || {})[el.dataset.dest] || {};
     el.classList.toggle('live', !!s.live);
     el.querySelector('.st').textContent = s.live ? 'LIVE ' + (s.timecode || '').split('.')[0] : 'off';
@@ -234,9 +263,31 @@ async function api(method, path, body) {
   return data;
 }
 
+let musicBusy = false;
+
+function showMusic(m) {
+  const el = $('#music'), go = el.querySelector('.go');
+  el.classList.toggle('on', !!m.on);
+  el.querySelector('.st').textContent = !m.ready ? 'not set up: run show_music.py setup'
+    : m.on ? 'playing' + (m.track ? ': ' + m.track : '') + ' (' + m.db + ' dB)' : 'off';
+  go.textContent = m.on ? 'Stop' : 'Start';
+  go.disabled = musicBusy || !m.ready;
+}
+
+// Fades run on their own (no page lock), so a fade never blocks a page switch.
+async function music() {
+  if (musicBusy) return;
+  const on = !$('#music').classList.contains('on');
+  musicBusy = true; $('#music .go').disabled = true;
+  say(on ? 'Fading music in...' : 'Fading music out...');
+  try { const m = await api('POST', '/api/pager/music', { on }); musicBusy = false; showMusic(m);
+        say(on ? 'Music on.' : 'Music off.'); }
+  catch (e) { musicBusy = false; $('#music .go').disabled = false; say(e.message, 'err'); }
+}
+
 function lock(on) {
   busy = on;
-  buttons.concat($('#refocus'), [...document.querySelectorAll('.go')]).forEach(b => b.disabled = on);
+  buttons.concat($('#refocus'), [...document.querySelectorAll('.dest[data-dest] .go')]).forEach(b => b.disabled = on);
 }
 
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
@@ -297,6 +348,7 @@ async function refocus() {
 async function poll() {
   if (!busy) {
     try { show(await api('GET', '/api/pager'));
+          if (!musicBusy) showMusic(await api('GET', '/api/pager/music'));
           if ($('#msg').textContent.startsWith('OBS')) say(''); }
     catch (e) { $('#badge').textContent = 'No OBS'; $('#badge').classList.remove('live');
                 say('OBS: ' + e.message, 'err'); }
@@ -306,6 +358,7 @@ async function poll() {
 
 buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
+$('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;
   lock(true);
@@ -314,12 +367,13 @@ $('#standin').addEventListener('change', async e => {
   catch (err) { e.target.checked = !on; say(err.message, 'err'); }
   lock(false);
 });
-document.querySelectorAll('.dest').forEach(el =>
+document.querySelectorAll('.dest[data-dest]').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop' }[e.key];
   if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
+  else if (e.key === 'm' || e.key === 'M') music();
 });
 poll();
 </script>

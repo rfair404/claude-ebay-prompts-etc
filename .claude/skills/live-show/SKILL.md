@@ -71,6 +71,7 @@ A show has four pages. One command puts any of them on air:
 | "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
+| "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
 - `page item` refocuses the D5100 *while the current page is still on air*
@@ -84,6 +85,11 @@ A show has four pages. One command puts any of them on air:
   result says `window hidden`; tell the user to open the next lot in a
   window of its own and re-run `setup --window`.
 - `next` / `back` are aliases of `page next` / `page item`.
+- `show_music.py on|off` fades the CC0 background music in or out over 2 s
+  (`off` mutes and pauses it). It's the only music allowed on the show: never
+  play anything else (eBay Live only allows music we hold rights to). If it
+  says to run `setup`, run `show_music.py setup` (and `build` first if the
+  file is missing); docs/live-streaming-setup.md section 7.
 - `standin on` puts a white panel in the item view in place of the D5100;
   while it's on, `page item` skips the refocus and `refocus` refuses. The
   pager page has the same switch, and it stays on through reloads (it lives
