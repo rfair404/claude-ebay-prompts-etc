@@ -154,6 +154,12 @@ Capture Device (V4L2) > "Nikon D5100".
 status` says `running`. `running, no frames for Ns` means the feed loop is up
 but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
 
+**Clock:** live view dies when the D5100's date resets, so every feed
+(re)start sets the camera clock to the computer's time first (`gphoto2
+--set-config datetime=now`, best effort). A reset date (before 2020) is
+logged in `$TMPDIR/d5100_feed.log` and the watch's reason becomes `clock
+reset (camera said <date>)`.
+
 ## 5. OM System TG-7 (close-up camera)
 
 What the camera offers, from its
@@ -227,6 +233,7 @@ python tools/live/obsctl.py launch            # 1. OBS minimized to the tray, no
 python tools/live/show_flow.py feed start     # 2. tools/d5100_webcam.sh (self-restarting), detached
 python tools/live/show_flow.py feed status    #    want "running", not "running, no frames for Ns"
 python tools/live/show_flow.py setup --window "<title substring>"   # 3. build/refresh the pages
+python tools/live/show_flow.py watch start   #    black panel over any camera that drops
 python tools/live/show_flow.py standin on     # 4. only if the D5100 is out (setup keeps this state)
 python tools/live/show_flow.py page intro     # 5. pre-show card, before going live
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
@@ -244,6 +251,19 @@ source is a v4l2 camera on /dev/video11 when that loopback device exists,
 else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
 the device and it switches. `refocus` on the closeup page is the TG-7's
 half-press (0.3 s, live view keeps running), so nothing is hidden.
+
+**watch** (`watch start|stop|status`) is the camera watch, a background
+process (log `$TMPDIR/show_flow_watch.log`). Once a second it looks at the
+D5100, the webcam and the TG-7. A camera that stays bad for 3 looks (feed
+stopped, no frames from the camera, no picture or a frozen one in OBS) gets
+a black panel (`D5 Down`, `Webcam Down`, `TG-7 Down`, which `setup` builds,
+hidden) over its slot on every page that shows it. The panel comes off after
+5 good looks in a row. While a panel is on and the device has frames, the
+watch reopens the camera in OBS like `reconnect`, at most every 15 s. It
+skips the D5 during a refocus, WB change or still, and while the stand-in
+is on. The panels are only on while the watch runs: it clears them when it
+ends, and `watch stop` clears them too. A camera slot went black:
+`watch status` says why; `reconnect` or `page webcam` meanwhile.
 
 **hold** (scene `Hold`) freezes the camera page on air: OBS screenshots the
 scene, and the Hold page shows that still under the live webcam strip, so
@@ -317,13 +337,17 @@ stacks into one column on a phone):
   CPU; **Multiview on** shows them (one off-air tile refreshed a second, so
   each is several seconds old) and the choice is remembered. The Hold
   tile freezes the camera page (H). Under it: Step, Refocus, Reconnect
-  cameras, the TG-7 feed, the D5 stand-in and the D5100 white balance.
+  cameras, the TG-7 feed, the camera watch (Start/Stop: black over a camera
+  that drops), the D5 stand-in and the D5100 white balance.
 - **Telemetry:** per destination kbps (with a 2-minute sparkline), dropped
   frames and congestion; OBS CPU, FPS, render time, render and encode drops
-  (red while they're climbing) and free disk; each camera feed's status.
+  (red while they're climbing) and free disk; each camera's status: the
+  camera watch's verdict (live, down, off, busy, with the reason on hover;
+  "black on air" when its panel is on), else its feed's.
 - **Event log:** every action and its result, plus anything a poll sees
   change on its own: a switch made in OBS or from the shell, a stream going
-  off air or reconnecting, a feed losing frames, OBS dropping frames.
+  off air or reconnecting, a feed losing frames, a camera on air going down
+  (its slot black) or coming back, OBS dropping frames.
 
 Keys: 1-7 (intro, item, next, desktop, webcam, close-up, multi), H
 (hold/release), Space (step), R (refocus), C (reconnect), M (music, section
@@ -333,7 +357,7 @@ a refocus runs; the last one pressed wins. The same pager is served as JSON for 
 /api/pager/tile/item.jpg`, `POST /api/pager {"page": "item"}`, `POST
 /api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
-"start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
+"start"}`, `POST /api/pager/watch {"action": "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
 "start"}`. The page has Start/Stop buttons for eBay and Twitch,
 each confirmed by a second click within 5 s (the button turns amber and the status bar asks; no pop-up, which the desktop app's browser pane would block). `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.

@@ -15,6 +15,7 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
     POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
     POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
+    POST /api/pager/watch       {"action": "start" | "stop"}: the camera watch (black over a dead camera)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
@@ -27,7 +28,14 @@ Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
      "standin": false, "refocusing": false, "held": null, "tg7_status": "running",
-     "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null}}
+     "watch": true,
+     "cameras": {"d5": {"state": "down", "reason": "no frames from the camera for 6s",
+                        "since": 1792617852.1, "blacked": true},
+                 "webcam": {"state": "live", "reason": "", "since": 1792617790.4, "blacked": false},
+                 "tg7": {"state": "off", "reason": "TG-7 feed stopped", "since": 1792617790.4,
+                         "blacked": true}},
+     "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null,
+                "blacked": ["d5"]}}
 
 `page` is null when OBS is on a scene that isn't one of the pager's, and
 "hold" on the hold still; `held` then names the page the still was taken of.
@@ -43,6 +51,13 @@ page (show_flow.SAFE_WINDOW) and not a private one (PRIVATE_WINDOW);
 otherwise card + webcam only. Every other page hides the window.
 `webcam` is the fallback page: the webcam alone, no D5100. `multi` shows
 the D5100, the webcam and the desktop page's window at once.
+
+`cameras` is the camera watch's word on each camera (`show_flow.py watch`):
+`state` "live", "down" (no moving picture), "off" (its feed isn't running),
+"busy" (the D5100 mid refocus, WB or still), "standin", or "unknown" (no
+watch running, or no verdict yet); `reason` says why, `since` is when (Unix
+time). `blacked` is read from OBS: the camera's black panel is on air. A
+switch to a page with a blacked camera carries `blacked: [ids]`.
 
 The preview is OBS's own render of the program scene, 360 px wide, so it
 works on or off air and shows the same frame for eBay and Twitch. It takes
@@ -129,6 +144,10 @@ class HoldRequest(BaseModel):
 
 
 class Tg7Request(BaseModel):
+    action: Literal["start", "stop"]
+
+
+class WatchRequest(BaseModel):
     action: Literal["start", "stop"]
 
 
@@ -263,20 +282,19 @@ def pager_tg7(req: Tg7Request) -> dict:
         return _show_flow.state(c)
 
 
-# The control page: a control-room screen, not a form. Plain HTML + fetch
-# against the routes above, same origin, so the guard's Origin check passes.
-#
-#   top bar   tally (LIVE / OFF AIR + timecode), what's on program, each
-#             destination, the OBS link, the last message, the clock
-#   left      the program monitor (OBS's render of what viewers see, ~2 fps)
-#             and the show's lineup (/live/<show>: which lot is on screen)
-#   middle    the switcher: a multiview tile per page, the on-air one tallied
-#             red; click or press its number to take it. Then the camera row.
-#   right     telemetry: kbps / dropped / congestion per destination, OBS
-#             CPU, FPS, render time and dropped frames, each camera feed
-#   bottom    the event log: every action and every change seen in a poll
-#
-# It polls state + telemetry every 1 s while the tab is visible (not at all
+@router.post("/api/pager/watch")
+def pager_watch(req: WatchRequest) -> dict:
+    with _obs() as c:
+        if req.action == "start":
+            _show_flow.watch_start()
+        else:
+            _show_flow.watch_stop(c)
+        return _show_flow.state(c)
+
+
+# The control page: tally bar; program monitor + lineup | switcher | telemetry;
+# event log. Plain HTML + fetch against the routes above, same origin, so the
+# guard's Origin check passes. It polls state + telemetry every 1 s while the tab is visible (not at all
 # while hidden: OBS is short of CPU during a show), so a switch made from the
 # shell or in OBS shows up here too, and is logged. Page clicks are sent one
 # at a time, latest wins: clicking 2 then 3 fast ends on 3, never on
@@ -503,6 +521,7 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
     <button id="refocus">Refocus <small>R</small></button>
     <button id="reconnect">Reconnect cams <small>C</small></button>
     <button id="tg7">TG-7 feed</button>
+    <button id="watch">Start camera watch</button>
     <label><input type="checkbox" id="standin"> D5 stand-in <small>white panel</small></label>
     <span class="wb" id="wbrow"><select id="wb" aria-label="Set the D5100 white balance to">
       <option value="" selected disabled>D5100 WB...</option>
@@ -541,8 +560,9 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
   </div>
   <canvas class="spark" id="spark-cpu" width="300" height="34" title="CPU %, last 2 minutes"></canvas>
   <h2>Sources</h2>
-  <div class="src" id="s-d5"><i class="led"></i><span>D5100 feed</span><em>-</em></div>
-  <div class="src" id="s-tg7"><i class="led"></i><span>TG-7 feed</span><em>-</em></div>
+  <div class="src" id="s-d5"><i class="led"></i><span>D5100</span><em>-</em></div>
+  <div class="src" id="s-tg7"><i class="led"></i><span>TG-7</span><em>-</em></div>
+  <div class="src" id="s-webcam"><i class="led"></i><span>Webcam</span><em>-</em></div>
   <div class="src" id="s-busy"><i class="led"></i><span>D5100 camera</span><em>-</em></div>
   <div class="src" id="s-scene"><i class="led"></i><span>OBS scene</span><em>-</em></div>
   <h2>Audio</h2>
@@ -563,11 +583,15 @@ const tileOf = p => p === 'hold' ? $('#hold') : document.querySelector('.tile[da
 const LABEL = { intro: 'Intro', item: 'Item', closeup: 'Close-up', next: 'Next', desktop: 'Desktop',
                 webcam: 'Webcam only', multi: 'Multi view', hold: 'Hold' };
 const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
+const CAM_LABEL = { d5: 'D5100', webcam: 'Webcam', tg7: 'TG-7' };
+// the cameras each page puts on air (show_flow.PAGE_CAMS)
+const PAGE_CAMS = { intro: [], item: ['d5', 'webcam'], closeup: ['tg7', 'webcam'], next: ['webcam'],
+                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam'] };
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
 // Hold, release and step ride the page queue as actions: one at a time, in order.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
                  '@step': ['/api/pager/step', null] };
-let held = null, tg7Busy = false, curPage = null, prev = null;
+let held = null, tg7Busy = false, watchBusy = false, curPage = null, prev = null;
 // Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
 let pending = null, switching = false, refocusing = false, streaming = false, standinBusy = false;
 let epoch = 0;  // bumped by every action, so a poll answer from before it can't undo it
@@ -646,8 +670,12 @@ function show(st, own = []) {
   // sources
   const d5Air = D5_PAGES.includes(st.page) && !st.standin;
   const fs = st.feed_status || (st.feed ? 'running' : 'stopped');
-  srcRow('#s-d5', st.standin ? 'stand-in' : fs, st.standin ? 'warn' : feedLevel(fs, d5Air));
-  srcRow('#s-tg7', st.tg7_status || '?', feedLevel(st.tg7_status, st.page === 'closeup'));
+  const onAir = PAGE_CAMS[st.page] || [];
+  // the camera watch's verdict when it has one (show_flow.py watch), else the feed's own status
+  camRow('#s-d5', st, 'd5', st.standin ? 'stand-in' : fs, st.standin ? 'warn' : feedLevel(fs, d5Air), onAir);
+  camRow('#s-tg7', st, 'tg7', st.tg7_status || '?', feedLevel(st.tg7_status, st.page === 'closeup'), onAir);
+  camRow('#s-webcam', st, 'webcam', 'no camera watch', '', onAir);
+  if (!watchBusy) $('#watch').textContent = st.watch ? 'Stop camera watch' : 'Start camera watch';
   srcRow('#s-busy', st.refocusing ? 'busy (refocus, WB or still)' : 'ready', st.refocusing ? 'warn' : 'ok');
   srcRow('#s-scene', st.scene, st.page ? 'ok' : 'warn');
   if (st.health && st.health.error) {
@@ -656,8 +684,16 @@ function show(st, own = []) {
   } else if (st.health) { healthErr = false; showHealth(st.health); }
 }
 let healthErr = false;
-function srcRow(id, text, level) {
-  const row = $(id); row.querySelector('em').textContent = text; setLevel(row.querySelector('.led'), level);
+function srcRow(id, text, level, title = '') {
+  const row = $(id); row.querySelector('em').textContent = text; row.title = title;
+  setLevel(row.querySelector('.led'), level);
+}
+const CAM_LEVEL = { live: 'ok', busy: 'warn', standin: 'warn', down: 'crit' };
+function camRow(id, st, k, fallback, fallbackLevel, onAir) {
+  const v = (st.cameras || {})[k];
+  if (!v || v.state === 'unknown') return srcRow(id, fallback, fallbackLevel, v ? v.reason : '');
+  const level = v.blacked ? 'crit' : v.state === 'off' ? (onAir.includes(k) ? 'crit' : '') : CAM_LEVEL[v.state] || '';
+  srcRow(id, v.state + (v.blacked ? ' \u00b7 black on air' : ''), level, v.reason || '');
 }
 
 // Pure: what changed between two states, as [text, class] log lines, so a
@@ -683,6 +719,12 @@ function changes(a, b, own = []) {
   if (!mine('tg7') && a.tg7_status !== b.tg7_status) out.push(['TG-7 feed: ' + b.tg7_status, b.tg7_status === 'running' ? 'ok' : 'warn']);
   if (!mine('standin') && a.standin !== b.standin) out.push(['D5 stand-in ' + (b.standin ? 'on' : 'off'), 'sys']);
   if (a.music && b.music && a.music.on !== b.music.on) out.push(['Music ' + (b.music.on ? 'on' : 'off'), 'sys']);
+  // a camera on the page on air going black (the camera watch's panel) or coming back
+  if (a.cameras && b.cameras) for (const k of PAGE_CAMS[b.page] || []) {
+    const was = !!(a.cameras[k] || {}).blacked, v = b.cameras[k] || {};
+    if (v.blacked && !was) out.push([CAM_LABEL[k] + ' went down: its slot is black on air' + (v.reason ? ' (' + v.reason + ')' : '') + '.', 'err']);
+    else if (was && !v.blacked && v.state === 'live') out.push([CAM_LABEL[k] + ' is back.', 'ok']);
+  }
   return out;
 }
 
@@ -738,6 +780,11 @@ function showHealth(h) {
   spark($('#spark-cpu'), hist.cpu, css('--accent'), 100);
 }
 
+function camText(st, k) {
+  const r = ((st.cameras || {})[k] || {}).reason;
+  return CAM_LABEL[k] + (r ? ' (' + r + ')' : '');
+}
+
 // Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
 async function api(method, path, body, ms) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
@@ -784,14 +831,9 @@ const ASK = {
   'twitch stop': 'Stop the Twitch stream?',
   'ebay stop': 'Stop sending video to eBay? This ends the eBay feed for your show.',
 };
-// Risky buttons take two clicks instead of confirm(): the desktop app's browser
-// pane blocks native dialogs, so confirm() said "cancel" at once and the button
-// looked dead. The first click arms it (amber, the question in the status bar)
-// for 5 s; a second click on the same action does it. The key names the action,
-// so if the state flips in between (a stream stopped elsewhere), it re-arms.
-function armStep(armed, key) { return armed === key ? 'fire' : 'arm'; }  // pure: the second click on the same action fires
+// Two clicks, not a native dialog (the app's browser pane blocks those): the first arms for 5 s, a second on the same `key` fires.
 function sure(btn, key, question) {
-  if (armStep(btn.dataset.armed, key) === 'fire') { disarm(btn); return true; }
+  if (btn.dataset.armed === key) { disarm(btn); return true; }
   disarm(btn);
   btn.dataset.armed = key; btn.classList.add('armed');
   btn._disarm = setTimeout(() => { disarm(btn); if ($('#msg').textContent === question) say(''); }, 5000);
@@ -830,6 +872,9 @@ function switched(page, st) {
   else if (sw.window && !sw.window.shown)
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
+  else if ((sw.blacked || []).length)
+    say('On air: ' + LABEL[page] + '. Black in place of ' + sw.blacked.map(k => camText(st, k)).join(', ') +
+        '. Reconnect (C) or Webcam only (5).', 'warn');
   else if (D5_PAGES.includes(page) && st.refocusing)
     say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus, WB or still): its picture is frozen for a few seconds.', 'warn');
   else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
@@ -889,6 +934,18 @@ async function tg7() {
                                : 'TG-7 feed stopped.'); }
   catch (e) { say('TG-7 feed ' + action + ' failed: ' + e.message, 'err'); }
   tg7Busy = false; $('#tg7').disabled = false;
+}
+async function watch() {
+  if (watchBusy) return;
+  const action = $('#watch').textContent.startsWith('Stop') ? 'stop' : 'start';
+  watchBusy = true; $('#watch').disabled = true; epoch++;
+  say(action === 'start' ? 'Starting the camera watch...' : 'Stopping the camera watch...');
+  try { const st = await api('POST', '/api/pager/watch', { action }, 15000);
+        watchBusy = false; if (!switching) show(st);
+        say(action === 'start' ? 'Camera watch started: a camera that drops goes black on air.'
+                               : 'Camera watch stopped: every black panel is off.'); }
+  catch (e) { say('Camera watch ' + action + ' failed: ' + e.message, 'err'); }
+  watchBusy = false; $('#watch').disabled = false;
 }
 async function refocus() {
   if (refocusing || $('#refocus').hidden) return;
@@ -1101,6 +1158,7 @@ $('#wbset').addEventListener('click', setWb);
 $('#hold').addEventListener('click', holdKey);
 $('#step').addEventListener('click', () => go('@step'));
 $('#tg7').addEventListener('click', tg7);
+$('#watch').addEventListener('click', watch);
 $('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;

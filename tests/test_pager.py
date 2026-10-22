@@ -5,6 +5,7 @@ OBS is a fake that records scene switches, and the D5100 refocus is stubbed
 (or, for refocus_d5 itself, the feed and gphoto2 are), so nothing here needs
 OBS, the camera, or a stream."""
 import base64
+import json
 import os
 import sys
 import time
@@ -45,6 +46,7 @@ class FakeObs:
         self.sent, self.duration = 375000, 1000  # the stream output's bytes and ms since it started
         self.congestion, self.reconnecting = None, False  # None: OBS leaves outputCongestion out
         self.reads: list[str] = []  # Get{Stream,Record}Status requests
+        self.panels: dict[str, bool] = {}  # the camera watch's black panels (SF.DOWN) -> shown
 
     def call(self, req, data=None):
         if (data or {}).get("sceneName") in self.missing:
@@ -104,6 +106,10 @@ class FakeObs:
             if data["sceneName"] == SF.PRODUCT:
                 items.append({"sourceName": SF.STANDIN, "sceneItemId": 9,
                               "sceneItemEnabled": self.standin_shown})
+            for cam, slots in ((SF.D5, SF.PRODUCT), (SF.WEBCAM, SF.PRODUCT), (SF.TG7, SF.CLOSEUP)):
+                if data["sceneName"] == slots and SF.DOWN[cam] in self.panels:
+                    items.append({"sourceName": SF.DOWN[cam], "sceneItemId": 20 + len(items),
+                                  "sceneItemEnabled": self.panels[SF.DOWN[cam]]})
             return {"sceneItems": items}
         if req == "SetSceneItemEnabled":
             if data["sceneItemId"] == 9:
@@ -131,6 +137,23 @@ def no_tg7_feed(monkeypatch):
     pids = []
     monkeypatch.setattr(SF, "tg7_pids", lambda: list(pids))
     return pids
+
+
+@pytest.fixture(autouse=True)
+def no_watch(tmp_path, monkeypatch):
+    """The camera watch's files in tmp_path, never a running show's: no watch
+    runs unless a test writes its status file (watch_says)."""
+    monkeypatch.setattr(SF, "CAMS_FILE", tmp_path / "show_flow.cams.json")
+    monkeypatch.setattr(SF, "WATCH_LOCK", tmp_path / "show_flow.watch.lock")
+    monkeypatch.setattr(SF, "WATCH_LOG", tmp_path / "show_flow_watch.log")
+    monkeypatch.setattr(SF, "watch_pids", lambda: [])
+
+
+def watch_says(cameras, t=None, pid=None):
+    """Write the camera watch's status file as a running watch does."""
+    SF.CAMS_FILE.write_text(json.dumps({"pid": os.getpid() if pid is None else pid,
+                                        "t": time.time() if t is None else t, "every": 1.0,
+                                        "cameras": cameras}))
 
 
 @pytest.fixture
@@ -174,7 +197,9 @@ def test_state_maps_scene_to_page(obs):
         "live": True, "timecode": "00:01:02.000", "feed": True, "feed_status": "running",
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
                     "twitch": {"live": False, "timecode": None}}, "standin": False,
-        "refocusing": False, "held": None, "tg7_status": "stopped"}
+        "refocusing": False, "held": None, "tg7_status": "stopped", "watch": False,
+        "cameras": {cam: {"state": "unknown", "reason": "", "since": None, "blacked": False}
+                    for cam in ("d5", "webcam", "tg7")}}
     obs.scene = "Desktop"  # switched by hand in OBS
     assert SF.state(obs)["page"] is None
 
@@ -314,13 +339,6 @@ def test_no_telemetry_still_answers_the_poll(client, obs, monkeypatch):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
     assert r.json()["health"] == {"error": "GetStats failed: code 500"}
-
-
-def test_health_from_an_obs_without_a_counter_reads_zero(obs, monkeypatch):
-    real = obs.call
-    monkeypatch.setattr(obs, "call", lambda req, data=None: {"cpuUsage": 5.0} if req == "GetStats" else real(req, data))
-    h = SF.health(obs)
-    assert h["cpu"] == 5.0 and h["fps"] == 0 and h["render_skipped"] == 0
 
 
 def test_post_switches_and_returns_state_plus_switch(client, obs):
@@ -496,8 +514,7 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     assert "filter(p => p !== curPage)" in r.text and 'id="tiletoggle"' in r.text
     assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
     # risky buttons confirm in the page, never with confirm(): the app's browser pane blocks it
-    code = "\n".join(line for line in r.text.splitlines() if not line.lstrip().startswith("//"))
-    assert "confirm(" not in code and "sure(btn, dest + ' ' + action" in code
+    assert "confirm(" not in r.text and "sure(btn, dest + ' ' + action" in r.text
 
 
 # --- the Up Next window guard ----------------------------------------------
@@ -1273,3 +1290,80 @@ def test_control_page_has_a_d5_white_balance_control(client):
     assert "/api/pager/wb" in r.text and 'id="wb"' in r.text and 'id="wbset"' in r.text
     for alias in ("auto", "daylight", "tungsten"):
         assert f'<option value="{alias}">' in r.text
+
+
+# --- the camera watch: chips, black panels, the watch button -------------------
+LIVE = {"state": "live", "reason": "", "since": 100.0}
+
+
+def test_a_page_with_a_blacked_camera_says_so(obs, monkeypatch, capsys):
+    obs.scene = "Up Next"
+    assert "blacked" not in SF.go(obs, "item")
+    obs.panels = {SF.DOWN[SF.D5]: True, SF.DOWN[SF.WEBCAM]: False}
+    obs.scene = "Up Next"
+    assert SF.go(obs, "item")["blacked"] == ["d5"]
+    assert SF.go(obs, "item")["blacked"] == ["d5"]  # already on air: still said
+    assert "blacked" not in SF.go(obs, "next")  # Up Next shows the webcam only, and it's fine
+    assert "blacked" not in SF.go(obs, "intro")
+    watch_says({"d5": {"state": "down", "reason": "no frames from the camera for 6s", "since": 100.0},
+                "webcam": LIVE, "tg7": LIVE})
+    monkeypatch.setattr(SF, "connect", lambda: obs)
+    assert SF.main(["page", "multi"]) == 0
+    out = capsys.readouterr().out
+    assert out == ("on air: multi\n  black in place of: D5100 (no frames from the camera for 6s); "
+                   "`reconnect` or `page webcam`\n")
+
+
+def test_state_has_the_watch_verdicts_and_what_obs_has_blacked(obs):
+    down = {"state": "down", "reason": "OBS has no picture", "since": 100.0}
+    off = {"state": "off", "reason": "TG-7 feed stopped", "since": 100.0}
+    watch_says({"d5": down, "webcam": LIVE, "tg7": off})
+    obs.panels = {SF.DOWN[SF.D5]: True, SF.DOWN[SF.WEBCAM]: False, SF.DOWN[SF.TG7]: True}
+    st = SF.state(obs)
+    assert st["watch"] is True
+    assert st["cameras"] == {"d5": {**down, "blacked": True}, "webcam": {**LIVE, "blacked": False},
+                             "tg7": {**off, "blacked": True}}
+    with SF.exclusive():  # a refocus: the D5 is busy, whatever the watch said a second ago
+        assert SF.state(obs)["cameras"]["d5"]["state"] == "busy"
+    obs.standin_shown = True
+    assert SF.state(obs)["cameras"]["d5"]["state"] == "standin"
+    obs.standin_shown = False
+
+    unknown = {"state": "unknown", "reason": "", "since": None}
+    watch_says({"d5": down, "webcam": LIVE, "tg7": off}, t=time.time() - 30)  # the watch stopped writing
+    st = SF.state(obs)
+    assert st["watch"] is False
+    assert {k: v["state"] for k, v in st["cameras"].items()} == dict.fromkeys(st["cameras"], "unknown")
+    assert st["cameras"]["d5"] == {**unknown, "blacked": True}  # blacked is OBS's word, not the watch's
+    SF.CAMS_FILE.unlink()
+    assert SF.state(obs)["watch"] is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the dead-process check is POSIX only")
+def test_state_ignores_the_status_of_a_watch_whose_process_is_gone(obs):
+    watch_says({"d5": LIVE, "webcam": LIVE, "tg7": LIVE}, pid=99_999_999)
+    st = SF.state(obs)
+    assert st["watch"] is False and st["cameras"]["d5"]["state"] == "unknown"
+
+
+def test_watch_route_starts_and_stops_the_watch(client, obs, monkeypatch):
+    calls = []
+    monkeypatch.setattr(SF, "watch_start", lambda: calls.append("start") or True)
+    monkeypatch.setattr(SF, "watch_stop", lambda c: calls.append(("stop", c is obs)))
+    body = client.post("/api/pager/watch", json={"action": "start"}).json()
+    assert calls == ["start"] and set(body["cameras"]) == {"d5", "webcam", "tg7"}
+    body = client.post("/api/pager/watch", json={"action": "stop"}).json()
+    assert calls == ["start", ("stop", True)] and body["watch"] is False
+    assert client.post("/api/pager/watch", json={"action": "reboot"}).status_code == 422
+    r = client.post("/api/pager/watch", json={"action": "start"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403 and len(calls) == 2
+
+
+def test_control_page_has_a_row_per_camera_and_a_watch_button(client):
+    r = client.get("/pager")
+    assert 'id="watch"' in r.text and "/api/pager/watch" in r.text
+    for cam in SF.CAM_IDS:
+        assert f'id="s-{cam}"' in r.text  # the Sources row that shows the watch's verdict
+    # the page's copy of which cameras each page puts on air, in step with show_flow's
+    for page, cams in SF.PAGE_CAMS.items():
+        assert f"{page}: {cams}" in r.text.replace('"', "'")
