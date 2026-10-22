@@ -5,7 +5,7 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
-    GET  /api/pager             what's on air
+    GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track"}
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
@@ -15,7 +15,6 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
-    GET  /api/pager/music       background music: {"ready", "on", "db", "track"}
     POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
 
 Every answer is the state object, plus `switch` or `refocus` on a POST:
@@ -89,10 +88,6 @@ class StandinRequest(BaseModel):
     on: bool
 
 
-class MusicRequest(BaseModel):
-    on: bool
-
-
 class StreamRequest(BaseModel):
     dest: Literal["ebay", "twitch"]
     action: Literal["start", "stop"]
@@ -137,7 +132,7 @@ def pager_page() -> str:
 @router.get("/api/pager")
 def pager_state() -> dict:
     with _obs() as c:
-        return _show_flow.state(c)
+        return {**_show_flow.state(c), "music": _show_music.state(c)}
 
 
 @router.get("/api/pager/preview.jpg")
@@ -169,16 +164,10 @@ def pager_standin(req: StandinRequest) -> dict:
         return _show_flow.state(c)
 
 
-@router.get("/api/pager/music")
-def pager_music_state() -> dict:
-    with _obs() as c:
-        return _show_music.state(c)
-
-
 # Not under show_flow's lock: a fade never touches the camera or the page, so
-# it can run during a refocus. show_music has its own lock, one fade at a time.
+# it can run during a refocus. The pager disables the button while one runs.
 @router.post("/api/pager/music")
-def pager_music(req: MusicRequest) -> dict:
+def pager_music(req: HoldRequest) -> dict:  # {"on": bool}
     with _obs() as c:
         r = _show_music.set_on(c, req.on)
         return {**_show_music.state(c), "fade": r}
@@ -359,6 +348,7 @@ function say(text, cls = '') { const m = $('#msg'); m.textContent = text; m.clas
 
 function show(st) {
   curPage = st.page;
+  if (st.music && !musicBusy) showMusic(st.music);  // only GET /api/pager carries it
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
   const badge = $('#badge');
@@ -561,7 +551,6 @@ async function poll() {
     const mine = epoch;
     try { const st = await api('GET', '/api/pager', null, 5000);
           if (mine === epoch && !switching) show(st);
-          if (!musicBusy) showMusic(await api('GET', '/api/pager/music', null, 5000));
           if ($('#msg').textContent.startsWith('OBS')) say(''); }
     catch (e) { $('#badge').textContent = 'No OBS'; $('#badge').classList.remove('live');
                 say('OBS: ' + e.message, 'err'); }

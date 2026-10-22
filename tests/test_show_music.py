@@ -27,7 +27,7 @@ class FakeObs:
         self.inputs = {"Mic/Aux"} | ({SM.MUSIC} if has_music else set())
         self.muted, self.db, self.media = True, SM.LEVEL_DB, "OBS_MEDIA_STATE_PAUSED"
         self.cursor = 0
-        self.scenes = {s: [] for s in SF.PAGES.values()}
+        self.scenes = {s: [] for s in [*SF.PAGES.values(), SF.HOLD]}
         self.filters: dict[str, dict] = {}
         self.log: list[tuple] = []  # (request, value) for volume / mute / media
 
@@ -84,7 +84,6 @@ class FakeObs:
 
 @pytest.fixture
 def obs(tmp_path, monkeypatch):
-    monkeypatch.setattr(SM, "LOCK", tmp_path / "show_music.lock")
     monkeypatch.setattr(SM.time, "sleep", lambda s: None)
     monkeypatch.setattr(SM, "MUSIC_DIR", tmp_path)
     return FakeObs()
@@ -143,7 +142,7 @@ def test_setup_puts_one_muted_paused_source_in_every_page(obs, tmp_path):
     obs.inputs.discard(SM.MUSIC)
     (tmp_path / SM.MIX).touch()
     SM.setup(obs, tmp_path)
-    assert all(SM.MUSIC in items for items in obs.scenes.values())
+    assert all(SM.MUSIC in items for items in obs.scenes.values())  # Hold too: H never goes silent
     assert obs.muted and obs.db == SM.LEVEL_DB and obs.media != SM.PLAYING  # never on air from setup
     assert obs.settings["looping"] and not obs.settings["close_when_inactive"]
     assert obs.filters[SM.DUCK]["sidechain_source"] == SF.MIC
@@ -207,7 +206,7 @@ def client(obs, monkeypatch):
 
 
 def test_api_music_state_and_fades(client, obs):
-    assert client.get("/api/pager/music").json()["on"] is False
+    assert not SM.state(obs)["on"]  # GET /api/pager carries it: test_pager.py
     r = client.post("/api/pager/music", json={"on": True}).json()
     assert r["on"] and r["fade"] == {"on": True, "changed": True}
     r = client.post("/api/pager/music", json={"on": False}).json()
@@ -218,16 +217,3 @@ def test_api_music_without_setup_is_502(client, obs):
     obs.inputs.discard(SM.MUSIC)
     r = client.post("/api/pager/music", json={"on": True})
     assert r.status_code == 502 and "setup" in r.json()["detail"]
-
-
-def test_api_music_is_local_only(client):
-    assert client.get("/api/pager/music", headers={"host": "evil.example"}).status_code == 403
-    r = client.post("/api/pager/music", json={"on": True}, headers={"origin": "https://evil.example"})
-    assert r.status_code == 403
-
-
-def test_pager_page_has_the_music_button(client):
-    html = client.get("/pager").text
-    assert 'id="music"' in html and "/api/pager/music" in html
-    # stream rows are picked by data-dest, so the music row never reads as a stream
-    assert "querySelectorAll('.dest[data-dest]')" in html

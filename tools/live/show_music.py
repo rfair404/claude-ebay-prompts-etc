@@ -1,31 +1,14 @@
 #!/usr/bin/env python3
-"""SHOW MUSIC — background music under the live show, with fades.
-
-The music is HoliznaCC0's lo-fi, dedicated to the public domain (CC0), so it
-is safe on eBay Live, whose policy only allows music you have the rights to
-(docs/live-streaming-setup.md, "Background music"). It plays from one local
-file, never an internet stream: every track in it has a license on record.
+"""SHOW MUSIC — CC0 background music under the live show, with fades.
 
     python tools/live/show_music.py fetch     # download the CC0 packs (once per machine)
     python tools/live/show_music.py build     # shuffle + level them into one looping file
-    python tools/live/show_music.py setup     # OBS: the Music source in every page, ducked under the mic
-    python tools/live/show_music.py on|off|toggle [--json]   # fade in / fade out
+    python tools/live/show_music.py setup     # OBS: "Show Music" in every page, ducked under the mic
+    python tools/live/show_music.py on|off [--json]   # fade in / fade out
     python tools/live/show_music.py status [--json]
 
-All of it lives in MUSIC_DIR (~/Music/show-bgm, or $SHOW_MUSIC_DIR), outside
-the repo: src/ holds the downloaded zips and their tracks, show-mix.ogg the
-built file, tracklist.json its running order and LICENSE.md the record of
-where every track came from and under what license.
-
-`on` unmutes the Music source and fades it up to its fader level over FADE_S;
-`off` fades it down, mutes it and pauses it, so the next `on` picks up mid
-track. The fader level in OBS *is* the setting (like the stand-in's
-visibility in show_flow): turn it in OBS and the next fade lands there.
-`setup` starts it at LEVEL_DB. While Russell talks, a sidechain compressor on
-the music (keyed by the mic) pulls it down a further ~8 dB.
-
-webapp/pager.py serves the same on/off/state as /api/pager/music, with a
-button on the pager page.
+Why this music, the levels and the pager button: docs/live-streaming-setup.md
+section 7. The OBS fader is the level setting: a fade-in lands where it was left.
 """
 from __future__ import annotations
 
@@ -35,16 +18,10 @@ import os
 import random
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
-from contextlib import contextmanager
+import zipfile
 from pathlib import Path
-
-try:
-    import fcntl
-except ImportError:  # Windows: the web app imports this module there too
-    fcntl = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import obsctl  # noqa: E402
@@ -83,7 +60,6 @@ LICENSE_NOTE = (
     "https://holiznacc0.bandcamp.com: \"I am dedicating my archive of music to the creative\n"
     "commons via CC0 ... you are not required to credit me either!\"\n")
 
-LOCK = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "show_music.lock"
 PLAYING = "OBS_MEDIA_STATE_PLAYING"
 ACTION = "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_"
 
@@ -100,7 +76,8 @@ def fetch(music_dir: Path = MUSIC_DIR) -> list[Path]:
             tmp = dest.with_suffix(".part")
             urllib.request.urlretrieve(pack["url"], tmp)
             tmp.rename(dest)
-        subprocess.run(["unzip", "-oq", str(dest), "-d", str(src / dest.stem)], check=True)
+        with zipfile.ZipFile(dest) as z:
+            z.extractall(src / dest.stem)
         got.append(dest)
     return got
 
@@ -129,7 +106,7 @@ def plan(items: list[tuple[Path, float]], xfade: float = XFADE_S) -> list[dict]:
     """Running order with each track's start in the mix (tracks overlap by xfade)."""
     out, t = [], 0.0
     for p, d in items:
-        out.append({"title": title_of(p), "file": p.name, "start_s": round(t, 2), "dur_s": round(d, 2)})
+        out.append({"title": title_of(p), "start_s": round(t, 2), "dur_s": round(d, 2)})
         t += d - xfade
     return out
 
@@ -149,11 +126,11 @@ def ffmpeg_args(files: list[Path], total_s: float, out: Path, xfade: float = XFA
                    "-c:a", "libopus", "-b:a", "160k", "-ar", "48000", str(out)]
 
 
-def build(music_dir: Path = MUSIC_DIR, seed: int | None = None) -> dict:
+def build(music_dir: Path = MUSIC_DIR) -> dict:
     found = tracks(music_dir)
     if not found:
         raise SystemExit(f"no tracks under {music_dir / 'src'}; run `show_music.py fetch` first")
-    random.Random(seed).shuffle(found)
+    random.shuffle(found)
     timed = [(p, duration(p)) for p, _ in found]
     order = plan(timed)
     total = order[-1]["start_s"] + order[-1]["dur_s"]
@@ -180,22 +157,6 @@ def write_license(music_dir: Path, found: list[tuple[Path, dict]]) -> None:
 
 
 # --- OBS -----------------------------------------------------------------------
-@contextmanager
-def exclusive(wait: float = 10):
-    """One fade at a time, across the shell and the web app."""
-    with open(LOCK, "w") as f:
-        deadline = time.monotonic() + wait
-        while fcntl:
-            try:
-                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() > deadline:
-                    raise show_flow.Busy("another music fade is still running")
-                time.sleep(0.05)
-        yield
-
-
 def setup(c, music_dir: Path = MUSIC_DIR) -> None:
     mix = music_dir / MIX
     if not mix.exists():
@@ -203,7 +164,7 @@ def setup(c, music_dir: Path = MUSIC_DIR) -> None:
     settings = {"is_local_file": True, "local_file": str(mix), "looping": True,
                 "restart_on_activate": False, "close_when_inactive": False}
     inputs = {i["inputName"] for i in c.call("GetInputList")["inputs"]}
-    scenes = list(show_flow.PAGES.values())
+    scenes = [*show_flow.PAGES.values(), show_flow.HOLD]  # Hold too, or H goes silent
     if MUSIC in inputs:
         c.call("SetInputSettings", {"inputName": MUSIC, "inputSettings": settings})
     else:
@@ -275,21 +236,20 @@ def set_on(c, on: bool) -> dict:
     """Fade the music in or out. Returns {"on", "changed"}."""
     if not _ready(c):
         raise obsctl.ObsError(f"no {MUSIC!r} source in OBS; run `show_music.py setup`")
-    with exclusive():
-        if state(c)["on"] == on:
-            return {"on": on, "changed": False}
-        level = _level(c)
-        if on:
-            c.call("SetInputVolume", {"inputName": MUSIC, "inputVolumeDb": -100.0})
-            c.call("SetInputMute", {"inputName": MUSIC, "inputMuted": False})
-            c.call("TriggerMediaInputAction", {"inputName": MUSIC, "mediaAction": ACTION + "PLAY"})
-            _ramp(c, FLOOR_DB, level)
-        else:
-            _ramp(c, level, FLOOR_DB)
-            c.call("SetInputMute", {"inputName": MUSIC, "inputMuted": True})
-            c.call("TriggerMediaInputAction", {"inputName": MUSIC, "mediaAction": ACTION + "PAUSE"})
-            c.call("SetInputVolume", {"inputName": MUSIC, "inputVolumeDb": level})  # the fader keeps its place
-        return {"on": on, "changed": True}
+    if state(c)["on"] == on:
+        return {"on": on, "changed": False}
+    level = _level(c)
+    if on:
+        c.call("SetInputVolume", {"inputName": MUSIC, "inputVolumeDb": -100.0})
+        c.call("SetInputMute", {"inputName": MUSIC, "inputMuted": False})
+        c.call("TriggerMediaInputAction", {"inputName": MUSIC, "mediaAction": ACTION + "PLAY"})
+        _ramp(c, FLOOR_DB, level)
+    else:
+        _ramp(c, level, FLOOR_DB)
+        c.call("SetInputMute", {"inputName": MUSIC, "inputMuted": True})
+        c.call("TriggerMediaInputAction", {"inputName": MUSIC, "mediaAction": ACTION + "PAUSE"})
+        c.call("SetInputVolume", {"inputName": MUSIC, "inputVolumeDb": level})  # the fader keeps its place
+    return {"on": on, "changed": True}
 
 
 # --- CLI -----------------------------------------------------------------------
@@ -297,10 +257,9 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("fetch", help="download the CC0 packs into MUSIC_DIR/src")
-    s = sub.add_parser("build", help="shuffle + level the tracks into one looping file")
-    s.add_argument("--seed", type=int, help="fixed shuffle (default: new order each build)")
+    sub.add_parser("build", help="shuffle + level the tracks into one looping file")
     sub.add_parser("setup", help="OBS: the Music source in every page, ducked under the mic")
-    for name in ("on", "off", "toggle", "status"):
+    for name in ("on", "off", "status"):
         sub.add_parser(name).add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     if a.cmd == "fetch":
@@ -308,7 +267,7 @@ def main(argv=None) -> int:
         print(f"packs in {MUSIC_DIR / 'src'}: {len(tracks())} tracks")
         return 0
     if a.cmd == "build":
-        r = build(seed=a.seed)
+        r = build()
         print(f"{r['file']}: {r['tracks']} tracks, {r['total_s'] / 60:.1f} min (loops)")
         return 0
     try:
@@ -316,11 +275,10 @@ def main(argv=None) -> int:
         try:
             if a.cmd == "setup":
                 setup(c)
-                print(f"{MUSIC!r} in {', '.join(show_flow.PAGES.values())}; muted until `on`")
+                print(f"{MUSIC!r} in {', '.join([*show_flow.PAGES.values(), show_flow.HOLD])}; muted until `on`")
                 return 0
             if a.cmd != "status":
-                on = (not state(c)["on"]) if a.cmd == "toggle" else a.cmd == "on"
-                set_on(c, on)
+                set_on(c, a.cmd == "on")
             st = state(c)
             if a.json:
                 print(json.dumps(st))

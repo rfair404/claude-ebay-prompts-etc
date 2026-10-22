@@ -47,6 +47,8 @@ class FakeObs:
         if (data or {}).get("sceneName") in self.missing:
             raise obsctl.ObsError(f"{req} failed: code 600 No source was found by the name of "
                                   f"`{data['sceneName']}`.")
+        if req == "GetInputList":  # show_music.state: no Show Music source here
+            return {"inputs": []}
         if req == "GetCurrentProgramScene":
             return {"currentProgramSceneName": self.scene}
         if req == "SetCurrentProgramScene":
@@ -236,6 +238,7 @@ def client(obs, monkeypatch):
 def test_get_reports_what_is_on_air(client, obs):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
+    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None}  # one poll, not two
     assert obs.closed
 
 
