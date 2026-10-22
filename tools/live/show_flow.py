@@ -211,6 +211,8 @@ LOCK = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "show_
 LOCK_WAIT = 0.5
 FRAMES_WAIT = 30  # seconds for the D5's frames to come back after a refocus
 GPHOTO_TIMEOUT = 15  # a wedged camera mustn't hold the lock (and the feed) forever
+STILL_TIMEOUT = 30  # still_d5: autofocus, shutter and the download of a full-size frame
+SAVED = re.compile(r"^Saving file as (.+)$", re.M)  # gphoto2's line per downloaded file
 REOPEN_GRACE = 3  # seconds after reopen_d5 before the feed's own frame is taken as proof
 FEED_START_WAIT = 15  # `feed start`: seconds to wait for frames before reopening in OBS
 D5_DEVICE = "/dev/video10"  # the feed's v4l2loopback device (tools/d5100_webcam.sh DEV)
@@ -281,7 +283,7 @@ def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
 
 
 class Busy(obsctl.ObsError):
-    """A refocus or WB change is already running (from the shell or the web app)."""
+    """A refocus, WB change or still is already running (from the shell or the web app)."""
 
 
 @contextmanager
@@ -297,7 +299,7 @@ def exclusive():
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
-                    raise Busy("a D5100 refocus or WB change is already running (pager or shell); "
+                    raise Busy("a D5100 refocus, WB change or still is already running (pager or shell); "
                                "it takes about 5 s, try again when it's done")
                 time.sleep(0.05)
         try:
@@ -425,11 +427,11 @@ def feed_status(pids=None) -> str:
     return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
 
 
-def _gphoto2(*args, **kw):
+def _gphoto2(*args, timeout=GPHOTO_TIMEOUT, **kw):
     try:
-        return subprocess.run(["gphoto2", *args], capture_output=True, timeout=GPHOTO_TIMEOUT, **kw)
+        return subprocess.run(["gphoto2", *args], capture_output=True, timeout=timeout, **kw)
     except subprocess.TimeoutExpired as e:
-        raise obsctl.ObsError(f"gphoto2 {' '.join(args)} hung for {GPHOTO_TIMEOUT}s; "
+        raise obsctl.ObsError(f"gphoto2 {' '.join(args)} hung for {timeout}s; "
                               "switch the D5100 off and on") from e
     except OSError as e:  # gphoto2 not installed
         raise obsctl.ObsError(f"can't run gphoto2: {e}") from e
@@ -1229,6 +1231,25 @@ def wb(c, preset: str | None = None) -> dict:
     isn't on air, so nothing is hidden, and the TG-7 is never touched."""
     return d5_covered(c, "wb", lambda c: wb_d5(c, preset))
 
+
+
+def still_d5(c, dest: Path) -> dict:
+    """A full-size D5100 still, downloaded into `dest`: the camera's own
+    autofocus and shutter, behind d5_usb (live view stops for it) and hidden
+    as d5_covered says. RAW+JPEG gives two files.
+    Returns {"camera": "d5", "files": [...], "still_s": seconds}."""
+    dest.mkdir(parents=True, exist_ok=True)
+    r, secs = d5_covered(c, "still", lambda c: d5_usb(c, lambda: _gphoto2(
+        "--capture-image-and-download", "--force-overwrite",
+        "--filename", str(dest / "D5_%Y%m%d_%H%M%S.%C"), timeout=STILL_TIMEOUT, text=True)))
+    files = [Path(f.strip()) for f in SAVED.findall(r.stdout or "")]
+    if r.returncode or not files:
+        why = (r.stderr or r.stdout or "").strip().splitlines()
+        why = why[-1] if why else "no file saved"
+        if re.search(r"out of focus|unspecified error", why, re.I):
+            why += " (autofocus can't lock on an empty or low-contrast frame)"
+        raise obsctl.ObsError(f"the D5100 didn't take the still: {why}")
+    return {"camera": "d5", "files": [str(f) for f in files], "still_s": round(secs, 1)}
 
 def held_page(c) -> str | None:
     """The page the hold still was taken of (hold() records it on the source)."""

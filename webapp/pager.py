@@ -401,7 +401,7 @@ function show(st) {
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
                            ' \\u00b7 TG-7 feed: ' + (st.tg7_status || '?') +
-                           (st.refocusing ? ' \\u00b7 D5100 busy (refocus or WB)' : '');
+                           (st.refocusing ? ' \\u00b7 D5100 busy (refocus, WB or still)' : '');
 }
 
 // Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
@@ -483,7 +483,7 @@ function switched(page, st) {
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
   else if (D5_PAGES.includes(page) && st.refocusing)
-    say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus or WB): its picture is frozen for a few seconds.', 'warn');
+    say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus, WB or still): its picture is frozen for a few seconds.', 'warn');
   else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
     say('On air: ' + LABEL[page] + ', but the D5100 feed is ' + st.feed_status + '.', 'warn');
   else say('On air: ' + LABEL[page] + '.');

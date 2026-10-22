@@ -15,6 +15,7 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | OM System TG-7 Wi-Fi control | `tools/live/tg7cam` |
 | OBS remote control, no GUI | `tools/live/obsctl.py` |
 | Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
+| Interactive photo shoot (stills, per-item log) | `tools/live/shoot.py`, skill `.claude/skills/photo-shoot/` |
 
 ## 1. OBS Studio — Flatpak, not the PPA
 
