@@ -142,7 +142,8 @@ def test_setup_puts_one_muted_paused_source_in_every_page(obs, tmp_path):
     obs.inputs.discard(SM.MUSIC)
     (tmp_path / SM.MIX).touch()
     SM.setup(obs, tmp_path)
-    assert all(SM.MUSIC in items for items in obs.scenes.values())  # Hold too: H never goes silent
+    assert all(SM.MUSIC in items for items in obs.scenes.values())
+    assert SM.MUSIC in obs.scenes[SF.HOLD]  # the hold still doesn't go silent
     assert obs.muted and obs.db == SM.LEVEL_DB and obs.media != SM.PLAYING  # never on air from setup
     assert obs.settings["looping"] and not obs.settings["close_when_inactive"]
     assert obs.filters[SM.DUCK]["sidechain_source"] == SF.MIC
@@ -205,8 +206,10 @@ def client(obs, monkeypatch):
         yield c
 
 
-def test_api_music_state_and_fades(client, obs):
-    assert not SM.state(obs)["on"]  # GET /api/pager carries it: test_pager.py
+def test_api_music_state_and_fades(client, obs, monkeypatch):
+    monkeypatch.setattr(SF, "state", lambda c: {"page": "intro"})  # tested in test_pager.py
+    st = client.get("/api/pager").json()  # the music rides on the pager's one poll
+    assert st["page"] == "intro" and st["music"]["ready"] and st["music"]["on"] is False
     r = client.post("/api/pager/music", json={"on": True}).json()
     assert r["on"] and r["fade"] == {"on": True, "changed": True}
     r = client.post("/api/pager/music", json={"on": False}).json()

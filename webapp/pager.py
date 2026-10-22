@@ -348,7 +348,6 @@ function say(text, cls = '') { const m = $('#msg'); m.textContent = text; m.clas
 
 function show(st) {
   curPage = st.page;
-  if (st.music && !musicBusy) showMusic(st.music);  // only GET /api/pager carries it
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
   const badge = $('#badge');
@@ -369,6 +368,7 @@ function show(st) {
   // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
   $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
+  if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
