@@ -106,9 +106,9 @@ five collisions that day was a conflict git would show you.
 Releases are tagged `vMAJOR.MINOR.PATCH` on `main` by the technical director
 (rules in [`.claude/agents/technical-director.md`](.claude/agents/technical-director.md),
 "Versioning"). PR titles keep their `feat:` / `fix:` / `refactor:` / `docs:`
-prefix. If a PR makes Russell act after pulling (a config key renamed or newly
-required, a command or flag removed or changed, a ledger column or locked format
-changed), add `!` to the prefix (`feat!:`) and a **Breaking** line to the
+prefix. If a PR stops something working until Russell acts (a config key renamed or
+newly required, a command or flag removed or changed that something still uses,
+a ledger column or locked format changed), add `!` to the prefix (`feat!:`) and a **Breaking** line to the
 description saying exactly what to do.
 
 ## Pick list requests → R2 links

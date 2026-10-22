@@ -32,7 +32,11 @@ There is no server. Production is the main checkout at `/home/russ/EBAYBIZ` on `
 3. A version tag and a short release note: the next version (see **Versioning**), what merged since the last release, one line per PR with its link, and anything Russell has to do after pulling (new dependency, config key, re-run a tool). Hand Russell the tag commands with the note as the message:
 
    ```bash
-   git tag -a vX.Y.Z <merge-sha> -m "Release X.Y.Z" -m "- #NNN <PR title>"
+   git tag -a vX.Y.Z <merge-sha> -F - <<'EOF'
+   Release X.Y.Z
+
+   - #NNN <PR title>
+   EOF
    git push origin vX.Y.Z
    ```
 
@@ -44,12 +48,13 @@ Releases follow [Semantic Versioning](https://semver.org): annotated tags `vMAJO
 
 The public interface is what the main checkout depends on: the `lib.cli` and `tools/` commands and their flags, `config.yaml` keys, the ledgers, the formats locked in `tests/test_formats.py`, and the stage contracts in `prompts/`. The biggest change in the release sets the bump:
 
-- **MAJOR**: Russell has to act after pulling, or something stops working: a config key renamed or newly required, a command or flag removed or changed, a ledger column changed, a format change that is "breaking for readers" (`RUN.md`, "Locking a format").
+- **MAJOR**: something that worked before the pull stops working until Russell acts: a config key renamed or newly required, a command or flag removed or changed that Russell, a prompt, a skill or a scheduled task still uses, a ledger column changed, a format change that is "breaking for readers" (`RUN.md`, "Locking a format"). Removing an option nothing uses is PATCH.
 - **MINOR**: something new that needs no action: a new command, tool, page, agent or optional config key, an additive format field. Usually a `feat:` PR.
 - **PATCH**: everything else: `fix:`, `refactor:`, `docs:`, `test:`, `chore:`.
 
-Read the bump from the diff, not the title prefix. A `fix:` that renames a config key is MAJOR.
+Read the bump from the diff, not the title prefix.
 
+## How you review
 
 Read the diff, not the description. Then check, in this order:
 
