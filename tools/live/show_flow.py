@@ -508,6 +508,28 @@ def _snap_age(snaps: list[Path], now: float | None = None) -> float | None:
     return min(ages) if ages else None
 
 
+def clock_marker(snap: Path) -> Path:
+    """The feed's note beside its frame that the D5100's clock had reset
+    (tools/d5100_webcam.sh: "${SNAP%.*}.clock")."""
+    return snap.with_suffix(".clock")
+
+
+def clock_reset(snaps: list[Path], last_frame: float | None) -> str | None:
+    """What the D5100 said its date was when the feed last found its clock
+    reset, if that was after `last_frame` (the newest frame's time; None: no
+    frame at all), so the reset belongs to this outage. None otherwise."""
+    for snap in snaps:
+        mark = clock_marker(snap)
+        try:
+            when = mark.stat().st_mtime
+            line = mark.read_text(errors="replace").strip()
+        except OSError:
+            continue
+        if line and (last_frame is None or when > last_frame):
+            return line.splitlines()[0].split("\t")[-1].strip() or "?"
+    return None
+
+
 def _gphoto2(*args, timeout=GPHOTO_TIMEOUT, **kw):
     try:
         return subprocess.run(["gphoto2", *args], capture_output=True, timeout=timeout, **kw)
@@ -811,8 +833,12 @@ def _look(c, cam: str, m: dict, now: float) -> tuple[str | None, str, str, bool]
         pids = feed_pids()
         if not pids:
             return "bad", "off", "D5100 feed stopped", False
-        age = _snap_age(feed_snaps(pids), now)
+        snaps = feed_snaps(pids)
+        age = _snap_age(snaps, now)
         if age is None or age > D5_STALE:
+            said = clock_reset(snaps, None if age is None else now - age)
+            if said:  # the feed set it again on its restart; frames back = live as usual
+                return "bad", "down", f"clock reset (camera said {said})", False
             why = "no frames from the camera" + (f" for {age:.0f}s" if age is not None else "")
             return "bad", "down", why, False
     elif cam == "webcam":

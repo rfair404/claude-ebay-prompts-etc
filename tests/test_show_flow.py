@@ -720,6 +720,24 @@ def test_no_reopen_without_frames_from_the_camera_or_while_busy(watch):
     assert watch.c.reopens == []
 
 
+@pytest.mark.parametrize("marked", [-30, -90])  # seconds from now: after / before the last frame
+def test_a_clock_reset_in_this_outage_is_the_d5s_reason(watch, marked):
+    watch.fresh = False
+    os.utime(watch.snap, (watch.t - 60, watch.t - 60))  # the last frame, a minute ago
+    mark = SF.clock_marker(watch.snap)  # the feed script's note beside its frame
+    mark.write_text("2026-10-22 01:02:03\t2011-01-01 00:00:05\n")
+    os.utime(mark, (watch.t + marked, watch.t + marked))
+    cams = watch.tick(3)
+    assert cams["d5"]["state"] == "down" and watch.black(SF.PRODUCT, SF.D5)
+    if marked > -60:
+        assert cams["d5"]["reason"] == "clock reset (camera said 2011-01-01 00:00:05)"
+        watch.fresh = True  # the feed set the clock and live view is back: a first look, then 5 good
+        assert watch.tick(6)["d5"] == {"state": "live", "reason": "", "since": watch.t - 1}
+        assert not watch.black(SF.PRODUCT, SF.D5)
+    else:  # an old reset, from before frames last flowed
+        assert cams["d5"]["reason"].startswith("no frames from the camera for")
+
+
 def test_the_watch_reopens_a_frozen_webcam_only_when_its_device_is_there(watch, tmp_path):
     dev = tmp_path / "video0"
     dev.write_bytes(b"")
