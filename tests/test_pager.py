@@ -1238,3 +1238,23 @@ def test_state_ignores_the_status_of_a_watch_whose_process_is_gone(obs):
     watch_says({"d5": LIVE, "webcam": LIVE, "tg7": LIVE}, pid=99_999_999)
     st = SF.state(obs)
     assert st["watch"] is False and st["cameras"]["d5"]["state"] == "unknown"
+
+
+def test_watch_route_starts_and_stops_the_watch(client, obs, monkeypatch):
+    calls = []
+    monkeypatch.setattr(SF, "watch_start", lambda: calls.append("start") or True)
+    monkeypatch.setattr(SF, "watch_stop", lambda c: calls.append(("stop", c is obs)))
+    body = client.post("/api/pager/watch", json={"action": "start"}).json()
+    assert calls == ["start"] and set(body["cameras"]) == {"d5", "webcam", "tg7"}
+    body = client.post("/api/pager/watch", json={"action": "stop"}).json()
+    assert calls == ["start", ("stop", True)] and body["watch"] is False
+    assert client.post("/api/pager/watch", json={"action": "reboot"}).status_code == 422
+    r = client.post("/api/pager/watch", json={"action": "start"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403 and len(calls) == 2
+
+
+def test_control_page_has_camera_chips_and_a_watch_button(client):
+    r = client.get("/pager")
+    assert 'id="cams"' in r.text and 'id="watch"' in r.text and "/api/pager/watch" in r.text
+    for cam in SF.CAM_IDS:
+        assert f'data-cam="{cam}"' in r.text
