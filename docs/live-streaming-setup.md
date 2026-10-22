@@ -221,7 +221,7 @@ python tools/live/show_flow.py standin on     # 4. only if the D5100 is out (set
 python tools/live/show_flow.py page intro     # 5. pre-show card, before going live
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
 python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
-python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus
+python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus, reconnect
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
@@ -243,10 +243,16 @@ never touches the D5100, so it's where to go if the camera dies mid-show.
 `eBay Main`) is the D5100 full frame (rotated 270 for the side-mounted
 camera) with the webcam full width across the top. **next** (scene `Up Next`)
 is the pause / next-item card: a desktop window centered on the dark
-background, under the same webcam strip. `page item` refocuses the D5100
-while the current page is still on air, starting the feed if it's off, then
-fades to the item view. `next` and `back` still work as aliases of
-`page next` and `page item`.
+background, under the same webcam strip. Every `page` is one scene switch
+(300 ms fade) and never waits for the camera. Refocusing is its own command,
+`refocus`: on the item view it covers the D5 with Up Next for the freeze,
+then fades back, unless the host asked for a page meanwhile (that page
+stays). `page item --refocus` refocuses behind the current page first, then
+switches. A failed refocus leaves the feed running. `reconnect [d5|webcam]`
+makes OBS reopen a camera whose picture is black or frozen (viewers see a
+blink of black on it); `feed start` and a refocus do that for the D5 on
+their own when the feed has frames but OBS's picture doesn't move. `next`
+and `back` still work as aliases of `page next` and `page item`.
 
 Up Next shows whatever its window shows *at that moment*, and a browser
 window drifts: the store page at setup can be Twitch (a feedback loop),
@@ -263,12 +269,13 @@ other page (and `setup`) only hides it.
 
 The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
 the repo venv) has a control page at
-http://localhost:8770/pager: one button per page, a Refocus button, the
-LIVE timer, the D5100 feed status, and keys 1-5 (intro, item, next,
-desktop, webcam) and R. The same pager is served as JSON for other
-pages or agents:
+http://localhost:8770/pager: one button per page, Refocus and Reconnect
+cameras buttons, the LIVE timer, the D5100 feed status, and keys 1-5
+(intro, item, next, desktop, webcam), R (refocus) and C (reconnect). Page
+clicks switch at once, even while a refocus runs; the last one pressed
+wins. The same pager is served as JSON for other pages or agents:
 `GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
-/api/pager/refocus` and `POST /api/pager/stream {"dest": "twitch",
+/api/pager/refocus`, `POST /api/pager/reconnect` and `POST /api/pager/stream {"dest": "twitch",
 "action": "start"}`. The page has Start/Stop buttons for eBay and Twitch,
 each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
@@ -278,8 +285,9 @@ canvas; `python tools/live/obsctl.py shot program -o /tmp/p.jpg` writes the
 program picture.
 
 Measured 2026-10-15: a refocus costs about 4.6 s with the D5 picture frozen
-(stop 0.5 s, autofocus 1.4 s, live view restart 2.7 s), so `back` and
-`refocus` cover it with Up Next. Live-view brightness on the D5100 is
+(stop 0.5 s, autofocus 1.4 s, live view restart 2.7 s), so `refocus`
+covers it with Up Next (and `page item --refocus` with the current page);
+a plain page switch no longer refocuses. Live-view brightness on the D5100 is
 automatic: ISO and shutter only change stills, so add light for a cleaner
 stream.
 
