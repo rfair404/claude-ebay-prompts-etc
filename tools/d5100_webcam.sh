@@ -15,6 +15,9 @@
 # shutter) only work while this is stopped.
 DEV=${DEV:-/dev/video10}
 SNAP=${SNAP:-${TMPDIR:-/tmp}/d5100_latest.jpg}
+# FPS caps the webcam feed (e.g. FPS=10 for a lighter preview); unset = the camera's ~24 fps.
+RATE=()
+[ -n "${FPS:-}" ] && RATE=(-vf "fps=$FPS")
 # The camera's clock: live view dies when the D5100's date has reset (Russell, 2026-10-22), so
 # every (re)start sets it to this computer's time first. A reset date (year before 2020) is
 # logged and noted in $CLOCK, one line "<when>\t<what the camera said>", which show_flow.py's
@@ -52,7 +55,7 @@ while true; do
   set_clock
   gphoto2 --stdout --capture-movie 2>/dev/null \
     | ffmpeg -hide_banner -loglevel error -i - \
-        -map 0:v -vcodec rawvideo -pix_fmt yuv420p -threads 0 -f v4l2 "$DEV" \
+        -map 0:v "${RATE[@]}" -vcodec rawvideo -pix_fmt yuv420p -threads 0 -f v4l2 "$DEV" \
         -map 0:v -vf fps=0.5 -update 1 -y "$SNAP"
   echo "$(date +%T) feed stopped, restarting in 2s (Ctrl+C to quit)" >&2
   sleep 2

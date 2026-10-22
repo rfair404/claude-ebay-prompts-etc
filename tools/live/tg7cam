@@ -390,6 +390,7 @@ def cmd_stream(a):
         start_liveview(a.size, a.port)
         ff = subprocess.Popen(ffmpeg_cmd(out), stdin=subprocess.PIPE)
         asm, frames, t0 = FrameAssembler(), 0, time.time()
+        next_at = t0
         print(f"live view {a.size} -> {out}  (Ctrl+C to stop)", flush=True)
         while True:
             try:
@@ -399,6 +400,11 @@ def cmd_stream(a):
                 start_liveview(a.size, a.port)
                 continue
             frame = asm.feed(pkt)
+            if frame and a.fps:  # cap the rate: drop frames that come too soon
+                now = time.time()
+                if now < next_at:
+                    continue
+                next_at = max(next_at + 1 / a.fps, now)
             if frame:
                 ff.stdin.write(frame)
                 frames += 1
@@ -522,6 +528,8 @@ def main(argv=None):
                                  f"if it exists, else {DEFAULT_UDP})")
     p.add_argument("--size", default=DEFAULT_LVQTY, help="live view size, see `probe`")
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--fps", type=float, default=0,
+                   help="cap the frame rate (default 0: whatever the camera sends, ~8 fps)")
     p.set_defaults(fn=cmd_stream)
     p = sub.add_parser("focus")
     p.add_argument("x", type=float)
