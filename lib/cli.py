@@ -91,6 +91,9 @@ COMMANDS = {
     "offsite":      ("lib.offsite",
                      "back up / restore ledgers + inventory/ to an S3-compatible "
                      "bucket (R2) — dry run unless --apply, never deletes remotely"),
+    "gdrive":       ("lib.gdrive_mirror",
+                     "second offsite copy to Google Drive via rclone — auto after each "
+                     "ledger write + daily timer; never deletes remotely"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }

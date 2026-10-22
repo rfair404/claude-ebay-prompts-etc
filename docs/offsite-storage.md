@@ -2,7 +2,8 @@
 
 Added after the 2026-10 Windows wipe, which lost every ledger, shoot photo and
 `draft.md` because only one copy existed. `ebz offsite` (`lib/offsite.py`)
-keeps a second copy in an S3-compatible bucket.
+keeps a second copy in an S3-compatible bucket, and `ebz gdrive` keeps a
+third on Google Drive (see the last section).
 
 ## What gets copied
 
@@ -131,3 +132,78 @@ An older version of an overwritten file is under
 - When `push` overwrites a changed object, it first copies the old one to `history/`.
 - `pull` never replaces a differing local file without `--overwrite`.
 - Nothing transfers without `--apply`.
+
+## Second copy: Google Drive
+
+`ebz gdrive` (`lib/gdrive_mirror.py`) copies the same file set to Google Drive
+with [rclone](https://rclone.org/drive/). It is a different provider and a
+different account from R2, so one lapsed bill, revoked key or bad push can't
+take out both copies.
+
+It runs on its own:
+
+- **After every ledger write**: draft, sync, publish, end, delete, sale
+  (`lib/sync_actuals.py --apply`), shipment (`pick-list`) and
+  `reconcile --apply`. A price edit doesn't write the ledger yet, so it
+  reaches Drive with the daily push. A detached background job pushes the
+  ledger files about 20 s later. Writes that land while it waits or runs are
+  batched into one upload. It never blocks or fails the command that wrote
+  the ledger. Only the main checkout's ledgers count; a worktree's copy and
+  a test's temporary ledger don't trigger it. Log: `.gdrive.log`.
+- **Daily at ~03:15**: a systemd user timer pushes the full set.
+  `Persistent=true` means a day the machine was off runs at the next boot.
+
+Drive layout: `<folder>/data/<path>` is the current copy, and
+`<folder>/history/<UTC stamp>/<path>` holds versions a push replaced
+(`rclone --backup-dir`). Push uses `rclone copy`, never `sync`, so it never
+deletes on Drive.
+
+### Setup (once)
+
+1. Install rclone. Needs your password:
+
+   ```
+   sudo apt install rclone
+   ```
+
+2. Create the remote. This opens a browser to sign in to Google. Take the
+   defaults, except name it `gdrive`, pick storage `drive`, and pick scope
+   `1` (full access) or `3` (files rclone creates only):
+
+   ```
+   rclone config
+   ```
+
+3. Add the `gdrive:` block to `config.yaml` (template in
+   `lib/config.example.yaml`):
+
+   ```yaml
+   gdrive:
+     remote: "gdrive"
+     folder: "EBAYBIZ-backup"
+     auto: true
+   ```
+
+4. Check it, do the first full push, and turn on the daily timer:
+
+   ```
+   python -m lib.cli gdrive check
+   python -m lib.cli gdrive push --apply
+   python -m lib.cli gdrive install-timer --apply
+   ```
+
+### Day to day
+
+```
+python -m lib.cli gdrive push                    # dry run: what would upload
+python -m lib.cli gdrive push --apply --ledgers  # just the ledgers, now
+systemctl --user list-timers ebaybiz-gdrive.timer
+journalctl --user -u ebaybiz-gdrive.service      # daily run output
+tail .gdrive.log                                 # after-write runs
+```
+
+Set `EBAYBIZ_GDRIVE_AUTO=0` to turn off the after-write push for one
+command, or `auto: false` to turn it off for good. To restore from Drive,
+copy `<folder>/data/` back with `rclone copy gdrive:EBAYBIZ-backup/data .`
+from the main checkout. Check what is there first:
+`rclone ls gdrive:EBAYBIZ-backup/data`.

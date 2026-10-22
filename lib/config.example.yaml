@@ -269,6 +269,19 @@ offsite:
   #                         # are never synced (MEDIA_SUFFIXES in lib/offsite.py)
 
 # ---------------------------------------------------------------------------
+# Second offsite copy: Google Drive — lib/gdrive_mirror.py (`ebz gdrive`)
+# ---------------------------------------------------------------------------
+# Same file set as offsite: above, copied with rclone. Pushes the ledgers in
+# the background after every ledger write, plus a daily full push from the
+# systemd user timer (`ebz gdrive install-timer --apply`). rclone keeps the
+# Google token in ~/.config/rclone/rclone.conf — nothing secret goes here.
+# Setup steps: docs/offsite-storage.md ("Second copy: Google Drive").
+gdrive:
+  remote: "gdrive"          # the rclone remote name from `rclone config`
+  folder: "EBAYBIZ-backup"  # top-level folder in My Drive
+  auto: true                # false: only the daily timer / manual pushes
+
+# ---------------------------------------------------------------------------
 # CURATE strategy profiles
 # ---------------------------------------------------------------------------
 # Profiles encode the Buy Point math used by CURATE. The active profile
