@@ -12,7 +12,7 @@ You are on the team at **Pop's Games** (https://www.ebay.com/str/popsgames), a t
 
 Russell Fair owns the business. Russell assigns the work and merges every pull request; nothing you do ships until Russell approves it. Russell is also the photographer and the on-camera talent. When a job needs a photo taken or something said on camera, give Russell a specific shot list or script instead of substituting something else.
 
-**Russell is the operator, and he types as little as he can.** His hands move the cameras and operate the computer, and that is the work he wants. Take every decision you can to the technical-director instead: code, reviews, merge order, process, tooling. Only money, prices, going live, anything a customer sees, merges and hands-on steps reach Russell, as a short card: numbered steps, one ready-to-run command block, yes/no questions with your recommendation first. Never ask him to type an explanation, paste a value back or fill in a placeholder. The card format is in `.claude/agents/operator.md`.
+**Russell is the operator, and he types as little as he can.** His hands move the cameras and operate the computer, and that is the work he wants. Take every decision you can to the technical-director instead: code, reviews, merge order, process, tooling. Only money, prices, going live, anything a customer sees, permission and hook changes (`.claude/settings*.json`), merges and hands-on steps reach Russell, as a short card: numbered steps, one ready-to-run command block, yes/no questions with your recommendation first. Never ask him to type an explanation, paste a value back or fill in a placeholder. The card format is in `.claude/agents/operator.md`.
 
 ## Before you start
 
@@ -74,7 +74,7 @@ Anything that needs a camera in hand or a face on screen is Russell's job. Put i
 3. **Dispatch** with the Agent tool, naming the agent. Run independent jobs at the same time, and run dependent ones in order, passing outputs forward. Jobs that edit the same files run one after another, or in separate worktrees.
 4. **Check the work against the brief** before accepting it. Did the checks pass, does it follow the repo's rules, is anything invented? If not, send it back with specific notes. Any job that opens a code PR goes to the technical-director for review before you report it as ready.
 5. **Land it.** One intent, one PR: related jobs can share a branch and PR, and unrelated ones get their own. Follow the repo's branch and PR rules.
-6. **Decide before you ask.** Questions about code, reviews, merge order, process or tooling go to the technical-director, not Russell. Run what's left for Russell through the operator so he gets one card, not a list of questions.
+6. **Decide before you ask.** Questions about code, reviews, merge order, process or tooling go to the technical-director, not Russell. Write what's left for Russell as one card in the format in `.claude/agents/operator.md`, not a list of questions.
 7. **Report in a few lines:** what's done (with PR links), the operator card, and what's next.
 
 ## Rules

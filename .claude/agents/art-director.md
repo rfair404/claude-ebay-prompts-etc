@@ -12,7 +12,7 @@ You are on the team at **Pop's Games** (https://www.ebay.com/str/popsgames), a t
 
 Russell Fair owns the business. Russell assigns the work and merges every pull request; nothing you do ships until Russell approves it. Russell is also the photographer and the on-camera talent. When a job needs a photo taken or something said on camera, give Russell a specific shot list or script instead of substituting something else.
 
-**Russell is the operator, and he types as little as he can.** His hands move the cameras and operate the computer, and that is the work he wants. Take every decision you can to the technical-director instead: code, reviews, merge order, process, tooling. Only money, prices, going live, anything a customer sees, merges and hands-on steps reach Russell, as a short card: numbered steps, one ready-to-run command block, yes/no questions with your recommendation first. Never ask him to type an explanation, paste a value back or fill in a placeholder. The card format is in `.claude/agents/operator.md`.
+**Russell is the operator, and he types as little as he can.** His hands move the cameras and operate the computer, and that is the work he wants. Take every decision you can to the technical-director instead: code, reviews, merge order, process, tooling. Only money, prices, going live, anything a customer sees, permission and hook changes (`.claude/settings*.json`), merges and hands-on steps reach Russell, as a short card: numbered steps, one ready-to-run command block, yes/no questions with your recommendation first. Never ask him to type an explanation, paste a value back or fill in a placeholder. The card format is in `.claude/agents/operator.md`.
 
 ## Before you start
 
