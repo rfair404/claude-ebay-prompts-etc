@@ -13,6 +13,7 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
     POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
     POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
+    POST /api/pager/watch       {"action": "start" | "stop"}: the camera watch (black over a dead camera)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
@@ -25,7 +26,14 @@ Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
      "standin": false, "refocusing": false, "held": null, "tg7_status": "running",
-     "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null}}
+     "watch": true,
+     "cameras": {"d5": {"state": "down", "reason": "no frames from the camera for 6s",
+                        "since": 1792617852.1, "blacked": true},
+                 "webcam": {"state": "live", "reason": "", "since": 1792617790.4, "blacked": false},
+                 "tg7": {"state": "off", "reason": "TG-7 feed stopped", "since": 1792617790.4,
+                         "blacked": true}},
+     "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null,
+                "blacked": ["d5"]}}
 
 `page` is null when OBS is on a scene that isn't one of the pager's, and
 "hold" on the hold still; `held` then names the page the still was taken of.
@@ -41,6 +49,13 @@ page (show_flow.SAFE_WINDOW) and not a private one (PRIVATE_WINDOW);
 otherwise card + webcam only. Every other page hides the window.
 `webcam` is the fallback page: the webcam alone, no D5100. `multi` shows
 the D5100, the webcam and the desktop page's window at once.
+
+`cameras` is the camera watch's word on each camera (`show_flow.py watch`):
+`state` "live", "down" (no moving picture), "off" (its feed isn't running),
+"busy" (the D5100 mid refocus, WB or still), "standin", or "unknown" (no
+watch running, or no verdict yet); `reason` says why, `since` is when (Unix
+time). `blacked` is read from OBS: the camera's black panel is on air. A
+switch to a page with a blacked camera carries `blacked: [ids]`.
 
 The preview is OBS's own render of the program scene, 360 px wide, so it
 works on or off air and shows the same frame for eBay and Twitch. It takes
@@ -108,6 +123,10 @@ class HoldRequest(BaseModel):
 
 
 class Tg7Request(BaseModel):
+    action: Literal["start", "stop"]
+
+
+class WatchRequest(BaseModel):
     action: Literal["start", "stop"]
 
 
@@ -230,6 +249,16 @@ def pager_tg7(req: Tg7Request) -> dict:
         return _show_flow.state(c)
 
 
+@router.post("/api/pager/watch")
+def pager_watch(req: WatchRequest) -> dict:
+    with _obs() as c:
+        if req.action == "start":
+            _show_flow.watch_start()
+        else:
+            _show_flow.watch_stop(c)
+        return _show_flow.state(c)
+
+
 # The control page. Plain HTML + fetch against the routes above, same
 # origin, so the guard's Origin check passes. It polls every 1 s while the
 # tab is visible (not at all while hidden: OBS is short of CPU during a
@@ -264,6 +293,12 @@ h1 { font-size:20px; margin:0; }
 .badge { font-size:13px; font-weight:600; padding:4px 10px; border-radius:999px;
          border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
 .badge.live { background:var(--live); border-color:var(--live); color:#fff; }
+.cams { display:flex; flex-wrap:wrap; gap:8px; margin:-6px 0 18px; }
+.chip { font-size:13px; font-weight:600; padding:4px 10px; border-radius:999px;
+        border:1px solid var(--line); color:var(--muted); }
+.chip.live { background:var(--on); border-color:var(--on); color:var(--on-ink); }
+.chip.down { background:var(--live); border-color:var(--live); color:#fff; }
+.chip.busy { border-color:var(--warn); color:var(--warn); }
 .pages { display:grid; gap:12px; }
 button { font:inherit; color:inherit; cursor:pointer; }
 .page { display:flex; align-items:center; gap:14px; width:100%; text-align:left;
@@ -308,6 +343,11 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
 </style></head>
 <body><main>
 <header><h1>Show Pager</h1><span id="badge" class="badge">connecting...</span></header>
+<div class="cams" id="cams" aria-label="Cameras">
+  <span class="chip" data-cam="d5">D5100 unknown</span>
+  <span class="chip" data-cam="webcam">Webcam unknown</span>
+  <span class="chip" data-cam="tg7">TG-7 unknown</span>
+</div>
 <div class="monitor" id="monitor">
   <img id="shot" alt="What OBS is sending now"
        src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">
@@ -334,7 +374,8 @@ footer { margin-top:22px; font-size:13px; color:var(--muted); }
   <button id="step">Step <small>(Space)</small></button></div>
 <div class="row"><button id="refocus">Refocus <small>(R)</small></button>
   <button id="reconnect">Reconnect cameras <small>(C)</small></button>
-  <button id="tg7">TG-7 feed</button></div>
+  <button id="tg7">TG-7 feed</button>
+  <button id="watch">Start camera watch</button></div>
 <div class="row" id="wbrow"><select id="wb" aria-label="Set the D5100 white balance to">
     <option value="" selected disabled>Set D5100 WB to...</option>
     <option value="auto">Auto</option><option value="daylight">Daylight</option>
@@ -363,10 +404,14 @@ const $ = s => document.querySelector(s), buttons = [...document.querySelectorAl
 const LABEL = { intro: 'Intro', item: 'Item', closeup: 'Close-up', next: 'Next', desktop: 'Desktop',
                 webcam: 'Webcam only', multi: 'Multi view', hold: 'Hold' };
 const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
+const CAM_LABEL = { d5: 'D5100', webcam: 'Webcam', tg7: 'TG-7' };
+// the cameras each page puts on air (show_flow.PAGE_CAMS)
+const PAGE_CAMS = { intro: [], item: ['d5', 'webcam'], closeup: ['tg7', 'webcam'], next: ['webcam'],
+                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam', 'tg7'] };
 // Hold, release and step ride the page queue as actions: one at a time, in order.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
                  '@step': ['/api/pager/step', null] };
-let held = null, tg7Busy = false;
+let held = null, tg7Busy = false, watchBusy = false, lastCams = null;
 // Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
 let pending = null, switching = false, refocusing = false, streaming = false, standinBusy = false;
 let epoch = 0;  // bumped by every action, so a poll answer from before it can't undo it
@@ -399,10 +444,34 @@ function show(st) {
   $('#wbset').disabled = wbBusy || !!st.refocusing;
   if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
+  if (!watchBusy) $('#watch').textContent = st.watch ? 'Stop camera watch' : 'Start camera watch';
+  showCams(st);
   $('#foot').textContent = 'OBS scene: ' + st.scene + (st.page ? '' : ' (not a pager page)') +
                            ' \\u00b7 D5100 feed: ' + (st.feed_status || (st.feed ? 'running' : 'stopped')) +
                            ' \\u00b7 TG-7 feed: ' + (st.tg7_status || '?') +
                            (st.refocusing ? ' \\u00b7 D5100 busy (refocus, WB or still)' : '');
+}
+
+// One chip per camera; a camera on the page on air going black (or coming back) is said.
+function showCams(st) {
+  const cams = st.cameras || {};
+  for (const el of document.querySelectorAll('#cams .chip')) {
+    const v = cams[el.dataset.cam] || { state: 'unknown' };
+    el.className = 'chip' + ({ live: ' live', down: ' down', busy: ' busy' }[v.state] || '');
+    el.textContent = CAM_LABEL[el.dataset.cam] + ' ' + v.state + (v.blacked ? ' \\u00b7 black on air' : '');
+    el.title = v.reason || '';
+  }
+  if (lastCams) for (const k of PAGE_CAMS[st.page] || []) {
+    const was = !!(lastCams[k] || {}).blacked, now = !!(cams[k] || {}).blacked;
+    if (now && !was) say(CAM_LABEL[k] + ' went down: its slot is black on air.', 'warn');
+    else if (was && !now && (cams[k] || {}).state === 'live') say(CAM_LABEL[k] + ' is back.');
+  }
+  lastCams = cams;
+}
+
+function camText(st, k) {
+  const r = ((st.cameras || {})[k] || {}).reason;
+  return CAM_LABEL[k] + (r ? ' (' + r + ')' : '');
 }
 
 // Every call has a deadline, so a stuck server or OBS can't leave the page waiting forever.
@@ -483,6 +552,9 @@ function switched(page, st) {
   else if (sw.window && !sw.window.shown)
     say('On air: Next. Window hidden (' + (sw.window.title || 'closed') +
         ' is not safe to show). Open the next lot in its own window.', 'warn');
+  else if ((sw.blacked || []).length)
+    say('On air: ' + LABEL[page] + '. Black in place of ' + sw.blacked.map(k => camText(st, k)).join(', ') +
+        '. Reconnect (C) or Webcam only (5).', 'warn');
   else if (D5_PAGES.includes(page) && st.refocusing)
     say('On air: ' + LABEL[page] + '. The D5100 is busy (refocus, WB or still): its picture is frozen for a few seconds.', 'warn');
   else if (D5_PAGES.includes(page) && !st.standin && st.feed_status !== 'running')
@@ -575,6 +647,19 @@ async function setWb() {
   wbBusy = false; $('#wbset').disabled = false;
 }
 
+async function watch() {
+  if (watchBusy) return;
+  const action = $('#watch').textContent.startsWith('Stop') ? 'stop' : 'start';
+  watchBusy = true; $('#watch').disabled = true; epoch++;
+  say(action === 'start' ? 'Starting the camera watch...' : 'Stopping the camera watch...');
+  try { const st = await api('POST', '/api/pager/watch', { action }, 15000);
+        watchBusy = false; if (!switching) show(st);
+        say(action === 'start' ? 'Camera watch started: a camera that drops goes black on air.'
+                               : 'Camera watch stopped: every black panel is off.'); }
+  catch (e) { say('Camera watch ' + action + ' failed: ' + e.message, 'err'); }
+  watchBusy = false; $('#watch').disabled = false;
+}
+
 let reconnecting = false;
 async function reconnect() {
   if (reconnecting) return;
@@ -643,6 +728,7 @@ $('#wbset').addEventListener('click', setWb);
 $('#hold').addEventListener('click', holdKey);
 $('#step').addEventListener('click', () => go('@step'));
 $('#tg7').addEventListener('click', tg7);
+$('#watch').addEventListener('click', watch);
 $('#music .go').addEventListener('click', music);
 $('#standin').addEventListener('change', async e => {
   const on = e.target.checked;

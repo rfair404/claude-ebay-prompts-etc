@@ -2,7 +2,9 @@
 and feed status, against a fake OBS that keeps real scene item stacks.
 
 Nothing here needs OBS, the D5100, gphoto2 or X: the window's live title and
-the feed's processes are stubbed. Pager switching is in tests/test_pager.py."""
+the feed's processes are stubbed. Pager switching is in tests/test_pager.py.
+The camera watch (black panels) runs here on the same fake, one tick at a time."""
+import json
 import os
 import sys
 import time
@@ -24,7 +26,9 @@ REAL_TG7_SOURCE = SF.tg7_source  # and this
 
 class SceneObs:
     """Scenes as stacks, bottom first (OBS's sceneItemIndex order); a new
-    scene item lands on top and enabled, as in OBS."""
+    scene item lands on top, enabled unless asked otherwise, as in OBS.
+    `pictures[source]` is what each screenshot of a source shows, one per
+    call, the last one repeating (None: OBS's code 702, no picture)."""
 
     def __init__(self, scenes=None, inputs=()):
         self.ids = iter(range(1, 1000))
@@ -38,6 +42,10 @@ class SceneObs:
         self.kinds = {}  # inputName -> inputKind, for inputs this fake created
         self.transforms = {}
         self.program = SF.INTRO
+        self.pictures = {}
+        self.shots = []  # sources screenshotted, in order
+        self.writes = []  # SetSceneItemEnabled: (scene, source, enabled)
+        self.reopens = []  # sources whose device_id was cleared and set back (reconnect)
 
     def _new(self, src, enabled=True):
         return {"sourceName": src, "sceneItemId": next(self.ids), "sceneItemEnabled": enabled}
@@ -60,6 +68,8 @@ class SceneObs:
         if req == "GetInputPropertiesListPropertyItems":
             return {"propertyItems": self.windows}
         if req == "SetInputSettings":
+            if d["inputSettings"] == {"device_id": ""}:
+                self.reopens.append(d["inputName"])
             self.settings.setdefault(d["inputName"], {}).update(d["inputSettings"])
             return {}
         if req == "GetInputSettings":
@@ -69,7 +79,7 @@ class SceneObs:
             self.inputs.add(d["inputName"])
             self.kinds[d["inputName"]] = d["inputKind"]
             self.settings[d["inputName"]] = dict(d.get("inputSettings") or {})
-            it = self._new(d["inputName"])
+            it = self._new(d["inputName"], d.get("sceneItemEnabled", True))
             self.scenes[d["sceneName"]].append(it)
             return {"sceneItemId": it["sceneItemId"]}
         if req == "GetSceneList":
@@ -79,11 +89,14 @@ class SceneObs:
             self.scenes[d["sceneName"]] = []
             return {}
         if req == "GetSceneItemList":
+            if d["sceneName"] not in self.scenes:
+                raise obsctl.ObsError(f"{req} failed: code 600 No source was found by the name of "
+                                      f"`{d['sceneName']}`.")
             return {"sceneItems": [{**i, "sceneItemIndex": n}
                                    for n, i in enumerate(self.scenes[d["sceneName"]])]}
         if req == "CreateSceneItem":
             assert d["sourceName"] in self.inputs, d
-            it = self._new(d["sourceName"])
+            it = self._new(d["sourceName"], d.get("sceneItemEnabled", True))
             self.scenes[d["sceneName"]].append(it)
             return {"sceneItemId": it["sceneItemId"]}
         if req == "SetSceneItemTransform":
@@ -91,7 +104,9 @@ class SceneObs:
                 d["sceneItemTransform"]
             return {}
         if req == "SetSceneItemEnabled":
-            self._find(d["sceneName"], d["sceneItemId"])["sceneItemEnabled"] = d["sceneItemEnabled"]
+            it = self._find(d["sceneName"], d["sceneItemId"])
+            it["sceneItemEnabled"] = d["sceneItemEnabled"]
+            self.writes.append((d["sceneName"], it["sourceName"], d["sceneItemEnabled"]))
             return {}
         if req == "SetSceneItemIndex":
             stack = self.scenes[d["sceneName"]]
@@ -101,6 +116,19 @@ class SceneObs:
             return {}
         if req == "GetCurrentProgramScene":
             return {"currentProgramSceneName": self.program}
+        if req == "SetCurrentProgramScene":
+            self.program = d["sceneName"]
+            return {}
+        if req == "GetSourceScreenshot":
+            src = d["sourceName"]
+            if src not in self.inputs:
+                raise obsctl.ObsError(f"{req} failed: code 600 No source was found by the name of `{src}`.")
+            self.shots.append(src)
+            pics = self.pictures[src]
+            pic = pics.pop(0) if len(pics) > 1 else pics[0]
+            if pic is None:
+                raise obsctl.ObsError(f"{req} failed: code 702 Failed to render screenshot.")
+            return {"imageData": f"data:image/jpg;base64,{pic}"}
         if req in ("SetCurrentSceneTransition", "SetCurrentSceneTransitionDuration"):
             return {}
         raise AssertionError(f"unexpected request {req}")
@@ -114,6 +142,9 @@ class SceneObs:
 
     def count(self, scene, src):
         return self.order(scene).count(src)
+
+    def close(self):
+        pass
 
 
 def live_obs():
@@ -139,6 +170,14 @@ def no_x(monkeypatch):
     monkeypatch.setattr(SF.time, "sleep", lambda s: None)
     monkeypatch.setattr(SF, "tg7_source", lambda: ("v4l2_input", {"device_id": "/dev/video11"}))
     return titles
+
+
+@pytest.fixture(autouse=True)
+def show_files(tmp_path, monkeypatch):
+    """The refocus lock and the camera watch's files in tmp_path, never a running show's."""
+    for const, name in (("LOCK", "show_flow.lock"), ("WATCH_LOCK", "show_flow.watch.lock"),
+                        ("CAMS_FILE", "show_flow.cams.json"), ("WATCH_LOG", "show_flow_watch.log")):
+        monkeypatch.setattr(SF, const, tmp_path / name)
 
 
 # --- bug: setup with the stand-in on -----------------------------------------
@@ -247,19 +286,20 @@ def test_setup_builds_the_webcam_page_idempotently():
     SF.cmd_setup(c, args())
     SF.cmd_setup(c, args())
     order = c.order(SF.WEBCAM_ONLY)
-    assert order[0] == SF.BG and order[-1] == SF.WEBCAM  # dark card under, webcam on top
-    assert sorted(order) == sorted([SF.BG, SF.WEBCAM, SF.MIC])  # nothing doubled
+    # dark card under, webcam on top, its (hidden) black panel over it
+    assert order[0] == SF.BG and order[-2:] == [SF.WEBCAM, "Webcam Down"]
+    assert sorted(order) == sorted([SF.BG, SF.WEBCAM, SF.MIC, "Webcam Down"])  # nothing doubled
     assert c.transforms[(SF.WEBCAM_ONLY, SF.WEBCAM)] == {
         "positionX": 0, "positionY": 0, "alignment": 5, "boundsType": "OBS_BOUNDS_SCALE_OUTER",
         "boundsWidth": 1080, "boundsHeight": 1350, "cropToBounds": True}
-    assert all(c.enabled(SF.WEBCAM_ONLY, s) for s in order)
+    assert all(c.enabled(SF.WEBCAM_ONLY, s) for s in order if s != "Webcam Down")
 
 
 def test_setup_creates_the_webcam_page_when_missing():
     c = live_obs()
     del c.scenes[SF.WEBCAM_ONLY]
     SF.cmd_setup(c, args())
-    assert c.order(SF.WEBCAM_ONLY) == [SF.BG, SF.MIC, SF.WEBCAM]
+    assert c.order(SF.WEBCAM_ONLY) == [SF.BG, SF.MIC, SF.WEBCAM, "Webcam Down"]
 
 
 def test_webcam_page_on_the_cli(monkeypatch, capsys):
@@ -338,21 +378,26 @@ def test_setup_builds_the_multi_page_idempotently():
     c = live_obs()
     SF.cmd_setup(c, args(desktop_window="Pop's Games", desktop_crop_left=216))
     SF.cmd_setup(c, args())  # later runs keep it, the window already picked
-    assert c.order(SF.MULTI) == [SF.BG, SF.D5, SF.WEBCAM, SF.DESKTOP_WIN, SF.MIC]
-    assert all(c.enabled(SF.MULTI, s) for s in c.order(SF.MULTI))
+    assert c.order(SF.MULTI) == [SF.BG, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down", SF.TG7, "TG-7 Down",
+                                 SF.DESKTOP_WIN, SF.MIC]
+    assert all(c.enabled(SF.MULTI, s) for s in c.order(SF.MULTI) if s not in SF.DOWN.values())
     d5, cam = c.transforms[(SF.MULTI, SF.D5)], c.transforms[(SF.MULTI, SF.WEBCAM)]
     # side by side in the top row, the D5 on its side: its bounds turn with it
     assert (d5["positionX"], d5["positionY"], d5["rotation"]) == (270, 405, 270)
     assert (d5["boundsWidth"], d5["boundsHeight"]) == (SF.MULTI_ROW, SF.W / 2) and d5["cropToBounds"]
     assert (cam["positionX"], cam["positionY"]) == (810, 405)
     assert (cam["boundsWidth"], cam["boundsHeight"]) == (SF.W / 2, SF.MULTI_ROW) and cam["cropToBounds"]
+    # the TG-7 whole under the row, the window under the TG-7, together filling the canvas
+    tg7 = c.transforms[(SF.MULTI, SF.TG7)]
+    assert (tg7["positionY"], tg7["boundsWidth"], tg7["boundsHeight"]) == (SF.MULTI_ROW, SF.W, SF.MULTI_TG7)
+    assert tg7["boundsType"] == "OBS_BOUNDS_SCALE_INNER"
     win = c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]
-    assert (win["positionY"], win["boundsHeight"]) == (SF.MULTI_ROW, SF.H - SF.MULTI_ROW)
+    assert win["positionY"] == SF.MULTI_ROW + SF.MULTI_TG7 and win["positionY"] + win["boundsHeight"] == SF.H
     assert win["alignment"] == win["boundsAlignment"] == 4  # hung from the row
     assert "cropLeft" not in win  # the second run didn't pass a crop: the first one's stays in OBS
     SF.cmd_setup(c, args(desktop_crop_left=100))
     assert c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]["cropLeft"] == 100
-    assert c.count(SF.MULTI, SF.D5) == 1 and c.count(SF.MULTI, SF.WEBCAM) == 1
+    assert c.count(SF.MULTI, SF.D5) == 1 and c.count(SF.MULTI, SF.WEBCAM) == 1 and c.count(SF.MULTI, SF.TG7) == 1
 
 
 def test_the_standin_darkens_the_multi_pages_d5_too():
@@ -378,7 +423,8 @@ def test_setup_builds_the_closeup_and_hold_pages_idempotently():
     c = live_obs()
     SF.cmd_setup(c, args())
     SF.cmd_setup(c, args())
-    assert c.order(SF.CLOSEUP) == [SF.BG, SF.TG7, SF.WEBCAM, SF.MIC]  # webcam over the TG-7
+    # webcam over the TG-7, each camera's (hidden) black panel right over it
+    assert c.order(SF.CLOSEUP) == [SF.BG, SF.TG7, "TG-7 Down", SF.WEBCAM, "Webcam Down", SF.MIC]
     assert c.kinds[SF.TG7] == "v4l2_input" and c.settings[SF.TG7] == {"device_id": "/dev/video11"}
     box = c.transforms[(SF.CLOSEUP, SF.TG7)]
     # below the webcam strip, cover-cropped
@@ -386,7 +432,7 @@ def test_setup_builds_the_closeup_and_hold_pages_idempotently():
     assert box["positionY"] == SF.TG7_TOP + (SF.H - SF.TG7_TOP) / 2 and box["cropToBounds"] is True
     assert c.transforms[(SF.CLOSEUP, SF.WEBCAM)] == SF.WEBCAM_BOX
     # Hold: the still under the live webcam strip, which lands where it sat in the still
-    assert c.order(SF.HOLD) == [SF.HOLD_FRAME, SF.WEBCAM, SF.MIC]
+    assert c.order(SF.HOLD) == [SF.HOLD_FRAME, SF.WEBCAM, "Webcam Down", SF.MIC]
     assert c.kinds[SF.HOLD_FRAME] == "image_source"
     assert c.transforms[(SF.HOLD, SF.WEBCAM)] == SF.WEBCAM_BOX
     assert c.transforms[(SF.HOLD, SF.HOLD_FRAME)]["boundsWidth"] == SF.W
@@ -453,3 +499,302 @@ def test_tg7_pattern_matches_the_feed_and_nothing_else():
     assert pat.search("python3 /home/russ/bin/tg7cam stream")
     assert not pat.search("python3 /home/russ/bin/tg7cam shoot")
     assert not pat.search("bash -c tg7cam stream")
+
+
+# --- the camera watch: a black panel over a camera that drops -------------------
+PANELS = list(SF.DOWN.values())
+
+
+def built():
+    """The show as setup leaves it, the desktop and multi pages included."""
+    c = live_obs()
+    SF.cmd_setup(c, args(desktop_window="Pop's Games"))
+    return c
+
+
+def test_setup_puts_a_hidden_black_panel_over_each_camera_on_every_page_that_shows_it():
+    c = built()
+    SF.cmd_setup(c, args())  # twice: nothing doubles
+    shows = {SF.D5: {SF.PRODUCT, SF.MULTI}, SF.TG7: {SF.CLOSEUP, SF.MULTI},
+             SF.WEBCAM: {SF.PRODUCT, SF.MULTI, SF.CLOSEUP, SF.UPNEXT, SF.DESKTOP, SF.HOLD, SF.WEBCAM_ONLY}}
+    for cam, panel in SF.DOWN.items():
+        assert c.kinds[panel] == "color_source_v3" and c.settings[panel]["color"] == 0xFF000000
+        assert {s for s in c.scenes if panel in c.order(s)} == shows[cam]
+        for scene in shows[cam]:
+            order = c.order(scene)
+            assert order.count(panel) == 1 and c.enabled(scene, panel) is False
+            assert order.index(panel) == order.index(cam) + 1  # directly over its camera
+            box = c.transforms[(scene, panel)]
+            assert (box["positionX"], box["positionY"], box["boundsWidth"], box["boundsHeight"]) == \
+                SF.SLOTS[scene][cam]
+            assert box["alignment"] == 5 and box["boundsType"] == "OBS_BOUNDS_STRETCH"
+    # the webcam strip still covers the D5's panel; nothing in Intro
+    assert c.order(SF.PRODUCT) == [SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down", SF.WINDOW]
+    assert c.transforms[(SF.WEBCAM_ONLY, "Webcam Down")]["boundsHeight"] == 1350
+    assert c.order(SF.WEBCAM_ONLY)[-2:] == [SF.WEBCAM, "Webcam Down"]
+    assert not set(PANELS) & set(c.order(SF.INTRO))
+    assert not any(on for _, src, on in c.writes if src in PANELS)  # never a flash of black
+
+
+def test_a_panel_below_its_camera_moves_to_directly_above_it():
+    # moved by hand in OBS: each panel under its camera, more items above
+    c = SceneObs({SF.PRODUCT: [("D5 Down", False), (SF.D5, True), ("Webcam Down", False),
+                               (SF.WEBCAM, True), (SF.WINDOW, False)]}, inputs=PANELS)
+    SF._seat_panels(c, SF.PRODUCT)
+    assert c.order(SF.PRODUCT) == [SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down", SF.WINDOW]
+
+
+def test_the_standin_keeps_the_panels_over_their_cameras_and_turns_the_d5s_off():
+    c = built()
+    SF.set_panel(c, SF.D5, True)
+    SF.standin(c, True)
+    assert c.order(SF.PRODUCT)[:5] == [SF.STANDIN, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down"]
+    assert c.enabled(SF.PRODUCT, "D5 Down") is False and c.enabled(SF.MULTI, "D5 Down") is False
+    SF.standin(c, False)
+    assert c.order(SF.PRODUCT)[:5] == [SF.STANDIN, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down"]
+
+
+def test_setup_turns_off_panels_a_dead_watch_left_on():
+    c = built()
+    SF.set_panel(c, SF.D5, True)
+    SF.set_panel(c, SF.WEBCAM, True)
+    SF.cmd_setup(c, args())
+    for scene in (SF.PRODUCT, SF.MULTI, SF.WEBCAM_ONLY):
+        assert not c.enabled(scene, "Webcam Down")
+    assert not c.enabled(SF.PRODUCT, "D5 Down") and not c.enabled(SF.MULTI, "D5 Down")
+    assert not c.enabled(SF.CLOSEUP, "TG-7 Down")
+
+
+def moving(tag):
+    return [f"{tag}{i}" for i in range(300)]
+
+
+class Watch:
+    """A built show, the cameras as the watch sees them (both feeds running,
+    the D5's frames fresh, every picture moving) and the watch's clock."""
+
+    def __init__(self, monkeypatch, tmp_path):
+        self.c = built()
+        self.c.writes.clear()
+        self.c.pictures = {SF.D5: moving("d5-"), SF.WEBCAM: moving("cam-"), SF.TG7: moving("tg7-")}
+        self.snap = tmp_path / "d5100_latest.jpg"
+        self.snap.write_bytes(b"jpeg")
+        self.feed, self.tg7, self.fresh = [42], [7], True
+        monkeypatch.setattr(SF, "feed_pids", lambda: list(self.feed))
+        monkeypatch.setattr(SF, "feed_snaps", lambda pids: [self.snap])
+        monkeypatch.setattr(SF, "tg7_pids", lambda: list(self.tg7))
+        self.mem, self.t = {}, time.time()
+
+    def tick(self, n=1):
+        for _ in range(n):
+            if self.fresh:
+                os.utime(self.snap, (self.t, self.t))  # the feed's 2 s frame
+            cams = SF.watch_tick(self.c, self.mem, self.t)
+            self.t += 1
+        return cams
+
+    def black(self, scene, cam):
+        return self.c.enabled(scene, SF.DOWN[cam])
+
+    def panel_writes(self, cam):
+        return [(scene, on) for scene, src, on in self.c.writes if src == SF.DOWN[cam]]
+
+
+@pytest.fixture
+def watch(monkeypatch, tmp_path):
+    return Watch(monkeypatch, tmp_path)
+
+
+def test_three_looks_with_no_d5_picture_black_out_its_slot_on_every_page(watch):
+    watch.c.pictures[SF.D5] = [None]
+    watch.tick(2)
+    assert not watch.black(SF.PRODUCT, SF.D5)
+    cams = watch.tick()
+    assert cams["d5"] == {"state": "down", "reason": "OBS has no picture", "since": watch.t - 1}
+    assert watch.black(SF.PRODUCT, SF.D5) and watch.black(SF.MULTI, SF.D5)
+    assert {src for _, src, _ in watch.c.writes} == {"D5 Down"}  # the other panels untouched
+
+
+def test_two_bad_looks_and_a_good_one_never_black_out(watch):
+    watch.c.pictures[SF.D5] = ["a", "a", "a", "b", "b", "b", "c"]  # first, bad, bad, ok, bad, bad, ok
+    watch.tick(7)
+    assert watch.panel_writes(SF.D5) == []
+
+
+def test_alternating_looks_never_flip_the_panel_either_way(watch):
+    flicker = [p for i in range(30) for p in (f"x{i}", f"x{i}")]  # ok, bad, ok, bad, ...
+    watch.c.pictures[SF.D5] = list(flicker)
+    assert watch.tick(40)["d5"]["state"] == "unknown" and watch.panel_writes(SF.D5) == []
+    watch.c.pictures[SF.D5] = [None]
+    watch.tick(3)
+    assert watch.black(SF.PRODUCT, SF.D5)
+    watch.c.pictures[SF.D5] = list(flicker)
+    watch.tick(40)
+    assert watch.black(SF.PRODUCT, SF.D5)
+
+
+def test_coming_back_takes_five_moving_looks(watch, capsys):
+    watch.c.pictures[SF.D5] = ["a"] * 4 + moving("m")  # first look, then frozen 3 times
+    watch.tick(4)
+    assert watch.black(SF.PRODUCT, SF.D5)
+    watch.tick(4)
+    assert watch.black(SF.PRODUCT, SF.D5)
+    cams = watch.tick()
+    assert not watch.black(SF.PRODUCT, SF.D5) and not watch.black(SF.MULTI, SF.D5)
+    assert cams["d5"]["state"] == "live"
+    log = capsys.readouterr().out
+    assert "D5100 down (picture frozen in OBS (the camera is sending)); black on" in log
+    assert "D5100 live; black off after 5s" in log
+
+
+def test_a_frozen_picture_blacks_out_and_a_moving_one_never_does(watch):
+    watch.c.pictures[SF.WEBCAM] = ["same"]
+    watch.tick(3)
+    assert not watch.black(SF.PRODUCT, SF.WEBCAM)
+    cams = watch.tick()
+    assert cams["webcam"]["state"] == "down" and cams["webcam"]["reason"] == "picture frozen in OBS"
+    assert all(watch.black(s, SF.WEBCAM) for s in SF.SLOTS)
+    cams = watch.tick(20)
+    assert cams["d5"]["state"] == cams["tg7"]["state"] == "live"
+    assert watch.panel_writes(SF.D5) == watch.panel_writes(SF.TG7) == []
+
+
+def test_the_d5_is_left_alone_while_busy_and_never_compared_with_before(watch, monkeypatch):
+    watch.c.pictures[SF.D5] = ["same"]
+    watch.tick()  # its picture before the refocus
+    real = SF.exclusive
+    monkeypatch.setattr(SF, "exclusive", lambda: pytest.fail("the watch took the camera lock"))
+    with real():  # a refocus, WB change or still holds the lock
+        for _ in range(10):
+            assert watch.tick()["d5"]["state"] == "busy"
+    assert watch.panel_writes(SF.D5) == [] and watch.c.shots.count(SF.D5) == 1
+    # the same picture after it is a first look, not "frozen" against the one from before
+    watch.tick(3)
+    assert not watch.black(SF.PRODUCT, SF.D5)
+    watch.tick()
+    assert watch.black(SF.PRODUCT, SF.D5)
+
+
+def test_the_standin_wins_over_the_watch(watch):
+    SF.standin(watch.c, True)
+    SF.set_panel(watch.c, SF.D5, True)  # switched on by hand
+    watch.c.shots.clear()
+    cams = watch.tick(5)
+    assert cams["d5"]["state"] == "standin"
+    assert not watch.black(SF.PRODUCT, SF.D5) and not watch.black(SF.MULTI, SF.D5)
+    assert SF.D5 not in watch.c.shots  # no screenshot of a camera that isn't on air
+
+
+def test_a_stopped_feed_is_off_and_blacked_out(watch):
+    watch.feed, watch.tg7 = [], []
+    watch.tick(2)
+    assert not watch.black(SF.PRODUCT, SF.D5)
+    cams = watch.tick()
+    assert (cams["d5"]["state"], cams["d5"]["reason"]) == ("off", "D5100 feed stopped")
+    assert (cams["tg7"]["state"], cams["tg7"]["reason"]) == ("off", "TG-7 feed stopped")
+    assert watch.black(SF.PRODUCT, SF.D5) and watch.black(SF.CLOSEUP, SF.TG7)
+    assert SF.D5 not in watch.c.shots and SF.TG7 not in watch.c.shots
+
+
+def test_the_watch_reopens_a_camera_with_frames_once_its_slot_is_black(watch):
+    watch.c.pictures[SF.D5] = [None]  # the feed has frames, OBS has none
+    watch.tick(3)
+    assert watch.black(SF.PRODUCT, SF.D5) and watch.c.reopens == []  # not before the panel is on
+    watch.tick()
+    assert watch.c.reopens == [SF.D5]
+    watch.tick(14)
+    assert watch.c.reopens == [SF.D5]  # not again within 15 s
+    watch.tick()
+    assert watch.c.reopens == [SF.D5, SF.D5] and watch.black(SF.PRODUCT, SF.D5)
+
+
+def test_no_reopen_without_frames_from_the_camera_or_while_busy(watch):
+    watch.fresh = False
+    os.utime(watch.snap, (watch.t - 60, watch.t - 60))
+    cams = watch.tick(20)
+    assert cams["d5"]["state"] == "down" and cams["d5"]["reason"].startswith("no frames from the camera for")
+    assert watch.c.reopens == []
+    watch.fresh = True
+    watch.c.pictures[SF.D5] = [None]
+    with SF.exclusive():
+        watch.tick(20)
+    assert watch.c.reopens == []
+
+
+@pytest.mark.parametrize("marked", [-30, -90])  # seconds from now: after / before the last frame
+def test_a_clock_reset_in_this_outage_is_the_d5s_reason(watch, marked):
+    watch.fresh = False
+    os.utime(watch.snap, (watch.t - 60, watch.t - 60))  # the last frame, a minute ago
+    mark = SF.clock_marker(watch.snap)  # the feed script's note beside its frame
+    mark.write_text("2026-10-22 01:02:03\t2011-01-01 00:00:05\n")
+    os.utime(mark, (watch.t + marked, watch.t + marked))
+    cams = watch.tick(3)
+    assert cams["d5"]["state"] == "down" and watch.black(SF.PRODUCT, SF.D5)
+    if marked > -60:
+        assert cams["d5"]["reason"] == "clock reset (camera said 2011-01-01 00:00:05)"
+        watch.fresh = True  # the feed set the clock and live view is back: a first look, then 5 good
+        assert watch.tick(6)["d5"] == {"state": "live", "reason": "", "since": watch.t - 1}
+        assert not watch.black(SF.PRODUCT, SF.D5)
+    else:  # an old reset, from before frames last flowed
+        assert cams["d5"]["reason"].startswith("no frames from the camera for")
+
+
+def test_the_watch_reopens_a_frozen_webcam_only_when_its_device_is_there(watch, tmp_path):
+    dev = tmp_path / "video0"
+    dev.write_bytes(b"")
+    watch.c.settings[SF.WEBCAM] = {"device_id": str(dev)}
+    watch.c.pictures[SF.WEBCAM] = ["same"]
+    watch.tick(5)  # first look, 3 frozen: black; then the reopen
+    assert watch.c.reopens == [SF.WEBCAM]
+    watch.mem.clear()
+    SF.clear_panels(watch.c)
+    watch.c.settings[SF.WEBCAM] = {"device_id": str(tmp_path / "video9")}  # unplugged
+    cams = watch.tick(30)
+    assert cams["webcam"]["reason"] == f"device {tmp_path / 'video9'} missing"
+    assert watch.black(SF.PRODUCT, SF.WEBCAM) and watch.c.reopens == [SF.WEBCAM]
+
+
+def test_no_tg7_source_leaves_the_other_cameras_judged(watch):
+    watch.c.inputs.discard(SF.TG7)  # setup never ran with the TG-7
+    watch.c.pictures[SF.D5] = [None]
+    cams = watch.tick(6)
+    assert (cams["tg7"]["state"], cams["tg7"]["reason"]) == ("unknown", "no TG-7 source in OBS; run setup")
+    assert cams["d5"]["state"] == "down" and cams["webcam"]["state"] == "live"
+
+
+def test_the_watch_clears_every_panel_when_it_ends(watch, monkeypatch):
+    for cam in SF.DOWN:
+        SF.set_panel(watch.c, cam, True)
+    monkeypatch.setattr(SF, "connect", lambda: watch.c)
+    seen = []
+
+    def sleep(s):
+        seen.append(json.loads(SF.CAMS_FILE.read_text()))
+        raise KeyboardInterrupt  # Ctrl+C; `watch stop`'s SIGTERM raises the same
+    monkeypatch.setattr(SF.time, "sleep", sleep)
+    assert SF.main(["watch", "run"]) == 0
+    assert seen[0]["pid"] == os.getpid() and set(seen[0]["cameras"]) == set(SF.CAM_IDS)
+    assert not any(c["sceneItemEnabled"] for items in watch.c.scenes.values() for c in items
+                   if c["sourceName"] in PANELS)
+    assert not SF.CAMS_FILE.exists()
+    with open(SF.WATCH_LOCK, "w") as f:  # the lock went with it
+        SF._lock_nb(f)
+
+
+def test_watch_stop_with_no_watch_running_still_clears_the_panels(watch, monkeypatch, capsys):
+    for cam in SF.DOWN:
+        SF.set_panel(watch.c, cam, True)
+    monkeypatch.setattr(SF, "watch_pids", lambda: [])
+    monkeypatch.setattr(SF.os, "kill", lambda *a: pytest.fail("signalled a process"))
+    monkeypatch.setattr(SF, "connect", lambda: watch.c)
+    assert SF.main(["watch", "stop"]) == 0
+    assert not any(watch.black(s, cam) for s, slots in SF.SLOTS.items() for cam in slots)
+    assert "every black panel off" in capsys.readouterr().out
+
+
+def test_a_second_watch_exits_at_once(monkeypatch, capsys):
+    monkeypatch.setattr(SF, "connect", lambda: pytest.fail("connected to OBS"))
+    with open(SF.WATCH_LOCK, "w") as f:
+        SF._lock_nb(f)  # a watch is running
+        assert SF.main(["watch", "run"]) == 0
+    assert "camera watch already running" in capsys.readouterr().out

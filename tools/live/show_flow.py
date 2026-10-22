@@ -19,8 +19,8 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
   webcam  scene "Webcam Only": the fallback. The webcam alone, filling the
           frame, with the mic. Never touches the D5100.
   multi   scene "Multi View": everything at once. The D5100 (left) and the
-          webcam (right) side by side in the top 1080x810, the desktop
-          page's window under them. Built with the desktop page.
+          webcam (right) side by side in the top 1080x810, the TG-7 under
+          them, then the desktop page's window. Built with the desktop page.
 
 Every `page` is one scene switch (300 ms fade): it never waits for the
 camera. `page next` fades to Up Next while the host swaps the item on the
@@ -50,10 +50,22 @@ OBS can sit black or frozen on a v4l2 camera whose device has frames again.
 frames but OBS's picture doesn't move; `reconnect` (the pager's Reconnect
 cameras button) reopens the D5 and the webcam by hand.
 
+`watch start` runs the camera watch in the background. Every 2 seconds it
+looks at the D5100, the webcam and the TG-7. A camera that stays bad for 3
+looks (feed stopped, no frames, no picture in OBS, or a frozen one) gets a
+black panel over its slot on every page that shows it, so viewers see
+black instead of a frozen frame. The panel comes off after 5 good looks in
+a row. While a panel is on and the device has frames, the watch reopens
+the camera in OBS (`reconnect`), at most every 15 s. It leaves the D5 alone
+during a refocus, WB change or still, and while the stand-in is on.
+Panels are only on while a watch runs: it clears them when it ends, and
+`watch stop` clears them too.
+
     python tools/live/show_flow.py setup [--window "Fair Hand"] [--intro-text "Starting\\nsoon"]
     python tools/live/show_flow.py feed start|stop|status
     python tools/live/show_flow.py reconnect [d5|webcam]  # OBS reopens a black/frozen camera
     python tools/live/show_flow.py tg7 start|stop|status   # TG-7 live view -> OBS (tg7cam stream)
+    python tools/live/show_flow.py watch start|stop|status # black panel over any camera that drops
     python tools/live/show_flow.py page intro|item|closeup|next|desktop|webcam|multi [--json] [--refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
@@ -91,6 +103,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -250,6 +263,40 @@ WEBCAM_ONLY_BOX = {"positionX": 0, "positionY": 0, "alignment": 5,
 # the multi page: the top row's height. Each camera gets half the width, so
 # 540x810 is 2:3, the D5's live view (640x426) on its side, uncropped.
 MULTI_ROW = 810
+# Under the top row, the TG-7 (4:3, fit whole, so 720x540) across the next
+# MULTI_TG7 rows; the desktop window gets what's left below it.
+MULTI_TG7 = 540
+MULTI_DESK = MULTI_ROW + MULTI_TG7
+
+# The camera watch (`watch run`): a black panel over a camera that drops.
+# Camera ids as the JSON and the pager name them -> OBS source.
+CAM_IDS = {"d5": D5, "webcam": WEBCAM, "tg7": TG7}
+CAM_LABEL = {"d5": "D5100", "webcam": "Webcam", "tg7": "TG-7"}
+# One black color source per camera, an item in every scene that shows it.
+DOWN = {D5: "D5 Down", WEBCAM: "Webcam Down", TG7: "TG-7 Down"}
+STRIP = WEBCAM_BOX["boundsHeight"]  # the webcam strip across the top
+# Each camera's slot per scene, (x, y, w, h) from the top left: what its panel covers.
+SLOTS = {PRODUCT: {D5: (0, 0, W, H), WEBCAM: (0, 0, W, STRIP)},
+         MULTI: {D5: (0, 0, W / 2, MULTI_ROW), WEBCAM: (W / 2, 0, W / 2, MULTI_ROW),
+                 TG7: (0, MULTI_ROW, W, MULTI_TG7)},
+         CLOSEUP: {TG7: (0, TG7_TOP, W, H - TG7_TOP), WEBCAM: (0, 0, W, STRIP)},
+         UPNEXT: {WEBCAM: (0, 0, W, STRIP)},
+         DESKTOP: {WEBCAM: (0, 0, W, STRIP)},
+         HOLD: {WEBCAM: (0, 0, W, STRIP)},
+         WEBCAM_ONLY: {WEBCAM: (0, 0, W, WEBCAM_ONLY_BOX["boundsHeight"])}}
+# The cameras each page puts on air.
+PAGE_CAMS = {"intro": [], "item": ["d5", "webcam"], "closeup": ["tg7", "webcam"], "next": ["webcam"],
+             "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam", "tg7"]}
+WATCH_EVERY = 2.0  # seconds between looks (each takes up to 3 OBS screenshots)
+DOWN_AFTER = 3  # bad looks in a row before the panel goes on
+UP_AFTER = 5  # good looks in a row before it comes off
+D5_STALE = 5  # seconds without a feed frame (FEED_SNAP, every 2 s) before the D5 counts as sending nothing
+RECONNECT_EVERY = 15  # at most one reopen in OBS per camera this often
+REASSERT_EVERY = 10  # seconds between re-writing each panel's state (someone may toggle it in OBS)
+WATCH_PATTERN = r"^\S*python\S* \S*show_flow\.py watch run"
+WATCH_LOG = Path(tempfile.gettempdir()) / "show_flow_watch.log"
+WATCH_LOCK = LOCK.with_name("show_flow.watch.lock")  # one watch; not the refocus LOCK
+CAMS_FILE = LOCK.with_name("show_flow.cams.json")  # the watch's verdicts, for state()
 
 
 # --- OBS helpers -------------------------------------------------------------
@@ -278,6 +325,24 @@ def stack(c, scene, sources_bottom_up):
     for idx, src in enumerate(sources_bottom_up):
         c.call("SetSceneItemIndex", {"sceneName": scene, "sceneItemId": item(c, scene, src),
                                      "sceneItemIndex": idx})
+    if scene in SLOTS:  # the listed items moved down past the black panels: put those back
+        _seat_panels(c, scene)
+
+
+def _seat_panels(c, scene) -> None:
+    """Each black panel (DOWN) in `scene` directly above its camera, so what
+    sits over the camera (the webcam strip over the D5) still covers it."""
+    items = c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]
+    names, ids = [i["sourceName"] for i in items], {i["sourceName"]: i["sceneItemId"] for i in items}
+    for cam, panel in DOWN.items():
+        if cam not in names or panel not in names:
+            continue
+        p, k = names.index(panel), names.index(cam)
+        if p == k + 1:
+            continue
+        to = k + 1 if p > k else k  # from below, the camera shifts down one as the panel leaves
+        c.call("SetSceneItemIndex", {"sceneName": scene, "sceneItemId": ids[panel], "sceneItemIndex": to})
+        names.insert(to, names.pop(p))
 
 
 def program(c) -> str:
@@ -296,16 +361,21 @@ class Busy(obsctl.ObsError):
     """A refocus, WB change or still is already running (from the shell or the web app)."""
 
 
+def _lock_nb(f) -> None:
+    """Take an exclusive lock on open file f, or raise OSError at once."""
+    if fcntl:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    else:
+        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+
+
 @contextmanager
 def exclusive():
     with open(LOCK, "w") as f:
         deadline = time.monotonic() + LOCK_WAIT
         while True:
             try:
-                if fcntl:
-                    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:
-                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                _lock_nb(f)
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
@@ -362,16 +432,26 @@ def _switch_asked() -> bool:
     return _switch_mark().exists()
 
 
-def d5_hash(c) -> str | None:
-    """A hash of the D5 source's picture, or None when OBS can't render one
+def source_hash(c, name: str) -> str | None:
+    """A hash of a source's picture, or None when OBS can't render one
     (code 702 "Failed to render screenshot": no frames, e.g. right after the
-    feed stops or the stand-in comes off)."""
+    feed stops or the stand-in comes off). A source OBS doesn't have (code
+    600) is raised."""
     try:
-        d = c.call("GetSourceScreenshot", {"sourceName": D5, "imageFormat": "jpg",
+        d = c.call("GetSourceScreenshot", {"sourceName": name, "imageFormat": "jpg",
                                            "imageWidth": 160, "imageCompressionQuality": 90})
-    except obsctl.ObsError:
+    except obsctl.ObsError as e:
+        if "code 600" in str(e):
+            raise
         return None
     return hashlib.md5(d["imageData"].encode()).hexdigest()
+
+
+def d5_hash(c) -> str | None:
+    try:
+        return source_hash(c, D5)
+    except obsctl.ObsError:  # no D5 source: no picture either
+        return None
 
 
 # --- D5100 feed (tools/d5100_webcam.sh) ----------------------------------------
@@ -425,16 +505,44 @@ def feed_status(pids=None) -> str:
     pids = feed_pids() if pids is None else pids
     if not pids:
         return "stopped"
+    age = _snap_age(feed_snaps(pids))
+    if age is None:
+        return "running, no frames yet"
+    return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
+
+
+def _snap_age(snaps: list[Path], now: float | None = None) -> float | None:
+    """Seconds since the feed's newest frame (FEED_SNAP), or None if there's none."""
+    now = time.time() if now is None else now
     ages = []
-    for snap in feed_snaps(pids):
+    for snap in snaps:
         try:
-            ages.append(time.time() - snap.stat().st_mtime)
+            ages.append(now - snap.stat().st_mtime)
         except OSError:
             pass
-    if not ages:
-        return "running, no frames yet"
-    age = min(ages)
-    return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
+    return min(ages) if ages else None
+
+
+def clock_marker(snap: Path) -> Path:
+    """The feed's note beside its frame that the D5100's clock had reset
+    (tools/d5100_webcam.sh: "${SNAP%.*}.clock")."""
+    return snap.with_suffix(".clock")
+
+
+def clock_reset(snaps: list[Path], last_frame: float | None) -> str | None:
+    """What the D5100 said its date was when the feed last found its clock
+    reset, if that was after `last_frame` (the newest frame's time; None: no
+    frame at all), so the reset belongs to this outage. None otherwise."""
+    for snap in snaps:
+        mark = clock_marker(snap)
+        try:
+            when = mark.stat().st_mtime
+            line = mark.read_text(errors="replace").strip()
+        except OSError:
+            continue
+        if line and (last_frame is None or when > last_frame):
+            return line.splitlines()[0].split("\t")[-1].strip() or "?"
+    return None
 
 
 def _gphoto2(*args, timeout=GPHOTO_TIMEOUT, **kw):
@@ -677,6 +785,309 @@ def tg7_refocus() -> dict:
     return {"camera": "tg7", "focused": af != "ng", "refocus_s": round(time.monotonic() - t, 1)}
 
 
+# --- the camera watch: black in place of a camera that drops ------------------
+def _panel_box(x, y, w, h) -> dict:
+    return {"positionX": x, "positionY": y, "alignment": 5, "rotation": 0,
+            "boundsType": "OBS_BOUNDS_STRETCH", "boundsAlignment": 0,
+            "boundsWidth": w, "boundsHeight": h, "cropToBounds": False}
+
+
+def panels_on(c) -> dict:
+    """Which cameras' black panels are on in OBS, {cam_id: bool}: the item
+    view's for the D5100 and the webcam, the close-up's for the TG-7
+    (set_panel keeps every scene's the same)."""
+    seen = {}
+    for scene in (PRODUCT, CLOSEUP):
+        try:
+            seen[scene] = c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]
+        except obsctl.ObsError:  # not built yet
+            seen[scene] = []
+    return {cam: any(i["sourceName"] == DOWN[name] and i["sceneItemEnabled"]
+                     for i in seen[CLOSEUP if name == TG7 else PRODUCT])
+            for cam, name in CAM_IDS.items()}
+
+
+def set_panel(c, cam: str, on: bool) -> int:
+    """Show or hide camera `cam`'s black panel in every scene that has one;
+    returns how many items changed. Writes only where the state differs."""
+    scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
+    n = 0
+    for scene, slots in SLOTS.items():
+        if cam not in slots or scene not in scenes:
+            continue
+        for i in c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]:
+            if i["sourceName"] == DOWN[cam] and i["sceneItemEnabled"] != on:
+                c.call("SetSceneItemEnabled", {"sceneName": scene, "sceneItemId": i["sceneItemId"],
+                                               "sceneItemEnabled": on})
+                n += 1
+    return n
+
+
+def clear_panels(c) -> None:
+    for name in CAM_IDS.values():
+        set_panel(c, name, False)
+
+
+def _clock(t: float) -> str:
+    return time.strftime("%H:%M:%S", time.localtime(t))
+
+
+def _look(c, cam: str, m: dict, now: float) -> tuple[str | None, str, str, bool]:
+    """One look at one camera, cheapest checks first: (verdict, state,
+    reason, reopenable). verdict is "ok", "bad", "skip" (stand-in, busy:
+    nothing to judge) or None (a first picture: nothing to compare it with
+    yet). reopenable: the device has frames but OBS's picture doesn't move,
+    what reconnect() fixes."""
+    name = CAM_IDS[cam]
+    reopenable = True
+    if cam == "d5":
+        if standin_on(c):
+            return "skip", "standin", "stand-in on", False
+        if refocusing():  # a probe: never takes or waits on the lock
+            return "skip", "busy", "refocus, WB or still", False
+        pids = feed_pids()
+        if not pids:
+            return "bad", "off", "D5100 feed stopped", False
+        snaps = feed_snaps(pids)
+        age = _snap_age(snaps, now)
+        if age is None or age > D5_STALE:
+            said = clock_reset(snaps, None if age is None else now - age)
+            if said:  # the feed set it again on its restart; frames back = live as usual
+                return "bad", "down", f"clock reset (camera said {said})", False
+            why = "no frames from the camera" + (f" for {age:.0f}s" if age is not None else "")
+            return "bad", "down", why, False
+    elif cam == "webcam":
+        dev = c.call("GetInputSettings", {"inputName": WEBCAM})["inputSettings"].get("device_id")
+        if dev and not os.path.exists(dev):
+            return "bad", "down", f"device {dev} missing", False
+        reopenable = bool(dev)
+    elif not tg7_pids():
+        return "bad", "off", "TG-7 feed stopped", False
+    h = source_hash(c, name)
+    last, m["last"] = m["last"], h
+    if h is None:
+        return "bad", "down", "OBS has no picture", reopenable
+    if last is None:
+        return None, m["state"], m["reason"], False
+    if h == last:
+        return ("bad", "down", "picture frozen in OBS" + (" (the camera is sending)" if cam == "d5" else ""),
+                reopenable)
+    return "ok", "live", "", False
+
+
+def watch_tick(c, mem: dict, now: float) -> dict:
+    """One look at every camera: count good and bad looks per camera in
+    `mem` (keep it between ticks), turn a panel on after DOWN_AFTER bad
+    looks in a row and off after UP_AFTER good ones, reopen a camera in OBS
+    when its panel is on and its device has frames. Returns {cam_id:
+    {"state", "reason", "since"}}. One camera failing never stops the others;
+    a lost OBS connection is raised."""
+    out = {}
+    for cam, name in CAM_IDS.items():
+        m = mem.setdefault(cam, {"bad": 0, "ok": 0, "last": None, "state": "unknown", "reason": "",
+                                 "since": now, "reopened": None, "skip": None, "asserted": now})
+        label = CAM_LABEL[cam]
+        try:
+            try:
+                verdict, kind, reason, reopenable = _look(c, cam, m, now)
+            except obsctl.ObsError as e:
+                if not re.search(r" failed: code \d+", str(e)):
+                    raise  # the connection, not this camera: the loop reconnects
+                why = f"no {label} source in OBS; run setup" if "code 600" in str(e) else str(e)
+                verdict, kind, reason, reopenable = "skip", "unknown", why, False
+            if verdict == "skip":
+                # no verdict: the next picture isn't compared with one from before
+                m["bad"] = m["ok"] = 0
+                m["last"] = None
+                if not m["skip"] or m["skip"][0] != kind:
+                    m["skip"] = [kind, now]
+                if kind == "standin":  # the stand-in wins: no black over the white panel
+                    set_panel(c, name, False)
+                    m.update(state="unknown", reason="", since=now)
+                out[cam] = {"state": kind, "reason": reason, "since": m["skip"][1]}
+                continue
+            m["skip"] = None
+            if (verdict == "bad" and reopenable and m["state"] == "down"
+                    and (m["reopened"] is None or now - m["reopened"] >= RECONNECT_EVERY)):
+                # the panel is already on, so viewers don't see the reopen's blink
+                m["reopened"] = now
+                r = reconnect(c, [name])[name]
+                if r["ok"]:
+                    m["bad"] = m["ok"] = 0
+                    m["last"] = None
+                    print(f"{_clock(now)} {label} reopened in OBS ({r['device']})", flush=True)
+            elif verdict == "bad":
+                m["bad"], m["ok"] = m["bad"] + 1, 0
+                if m["state"] in ("down", "off"):
+                    if m["state"] != kind:
+                        m.update(state=kind, since=now)
+                    m["reason"] = reason
+                elif m["bad"] >= DOWN_AFTER:
+                    set_panel(c, name, True)
+                    m.update(state=kind, reason=reason, since=now, asserted=now)
+                    print(f"{_clock(now)} {label} {kind} ({reason}); black on", flush=True)
+            elif verdict == "ok":
+                m["ok"], m["bad"] = m["ok"] + 1, 0
+                if m["state"] != "live" and m["ok"] >= UP_AFTER:
+                    off = set_panel(c, name, False)
+                    took = now - m["since"]
+                    m.update(state="live", reason="", since=now, asserted=now)
+                    print(f"{_clock(now)} {label} live" + (f"; black off after {took:.0f}s" if off else ""),
+                          flush=True)
+            if m["state"] != "unknown" and now - m["asserted"] >= REASSERT_EVERY:
+                m["asserted"] = now
+                set_panel(c, name, m["state"] != "live")
+        except obsctl.ObsError as e:
+            if not re.search(r" failed: code \d+", str(e)):
+                raise
+            print(f"{_clock(now)} {label}: {e}", flush=True)
+        out[cam] = {"state": m["state"], "reason": m["reason"], "since": m["since"]}
+    return out
+
+
+def _write_cams(cams: dict, every: float) -> None:
+    tmp = CAMS_FILE.with_name(CAMS_FILE.name + ".tmp")
+    tmp.write_text(json.dumps({"pid": os.getpid(), "t": time.time(), "every": every, "cameras": cams}))
+    os.replace(tmp, CAMS_FILE)  # state() never reads half a file
+
+
+def _alive(pid) -> bool:
+    if not isinstance(pid, int):
+        return False
+    if os.name == "nt":  # os.kill(pid, 0) would end the process there; the file's age has to do
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def watch_cams() -> dict | None:
+    """The running watch's last word, {"pid", "t", "every", "cameras"}, or
+    None when no watch is running (no file, a stale one, or its process gone)."""
+    try:
+        st = json.loads(CAMS_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+    if time.time() - st.get("t", 0) > max(5, 3 * st.get("every", WATCH_EVERY)) or not _alive(st.get("pid")):
+        return None
+    return st
+
+
+def cam_states(c, w: dict | None, standin: bool, busy: bool) -> dict:
+    """Each camera for state(): the watch's verdict (`w`, from watch_cams;
+    "unknown" without one), the D5 busy or stand-in as they are right now,
+    and "blacked": its panel is on in OBS."""
+    on = panels_on(c)
+    seen = (w or {}).get("cameras", {})
+    out = {}
+    for cam in CAM_IDS:
+        v = {"state": "unknown", "reason": "", "since": None, **seen.get(cam, {})}
+        if cam == "d5" and standin:
+            v.update(state="standin", reason="stand-in on")
+        elif cam == "d5" and busy:
+            v.update(state="busy", reason="refocus, WB or still")
+        out[cam] = {**v, "blacked": on[cam]}
+    return out
+
+
+def watch_pids() -> list[int]:
+    r = subprocess.run(["pgrep", "-f", WATCH_PATTERN], capture_output=True, text=True)
+    return [int(p) for p in r.stdout.split()]
+
+
+def watch_start() -> bool:
+    """Start `watch run` detached unless it's running; True if this started it."""
+    if watch_pids():
+        return False
+    log = open(WATCH_LOG, "ab")
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "watch", "run"], cwd=REPO,
+                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    return True
+
+
+def watch_stop(c=None) -> None:
+    """End the watch (it clears its panels on the way out) and clear every
+    panel anyway, so none stays on with no watch running. Without `c` it
+    connects itself; with OBS down there's nothing on air to clear."""
+    for p in watch_pids():
+        os.kill(p, 15)
+    deadline = time.monotonic() + 5
+    while watch_pids() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if c is not None:
+        clear_panels(c)
+        return
+    try:
+        c = connect()
+    except (obsctl.ObsError, OSError):
+        return
+    try:
+        clear_panels(c)
+    finally:
+        c.close()
+
+
+def _sigterm(signum, frame):
+    raise KeyboardInterrupt  # `watch stop`: leave through watch_run's cleanup
+
+
+def watch_run(every: float = WATCH_EVERY) -> int:
+    """The watch, in the foreground: watch_tick every `every` seconds with
+    its own OBS connection, the verdicts in CAMS_FILE. If OBS goes away it
+    retries every 2 s and leaves the panels as they are. Ctrl+C or SIGTERM
+    ends it with every panel off. One watch at a time (WATCH_LOCK)."""
+    lock = open(WATCH_LOCK, "w")
+    try:
+        _lock_nb(lock)
+    except OSError:
+        lock.close()
+        print("camera watch already running")
+        return 0
+    before = signal.signal(signal.SIGTERM, _sigterm)
+    mem, c, lost = {}, None, False
+    print(f"{_clock(time.time())} camera watch started, every {every:g}s", flush=True)
+    try:
+        while True:
+            now = time.time()
+            try:
+                c = c or connect()
+                cams = watch_tick(c, mem, now)
+            except (obsctl.ObsError, OSError) as e:
+                if c is not None:
+                    c.close()
+                    c = None
+                if not lost:
+                    print(f"{_clock(now)} OBS unreachable ({e}); retrying every 2s", flush=True)
+                lost = True
+                _write_cams({k: {"state": "unknown", "reason": "OBS unreachable", "since": now}
+                             for k in CAM_IDS}, every)
+                time.sleep(2)
+                continue
+            lost = False
+            _write_cams(cams, every)
+            time.sleep(every)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        signal.signal(signal.SIGTERM, before)
+        try:
+            c = c or connect()
+            clear_panels(c)
+        except (obsctl.ObsError, OSError):
+            pass  # OBS is gone: nothing on air
+        finally:
+            if c is not None:
+                c.close()
+            CAMS_FILE.unlink(missing_ok=True)
+            lock.close()
+        print(f"{_clock(time.time())} camera watch stopped; every black panel off", flush=True)
+    return 0
+
+
 # --- commands ----------------------------------------------------------------
 def cmd_setup(c, a):
     if c.call("GetSceneCollectionList")["currentSceneCollectionName"] != COLLECTION:
@@ -750,11 +1161,11 @@ def cmd_setup(c, a):
     c.call("SetSceneItemIndex", {"sceneName": WEBCAM_ONLY, "sceneItemId": item(c, WEBCAM_ONLY, WEBCAM),
                                  "sceneItemIndex": n - 1})  # on top of anything hand-added
 
+    build_closeup(c, a.tg7_rotation)  # before multi, which shows the TG-7 too
     if a.desktop_window or DESKTOP_WIN in inputs:
         build_desktop(c, a.desktop_window, a.desktop_crop_left)
         build_multi(c, a.d5_rotation, a.desktop_crop_left)
 
-    build_closeup(c, a.tg7_rotation)
     build_hold(c)
 
     # Only Up Next may show the desktop window (a stray one turned up in Intro)
@@ -763,6 +1174,7 @@ def cmd_setup(c, a):
         if scene != UPNEXT and scene in scenes:
             hide_window(c, scene)
 
+    build_down_panels(c)  # last: over every camera every page above has
     c.call("SetCurrentSceneTransition", {"transitionName": "Fade"})
     c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": FADE_MS})
     print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
@@ -1033,16 +1445,19 @@ def guard_window(c) -> dict | None:
 
 def state(c) -> dict:
     """What's on air. `page` is None when the program scene isn't one of the
-    pager's (someone switched in OBS by hand)."""
+    pager's (someone switched in OBS by hand). `watch`: a camera watch is
+    running; `cameras`: what it says of each (cam_states)."""
     scene = program(c)
     out = streams(c)
     on = [s["timecode"] for s in out.values() if s["live"]]
     pids = feed_pids()
+    sub, busy, w = standin_on(c), refocusing(), watch_cams()
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
             "live": bool(on), "timecode": max(on) if on else None,
             "streams": out, "feed": bool(pids), "feed_status": feed_status(pids),
-            "standin": standin_on(c), "refocusing": refocusing(),
-            "held": held_page(c) if scene == HOLD else None, "tg7_status": tg7_status()}
+            "standin": sub, "refocusing": busy,
+            "held": held_page(c) if scene == HOLD else None, "tg7_status": tg7_status(),
+            "watch": w is not None, "cameras": cam_states(c, w, sub, busy)}
 
 
 def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> None:
@@ -1079,9 +1494,10 @@ def build_desktop(c, title: str | None = None, crop_left: int | None = None) -> 
 
 def build_multi(c, d5_rotation: float = 270, crop_left: int | None = None) -> None:
     """The multi page: the D5100 and the webcam side by side in the top
-    MULTI_ROW, each cover-cropped into half the width, and DESKTOP_WIN (the
-    desktop page's window, so build_desktop first) full width under them,
-    hung from the row. The D5 follows the stand-in, like the item view."""
+    MULTI_ROW, each cover-cropped into half the width, the TG-7 whole and
+    centered in the MULTI_TG7 rows under them, and DESKTOP_WIN (the desktop
+    page's window, so build_desktop first) full width below that. The D5
+    follows the stand-in, like the item view."""
     if MULTI not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
         c.call("CreateScene", {"sceneName": MULTI})
     w, h = W / 2, MULTI_ROW
@@ -1096,14 +1512,17 @@ def build_multi(c, d5_rotation: float = 270, crop_left: int | None = None) -> No
                                "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_OUTER",
                                "boundsAlignment": 0, "boundsWidth": W / 2, "boundsHeight": MULTI_ROW,
                                "cropToBounds": True})
-    box = {"positionX": W / 2, "positionY": MULTI_ROW, "alignment": 4, "rotation": 0,  # 4: top center
+    set_box(c, MULTI, TG7, {"positionX": W / 2, "positionY": MULTI_ROW, "alignment": 4,  # 4: top center
+                            "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 0,
+                            "boundsWidth": W, "boundsHeight": MULTI_TG7, "cropToBounds": False})
+    box = {"positionX": W / 2, "positionY": MULTI_DESK, "alignment": 4, "rotation": 0,
            "scaleX": 1, "scaleY": 1, "boundsType": "OBS_BOUNDS_SCALE_INNER", "boundsAlignment": 4,
-           "boundsWidth": W, "boundsHeight": H - MULTI_ROW}
+           "boundsWidth": W, "boundsHeight": H - MULTI_DESK}
     if crop_left is not None:
         box["cropLeft"] = crop_left
     set_box(c, MULTI, DESKTOP_WIN, box)
     item(c, MULTI, MIC)
-    stack(c, MULTI, [BG, D5, WEBCAM, DESKTOP_WIN])
+    stack(c, MULTI, [BG, D5, WEBCAM, TG7, DESKTOP_WIN])
 
 
 def build_closeup(c, rotation: float = 0) -> None:
@@ -1151,6 +1570,33 @@ def build_hold(c) -> None:
     stack(c, HOLD, [HOLD_FRAME, WEBCAM])
 
 
+def build_down_panels(c) -> None:
+    """The camera watch's black panels (DOWN): one item per scene that
+    shows the camera, over its slot (SLOTS), directly above it, so the
+    webcam strip still covers the D5's. All start off, so setup never
+    flashes black on air and never keeps one a dead watch left on; a
+    running watch puts a down camera's back within REASSERT_EVERY."""
+    scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
+    inputs = {i["inputName"] for i in c.call("GetInputList")["inputs"]}
+    for scene, slots in SLOTS.items():
+        if scene not in scenes:
+            continue
+        have = {i["sourceName"] for i in c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]}
+        for name in CAM_IDS.values():
+            if name not in slots or name not in have:
+                continue
+            panel = DOWN[name]
+            if panel not in inputs:
+                c.call("CreateInput", {"sceneName": scene, "inputName": panel, "inputKind": "color_source_v3",
+                                       "inputSettings": {"color": 0xFF000000, "width": W, "height": H},
+                                       "sceneItemEnabled": False})
+                inputs.add(panel)
+            elif panel not in have:
+                c.call("CreateSceneItem", {"sceneName": scene, "sourceName": panel, "sceneItemEnabled": False})
+            set_box(c, scene, panel, _panel_box(*slots[name]), enabled=False)
+        _seat_panels(c, scene)
+
+
 def standin_on(c) -> bool:
     for i in c.call("GetSceneItemList", {"sceneName": PRODUCT})["sceneItems"]:
         if i["sourceName"] == STANDIN:
@@ -1160,7 +1606,10 @@ def standin_on(c) -> bool:
 
 def standin(c, on: bool) -> None:
     """Swap the D5100 in the item view for a white panel, or back. While it's
-    on, `go("item")` and `refocus()` leave the camera alone."""
+    on, `go("item")` and `refocus()` leave the camera alone, and the camera
+    watch leaves its black panel off."""
+    if on:
+        set_panel(c, D5, False)
     if on and STANDIN not in {i["inputName"] for i in c.call("GetInputList")["inputs"]}:
         c.call("CreateInput", {"sceneName": PRODUCT, "inputName": STANDIN, "inputKind": "color_source_v3",
                                "inputSettings": {"color": 0xFFFFFFFF, "width": W, "height": H}})
@@ -1192,7 +1641,10 @@ def go(c, page: str, refocus: bool = False) -> dict:
     page still hides it. If that fails, the feed is left running and the
     current page stays on air (the error says why). If someone asks for a
     page during that refocus, their switch wins and this one isn't made
-    (`superseded_by`). A page that's already on air is left alone."""
+    (`superseded_by`). A page that's already on air is left alone.
+
+    `blacked` lists the page's cameras (PAGE_CAMS) the camera watch has
+    blacked out, when there are any."""
     if page not in PAGES:
         raise ValueError(f"unknown page {page!r}; pages: {', '.join(PAGES)}")
     scene = PAGES[page]
@@ -1200,7 +1652,7 @@ def go(c, page: str, refocus: bool = False) -> dict:
     out = {"page": page, "changed": False, "focused": None, "refocus_s": None}
     before = program(c)
     if before == scene:
-        return out
+        return _blacked(c, page, out)
     try:
         if page == "next":  # the one page allowed to show the desktop window
             w = guard_window(c)
@@ -1225,6 +1677,15 @@ def go(c, page: str, refocus: bool = False) -> dict:
     except obsctl.ObsError as e:
         raise _no_scene(e, page) from e
     out["changed"] = True
+    return _blacked(c, page, out)
+
+
+def _blacked(c, page: str, out: dict) -> dict:
+    if PAGE_CAMS[page]:
+        on = panels_on(c)
+        ids = [cam for cam in PAGE_CAMS[page] if on[cam]]
+        if ids:
+            out["blacked"] = ids
     return out
 
 
@@ -1373,6 +1834,11 @@ def cmd_page(c, a):
             print(f"  window hidden: {w['title'] or '(closed)'!r} isn't safe to show; card + webcam only")
     else:
         print(f"{focus_note(r['focused'])} ({r['refocus_s']}s); on air: {a.page}")
+    if r.get("blacked") and not a.json:
+        seen = (watch_cams() or {}).get("cameras", {})
+        why = [CAM_LABEL[k] + (f" ({seen[k]['reason']})" if seen.get(k, {}).get("reason") else "")
+               for k in r["blacked"]]
+        print(f"  black in place of: {', '.join(why)}; `reconnect` or `page webcam`")
 
 
 def cmd_standin(c, a):
@@ -1435,6 +1901,25 @@ def cmd_tg7(c, a):
     print(f"TG-7 feed: {tg7_status()}  (log {TG7_LOG})")
 
 
+def cmd_watch(c, a):
+    """start, stop and run get no `c` (main): they work with OBS down."""
+    if a.action == "run":
+        return watch_run()
+    if a.action == "start":
+        print("camera watch " + ("started" if watch_start() else "already running") + f"  (log {WATCH_LOG})")
+        return 0
+    if a.action == "stop":
+        watch_stop(c)
+        print("camera watch: stopped; every black panel off")
+        return 0
+    w = watch_cams()
+    print(f"camera watch: running (pid {w['pid']})" if w else "camera watch: off (show_flow.py watch start)")
+    for k, v in cam_states(c, w, standin_on(c), refocusing()).items():
+        print(f"{CAM_LABEL[k]}: {v['state']}" + (f" ({v['reason']})" if v["reason"] else "")
+              + ("; black on air" if v["blacked"] else ""))
+    return 0
+
+
 def cmd_golive(c, a):
     if not a.confirm:
         raise obsctl.ObsError(f"going live on {a.dest} is public-facing; re-run with --confirm")
@@ -1475,6 +1960,13 @@ def cmd_status(c, a):
         print(f"{dest}: {'LIVE ' + s['timecode'] if s['live'] else 'off'}")
     print(f"D5100 feed: {feed_status()}")
     print(f"TG-7 feed: {tg7_status()}")
+    w = watch_cams()
+    if w:
+        cams = cam_states(c, w, standin_on(c), refocusing())
+        print("cameras: " + " · ".join(f"{CAM_LABEL[k]} {v['state']}" for k, v in cams.items())
+              + "  (watch running)")
+    else:
+        print("camera watch: off (show_flow.py watch start)")
 
 
 def main(argv=None) -> int:
@@ -1509,6 +2001,9 @@ def main(argv=None) -> int:
     s = sub.add_parser("tg7", help="TG-7 live view -> OBS (tg7cam stream, detached)")
     s.add_argument("action", choices=["start", "stop", "status"])
     s.set_defaults(fn=cmd_tg7)
+    s = sub.add_parser("watch", help="black panel over a camera that drops (run: in the foreground)")
+    s.add_argument("action", choices=["start", "stop", "status", "run"])
+    s.set_defaults(fn=cmd_watch)
     s = sub.add_parser("hold", help="freeze the camera page on air while the item turns")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_hold)
@@ -1544,6 +2039,8 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_status)
     a = p.parse_args(argv)
     try:
+        if a.cmd == "watch" and a.action != "status":
+            return cmd_watch(None, a)  # these work with OBS down (run reconnects on its own)
         c = connect()
         try:
             a.fn(c, a)

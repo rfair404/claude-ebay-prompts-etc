@@ -36,6 +36,7 @@ python tools/live/obsctl.py launch                    # OBS, no window (no-op if
 python tools/live/show_flow.py feed start              # D5100 live view -> OBS (runs tools/d5100_webcam.sh)
 python tools/live/show_flow.py feed status             # "running"; "running, no frames for Ns" = camera not sending
 python tools/live/show_flow.py setup --window "<title>" # build the intro, item, next and webcam pages
+python tools/live/show_flow.py watch start   # black panel over any camera that drops
 python tools/live/show_flow.py standin on              # only if the D5100 is out; setup keeps this state
 python tools/live/show_flow.py page intro              # pre-show card while you get ready
 python tools/live/show_flow.py status
@@ -89,6 +90,7 @@ One command puts any page on air:
 | "refocus", "it's blurry" | `show_flow.py refocus` |
 | "too orange", "too blue", "white balance", "set WB to daylight" | `show_flow.py wb` (read) / `show_flow.py wb daylight` |
 | "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
+| "watch the cameras", "black out a dead camera", "is the camera up?" | `show_flow.py watch start` / `watch status` / `watch stop` |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 | "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
 
@@ -121,6 +123,16 @@ One command puts any page on air:
   says `window hidden`; tell the user to open the next lot's eBay page in a
   window of its own and re-run `setup --window`. Up Next is the only page
   that ever shows that window; every other page hides it.
+- `watch start` runs the camera watch in the background. Every 2 seconds it
+  looks at the D5100, the webcam and the TG-7; one that stays bad for 3
+  looks (feed stopped, no frames, no picture or a frozen one in OBS) gets a
+  black panel over its slot on every page that shows it, and the panel comes
+  off after 5 good looks. `watch status` (and `status`) says each camera's
+  state and why; a `page` onto a blacked camera prints `black in place of:`.
+  It skips the D5 during a refocus, WB change or still and while the
+  stand-in is on. The panels are only on while the watch runs: `watch stop`
+  clears them. The pager page shows a chip per camera and has a Start/Stop
+  camera watch button.
 - `page webcam` (scene `Webcam Only`) is the fallback: the webcam alone with
   the mic. It never touches the D5100, so use it if the camera dies mid-show.
 - `next` / `back` are aliases of `page next` / `page item`.
@@ -179,6 +191,12 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
   on, awake, plugged in and in M or A mode. Meanwhile `page webcam`. If it
   says `running` but OBS's picture is still black or frozen, `reconnect d5`. The feed script restarts itself if live view drops. Log:
   `$TMPDIR/d5100_feed.log`.
+- A camera slot went black: `watch status` says why; the watch reopens it in
+  OBS when the device has frames; `reconnect` or `page webcam` meanwhile.
+  Log: `$TMPDIR/show_flow_watch.log`.
+- D5 reason `clock reset (camera said <date>)`: the feed sets the camera's
+  clock on every restart, so frames should return on their own. See
+  docs/live-streaming-setup.md section 4, "Clock".
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what
