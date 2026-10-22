@@ -46,6 +46,9 @@ class FakeObs:
         self.sent, self.duration = 375000, 1000  # the stream output's bytes and ms since it started
         self.congestion, self.reconnecting = None, False  # None: OBS leaves outputCongestion out
         self.reads: list[str] = []  # Get{Stream,Record}Status requests
+        self.transitions = ["Cut", "Fade", "Swipe"]  # the collection's
+        self.transition, self.duration_ms = "Fade", 300  # OBS's current one
+        self.cuts: list[tuple] = []  # (scene, transition, ms) per program switch
         self.panels: dict[str, bool] = {}  # the camera watch's black panels (SF.DOWN) -> shown
 
     def call(self, req, data=None):
@@ -59,7 +62,22 @@ class FakeObs:
         if req == "SetCurrentProgramScene":
             self.scene = data["sceneName"]
             self.switches.append(self.scene)
+            self.cuts.append((self.scene, self.transition, self.duration_ms))
             return {}
+        if req == "SetCurrentSceneTransition":
+            if data["transitionName"] not in self.transitions:
+                raise obsctl.ObsError(f"{req} failed: code 600 No transition was found by the name of "
+                                      f"`{data['transitionName']}`.")
+            self.transition = data["transitionName"]
+            return {}
+        if req == "SetCurrentSceneTransitionDuration":
+            self.duration_ms = data["transitionDuration"]
+            return {}
+        if req == "GetSceneTransitionList":
+            return {"currentSceneTransitionName": self.transition,
+                    "transitions": [{"transitionName": n} for n in self.transitions]}
+        if req == "GetCurrentSceneTransition":
+            return {"transitionName": self.transition, "transitionDuration": self.duration_ms}
         for kind in ("Stream", "Record"):
             if req == f"Get{kind}Status":
                 on = self.active[kind]
@@ -353,6 +371,55 @@ def test_post_switches_and_returns_state_plus_switch(client, obs):
     assert body["switch"]["focused"] is True and obs.refocused == ["Up Next"]
 
 
+@pytest.fixture(autouse=True)
+def no_preview(monkeypatch):
+    monkeypatch.setitem(pager._preview, "page", None)  # the pager's preview bus, per test
+
+
+def test_take_puts_preview_on_air_with_its_transition_and_swaps(client, obs):
+    obs.scene = "Intro"
+    assert client.post("/api/pager/preview", json={"page": "item"}).json() == {"preview": "item"}
+    assert obs.switches == []  # lining a page up never touches the program
+    assert client.get("/api/pager").json()["preview"] == "item"
+    body = client.post("/api/pager/take", json={"transition": "Swipe", "duration_ms": 800}).json()
+    assert body["page"] == "item" and body["switch"]["changed"] is True
+    assert obs.cuts == [("eBay Main", "Swipe", 800)]
+    assert body["preview"] == "intro"  # what was on air is lined up next, like a vision mixer
+    # the page sends what was on preview when take was pressed, so a later click can't change it
+    body = client.post("/api/pager/take", json={"page": "next", "transition": "Cut"}).json()
+    assert body["page"] == "next" and obs.cuts[-1] == ("Up Next", "Cut", 800)  # Cut has no length
+    assert body["preview"] == "item"
+
+
+def test_take_with_nothing_on_preview_is_409_and_switches_nothing(client, obs):
+    r = client.post("/api/pager/take", json={})
+    assert r.status_code == 409 and "nothing on preview" in r.json()["detail"] and obs.switches == []
+
+
+def test_a_transition_obs_lacks_is_named_and_nothing_switches(client, obs):
+    r = client.post("/api/pager/take", json={"page": "item", "transition": "Stinger"})
+    assert r.status_code == 502 and "Stinger" in r.json()["detail"] and obs.switches == []
+    assert client.post("/api/pager/take", json={"page": "item", "duration_ms": 10}).status_code == 422
+
+
+def test_a_plain_switch_fades_again_after_a_cut(client, obs):
+    client.post("/api/pager", json={"page": "item", "transition": "Cut"})
+    SF.go(obs, "next")  # the shell's `page next`: the 300 ms fade, not the pager's last cut
+    assert obs.cuts == [("eBay Main", "Cut", 300), ("Up Next", "Fade", 300)]
+
+
+def test_transitions_lists_the_collections(client, obs):
+    assert client.get("/api/pager/transitions").json() == {
+        "transitions": ["Cut", "Fade", "Swipe"], "current": "Fade", "duration_ms": 300}
+
+
+def test_preview_is_local_only(client, obs):
+    r = client.post("/api/pager/preview", json={"page": "item"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403 and pager._preview["page"] is None
+    assert client.post("/api/pager/preview", json={"page": "outro"}).status_code == 422
+    assert client.post("/api/pager/preview", json={"page": None}).json() == {"preview": None}
+
+
 def test_post_refocus(client, obs):
     obs.scene = "eBay Main"
     r = client.post("/api/pager/refocus")
@@ -504,14 +571,17 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     # light polling, a deadline on every call, page clicks never wait on a refocus
     assert "setTimeout(poll, 1000)" in r.text and "document.hidden" in r.text
     assert "AbortController" in r.text and "refocuses first" not in r.text
-    assert "{ page }" in r.text and "refocus: true" not in r.text  # the page never asks for a refocus switch
+    assert "{ page, transition: 'Cut' }" in r.text and "refocus: true" not in r.text  # never a refocus switch
+    # preview / program: a click or 1-7 lines a page up, Enter takes it, Shift+1-7 cuts straight to air
+    assert "setPreview(b.dataset.page)" in r.text and "'/api/pager/take'" in r.text
+    assert "e.key === 'Enter'" in r.text and 'id="pvwshot"' in r.text and 'id="trans"' in r.text
     assert "if (busy)" not in r.text
     # the On-air preview: one frame at a time, nothing while hidden or switched off
     assert "/api/pager/preview.jpg" in r.text and 'id="shottoggle"' in r.text
     assert "setTimeout(frame, 500)" in r.text and "previewOn && !document.hidden" in r.text
     # the multiview: one tile at a time, off-air pages only, nothing while hidden or switched off
     assert "/api/pager/tile/" in r.text and "tilesOn && !document.hidden" in r.text
-    assert "filter(p => p !== curPage)" in r.text and 'id="tiletoggle"' in r.text
+    assert "filter(p => p !== curPage && p !== pvw)" in r.text and 'id="tiletoggle"' in r.text
     assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
     # risky buttons confirm in the page, never with confirm(): the app's browser pane blocks it
     assert "confirm(" not in r.text and "sure(btn, dest + ' ' + action" in r.text

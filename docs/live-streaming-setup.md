@@ -331,8 +331,17 @@ stacks into one column on a phone):
   the next one, step with `[` / `]` or click a lot. This is the same
   on-screen lot as the `/live/<show>` host page; eBay draws its own lot
   overlay, so none of it goes on air.
-- **Switcher:** a multiview tile per page, the on-air one tallied red.
-  Click a tile or press its number to take it. Tile pictures are off by
+- **Switcher:** a **Preview** and a **Program** monitor side by side,
+  with the transition bar between them, like a vision mixer. Click a tile
+  or press its number to line that page up on preview (green); **AUTO**
+  (Enter) takes it to program (red) with the transition picked under it
+  (any OBS has: Fade, Cut, Swipe, ...; its length in ms), **CUT**
+  (Shift+Enter) takes it with none. Program and preview then swap, so
+  Enter again goes back. Shift+1-7 skips preview and cuts that page
+  straight to air (the emergency way). The preview is the pager's own, not
+  OBS's studio mode, which would render a second scene all the time; the
+  preview monitor is a screenshot of the page's scene about every 0.7 s.
+  Below the monitors, a multiview tile per page. Tile pictures are off by
   default, since each is an extra OBS render and the show laptop is short of
   CPU; **Multiview on** shows them (one off-air tile refreshed a second, so
   each is several seconds old) and the choice is remembered. The Hold
@@ -349,12 +358,15 @@ stacks into one column on a phone):
   off air or reconnecting, a feed losing frames, a camera on air going down
   (its slot black) or coming back, OBS dropping frames.
 
-Keys: 1-7 (intro, item, next, desktop, webcam, close-up, multi), H
-(hold/release), Space (step), R (refocus), C (reconnect), M (music, section
+Keys: 1-7 line a page up on preview (intro, item, next, desktop, webcam,
+close-up, multi), Enter takes it, Shift+Enter cuts it, Shift+1-7 cut
+straight to air, H (hold/release, on program), Space (step), R (refocus), C (reconnect), M (music, section
 7), `[` / `]` (previous / next lot). Page clicks switch at once, even while
 a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
-`GET /api/pager` (state, music and telemetry), `GET /api/pager/preview.jpg`, `GET
-/api/pager/tile/item.jpg`, `POST /api/pager {"page": "item"}`, `POST
+`GET /api/pager` (state, music, telemetry and `preview`), `GET /api/pager/preview.jpg`, `GET
+/api/pager/tile/item.jpg`, `GET /api/pager/transitions`, `POST /api/pager/preview {"page": "item"}`,
+`POST /api/pager/take {"transition": "Fade", "duration_ms": 300}`, `POST /api/pager {"page": "item"}`
+(straight to program), `POST
 /api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}`, `POST /api/pager/watch {"action": "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":

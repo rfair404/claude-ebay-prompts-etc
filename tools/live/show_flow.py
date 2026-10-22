@@ -1647,9 +1647,26 @@ def _no_scene(e: obsctl.ObsError, page: str) -> obsctl.ObsError:
     return e
 
 
-def go(c, page: str, refocus: bool = False) -> dict:
-    """Put a page on air: one scene switch with OBS's 300 ms fade. No camera
-    work and no lock, so it never waits behind a refocus.
+def set_transition(c, name: str, duration_ms: int | None = None) -> None:
+    """The transition OBS's next scene switch uses ("Cut", "Fade", or any the
+    collection has). OBS keeps it until it's changed; Cut has no duration."""
+    c.call("SetCurrentSceneTransition", {"transitionName": name})
+    if duration_ms is not None and name != "Cut":
+        c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": duration_ms})
+
+
+def transitions(c) -> dict:
+    """The collection's transitions, for the pager's transition list."""
+    r = c.call("GetSceneTransitionList")
+    cur = c.call("GetCurrentSceneTransition")
+    return {"transitions": [t["transitionName"] for t in r["transitions"]],
+            "current": r["currentSceneTransitionName"], "duration_ms": cur.get("transitionDuration")}
+
+
+def go(c, page: str, refocus: bool = False, transition: str = "Fade", duration_ms: int = FADE_MS) -> dict:
+    """Put a page on air: one scene switch with `transition` (by default the
+    300 ms fade, set each time, so a cut made from the pager doesn't stick).
+    No camera work and no lock, so it never waits behind a refocus.
 
     refocus=True (item and multi) refocuses the D5100 first, while the current
     page still hides it. If that fails, the feed is left running and the
@@ -1686,6 +1703,7 @@ def go(c, page: str, refocus: bool = False) -> dict:
         if now != before or asked:
             out["superseded_by"] = page_of(now) or now
             return out
+    set_transition(c, transition, duration_ms)
     try:
         c.call("SetCurrentProgramScene", {"sceneName": scene})
     except obsctl.ObsError as e:

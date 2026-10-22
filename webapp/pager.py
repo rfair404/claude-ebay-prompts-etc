@@ -8,8 +8,13 @@ page, a phone, or another agent's web app can drive the show:
     GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track"}
                                 and `health`: OBS and output telemetry (show_flow.health())
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
-    GET  /api/pager/tile/<page>.jpg  a 160 px JPEG of one page's scene, on air or not (multiview)
-    POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
+    GET  /api/pager/tile/<page>.jpg  a JPEG of one page's scene, on air or not (?width=80-480, default 160)
+    GET  /api/pager/transitions {"transitions": ["Cut", "Fade", ...], "current", "duration_ms"}
+    POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi",
+                                 "refocus": false, "transition": "Fade", "duration_ms": 300}: straight to program
+    POST /api/pager/preview     {"page": "item" | null}: line a page up on the pager's preview bus
+    POST /api/pager/take        {"page": "item", "transition": "Fade", "duration_ms": 300}: preview to
+                                program (no page: the preview bus's); program and preview then swap
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/wb          {"preset": "daylight"}: the D5100's white balance (no preset: read it)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
@@ -108,9 +113,9 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from webapp.freight import _local_only
 
@@ -137,6 +142,24 @@ Page = Literal["intro", "item", "closeup", "next", "desktop", "webcam", "multi"]
 class PageRequest(BaseModel):
     page: Page
     refocus: bool = False  # true: item/multi refocus the D5100 first, behind the current page (~5 s)
+    transition: str = "Fade"  # any of GET /api/pager/transitions
+    duration_ms: int = Field(_show_flow.FADE_MS, ge=50, le=5000)
+
+
+class PreviewRequest(BaseModel):
+    page: Page | None
+
+
+class TakeRequest(BaseModel):
+    page: Page | None = None  # what was on preview when take was pressed; none: the pager's preview
+    transition: str = "Fade"
+    duration_ms: int = Field(_show_flow.FADE_MS, ge=50, le=5000)
+
+
+# The pager's preview bus: the page lined up to take next. The pager's own,
+# not OBS's studio mode, which would render a second scene all the time on a
+# laptop already short of CPU; the page shows it from screenshots instead.
+_preview: dict = {"page": None}
 
 
 class HoldRequest(BaseModel):
@@ -186,7 +209,8 @@ def pager_state() -> dict:
             health = _show_flow.health(c, outs)
         except _obsctl.ObsError as exc:  # no telemetry is no reason to lose the pager
             health = {"error": str(exc)}
-        return {**_show_flow.state(c, outs), "music": _show_music.state(c), "health": health}
+        return {**_show_flow.state(c, outs), "music": _show_music.state(c), "health": health,
+                "preview": _preview["page"]}
 
 
 @router.get("/api/pager/preview.jpg")
@@ -197,17 +221,43 @@ def pager_preview() -> Response:
 
 
 @router.get("/api/pager/tile/{page}.jpg")
-def pager_tile(page: Page) -> Response:
+def pager_tile(page: Page, width: int = Query(160, ge=80, le=480)) -> Response:
     with _obs() as c:
-        jpg = _show_flow.page_shot(c, page)
+        jpg = _show_flow.page_shot(c, page, width=width)
     return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/pager")
 def pager_go(req: PageRequest) -> dict:
     with _obs() as c:
-        switch = _show_flow.go(c, req.page, refocus=req.refocus)
+        switch = _show_flow.go(c, req.page, refocus=req.refocus,
+                               transition=req.transition, duration_ms=req.duration_ms)
         return {**_show_flow.state(c), "switch": switch}
+
+
+@router.post("/api/pager/preview")
+def pager_set_preview(req: PreviewRequest) -> dict:
+    _preview["page"] = req.page  # no OBS call: the page screenshots the scene itself
+    return {"preview": req.page}
+
+
+@router.post("/api/pager/take")
+def pager_take(req: TakeRequest) -> dict:
+    page = req.page or _preview["page"]
+    if not page:
+        raise HTTPException(409, "nothing on preview: pick a page first")
+    with _obs() as c:
+        before = _show_flow.page_of(_show_flow.program(c))
+        switch = _show_flow.go(c, page, transition=req.transition, duration_ms=req.duration_ms)
+        if switch["changed"]:  # program and preview swap, like a vision mixer
+            _preview["page"] = before if before in _show_flow.PAGES else None
+        return {**_show_flow.state(c), "switch": switch, "preview": _preview["page"]}
+
+
+@router.get("/api/pager/transitions")
+def pager_transitions() -> dict:
+    with _obs() as c:
+        return _show_flow.transitions(c)
 
 
 @router.post("/api/pager/stream")
@@ -354,17 +404,34 @@ button:disabled { opacity:.5; cursor:wait; }
 #msg.err { color:var(--crit); } #msg.warn { color:var(--warn); }
 .clock { font-size:15px; color:var(--ink); }
 
-.grid { display:grid; grid-template-columns:minmax(250px, 21vw) minmax(0, 1fr) minmax(300px, 25vw); gap:8px; min-height:0; }
+.grid { display:grid; grid-template-columns:minmax(220px, 17vw) minmax(0, 1fr) minmax(300px, 24vw); gap:8px; min-height:0; }
 
-/* program monitor */
-.pgm { display:flex; flex-direction:column; align-items:center; gap:6px; }
-.pgm img { display:block; height:min(42vh, 560px); max-width:100%; aspect-ratio:9/16; object-fit:contain; background:#000;
+/* preview / program monitors and the transition bar between them */
+.bus { display:flex; justify-content:center; align-items:stretch; gap:12px; margin-bottom:10px; }
+.mon { margin:0; display:flex; flex-direction:column; align-items:center; gap:4px; min-width:0; }
+.mon figcaption { font-size:11px; letter-spacing:.12em; color:var(--muted); white-space:nowrap; }
+.mon figcaption b { padding:1px 6px; border-radius:3px; color:#fff; }
+.pvw figcaption b { background:var(--ok); color:#06150d; } .pgmon figcaption b { background:var(--pgm); }
+.mon img { display:block; height:min(36vh, 460px); max-width:100%; aspect-ratio:9/16; object-fit:contain; background:#000;
            border:3px solid var(--line); border-radius:4px; }
-.pgm.live img { border-color:var(--pgm); }
-.pgm.stale img { opacity:.35; }
-.pgm.off img { display:none; }
-#shotnote { color:var(--muted); font-size:12px; text-align:center; }
-.pgm.stale #shotnote { color:var(--warn); }
+.pvw img { border-color:var(--ok); } .pgmon img { border-color:#5a1d1f; } .pgmon.live img { border-color:var(--pgm); }
+.mon.stale img { opacity:.35; }
+.bus.off .mon img, .bus.off #shotnote { display:none; }
+#shotnote { color:var(--muted); font-size:11px; text-align:center; max-width:220px; }
+.pgmon.stale #shotnote { color:var(--warn); }
+.tbar { display:flex; flex-direction:column; justify-content:center; gap:8px; width:128px; flex:none; }
+.tbar button { padding:14px 8px; border-radius:4px; border:1px solid var(--line); background:var(--panel2); font-weight:800;
+               letter-spacing:.12em; }
+.tbar button small { display:block; font-weight:400; letter-spacing:0; color:var(--muted); font-size:10px; }
+#auto { background:#3a1214; border-color:var(--pgm); }
+#auto.go, #cut.go { background:var(--pgm); color:#fff; }
+.tbar select, .tbar input { width:100%; padding:6px; border-radius:4px; border:1px solid var(--line); background:var(--panel2); }
+.tbar .dur { display:flex; align-items:center; gap:4px; color:var(--muted); font-size:11px; }
+.tile .pv { position:absolute; top:6px; right:6px; padding:1px 6px; border-radius:3px; font-size:10px; font-weight:800;
+            letter-spacing:.12em; background:var(--ok); color:#06150d; display:none; }
+.tile.pvw { border-color:var(--ok); box-shadow:0 0 0 1px var(--ok); }
+.tile.pvw .pv { display:block; }
+.tile.pvw:not(.on) .lab, .tile.pvw:not(.on) .sub { background:#123222; }
 
 /* lineup */
 .lot { padding:8px; border:1px solid var(--line); border-radius:4px; background:var(--panel2); }
@@ -387,7 +454,7 @@ button:disabled { opacity:.5; cursor:wait; }
 .mv { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; }
 .tile { position:relative; display:block; padding:0; border:2px solid var(--line); border-radius:4px; background:#000;
         overflow:hidden; text-align:left; }
-.tile img { display:block; width:100%; height:clamp(120px, calc((100vh - 470px) / 2), 400px); object-fit:contain; background:#000; }
+.tile img { display:block; width:100%; height:clamp(80px, calc((100vh - 36vh - 560px) / 2), 300px); object-fit:contain; background:#000; }
 .tile .lab { display:flex; align-items:center; gap:6px; padding:5px 6px; background:var(--panel2); border-top:1px solid var(--line); }
 .tile .key { flex:none; min-width:20px; padding:0 4px; border:1px solid var(--line); border-radius:3px; text-align:center;
              color:var(--muted); font-weight:700; font-size:11px; }
@@ -407,6 +474,8 @@ button:disabled { opacity:.5; cursor:wait; }
 .tile .note { position:absolute; top:40%; left:0; right:0; text-align:center; font-size:11px; color:var(--warn); display:none; }
 .tile.missing .note { display:block; }
 .mv.off .tile img { height:0; }
+.mv.off .tile .flag { left:auto; right:6px; top:5px; }  /* no picture: tally beside the label, not over its key */
+.mv.off .tile.on.pvw .pv { display:none; }
 #hold.on { border-color:var(--warn); }
 #hold.on .lab, #hold.on .sub { background:var(--warn); color:#111; }
 .ctl { display:grid; grid-template-columns:repeat(auto-fit, minmax(118px, 1fr)); gap:6px; margin-top:8px; }
@@ -454,7 +523,8 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
   .noc { height:auto; grid-template-rows:auto; }
   .grid { grid-template-columns:minmax(0, 1fr); }
   .panel { overflow:visible; }
-  .pgm img { height:auto; width:min(100%, 240px); }
+  .mon img { height:auto; width:min(100%, 200px); }
+  .tbar { width:96px; }
   .tile img { height:150px; }
   #logp { height:260px; }
 }
@@ -475,13 +545,7 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
 
 <div class="grid">
 
-<section class="panel" aria-label="Program and lineup">
-  <h2>Program <button id="shottoggle">Hide preview</button></h2>
-  <div class="pgm" id="monitor">
-    <img id="shot" alt="What OBS is sending now"
-         src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">
-    <div id="shotnote">waiting for OBS...</div>
-  </div>
+<section class="panel" aria-label="Lineup">
   <h2>Lineup <span class="mono" id="lotcount"></span></h2>
   <div class="lotnav"><input id="show" type="text" placeholder="show name (inventory/_live/...)" aria-label="Show name"
     autocomplete="off" spellcheck="false"><button id="showload">Load</button></div>
@@ -496,22 +560,36 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
 </section>
 
 <section class="panel" aria-label="Switcher">
-  <h2>Switcher <span>click or press a number to take it to air
-    <button id="tiletoggle">Multiview off</button></span></h2>
+  <h2>Switcher <span>1-7 / click: preview &middot; Enter: take &middot; Shift+1-7: straight to air
+    <button id="shottoggle">Hide monitors</button> <button id="tiletoggle">Multiview off</button></span></h2>
+  <div class="bus">
+    <figure class="mon pvw" id="pvwmon"><figcaption><b>PREVIEW</b> <span id="pvwname">click a page</span></figcaption>
+      <img id="pvwshot" alt="The page lined up to take next"></figure>
+    <div class="tbar">
+      <button id="auto" title="Take preview to program with the transition below (Enter)">AUTO <small>Enter</small></button>
+      <button id="cut" title="Take preview to program with no transition (Shift+Enter)">CUT <small>Shift+Enter</small></button>
+      <select id="trans" aria-label="Transition"><option value="Fade">Fade</option><option value="Cut">Cut</option></select>
+      <label class="dur"><input id="dur" type="number" min="50" max="5000" step="50" value="300" aria-label="Transition length"> ms</label>
+    </div>
+    <figure class="mon pgmon" id="monitor"><figcaption><b>PROGRAM</b> <span id="pgmlabel"></span></figcaption>
+      <img id="shot" alt="What OBS is sending now"
+           src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">
+      <div id="shotnote">waiting for OBS...</div></figure>
+  </div>
   <div class="mv" id="mv">
-    <button class="tile page" data-page="intro"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="intro"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">1</span><span class="name">Intro</span></span><span class="sub">Pre-show card, no cameras</span></button>
-    <button class="tile page" data-page="item"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="item"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">2</span><span class="name">Item</span></span><span class="sub">D5100 + webcam (R refocus)</span></button>
-    <button class="tile page" data-page="next"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="next"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">3</span><span class="name">Next</span></span><span class="sub">Pause / next item: window + webcam</span></button>
-    <button class="tile page" data-page="desktop"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="desktop"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">4</span><span class="name">Desktop</span></span><span class="sub">App window + webcam</span></button>
-    <button class="tile page" data-page="webcam"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="webcam"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">5</span><span class="name">Webcam</span></span><span class="sub">Fallback: face cam + mic, no D5100</span></button>
-    <button class="tile page" data-page="closeup"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="closeup"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">6</span><span class="name">Close-up</span></span><span class="sub">TG-7 + webcam (R: TG-7 AF)</span></button>
-    <button class="tile page" data-page="multi"><span class="flag">ON AIR</span><img alt=""><span class="note">no scene in OBS</span>
+    <button class="tile page" data-page="multi"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
       <span class="lab"><span class="key">7</span><span class="name">Multi</span></span><span class="sub">D5100 + webcam + window</span></button>
     <button class="tile" id="hold"><span class="flag">ON AIR</span><img alt="">
       <span class="lab"><span class="key">H</span><span class="name">Hold still</span></span><span class="sub">Freeze the camera page</span></button>
@@ -592,6 +670,7 @@ const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
                  '@step': ['/api/pager/step', null] };
 let held = null, tg7Busy = false, watchBusy = false, curPage = null, prev = null;
+let pvw = null, pendingTake = null;  // the preview bus; the take waiting in the queue
 // Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
 let pending = null, switching = false, refocusing = false, streaming = false, standinBusy = false;
 let epoch = 0;  // bumped by every action, so a poll answer from before it can't undo it
@@ -637,6 +716,7 @@ function show(st, own = []) {
   }
   if ($('#tg7').dataset.armed && st.page !== 'closeup') disarm($('#tg7'));  // nothing on air to warn about
   curPage = st.page;
+  if ('preview' in st) showPreview(st.preview);
   buttons.forEach(b => { b.classList.toggle('on', b.dataset.page === st.page);
                          b.classList.toggle('pending', b.dataset.page === pending); });
   $('#tally').classList.toggle('live', !!st.live);
@@ -645,6 +725,7 @@ function show(st, own = []) {
   $('#monitor').classList.toggle('live', !!st.live);
   held = st.page === 'hold' ? (st.held || 'item') : null;
   $('#pgmname').textContent = held ? 'Hold (' + LABEL[held] + ')' : st.page ? LABEL[st.page] : st.scene + ' (not a pager page)';
+  $('#pgmlabel').textContent = $('#pgmname').textContent;
   for (const el of document.querySelectorAll('.dest[data-dest]')) {
     const d = el.dataset.dest, s = (st.streams || {})[d] || {};
     el.classList.toggle('live', !!s.live);
@@ -893,16 +974,46 @@ async function drain() {
   switching = true;
   while (pending) {
     const page = pending; pending = null;
+    if (page === '@take') { await takeNow(); continue; }
     if (ACTION[page]) { await act(page); continue; }
     $('#msg').textContent = 'Taking ' + LABEL[page] + '...'; $('#msg').className = '';
-    try {
-      const st = await api('POST', '/api/pager', { page }, 12000);
+    try {  // straight to program (Shift+number): a cut, the emergency way
+      const st = await api('POST', '/api/pager', { page, transition: 'Cut' }, 12000);
       epoch++;
       if (!pending) { show(st, ['page']); switched(page, st); }
     } catch (e) { say(LABEL[page] + ' did not go on air: ' + e.message, 'err'); }
   }
   buttons.forEach(b => b.classList.remove('pending'));
   switching = false;
+}
+// ---- the preview bus: line a page up, then take it with a transition ----
+function showPreview(page) {
+  pvw = page || null;
+  buttons.forEach(b => b.classList.toggle('pvw', b.dataset.page === pvw));
+  $('#pvwname').textContent = pvw ? LABEL[pvw] + (pvw === curPage ? ' (on air now)' : '') : 'click a page';
+  if (!pvw) $('#pvwshot').removeAttribute('src');
+}
+function setPreview(page) {
+  epoch++; showPreview(page);
+  api('POST', '/api/pager/preview', { page }, 5000).catch(e => say('Preview: ' + e.message, 'err'));
+}
+function take(cut) {
+  if (!pvw) return say('Nothing on preview: click a page (or press 1-7) first.', 'warn');
+  const btn = cut ? $('#cut') : $('#auto');
+  btn.classList.add('go'); setTimeout(() => btn.classList.remove('go'), 300);
+  pendingTake = { page: pvw, transition: cut ? 'Cut' : $('#trans').value || 'Fade',
+                  duration_ms: Math.min(5000, Math.max(50, +$('#dur').value || 300)) };
+  go('@take');
+}
+async function takeNow() {
+  const body = pendingTake;
+  $('#msg').textContent = (body.transition === 'Cut' ? 'Cut to ' : body.transition + ' to ') + LABEL[body.page] + '...';
+  $('#msg').className = '';
+  try {
+    const st = await api('POST', '/api/pager/take', body, 12000);
+    epoch++;
+    if (!pending) { show(st, ['page']); switched(body.page, st); }
+  } catch (e) { say(LABEL[body.page] + ' did not go on air: ' + e.message, 'err'); }
 }
 async function act(name) {
   const [path, body] = ACTION[name];
@@ -1011,9 +1122,47 @@ async function poll() {
 let previewOn = true, shotUrl = null;
 try { previewOn = localStorage.getItem('pager.preview') !== 'off'; } catch (e) {}
 function previewShown() {
-  $('#monitor').classList.toggle('off', !previewOn);
-  $('#shottoggle').textContent = previewOn ? 'Hide preview' : 'Show preview';
+  $('.bus').classList.toggle('off', !previewOn);
+  $('#shottoggle').textContent = previewOn ? 'Hide monitors' : 'Show monitors';
 }
+// The preview monitor: the lined-up page's scene, a frame every ~0.7 s while
+// one is lined up (the program monitor covers it when it's the page on air).
+async function pvwFrame() {
+  const page = pvw;
+  if (page && page !== curPage && previewOn && !document.hidden) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const r = await fetch('/api/pager/tile/' + page + '.jpg?width=270', { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || 'HTTP ' + r.status);
+      const url = URL.createObjectURL(await r.blob());
+      if (page === pvw) {
+        const old = $('#pvwshot').src;
+        $('#pvwshot').src = url; tileOf(page).querySelector('img').src = url;
+        if (old.startsWith('blob:') && old !== shotUrl) URL.revokeObjectURL(old);
+      } else URL.revokeObjectURL(url);
+      $('#pvwmon').classList.remove('stale');
+    } catch (e) { $('#pvwmon').classList.add('stale'); }
+    finally { clearTimeout(timer); }
+  }
+  setTimeout(pvwFrame, 700);
+}
+pvwFrame();
+// The transitions OBS has, once; the choice is remembered on this browser.
+(async () => {
+  try {
+    const r = await api('GET', '/api/pager/transitions', null, 5000), sel = $('#trans');
+    sel.textContent = '';
+    for (const n of r.transitions) { const o = document.createElement('option'); o.value = o.textContent = n; sel.append(o); }
+    let want = 'Fade', ms = 300;
+    try { want = localStorage.getItem('pager.trans') || want; ms = +localStorage.getItem('pager.dur') || ms; } catch (e) {}
+    sel.value = r.transitions.includes(want) ? want : r.transitions.includes('Fade') ? 'Fade' : r.transitions[0];
+    $('#dur').value = ms;
+  } catch (e) { log('Transitions: ' + e.message + ' (Fade and Cut still work)', 'warn'); }
+})();
+$('#trans').addEventListener('change', () => { try { localStorage.setItem('pager.trans', $('#trans').value); } catch (e) {} });
+$('#dur').addEventListener('change', () => { try { localStorage.setItem('pager.dur', $('#dur').value); } catch (e) {} });
+$('#auto').addEventListener('click', () => take(false));
+$('#cut').addEventListener('click', () => take(true));
 async function frame() {
   if (previewOn && !document.hidden) {
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
@@ -1024,6 +1173,7 @@ async function frame() {
       $('#shot').src = url;
       const t = curPage && tileOf(curPage);  // the on-air tile shows the program feed, not a stale tile
       if (t) { t.querySelector('img').src = url; t.classList.remove('stale', 'missing'); }
+      if (pvw && pvw === curPage) $('#pvwshot').src = url;
       if (shotUrl) URL.revokeObjectURL(shotUrl);
       shotUrl = url;
       $('#monitor').classList.remove('stale');
@@ -1052,7 +1202,7 @@ function tilesShown() {
 }
 async function tiles() {
   if (tilesOn && !document.hidden) {
-    const pages = buttons.map(b => b.dataset.page).filter(p => p !== curPage);
+    const pages = buttons.map(b => b.dataset.page).filter(p => p !== curPage && p !== pvw);
     const page = pages[tileNext++ % pages.length], t = tileOf(page);
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
     try {
@@ -1151,7 +1301,7 @@ $('#lotfwd').addEventListener('click', () => stepLot(1));
 }
 
 // ---- wiring ----
-buttons.forEach(b => b.addEventListener('click', () => go(b.dataset.page)));
+buttons.forEach(b => b.addEventListener('click', () => setPreview(b.dataset.page)));
 $('#refocus').addEventListener('click', refocus);
 $('#reconnect').addEventListener('click', reconnect);
 $('#wbset').addEventListener('click', setWb);
@@ -1172,10 +1322,15 @@ $('#standin').addEventListener('change', async e => {
 document.querySelectorAll('.dest[data-dest]').forEach(el =>
   el.querySelector('.go').addEventListener('click', () => stream(el.dataset.dest)));
 document.addEventListener('keydown', e => {
-  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.target.matches('select, input[type=text]')) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || e.target.matches('select, input')) return;
+  // by e.code too, so Shift+1 (which types "!") still names page 1
+  const digit = /^Digit[1-7]$/.test(e.code) ? e.code.slice(5) : e.key;
   const k = { '1': 'intro', '2': 'item', '3': 'next', '4': 'desktop', '5': 'webcam', '6': 'closeup',
-              '7': 'multi' }[e.key];
-  if (k) go(k); else if (e.key === 'r' || e.key === 'R') refocus();
+              '7': 'multi' }[digit];
+  if (k && e.shiftKey) go(k);  // straight to air, a cut
+  else if (k) setPreview(k);
+  else if (e.key === 'Enter') { e.preventDefault(); take(e.shiftKey); }  // not also a click on a focused button
+  else if (e.key === 'r' || e.key === 'R') refocus();
   else if (e.key === 'c' || e.key === 'C') reconnect();
   else if (e.key === 'h' || e.key === 'H') holdKey();
   else if (e.key === ' ') { e.preventDefault(); go('@step'); }  // not also a click on a focused button
