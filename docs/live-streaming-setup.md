@@ -308,7 +308,7 @@ close-up, multi), H (hold/release), Space (step), R (refocus), C
 (reconnect) and M (music, section 7). Page clicks switch at once, even while
 a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
 `GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
-/api/pager/refocus`, `POST /api/pager/reconnect`, `POST /api/pager/hold
+/api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
 "start"}`. The page has Start/Stop buttons for eBay and Twitch,
@@ -325,6 +325,15 @@ covers it with Up Next (and `page item --refocus` with the current page);
 a plain page switch no longer refocuses. Live-view brightness on the D5100 is
 automatic: ISO and shutter only change stills, so add light for a cleaner
 stream.
+
+`show_flow.py wb [PRESET]` reads or sets the D5100's white balance (gphoto2
+`whitebalance`; presets `auto`, `daylight`, `cloudy`, `shade`, `tungsten`,
+`fluorescent`, `flash`, checked against the list the camera reports). It
+stops and restarts the feed like `refocus`, hidden the same way; the pager
+page has a white balance list and a Set button. **Unverified:** whether the
+D5100's USB live view (what OBS shows) follows white balance, or only stills
+do, as with ISO and shutter. Nothing found settles it for this camera; try
+it once with the feed running and update this note.
 
 ## 7. Background music (CC0, no cost)
 
