@@ -289,7 +289,7 @@ def exclusive():
                 break
             except OSError:  # BlockingIOError (flock) / PermissionError (msvcrt)
                 if time.monotonic() > deadline:
-                    raise Busy("the D5100 is busy with a refocus or a still (pager or shell); "
+                    raise Busy("a D5100 refocus or still is already running (pager or shell); "
                                "it takes about 5-10 s, try again when it's done")
                 time.sleep(0.05)
         try:
