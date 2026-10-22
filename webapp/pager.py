@@ -5,7 +5,7 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a control-room screen (switcher, monitors, telemetry, log)
-    GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track"}
+    GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track", "preset", "presets"}
                                 and `health`: OBS and output telemetry (show_flow.health())
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     GET  /api/pager/tile/<page>.jpg  a JPEG of one page's scene, on air or not (?width=80-480, default 160)
@@ -24,7 +24,8 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
-    POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py)
+    POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py);
+                                {"preset": "lofi" | "folk"}: switch mixes (fades out and back in if on)
 
 Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
 
@@ -166,6 +167,11 @@ class HoldRequest(BaseModel):
     on: bool
 
 
+class MusicRequest(BaseModel):
+    on: bool | None = None
+    preset: Literal[tuple(_show_music.PRESETS)] | None = None
+
+
 class Tg7Request(BaseModel):
     action: Literal["start", "stop"]
 
@@ -278,8 +284,13 @@ def pager_standin(req: StandinRequest) -> dict:
 # Not under show_flow's lock: a fade never touches the camera or the page, so
 # it can run during a refocus. The pager disables the button while one runs.
 @router.post("/api/pager/music")
-def pager_music(req: HoldRequest) -> dict:  # {"on": bool}
+def pager_music(req: MusicRequest) -> dict:
+    if (req.on is None) == (req.preset is None):
+        raise HTTPException(422, 'send one of "on" or "preset"')
     with _obs() as c:
+        if req.preset:
+            r = _show_music.use(c, req.preset)  # before state(), so the answer shows the new preset
+            return {**_show_music.state(c), "switch": r}
         r = _show_music.set_on(c, req.on)
         return {**_show_music.state(c), "fade": r}
 
@@ -499,7 +510,9 @@ button:disabled { opacity:.5; cursor:wait; }
 button.armed { background:var(--warn) !important; border-color:var(--warn) !important; color:#111 !important; }
 button.armed::after { content:"? click again"; }
 #music.on { border-color:var(--ok); } #music.on .st { color:var(--ok); }
-#music.on .go { background:var(--ok); border-color:var(--ok); color:#06150d; }
+#music.on .dh .go { background:var(--ok); border-color:var(--ok); color:#06150d; }
+#presets { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; } #presets:empty { display:none; }
+#presets .go.on { background:var(--ok); border-color:var(--ok); color:#06150d; }
 .kpis { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; margin-top:6px; }
 .kpi { padding:5px 7px; border-radius:4px; background:var(--panel); border:1px solid var(--line); min-width:0; }
 .kpi small { display:block; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
@@ -644,7 +657,8 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
   <div class="src" id="s-busy"><i class="led"></i><span>D5100 refocus / WB</span><em>-</em></div>
   <div class="src" id="s-scene"><i class="led"></i><span>OBS scene</span><em>-</em></div>
   <h2>Audio</h2>
-  <div class="dest" id="music"><div class="dh"><b>Music</b><span class="st">...</span><button class="go">Start</button></div></div>
+  <div class="dest" id="music"><div class="dh"><b>Music</b><span class="st">...</span><button class="go">Start</button></div>
+    <div id="presets"></div></div>
 </section>
 
 </div>
@@ -889,10 +903,33 @@ function showMusic(m) {
   const el = $('#music'), go = el.querySelector('.go');
   el.classList.toggle('on', !!m.on);
   el.querySelector('.st').textContent = !m.ready ? 'not set up: show_music.py setup'
-    : m.on ? 'playing' + (m.track ? ': ' + m.track : '') + ' (' + m.db + ' dB)' : 'off';
+    : (m.on ? 'playing' + (m.track ? ': ' + m.track : '') + ' (' + m.db + ' dB)' : 'off')
+      + (m.preset ? ' \u00b7 ' + m.preset : '');
   go.textContent = m.on ? 'Stop' : 'Start';
   go.disabled = musicBusy || !m.ready;
+  const box = $('#presets'), names = m.presets || [];
+  if (box.dataset.names !== names.join()) {  // rebuild only when the built set changes
+    box.dataset.names = names.join();
+    box.replaceChildren(...names.map(n => {
+      const b = document.createElement('button');
+      b.className = 'go'; b.dataset.preset = n; b.textContent = n;
+      b.addEventListener('click', () => musicPreset(n));
+      return b; }));
+  }
+  box.querySelectorAll('.go').forEach(b => { b.classList.toggle('on', b.dataset.preset === m.preset);
+                                            b.disabled = musicBusy; });
 }
+
+async function musicPreset(preset) {
+  if (musicBusy) return;
+  musicBusy = true; $('#presets').querySelectorAll('.go').forEach(b => b.disabled = true);
+  say('Switching music to ' + preset + '...');
+  try { const m = await api('POST', '/api/pager/music', { preset }, 20000); musicBusy = false; showMusic(m);
+        if (prev) prev.music = m;
+        say('Music: ' + preset + (m.switch.changed ? '.' : ' (already on it).')); }
+  catch (e) { musicBusy = false; say(e.message, 'err'); }
+}
+
 // Fades run on their own flag, so a fade never blocks a page switch.
 async function music() {
   if (musicBusy) return;

@@ -294,7 +294,8 @@ def client(obs, monkeypatch):
 def test_get_reports_what_is_on_air(client, obs):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
-    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None}  # one poll, not two
+    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None,
+                                 "preset": None, "presets": []}  # one poll, not two
     assert r.json()["health"]["cpu"] == 12.3  # and the telemetry rides the same poll
     assert obs.closed
 
@@ -789,6 +790,39 @@ def test_ebay_refuses_when_the_stream_service_is_not_whip(obs):
     with pytest.raises(obsctl.ObsError, match="isn't eBay's WHIP") as e:
         SF.go_live(obs, "ebay", check=0)
     assert obs.active["Stream"] is False and "secret" not in str(e.value)
+
+
+def test_on_air_flag_follows_the_destinations(obs, on_air_flag):
+    """bg_guard.py's show mode reads this flag: up while anything is live,
+    gone once nothing is, and never written by a start that failed."""
+    assert SF.on_air_flag() == on_air_flag
+    obs.connects = False
+    with pytest.raises(obsctl.ObsError):
+        SF.go_live(obs, "ebay", check=0)
+    assert not on_air_flag.exists()
+    obs.active["Stream"] = False
+    obs.connects = True
+    SF.go_live(obs, "ebay", check=0)
+    SF.go_live(obs, "twitch", check=0)
+    assert json.loads(on_air_flag.read_text())["live"] == ["ebay", "twitch"]
+    SF.stop_dest(obs, "ebay")
+    assert json.loads(on_air_flag.read_text())["live"] == ["twitch"]  # Twitch still on
+    SF.stop_dest(obs, "twitch")
+    assert not on_air_flag.exists()
+
+
+def test_stop_clears_a_flag_a_crash_left_behind(obs, on_air_flag):
+    on_air_flag.write_text("{}")  # OBS died mid-show; nothing is live now
+    SF.stop_dest(obs, "ebay")
+    assert not on_air_flag.exists()
+
+
+def test_a_flag_it_cannot_write_never_stops_the_show(obs, monkeypatch, tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    monkeypatch.setenv("SHOW_ON_AIR_FLAG", str(blocker / "ON_AIR"))  # parent is a file
+    assert SF.go_live(obs, "ebay", check=0)["changed"] is True
+    assert SF.stop_dest(obs, "ebay")["changed"] is True
 
 
 def test_standin_makes_item_skip_the_camera_and_refocus_refuse(obs):

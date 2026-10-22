@@ -30,6 +30,7 @@ class FakeObs:
         self.scenes = {s: [] for s in [*SF.PAGES.values(), SF.HOLD]}
         self.filters: dict[str, dict] = {}
         self.log: list[tuple] = []  # (request, value) for volume / mute / media
+        self.settings: dict = {}
 
     def call(self, req, data=None):
         data = data or {}
@@ -43,7 +44,11 @@ class FakeObs:
             return {"sceneItemId": 1}
         if req == "SetInputSettings":
             self.settings = data["inputSettings"]
+            self.media = SM.PLAYING  # a media source plays as soon as its file loads
+            self.log.append(("file", Path(self.settings["local_file"]).name))
             return {}
+        if req == "GetInputSettings":
+            return {"inputSettings": self.settings}
         if req == "GetSceneList":
             return {"scenes": [{"sceneName": s} for s in self.scenes]}
         if req == "GetSceneItemList":
@@ -89,6 +94,12 @@ def obs(tmp_path, monkeypatch):
     return FakeObs()
 
 
+def built_presets(music_dir, *names):
+    for n in names:
+        SM.preset_path(n, music_dir).parent.mkdir(parents=True, exist_ok=True)
+        SM.preset_path(n, music_dir).touch()
+
+
 # --- the file ----------------------------------------------------------------
 def test_titles_drop_number_artist_and_doubled_extension():
     assert SM.title_of(Path("03 HoliznaCC0 - Blue Skies.mp3.mp3")) == "Blue Skies"
@@ -96,17 +107,36 @@ def test_titles_drop_number_artist_and_doubled_extension():
 
 
 def test_plan_overlaps_tracks_by_the_crossfade():
-    order = SM.plan([(Path("1 A - One.mp3"), 100.0), (Path("2 A - Two.mp3"), 50.0),
-                     (Path("3 A - Three.mp3"), 60.0)], xfade=3)
+    order = SM.plan([("One", 100.0), ("Two", 50.0), ("Three", 60.0)], xfade=3)
     assert [(t["title"], t["start_s"]) for t in order] == [("One", 0), ("Two", 97), ("Three", 144)]
 
 
-def test_ffmpeg_levels_each_track_and_chains_crossfades():
-    args = SM.ffmpeg_args([Path("a.mp3"), Path("b.mp3"), Path("c.mp3")], 200, Path("out.ogg"))
-    graph = args[args.index("-filter_complex") + 1]
-    assert graph.count("loudnorm=") == 3 and graph.count("acrossfade=") == 2
-    assert "afade=t=out:st=197.00:d=3[out]" in graph
-    assert args[-1] == "out.ogg" and "libopus" in args
+def test_acoustic_presets_trim_and_compress_each_track_lofi_only_levels():
+    assert SM.track_filter("lofi").startswith("loudnorm=I=-16") and "acompressor" not in SM.track_filter("lofi")
+    folk = SM.track_filter("folk")
+    assert "silenceremove" in folk and "areverse" in folk and "loudnorm=I=-18" in folk and "acompressor=ratio=2" in folk
+    assert SM.track_filter("folk", 175).startswith("atrim=end=175,afade=t=out:st=171:d=4,")
+
+
+def test_mix_chains_crossfades_and_limits_only_acoustic():
+    parts = [Path("0.wav"), Path("1.wav"), Path("2.wav")]
+    graph = lambda a: a[a.index("-filter_complex") + 1]  # noqa: E731
+    lofi = SM.mix_args(parts, 200, Path("out.ogg"), acoustic=False)
+    assert graph(lofi).count("acrossfade=") == 2 and "afade=t=out:st=197.00:d=3[out]" in graph(lofi)
+    assert lofi[-1] == "out.ogg" and "libopus" in lofi
+    assert "alimiter" in graph(SM.mix_args(parts, 200, Path("o.ogg"), acoustic=True))
+
+
+def test_folk_plays_in_the_sound_editors_order_and_every_track_has_a_cc0_source(tmp_path):
+    order = SM.preset_tracks("folk", tmp_path)
+    assert [t for _, t in order][:3] == ["Hélice", "Skysand", "Ce flou entre nous"] and len(order) == 17
+    assert "Spell me your love" not in [t for _, t in order] and "Blood in the fridge" not in [t for _, t in order]
+    assert all(src in SM.FOLK_SOURCES for _, src, _, _ in SM.FOLK)
+
+
+def test_build_says_fetch_when_tracks_are_missing(tmp_path):
+    with pytest.raises(SystemExit, match="fetch folk"):
+        SM.build("folk", tmp_path)
 
 
 def test_tracks_take_the_mp3_of_each_pair(tmp_path):
@@ -121,31 +151,41 @@ def test_tracks_take_the_mp3_of_each_pair(tmp_path):
 
 def test_license_record_names_source_license_and_tracks(tmp_path):
     pack = SM.PACKS["chill_beats.zip"]
-    SM.write_license(tmp_path, [(Path("01 HoliznaCC0 - City.mp3"), pack)])
-    text = (tmp_path / "LICENSE.md").read_text()
+    d = tmp_path / "src" / "chill_beats"
+    d.mkdir(parents=True)
+    (d / "01 HoliznaCC0 - City.mp3").touch()
+    (tmp_path / "presets").mkdir()
+    SM.write_license("lofi", [(d / "01 HoliznaCC0 - City.mp3", "City")], tmp_path)
+    text = SM.preset_path("lofi", tmp_path, "LICENSE.md").read_text()
     assert pack["page"] in text and "CC0" in text and "- City" in text
     assert "Happy Lo-Fi" not in text  # a pack with no tracks in the mix isn't listed
+    SM.write_license("folk", [], tmp_path)
+    folk = SM.preset_path("folk", tmp_path, "LICENSE.md").read_text()
+    assert "freemusicarchive.org" in folk and "web.archive.org" in folk and "never show it on stream" in folk
 
 
 def test_now_playing_follows_the_cursor_and_loops(tmp_path):
-    (tmp_path / SM.TRACKLIST).write_text(json.dumps({"total_s": 200, "tracks": [
+    built_presets(tmp_path, "folk")
+    SM.preset_path("folk", tmp_path, "tracklist.json").write_text(json.dumps({"total_s": 200, "tracks": [
         {"title": "One", "start_s": 0}, {"title": "Two", "start_s": 97}, {"title": "Three", "start_s": 144}]}))
-    assert SM.now_playing(50_000, tmp_path) == "One"
-    assert SM.now_playing(150_000, tmp_path) == "Three"
-    assert SM.now_playing(250_000, tmp_path) == "One"     # second time round the loop
-    assert SM.now_playing(None, tmp_path) is None
-    assert SM.now_playing(1000, tmp_path / "missing") is None
+    assert SM.now_playing(50_000, "folk", tmp_path) == "One"
+    assert SM.now_playing(150_000, "folk", tmp_path) == "Three"
+    assert SM.now_playing(250_000, "folk", tmp_path) == "One"     # second time round the loop
+    assert SM.now_playing(None, "folk", tmp_path) is None
+    assert SM.now_playing(1000, "lofi", tmp_path) is None         # no tracklist
+    assert SM.now_playing(1000, None, tmp_path) is None           # OBS on some other file
 
 
 # --- OBS -----------------------------------------------------------------------
 def test_setup_puts_one_muted_paused_source_in_every_page(obs, tmp_path):
     obs.inputs.discard(SM.MUSIC)
-    (tmp_path / SM.MIX).touch()
+    built_presets(tmp_path, "lofi")
     SM.setup(obs, tmp_path)
     assert all(SM.MUSIC in items for items in obs.scenes.values())
     assert SM.MUSIC in obs.scenes[SF.HOLD]  # the hold still doesn't go silent
     assert obs.muted and obs.db == SM.LEVEL_DB and obs.media != SM.PLAYING  # never on air from setup
     assert obs.settings["looping"] and not obs.settings["close_when_inactive"]
+    assert obs.settings["local_file"] == str(SM.preset_path("lofi", tmp_path))  # the default preset
     assert obs.filters[SM.DUCK]["sidechain_source"] == SF.MIC
     SM.setup(obs, tmp_path)  # again: nothing doubled
     assert all(items.count(SM.MUSIC) == 1 for items in obs.scenes.values())
@@ -193,9 +233,45 @@ def test_muted_but_playing_counts_as_off(obs):
 
 def test_no_source_is_not_ready_and_on_says_run_setup():
     fake = FakeObs(has_music=False)
-    assert SM.state(fake) == {"ready": False, "on": False, "db": None, "track": None}
+    assert SM.state(fake) == {"ready": False, "on": False, "db": None, "track": None,
+                              "preset": None, "presets": []}
     with pytest.raises(obsctl.ObsError, match="setup"):
         SM.set_on(fake, True)
+
+
+def test_setup_keeps_the_preset_obs_is_on(obs, tmp_path):
+    built_presets(tmp_path, "lofi", "folk")
+    obs.settings = SM._settings(SM.preset_path("folk", tmp_path))
+    SM.setup(obs, tmp_path)
+    assert obs.settings["local_file"].endswith("folk.ogg")
+
+
+def test_switching_while_on_fades_out_swaps_the_file_and_fades_back_in(obs, tmp_path):
+    built_presets(tmp_path, "lofi", "folk")
+    obs.settings = SM._settings(SM.preset_path("lofi", tmp_path))
+    obs.muted, obs.media = False, SM.PLAYING
+    assert SM.use(obs, "folk") == {"preset": "folk", "changed": True}
+    steps = [e for e in obs.log if e[0] != "db"]
+    assert steps == [("mute", True), ("media", "PAUSE"), ("file", "folk.ogg"),
+                     ("mute", False), ("media", "PLAY")]
+    st = SM.state(obs)
+    assert st["on"] and st["preset"] == "folk" and st["presets"] == ["lofi", "folk"]
+
+
+def test_switching_while_off_stays_off(obs, tmp_path):
+    built_presets(tmp_path, "lofi", "folk")
+    obs.settings = SM._settings(SM.preset_path("lofi", tmp_path))
+    SM.use(obs, "folk")
+    assert obs.log == [("file", "folk.ogg"), ("media", "PAUSE")]
+    assert not SM.state(obs)["on"]
+
+
+def test_switching_to_the_current_or_an_unbuilt_preset(obs, tmp_path):
+    built_presets(tmp_path, "lofi")
+    obs.settings = SM._settings(SM.preset_path("lofi", tmp_path))
+    assert SM.use(obs, "lofi") == {"preset": "lofi", "changed": False} and obs.log == []
+    with pytest.raises(obsctl.ObsError, match="build folk"):
+        SM.use(obs, "folk")
 
 
 # --- /api/pager/music -----------------------------------------------------------
@@ -222,3 +298,13 @@ def test_api_music_without_setup_is_502(client, obs):
     obs.inputs.discard(SM.MUSIC)
     r = client.post("/api/pager/music", json={"on": True})
     assert r.status_code == 502 and "setup" in r.json()["detail"]
+
+
+def test_api_music_switches_preset(client, obs, tmp_path):
+    built_presets(tmp_path, "lofi", "folk")
+    obs.settings = SM._settings(SM.preset_path("lofi", tmp_path))
+    r = client.post("/api/pager/music", json={"preset": "folk"}).json()
+    assert r["preset"] == "folk" and r["switch"] == {"preset": "folk", "changed": True}
+    assert client.post("/api/pager/music", json={"preset": "jazz"}).status_code == 422
+    assert client.post("/api/pager/music", json={}).status_code == 422
+    assert client.post("/api/pager/music", json={"on": True, "preset": "lofi"}).status_code == 422
