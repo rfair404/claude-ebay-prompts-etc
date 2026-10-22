@@ -169,9 +169,18 @@ W, H = 1080, 1920
 # stream output (WHIP), Twitch on its *recording* output, set to Custom Output
 # (FFmpeg) -> Output to URL. OBS has a single stream output, and this ffmpeg
 # (7.1) has no WHIP muxer, so a relay can't carry eBay. The cost: no local
-# recording while Twitch is live, and a second x264 encode. `twitch-setup`
+# recording while Twitch is live, and a second encode. `twitch-setup`
 # writes the non-secret half of that output; the user pastes the
 # rtmp://live.twitch.tv/app/<key> URL into OBS (keys never pass through here).
+#
+# That second encode is on the CPU: OBS's Custom Output has no VAAPI path, so
+# it is libx264 whatever the stream output uses. On the show laptop (4-core
+# i7-8665U) libx264 veryfast at the full 1080x1920 canvas, next to the eBay
+# encode, skipped 99% of frames ("Encoding overloaded", 2026-10-21). So Twitch
+# gets superfast at 720x1280: roughly a quarter of the work (estimated), and
+# 3000 kbps over fewer pixels looks no worse. eBay stays full size on the GPU (VAAPI, see
+# docs/live-streaming-setup.md step 2). The rescale keys are FFRescale and
+# FFRescaleRes; OBS never read the FFUseRescale this used to write.
 SHOW_PROFILE = "Ebay"
 DESTS = {"ebay": "Stream", "twitch": "Record"}  # destination -> OBS output
 # Twitch on its own, the older way: the "Untitled" profile's stream output
@@ -184,7 +193,8 @@ TWITCH_OUT = {"RecType": "FFmpeg", "FFOutputToFile": "false", "FFFormat": "flv",
               "FFVEncoder": "libx264", "FFVEncoderId": "27",      # AV_CODEC_ID_H264
               "FFAEncoder": "aac", "FFAEncoderId": "86018",       # AV_CODEC_ID_AAC
               "FFVBitrate": "3000", "FFVGOPSize": "60", "FFABitrate": "160",
-              "FFVCustom": "preset=veryfast", "FFUseRescale": "false", "FFAudioMixes": "1"}
+              "FFVCustom": "preset=superfast", "FFRescale": "true", "FFRescaleRes": "720x1280",
+              "FFAudioMixes": "1"}
 # Up Next is the only page that may ever show the desktop window (WINDOW);
 # every other page only ever hides it. Up Next shows whatever the captured
 # window shows *now*: one browser window can be on the store page at setup
