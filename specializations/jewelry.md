@@ -341,6 +341,12 @@ AC Silver clasp guide):
 1. **Metal melt/scrap floor (fine only).** Precious metal sets a hard floor costume lacks. Rough melt
    = (gold karat % OR silver fineness) × **weight** × **spot price**. Needs the *weight* (a photo
    can't give it) → request it. Plated/GF/vermeil/HGE have **no** melt floor.
+
+   > **Melt is a FLOOR, never the price (Russell, 2026-10-22).** Solid gold is priced as fine
+   > jewelry from fine-jewelry comps, at the Push-high tier, never from melt or scrap comps. Melt only
+   > answers "never below this". Turn Best Offer on with a **high auto-decline** (well above melt,
+   > near the low end of the fine-jewelry comps) so scrap buyers see it isn't a melt sale. A scrap or
+   > melt comp may never pull a jewelry price down.
 2. **Signed maker.** A confirmed fine OR collectible-costume maker multiplies value over scrap/base.
 3. **Gemstones.** Genuine, sizeable, well-cut natural stones (esp. diamond, ruby, sapphire, emerald,
    natural pearl, jadeite-A) — but only when authenticity is supported; assume glass in costume.
