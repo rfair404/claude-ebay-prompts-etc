@@ -1,7 +1,7 @@
 # Playboy magazines — specialization module
 
 ```yaml
-triggers: [playboy, "playboy magazine", "playboy lot", playmate, "playmate of the month", "centerfold (in a magazine)", "playboy special edition", "playboy's book of lingerie", "playboy's college girls"]
+triggers: [playboy, "playboy magazine", "playboy lot", "playboy playmate", "playboy playmate of the month", "playboy centerfold", "playboy special edition", "playboy's book of lingerie", "playboy's college girls"]
 version: 1
 last_reviewed: 2026-10-22
 sources:
@@ -10,7 +10,7 @@ sources:
   - eBay Taxonomy + Metadata APIs, category 280 aspects and condition policy, pulled 2026-10-22
   - CGC (Certified Guaranty Company) — Playboy grading announcement (2009) and newsstand-edition article
   - Wikipedia — Playboy (first issue, 2016–17 non-nude period, end of regular print, Special Editions, Nov 1972 print run)
-  - Our own comps — inventory/ES/MON1020-M/02-playboy-trump-cover/ (sold pull 2026-10-22, n=102 unique rows) and eBay Browse active pulls 2026-10-22 (2,094 unique Playboy listings, asking prices only)
+  - Our own comps — inventory/ES/MON1020-M/02-playboy-trump-cover/ (sold pull 2026-10-22, n=102 unique rows) and eBay Browse active pulls 2026-10-22 (2,094 unique Playboy listings, asking prices only; saved in inventory/ES/MON1020-M/_research/browse-active-20261022/)
   - Our own sales ledger — printed-paper singles and small lots, Aug–Oct 2026
 ```
 
@@ -61,10 +61,12 @@ the US text, both read 2026-10-22.
   - **Pictorials:** never shown.
 - **No masking.** Some sellers put bars or white squares over nudity. The
   policy text we read neither allows nor forbids masking, so we don't do
-  it. We get to a compliant frame by **framing at capture** (preferred) or
-  an art-director crop to a non-nude area of the real page. A cover that
-  fails the definition is shown as spine and back cover only, and the cover
-  is described in words.
+  it. A compliant frame is **framed compliant at capture**. If a frame isn't
+  compliant, reshoot it, or leave it out and describe that part in words.
+  PREP can't cut a box out of a frame (`--crop` is only off/on/pad, and its
+  approval covers the whole shoot, not one file), so there is no crop
+  fallback. A cover that fails the definition is shown as spine and back
+  cover only, and the cover is described in words.
 - **Feedback photos** may not contain nudity even when the item does
   (ebay.co.uk edition). That's the buyer's business, not ours, but don't
   ask buyers for photos.
@@ -79,9 +81,14 @@ the US text, both read 2026-10-22.
 - **Shipping:** periodicals with ads are not Media Mail (DMM 173.4.2, see
   `prompts/draft.md`). They ship Ground Advantage. Adult material is
   restricted in some destination countries (price.txt research note,
-  2026-10-22), so default to **US-only shipping** (main store policy
-  `fulfillment_policy_id_us_only`). That's a Russell yes/no until he
-  decides it once for the whole category.
+  2026-10-22), so every Playboy ships **US only**. There's one rule per
+  store:
+  - **Main store (singles):** set `shipping.us_only: true`. That routes to
+    the US-only policy `297194269014` instead of the default worldwide/eIS
+    policy.
+  - **Junk store (lots):** leave `shipping.us_only` **unset**. The junk
+    default policy `264925613013` already ships US only, and setting the
+    flag there hard-stops sync.
 
 ## When this applies
 
@@ -115,8 +122,8 @@ About 30 seconds an issue, done from the intake frames (see **Intake**):
    **look closer** (an exact-issue comp decides it).
 5. Everything else is **lot filler**. That's the large majority of any run.
    Active asks for single issues from 1965 to 2005 cluster at $10–$17
-   median *asking* (Browse, 2026-10-22), which is below what a free-shipped
-   single nets (see **Format**).
+   median *asking* (Browse, 2026-10-22). That's under the single-out
+   threshold (see **Format**).
 
 When in doubt, pull it for a closer look. The exact-issue sold comp makes
 the call, not the cover's fame.
@@ -229,18 +236,29 @@ Tiers are triage signals, not quotes. PRICE still hunts live comps.
 ## Format: singles, lots and auctions
 
 **The single-out threshold is about $25 sold, delivered, for the exact
-issue (raw, unsigned, n ≥ 3).** The arithmetic, using PRICE's fee band and
-the about $7 Ground Advantage postage estimated for one issue
-(price.txt):
+issue (raw, unsigned, n ≥ 3).** A free-shipped single on the main store
+keeps:
 
-- A free-shipped single at $25 nets 25 − 4.38 (17.5%) − 7.00 = **$13.62**.
-- A common issue inside a lot adds about **$3–$4**. Measured on 1990: two
-  "Complete Year Lot of 12 w/ Donald Trump" sales at $81.85 and $96.85
-  delivered, less about $49 for the Trump issue, leaves about $33–$48 for
-  11 issues. Active 6–12-issue lots ask a median of $4.22 per issue (IQR
-  $3.02–$6.25), and 13–30-issue lots ask $2.86 per issue.
-- A $12 single nets about $2.84 after fees and postage. That's why common
-  issues go in lots.
+    net_single = P × (1 − fee − ad) − postage
+
+- **fee:** PRICE's band (17.5% at $25–50; 18% under $25).
+- **ad:** about 10%. The main store auto-promotes every listing at publish
+  (memory: promote-on-publish), so this applies to every single.
+- **postage:** plan $7.00–$9.50 for one issue on Ground Advantage, and
+  replace it with the weighed figure.
+
+Compare that with what the same issue adds inside a lot, about **$3–$4**:
+- Measured on 1990: two "Complete Year Lot of 12 w/ Donald Trump" sales
+  at $81.85 and $96.85 delivered, less about $49 for the Trump issue,
+  leaves about $33–$48 for 11 issues.
+- Active 6–12-issue lots ask a median of $4.22 per issue (IQR
+  $3.02–$6.25), and 13–30-issue lots ask $2.86 per issue (*Browse,
+  asking*).
+- Our own "Inside Sports Magazine Lot of 5" auction sold at $14.99 on
+  2026-06-01, about $3 per issue (sales_ledger.csv).
+
+Below about $25, the fee, ad and postage take nearly all of a single's
+price, so common issues go in lots.
 
 **Keys (single listings):** fixed price, main store, free shipping, at
 PRICE's tier.
@@ -248,8 +266,9 @@ PRICE's tier.
   at a $45.85 median delivered (n=11, and 6 of the 11 closed on 1–2 bids,
   so essentially at the start price). Plain BIN sales ran a $55.53 median
   (n=18; uncleaned grouping of the same pull).
-- Our own store's printed-paper singles and small lots sold at 77–100% of
-  their fixed ask with free shipping (sales_ledger.csv, Aug–Oct 2026).
+- Our own store's printed-paper singles and small lots sold at 75–100% of
+  their fixed ask with free shipping (sales_ledger.csv, Jul–Oct 2026; the
+  rows that record a percent of ask).
 
 **Lots: one complete year where we have one; otherwise 10–12 issues by
 decade.**
@@ -261,9 +280,12 @@ decade.**
   it, because the partial-lot value above is itself backed out of the
   year-lot sales.
 - A 12-issue lot weighs roughly 6–10 lb on IDENTIFY's 0.5–0.8 lb per-issue
-  estimate. **It hasn't been weighed.** Free shipping at that weight would
-  eat a large share of a $40–$50 lot, so **lots ship buyer-pays
-  calculated.**
+  estimate. Free shipping at that weight would eat a large share of a
+  $40–$50 lot, so **lots ship buyer-pays calculated.** **Weigh every lot
+  before it lists.** The estimate is unweighed, and the shipping figure
+  feeds the start-bid formula below.
+- eBay's final value fee is charged on the **total including buyer-paid
+  shipping**, so buyer-pays shipping still costs us its fee share.
 
 **Lots as auctions: a fixed end date, which is the point when the goal is
 to empty the lot.**
@@ -273,10 +295,25 @@ to empty the lot.**
   this thinner pool is **an inference, not measured**.
 - In a thin auction the start bid is the sale price: 6 of 11 March 1990
   auctions closed on 1–2 bids. So **the start bid is the lowest price we're
-  happy to take,** never $0.99. The working figure for common issues from
-  1965 to 2020 is **$3 per issue** (the bottom quartile of lot asks, and
-  the bottom of the 1990 sold estimate). Pre-1965 lots get their own comps.
-  This is a proposal for Russell, not a rule.
+  happy to take,** never $0.99. For common issues from 1965 to 2020, the
+  start bid per issue is:
+
+      start_per_issue = max( $3 , (C / N + 0.28) / 0.835 )
+
+  - **C:** the magazines' share of the acquisition cost. It's a named input
+    from the lot's records, never written here.
+  - **N:** the issue count from intake.
+  - **0.835** and **0.28** are the accountant's constants (2026-10-22). They
+    cover the final value fee on the item and on about $18 of buyer-paid
+    shipping, for a **12-issue lot**. Re-derive them for other lot sizes
+    or a different weighed shipping figure.
+  - **The $3 floor** is the bottom quartile of active lot asks and the low
+    end of the 1990 sold estimate.
+
+  At the floor alone, lots cover the cost share only when the run is large.
+  The accountant checks C/N for each lot after intake. Pre-1965 lots get
+  their own comps. The start bid is Russell's call per batch; this formula
+  is the proposal.
 - Duration and timing: Russell's stated preference (2026-10-08, memory) is
   **10-day auctions listed Friday about 8 PM ET, ending Monday about 8 PM
   ET**. That is his preference, not a measured best. Our only auction run
@@ -336,7 +373,7 @@ subscriber copy?).
 2. Back cover, whole.
 3. Spine, end to end.
 4. Top and bottom corners, close.
-5. Contents page, framed or cropped so no thumbnail shows nudity.
+5. Contents page, framed at capture so no thumbnail shows nudity.
 6. Centerfold-present evidence: the folded flap with the Playmate Data
    Sheet up, framed from the gutter outward with the pictorial page out of
    frame. Skip it if no compliant framing exists, and say "attached" in
@@ -352,12 +389,12 @@ subscriber copy?).
 3. Back covers, about 6 per frame (optional).
 4. The worst defect in the lot, close.
 
-**PREP note:** the `printed` category forces crop **off** (prep.md), which
-is right for covers. So nudity has to be solved **at capture**. When a crop
-is unavoidable, the art director sets an explicit box in `draft.md`
-`photos:` (as on March 1990). PREP's auto-crop never stands in for it.
-Uncropped interior frames stay in the folder as condition evidence and
-never go into `photos:`.
+**PREP note:** the `printed` category forces crop **off** (prep.md). PREP
+has no explicit crop box: `--crop` is off, on or a pad, and its approval
+covers the whole shoot, not one file. So nudity is solved **at capture
+only**. A frame that isn't compliant as shot is reshot compliant, or left
+out with that part described in words. Non-compliant frames stay in the
+folder as condition evidence and never go into `photos:`.
 
 ### Description skeleton (draft.md's fixed sections)
 
@@ -445,12 +482,17 @@ agent then:
   - Single: query `Playboy <Month> <Year> <cover subject>`. Exclude CGC,
     signed, variant and lot rows.
   - `price_stats.py` false-positives "complete"/"N issue(s)" as lots
-    (NEEDS_REVIEW, March 1990); neutralise those tokens until it's fixed.
+    (NEEDS_REVIEW, March 1990). Neutralise those tokens in a filtered copy
+    of the comps until #263 merges.
   - Lots: query `Playboy <year> complete year` / `Playboy magazine lot
     <decade>s`. Price on item-only when the lot ships buyer-pays.
 - **DRAFT** →
   - `category_id: "280"`.
-  - US-only shipping per Russell's decision.
+  - US-only shipping, one rule per store:
+    - Main-store singles: `shipping.us_only: true` (routes to `297194269014`).
+    - Junk-store lots: leave `us_only` unset (its default `264925613013` is
+      already US only; setting it hard-stops sync).
+  - Auction lots: weigh first; start bid per the **Format** formula.
   - Best Offer per the #140 gate (off on auctions and under $100).
   - **Never promote a junk-store listing.**
   - `meta.notes` records the nudity check of every frame in `photos:`.
@@ -475,8 +517,16 @@ agent then:
   the label/newsstand mechanics apply to magazines generally): https://www.cgcgrading.com/news/articles/sports-illustrated-newsstand-e9FzYwEdlLWT2FSVS3UfR/
 - Wikipedia, Playboy (first issue, Nov 1972 print run, Carter interview,
   2016–17 nudity change, end of regular print, Special Editions): https://en.wikipedia.org/wiki/Playboy
-- Our comps: `inventory/ES/MON1020-M/02-playboy-trump-cover/` (`price.txt`,
-  `apify_run_*.json`, `signature_research.md`, `art_direction.md`).
+- Our comps (pipeline data, gitignored):
+  - Sold: `inventory/ES/MON1020-M/02-playboy-trump-cover/` (`price.txt`,
+    `apify_run_*.json`, `signature_research.md`, `art_direction.md`).
+  - Active: `inventory/ES/MON1020-M/_research/browse-active-20261022/`.
+    These are the saved Browse pulls plus `summarize.py`, which recomputes
+    every *asking* figure here into `summary.json`: the 2,094 listings, the
+    per-issue lot asks, the median asks by year, and the $3,218.99
+    signed-copy ask.
+  - Ours: `sales_ledger.csv` (printed-paper sales; "Inside Sports Magazine
+    Lot of 5", auction, $14.99, 2026-06-01).
 - Not used: the "what's my Playboy worth" articles that web searches surface
   (appraisily, marketrealist, historytools and similar). They're unsourced
   price lists, below this module's source bar.
