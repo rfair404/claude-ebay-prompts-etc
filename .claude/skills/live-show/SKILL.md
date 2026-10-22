@@ -88,6 +88,7 @@ One command puts any page on air:
 | "everything at once", "both cameras and the screen", "multi view" | `show_flow.py page multi` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "TG-7", "show it close", "cover the camera while I fix it" | `show_flow.py still` (`--refocus`: and refocus the D5 behind it) |
+| "TG-7 preview", "let me frame the TG-7" | `show_flow.py tg7 preview on` (off air; `still` or `tg7 preview off` ends it) |
 | "next side", "turn it", "step" | `show_flow.py step` (item -> still -> item -> ...) |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
 | "too orange", "too blue", "white balance", "set WB to daylight" | `show_flow.py wb` (read) / `show_flow.py wb daylight` |
@@ -116,6 +117,12 @@ One command puts any page on air:
   `inventory/_live/stills/<date>/`. `step` goes item -> still -> item; the
   live TG-7 close-up (`tg7 start`, `page closeup`) and `hold` are manual
   fallbacks a normal show doesn't need.
+- `tg7 preview on` is for framing the next still: it starts the TG-7's live
+  view if it's off, into scene `TG-7 Preview` (the still's slot and
+  framing), which never goes on air; the pager shows it big (key P). The
+  next `still` ends it, as does `tg7 preview off`; the feed stops again if
+  the preview started it (battery, Wi-Fi), unless the close-up or multi
+  page is on air. A stopped TG-7 reads "off", never a black panel on air.
 - `wb [PRESET]` reads or sets the D5100's white balance: `auto`,
   `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
   `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
@@ -174,7 +181,8 @@ One command puts any page on air:
   and program monitors with a transition bar: a tile click or key 1-7
   lines up intro/item/next/desktop/webcam/close-up/multi on preview, Enter
   takes it with the chosen transition, Shift+Enter cuts, Shift+1-7 cut
-  straight to air; T TG-7 still, Shift+T still + D5 refocus, Space step;
+  straight to air; P TG-7 preview (off air), T TG-7 still, Shift+T still + D5 refocus,
+  Space step;
   R refocus, C reconnect
   cameras, stream and OBS telemetry, the lineup with `[` / `]`, an event
   log) and serves the same pager at `/api/pager` (`GET` state + `health`, `POST
