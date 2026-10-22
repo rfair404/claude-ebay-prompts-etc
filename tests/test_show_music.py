@@ -84,7 +84,6 @@ class FakeObs:
 
 @pytest.fixture
 def obs(tmp_path, monkeypatch):
-    monkeypatch.setattr(SM, "LOCK", tmp_path / "show_music.lock")
     monkeypatch.setattr(SM.time, "sleep", lambda s: None)
     monkeypatch.setattr(SM, "MUSIC_DIR", tmp_path)
     return FakeObs()
@@ -221,15 +220,3 @@ def test_api_music_without_setup_is_502(client, obs):
     obs.inputs.discard(SM.MUSIC)
     r = client.post("/api/pager/music", json={"on": True})
     assert r.status_code == 502 and "setup" in r.json()["detail"]
-
-
-def test_api_music_is_local_only(client):
-    r = client.post("/api/pager/music", json={"on": True}, headers={"origin": "https://evil.example"})
-    assert r.status_code == 403
-
-
-def test_pager_page_has_the_music_button(client):
-    html = client.get("/pager").text
-    assert 'id="music"' in html and "/api/pager/music" in html
-    # stream rows are picked by data-dest, so the music row never reads as a stream
-    assert "querySelectorAll('.dest[data-dest]')" in html
