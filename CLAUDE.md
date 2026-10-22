@@ -140,6 +140,13 @@ newly required, a command or flag removed or changed that something still uses,
 a ledger column or locked format changed), add `!` to the prefix (`feat!:`) and a **Breaking** line to the
 description saying exactly what to do.
 
+Docs are versioned the same way. Each tracked doc carries a `MAJOR.MINOR.PATCH`
+`version:` (the docs-writer is adding them), and whoever edits a versioned doc
+bumps it in the same PR. The rules, and
+which files are exempt, are in
+[`.claude/agents/docs-writer.md`](.claude/agents/docs-writer.md) ("Every doc is
+versioned"). Before adding a doc, extend the one that already covers the topic.
+
 ## Pick list requests → R2 links
 
 When asked for the pick list (to print, for today, what to ship), follow
