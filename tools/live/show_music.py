@@ -451,7 +451,7 @@ def main(argv=None) -> int:
             elif a.cmd != "status":
                 set_on(c, a.cmd == "on")
             st = state(c)
-            if a.json:
+            if getattr(a, "json", False):  # `use` has no --json
                 print(json.dumps(st))
             elif not st["ready"]:
                 print("music: not set up (show_music.py setup)")
