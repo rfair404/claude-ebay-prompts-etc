@@ -406,7 +406,7 @@ const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
 const CAM_LABEL = { d5: 'D5100', webcam: 'Webcam', tg7: 'TG-7' };
 // the cameras each page puts on air (show_flow.PAGE_CAMS)
 const PAGE_CAMS = { intro: [], item: ['d5', 'webcam'], closeup: ['tg7', 'webcam'], next: ['webcam'],
-                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam'] };
+                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam', 'tg7'] };
 // Hold, release and step ride the page queue as actions: one at a time, in order.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
                  '@step': ['/api/pager/step', null] };

@@ -378,7 +378,8 @@ def test_setup_builds_the_multi_page_idempotently():
     c = live_obs()
     SF.cmd_setup(c, args(desktop_window="Pop's Games", desktop_crop_left=216))
     SF.cmd_setup(c, args())  # later runs keep it, the window already picked
-    assert c.order(SF.MULTI) == [SF.BG, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down", SF.DESKTOP_WIN, SF.MIC]
+    assert c.order(SF.MULTI) == [SF.BG, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down", SF.TG7, "TG-7 Down",
+                                 SF.DESKTOP_WIN, SF.MIC]
     assert all(c.enabled(SF.MULTI, s) for s in c.order(SF.MULTI) if s not in SF.DOWN.values())
     d5, cam = c.transforms[(SF.MULTI, SF.D5)], c.transforms[(SF.MULTI, SF.WEBCAM)]
     # side by side in the top row, the D5 on its side: its bounds turn with it
@@ -386,13 +387,17 @@ def test_setup_builds_the_multi_page_idempotently():
     assert (d5["boundsWidth"], d5["boundsHeight"]) == (SF.MULTI_ROW, SF.W / 2) and d5["cropToBounds"]
     assert (cam["positionX"], cam["positionY"]) == (810, 405)
     assert (cam["boundsWidth"], cam["boundsHeight"]) == (SF.W / 2, SF.MULTI_ROW) and cam["cropToBounds"]
+    # the TG-7 whole under the row, the window under the TG-7, together filling the canvas
+    tg7 = c.transforms[(SF.MULTI, SF.TG7)]
+    assert (tg7["positionY"], tg7["boundsWidth"], tg7["boundsHeight"]) == (SF.MULTI_ROW, SF.W, SF.MULTI_TG7)
+    assert tg7["boundsType"] == "OBS_BOUNDS_SCALE_INNER"
     win = c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]
-    assert (win["positionY"], win["boundsHeight"]) == (SF.MULTI_ROW, SF.H - SF.MULTI_ROW)
+    assert win["positionY"] == SF.MULTI_ROW + SF.MULTI_TG7 and win["positionY"] + win["boundsHeight"] == SF.H
     assert win["alignment"] == win["boundsAlignment"] == 4  # hung from the row
     assert "cropLeft" not in win  # the second run didn't pass a crop: the first one's stays in OBS
     SF.cmd_setup(c, args(desktop_crop_left=100))
     assert c.transforms[(SF.MULTI, SF.DESKTOP_WIN)]["cropLeft"] == 100
-    assert c.count(SF.MULTI, SF.D5) == 1 and c.count(SF.MULTI, SF.WEBCAM) == 1
+    assert c.count(SF.MULTI, SF.D5) == 1 and c.count(SF.MULTI, SF.WEBCAM) == 1 and c.count(SF.MULTI, SF.TG7) == 1
 
 
 def test_the_standin_darkens_the_multi_pages_d5_too():
@@ -510,7 +515,7 @@ def built():
 def test_setup_puts_a_hidden_black_panel_over_each_camera_on_every_page_that_shows_it():
     c = built()
     SF.cmd_setup(c, args())  # twice: nothing doubles
-    shows = {SF.D5: {SF.PRODUCT, SF.MULTI}, SF.TG7: {SF.CLOSEUP},
+    shows = {SF.D5: {SF.PRODUCT, SF.MULTI}, SF.TG7: {SF.CLOSEUP, SF.MULTI},
              SF.WEBCAM: {SF.PRODUCT, SF.MULTI, SF.CLOSEUP, SF.UPNEXT, SF.DESKTOP, SF.HOLD, SF.WEBCAM_ONLY}}
     for cam, panel in SF.DOWN.items():
         assert c.kinds[panel] == "color_source_v3" and c.settings[panel]["color"] == 0xFF000000
