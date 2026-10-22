@@ -773,58 +773,133 @@ def test_item_folders_dedupes_and_skips_unplaceable_items():
     assert pick_list.item_folders(order, drafts, []) == ["inventory/A/one"]
 
 
-def test_publish_sheet_serves_the_file_it_dropped_in_the_item_folder():
+def _temp_repo(*, linked: bool) -> tuple[Path, Path]:
+    """A throwaway repo root with an inventory/ in it, returned as (root, base),
+    where `base` is the directory to rmtree.
+
+    With `linked`, root/inventory is a symlink to a sibling directory. That is
+    the shape tools/worktree_link.py gives every worktree, so an item folder
+    resolves to a path OUTSIDE root. These tests used to write into
+    ROOT/inventory, which in a worktree IS the main checkout's real inventory,
+    and the containment guards then refused the folder they had just made."""
+    base = Path(tempfile.mkdtemp(prefix="pickinv-repo-"))
+    root = base / "checkout"
+    root.mkdir()
+    if not linked:
+        (root / "inventory").mkdir()
+        return root, base
+    real = base / "main-inventory"
+    real.mkdir()
+    try:
+        (root / "inventory").symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"symlinks not available here: {e}")
+    return root, base
+
+
+def _rooted_at(root: Path) -> "_Patched":
+    """Point both halves at `root`. drop_in_item_folders() writes against
+    pick_list.ROOT, and pick_store's source guard reads against
+    pick_store.ROOT."""
+    import pick_store
+    return _Patched({(pick_list, "ROOT"): root, (pick_store, "ROOT"): root})
+
+
+def _check_publish_sheet_serves_the_dropped_file(*, linked: bool):
     """End to end through publish_sheet(): the sheet is written into the item's
     folder, and the published link reads back from THAT file."""
+    root, base = _temp_repo(linked=linked)
     out_dir, _ = _scratch_dirs()
     store = _pick_store_at(out_dir.parent)
-    folder = ROOT / "inventory" / "_pickinv_test_folder"
-    folder.mkdir(parents=True, exist_ok=True)
     rel = "inventory/_pickinv_test_folder"
+    folder = root / rel
+    folder.mkdir()
     try:
         order = _order(oid="inv-1")
         order["lineItems"] = [_item(sku="S1", title="Jamie's thing")]
         drafts = [_draft(rel, sku="S1")]
-        with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+        with _rooted_at(root), _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
             sheet = pick_list.publish_sheet(order, drafts, [])
+            html, status = store.fetch(sheet.token)
         dropped = folder / "pick_inv-1.html"
         assert dropped.exists(), "no sheet landed in the item's folder"
-        html, status = store.fetch(sheet.token)
         assert status == "ok"
         assert html == dropped.read_text(encoding="utf-8")
         # served from the item folder, not from a copy in the store
         assert not (store.store_dir / f"{sheet.token}.html").exists()
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(base, ignore_errors=True)
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
 
-def test_a_poll_drops_sheets_and_still_records_a_working_link():
+def test_publish_sheet_serves_the_file_it_dropped_in_the_item_folder():
+    _check_publish_sheet_serves_the_dropped_file(linked=False)
+
+
+def test_publish_sheet_serves_the_dropped_file_through_a_linked_inventory():
+    """The worktree case: inventory/ is a link to the main checkout's."""
+    _check_publish_sheet_serves_the_dropped_file(linked=True)
+
+
+def _check_poll_drops_sheets_and_records_a_link(*, linked: bool):
+    root, base = _temp_repo(linked=linked)
     out_dir, _ = _scratch_dirs()
     store = _pick_store_at(out_dir.parent)
-    folder = ROOT / "inventory" / "_pickinv_poll_folder"
-    folder.mkdir(parents=True, exist_ok=True)
     rel = "inventory/_pickinv_poll_folder"
+    folder = root / rel
+    folder.mkdir()
     try:
         order = _order(oid="inv-2")
         order["lineItems"] = [_item(sku="S9", title="Jamie's other thing")]
         orders = [order]
         with _Patched({(pick_list, "scan_drafts"): lambda *_a: [_draft(rel, sku="S9")],
                        (pick_list, "load_listings_ledger"): lambda *_a: []}):
-            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+            with _rooted_at(root), _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
                 new_ids, _, state, _ = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
+                entry = state["printed"]["inv-2"]
+                assert store.fetch(entry["token"])[1] == "ok"
         assert new_ids == ["inv-2"]
         assert (folder / "pick_inv-2.html").exists()
-        entry = state["printed"]["inv-2"]
-        assert store.fetch(entry["token"])[1] == "ok"
         # the seller-only .txt still goes to pick_lists/, not into inventory/
         assert (out_dir / "pick_inv-2.txt").exists()
         assert list(folder.glob("*.txt")) == []
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(base, ignore_errors=True)
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_poll_drops_sheets_and_still_records_a_working_link():
+    _check_poll_drops_sheets_and_records_a_link(linked=False)
+
+
+def test_a_poll_drops_sheets_through_a_linked_inventory():
+    """The worktree case: inventory/ is a link to the main checkout's."""
+    _check_poll_drops_sheets_and_records_a_link(linked=True)
+
+
+def test_a_symlink_inside_a_linked_inventory_still_cannot_escape():
+    """The linked-inventory exemption covers inventory/ itself, not whatever a
+    folder inside it happens to point at."""
+    root, base = _temp_repo(linked=True)
+    outside = base / "elsewhere"
+    outside.mkdir()
+    try:
+        (root / "inventory" / "evil").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"symlinks not available here: {e}")
+    try:
+        order = {"orderId": "44-10-3", "lineItems": [_item(sku="ESC")]}
+        written = pick_list.drop_in_item_folders(
+            order, "<html>x</html>", [_draft("inventory/evil", sku="ESC")], [],
+            root=root)
+        assert written == []
+        assert list(outside.iterdir()) == []
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 # render_html()'s BUYER block, rendered for real.

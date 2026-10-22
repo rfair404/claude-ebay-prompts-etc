@@ -135,7 +135,8 @@ One command puts any page on air:
   same privacy note. `refocus` on it hides behind Up Next like the item
   view, and the stand-in leaves its D5 slot dark.
 - Web: the local app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli
-  serve`) has a button page at http://localhost:8770/pager (keys 1-7 for
+  serve`) has a button page at http://localhost:8770/pager (an On-air
+  preview of OBS's program scene, keys 1-7 for
   intro/item/next/desktop/webcam/close-up/multi, R refocus, C reconnect
   cameras) and serves the same pager at `/api/pager` (`GET` state, `POST
   {"page": ...}`, `POST /api/pager/refocus`, `POST /api/pager/reconnect`).
