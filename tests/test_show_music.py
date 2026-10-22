@@ -283,7 +283,9 @@ def client(obs, monkeypatch):
 
 
 def test_api_music_state_and_fades(client, obs, monkeypatch):
-    monkeypatch.setattr(SF, "state", lambda c: {"page": "intro"})  # tested in test_pager.py
+    monkeypatch.setattr(SF, "outputs", lambda c: {})  # tested in test_pager.py
+    monkeypatch.setattr(SF, "state", lambda c, outs=None: {"page": "intro"})
+    monkeypatch.setattr(SF, "health", lambda c, outs=None: {})  # so is the telemetry
     st = client.get("/api/pager").json()  # the music rides on the pager's one poll
     assert st["page"] == "intro" and st["music"]["ready"] and st["music"]["on"] is False
     r = client.post("/api/pager/music", json={"on": True}).json()

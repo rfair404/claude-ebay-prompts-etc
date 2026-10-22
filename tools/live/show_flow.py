@@ -349,12 +349,23 @@ def program(c) -> str:
     return c.call("GetCurrentProgramScene")["currentProgramSceneName"]
 
 
+def scene_shot(c, scene: str, width: int, quality: int) -> bytes:
+    """A JPEG of one scene as OBS renders it now. No camera, no lock."""
+    d = c.call("GetSourceScreenshot", {"sourceName": scene, "imageFormat": "jpg",
+                                       "imageWidth": width, "imageCompressionQuality": quality})
+    return base64.b64decode(d["imageData"].split(",", 1)[1])
+
+
 def program_shot(c, width: int = 360, quality: int = 60) -> bytes:
     """A JPEG of what's on air (the program scene), for the pager's preview.
     No camera, no lock: OBS renders the scene it is already sending."""
-    d = c.call("GetSourceScreenshot", {"sourceName": program(c), "imageFormat": "jpg",
-                                       "imageWidth": width, "imageCompressionQuality": quality})
-    return base64.b64decode(d["imageData"].split(",", 1)[1])
+    return scene_shot(c, program(c), width, quality)
+
+
+def page_shot(c, page: str, width: int = 160, quality: int = 50) -> bytes:
+    """A small JPEG of one page's scene, on air or not: the pager's multiview
+    tile. A camera OBS only opens while it is shown renders black here."""
+    return scene_shot(c, PAGES[page], width, quality)
 
 
 class Busy(obsctl.ObsError):
@@ -1175,8 +1186,7 @@ def cmd_setup(c, a):
             hide_window(c, scene)
 
     build_down_panels(c)  # last: over every camera every page above has
-    c.call("SetCurrentSceneTransition", {"transitionName": "Fade"})
-    c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": FADE_MS})
+    set_transition(c, "Fade", FADE_MS)
     print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
 
 
@@ -1219,15 +1229,69 @@ def _on_twitch_profile(c) -> bool:
     return c.call("GetProfileList")["currentProfileName"] == TWITCH_PROFILE
 
 
-def streams(c) -> dict:
-    out = {}
-    for dest, kind in DESTS.items():
-        st = c.call(f"Get{kind}Status")
-        out[dest] = {"live": st["outputActive"],
-                     "timecode": st["outputTimecode"] if st["outputActive"] else None}
+def outputs(c) -> dict:
+    """OBS's raw status per destination; {} for a destination with no output.
+    One read serves both state() and health() in the pager's poll."""
+    out = {dest: c.call(f"Get{kind}Status") for dest, kind in DESTS.items()}
     if _on_twitch_profile(c):  # the stream output is Twitch here, not eBay
-        out["twitch"], out["ebay"] = out["ebay"], {"live": False, "timecode": None}
+        out["twitch"], out["ebay"] = out["ebay"], {}
     return out
+
+
+def streams(c, outs: dict | None = None) -> dict:
+    out = {}
+    for dest, st in (outs or outputs(c)).items():
+        on = bool(st.get("outputActive"))
+        out[dest] = {"live": on, "timecode": st["outputTimecode"] if on else None}
+    return out
+
+
+# dest -> (outputBytes, outputDuration ms, kbps): health()'s last reading per output
+_LAST_OUT: dict[str, tuple[int, int, int | None]] = {}
+KBPS_MIN_MS = 500  # readings closer than this (two pages polling) reuse the last rate
+
+
+def kbps(dest: str, st: dict) -> int | None:
+    """kbit/s sent since health() last read this output, timed by OBS's own
+    outputDuration (as go_live does), so poll jitter doesn't skew it. None
+    off air, on the first reading, and after the output restarted."""
+    if not st.get("outputActive"):
+        _LAST_OUT.pop(dest, None)
+        return None
+    sent, ms = st.get("outputBytes", 0), st.get("outputDuration", 0)
+    prev = _LAST_OUT.get(dest)
+    if prev and sent >= prev[0] and 0 <= ms - prev[1] < KBPS_MIN_MS:
+        return prev[2]
+    rate = None
+    if prev and sent >= prev[0] and ms > prev[1]:
+        rate = round((sent - prev[0]) * 8 / (ms - prev[1]))  # bytes * 8 / ms = kbit/s
+    _LAST_OUT[dest] = (sent, ms, rate)
+    return rate
+
+
+def health(c, outs: dict | None = None) -> dict:
+    """The pager's telemetry: OBS's render and encode counters, and per
+    destination its bytes sent and kbps (kbps()). Counters are cumulative
+    since OBS started (frames) or the output started (bytes); `skipped`,
+    `frames` and `congestion` are null where OBS doesn't report them (its
+    record output, which carries Twitch)."""
+    s = c.call("GetStats")
+    out = {}
+    for dest, st in (outs or outputs(c)).items():
+        on = bool(st.get("outputActive"))
+        out[dest] = {"live": on, "bytes": st.get("outputBytes", 0) if on else 0, "kbps": kbps(dest, st),
+                      "skipped": st.get("outputSkippedFrames"), "frames": st.get("outputTotalFrames"),
+                      "congestion": st.get("outputCongestion"),
+                      "reconnecting": bool(st.get("outputReconnecting"))}
+
+    def n(key, places=None):
+        return round(s[key], places)
+
+    return {"cpu": n("cpuUsage", 1), "mem_mb": n("memoryUsage"), "fps": n("activeFps", 1),
+            "frame_ms": n("averageFrameRenderTime", 1),
+            "render_skipped": n("renderSkippedFrames"), "render_frames": n("renderTotalFrames"),
+            "encode_skipped": n("outputSkippedFrames"), "encode_frames": n("outputTotalFrames"),
+            "disk_mb": n("availableDiskSpace"), "outputs": out}
 
 
 def _profile_param(c, name: str) -> str:
@@ -1443,12 +1507,12 @@ def guard_window(c) -> dict | None:
     return {"title": title, "shown": safe}
 
 
-def state(c) -> dict:
+def state(c, outs: dict | None = None) -> dict:
     """What's on air. `page` is None when the program scene isn't one of the
     pager's (someone switched in OBS by hand). `watch`: a camera watch is
     running; `cameras`: what it says of each (cam_states)."""
     scene = program(c)
-    out = streams(c)
+    out = streams(c, outs)
     on = [s["timecode"] for s in out.values() if s["live"]]
     pids = feed_pids()
     sub, busy, w = standin_on(c), refocusing(), watch_cams()
@@ -1633,9 +1697,26 @@ def _no_scene(e: obsctl.ObsError, page: str) -> obsctl.ObsError:
     return e
 
 
-def go(c, page: str, refocus: bool = False) -> dict:
-    """Put a page on air: one scene switch with OBS's 300 ms fade. No camera
-    work and no lock, so it never waits behind a refocus.
+def set_transition(c, name: str, duration_ms: int | None = None) -> None:
+    """The transition OBS's next scene switch uses ("Cut", "Fade", or any the
+    collection has). OBS keeps it until it's changed; Cut has no duration."""
+    c.call("SetCurrentSceneTransition", {"transitionName": name})
+    if duration_ms is not None and name != "Cut":
+        c.call("SetCurrentSceneTransitionDuration", {"transitionDuration": duration_ms})
+
+
+def transitions(c) -> dict:
+    """The collection's transitions, for the pager's transition list."""
+    r = c.call("GetSceneTransitionList")
+    cur = c.call("GetCurrentSceneTransition")
+    return {"transitions": [t["transitionName"] for t in r["transitions"]],
+            "current": r["currentSceneTransitionName"], "duration_ms": cur.get("transitionDuration")}
+
+
+def go(c, page: str, refocus: bool = False, transition: str = "Fade", duration_ms: int = FADE_MS) -> dict:
+    """Put a page on air: one scene switch with `transition` (by default the
+    300 ms fade, set each time, so a cut made from the pager doesn't stick).
+    No camera work and no lock, so it never waits behind a refocus.
 
     refocus=True (item and multi) refocuses the D5100 first, while the current
     page still hides it. If that fails, the feed is left running and the
@@ -1672,6 +1753,7 @@ def go(c, page: str, refocus: bool = False) -> dict:
         if now != before or asked:
             out["superseded_by"] = page_of(now) or now
             return out
+    set_transition(c, transition, duration_ms)
     try:
         c.call("SetCurrentProgramScene", {"sceneName": scene})
     except obsctl.ObsError as e:
@@ -1704,6 +1786,7 @@ def d5_covered(c, what: str, fn):
         hide = back in D5_PAGES.values()
         if hide:
             guard_window(c)
+            set_transition(c, "Fade", FADE_MS)  # not the pager's last (an 800 ms swipe): the sleep is FADE_MS
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
             time.sleep(FADE_MS / 1000)
         try:
@@ -1786,6 +1869,7 @@ def hold(c) -> dict:
     c.call("SetInputSettings", {"inputName": HOLD_FRAME,
                                 "inputSettings": {"file": str(path), HELD: page}})
     hide_window(c, HOLD)
+    set_transition(c, "Fade", FADE_MS)  # the hold's own fade, whatever the pager took last
     c.call("SetCurrentProgramScene", {"sceneName": HOLD})
     return {"held": page, "changed": True}
 

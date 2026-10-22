@@ -377,22 +377,59 @@ of its own. Up Next is the only page that ever shows that window; every
 other page (and `setup`) only hides it.
 
 The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
-the repo venv) has a control page at
-http://localhost:8770/pager: a small On-air preview of what OBS is sending
-(its program scene, a few frames a second, no sound; Hide preview turns it
-off), one button per page, Hold and Step buttons,
-Refocus and Reconnect cameras buttons, a TG-7 feed button, a Start/Stop
-camera watch button with a chip per camera (live, down, off, busy; "black
-on air" when its panel is on), the LIVE timer, both feeds' status, and keys 1-7 (intro, item, next, desktop, webcam,
-close-up, multi), H (hold/release), Space (step), R (refocus), C
-(reconnect) and M (music, section 7). Page clicks switch at once, even while
+the repo venv) has a control-room screen at
+http://localhost:8770/pager, laid out for a monitor beside the podium (it
+stacks into one column on a phone):
+
+- **Top bar:** ON AIR / OFF AIR tally with the timecode, what's on program,
+  eBay and Twitch, the OBS link, the last message and a clock.
+- **Program:** what OBS is sending (its program scene, ~2 frames a second,
+  no sound; Hide preview turns it off), and the show's **lineup**: type the
+  show name (or open `/pager?show=<name>`) to see the lot on the podium and
+  the next one, step with `[` / `]` or click a lot. This is the same
+  on-screen lot as the `/live/<show>` host page; eBay draws its own lot
+  overlay, so none of it goes on air.
+- **Switcher:** a **Preview** and a **Program** monitor side by side,
+  with the transition bar between them, like a vision mixer. Click a tile
+  or press its number to line that page up on preview (green); **AUTO**
+  (Enter) takes it to program (red) with the transition picked under it
+  (any OBS has: Fade, Cut, Swipe, ...; its length in ms), **CUT**
+  (Shift+Enter) takes it with none. Program and preview then swap, so
+  Enter again goes back. Shift+1-7 skips preview and cuts that page
+  straight to air (the emergency way). The preview is the pager's own, not
+  OBS's studio mode, which would render a second scene all the time; the
+  preview monitor is a screenshot of the page's scene about every 0.7 s.
+  Below the monitors, a multiview tile per page. Tile pictures are off by
+  default, since each is an extra OBS render and the show laptop is short of
+  CPU; **Multiview on** shows them (one off-air tile refreshed a second, so
+  each is several seconds old) and the choice is remembered. The Hold
+  tile freezes the camera page (H). Under it: Step, Refocus, Reconnect
+  cameras, the TG-7 feed, the camera watch (Start/Stop: black over a camera
+  that drops), the D5 stand-in and the D5100 white balance.
+- **Telemetry:** per destination kbps (with a 2-minute sparkline), dropped
+  frames and congestion; OBS CPU, FPS, render time, render and encode drops
+  (red while they're climbing) and free disk; each camera's status: the
+  camera watch's verdict (live, down, off, busy, with the reason on hover;
+  "black on air" when its panel is on), else its feed's.
+- **Event log:** every action and its result, plus anything a poll sees
+  change on its own: a switch made in OBS or from the shell, a stream going
+  off air or reconnecting, a feed losing frames, a camera on air going down
+  (its slot black) or coming back, OBS dropping frames.
+
+Keys: 1-7 line a page up on preview (intro, item, next, desktop, webcam,
+close-up, multi), Enter takes it, Shift+Enter cuts it, Shift+1-7 cut
+straight to air, H (hold/release, on program), Space (step), R (refocus), C (reconnect), M (music, section
+7), `[` / `]` (previous / next lot). Page clicks switch at once, even while
 a refocus runs; the last one pressed wins. The same pager is served as JSON for other pages or agents:
-`GET /api/pager`, `GET /api/pager/preview.jpg`, `POST /api/pager {"page": "item"}`, `POST
+`GET /api/pager` (state, music, telemetry and `preview`), `GET /api/pager/preview.jpg`, `GET
+/api/pager/tile/item.jpg`, `GET /api/pager/transitions`, `POST /api/pager/preview {"page": "item"}`,
+`POST /api/pager/take {"transition": "Fade", "duration_ms": 300}`, `POST /api/pager {"page": "item"}`
+(straight to program), `POST
 /api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}`, `POST /api/pager/watch {"action": "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
 "start"}`. The page has Start/Stop buttons for eBay and Twitch,
-each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
+each confirmed by a second click within 5 s (the button turns amber and the status bar asks; no pop-up, which the desktop app's browser pane would block). `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
 
 **Verify:** `python tools/live/obsctl.py status` prints the OBS version and

@@ -244,6 +244,12 @@ def live_host(show: str) -> str:
     return _live.render_host(show, lineup, _live.load_state(show, _live_base))
 
 
+@app.get("/live/{show}/lineup")
+def live_lineup(show: str) -> dict:
+    """The lineup as JSON, for the pager's lineup panel. No eBay call."""
+    return _live_lineup(show)
+
+
 @app.get("/live/{show}/overlay", response_class=HTMLResponse)
 def live_overlay(show: str) -> str:
     """Transparent page for an OBS browser source over the camera feed."""

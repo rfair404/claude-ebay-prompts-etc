@@ -43,6 +43,12 @@ class FakeObs:
         self.capture = "62914622\r\nThe Fair Hand \u2014 Mozilla Firefox\r\nNavigator"
         self.missing = set()  # scenes OBS doesn't have
         self.shots: list[dict] = []  # GetSourceScreenshot requests
+        self.sent, self.duration = 375000, 1000  # the stream output's bytes and ms since it started
+        self.congestion, self.reconnecting = None, False  # None: OBS leaves outputCongestion out
+        self.reads: list[str] = []  # Get{Stream,Record}Status requests
+        self.transitions = ["Cut", "Fade", "Swipe"]  # the collection's
+        self.transition, self.duration_ms = "Fade", 300  # OBS's current one
+        self.cuts: list[tuple] = []  # (scene, transition, ms) per program switch
         self.panels: dict[str, bool] = {}  # the camera watch's black panels (SF.DOWN) -> shown
 
     def call(self, req, data=None):
@@ -56,14 +62,32 @@ class FakeObs:
         if req == "SetCurrentProgramScene":
             self.scene = data["sceneName"]
             self.switches.append(self.scene)
+            self.cuts.append((self.scene, self.transition, self.duration_ms))
             return {}
+        if req == "SetCurrentSceneTransition":
+            if data["transitionName"] not in self.transitions:
+                raise obsctl.ObsError(f"{req} failed: code 600 No transition was found by the name of "
+                                      f"`{data['transitionName']}`.")
+            self.transition = data["transitionName"]
+            return {}
+        if req == "SetCurrentSceneTransitionDuration":
+            self.duration_ms = data["transitionDuration"]
+            return {}
+        if req == "GetSceneTransitionList":
+            return {"currentSceneTransitionName": self.transition,
+                    "transitions": [{"transitionName": n} for n in self.transitions]}
+        if req == "GetCurrentSceneTransition":
+            return {"transitionName": self.transition, "transitionDuration": self.duration_ms}
         for kind in ("Stream", "Record"):
             if req == f"Get{kind}Status":
                 on = self.active[kind]
+                self.reads.append(req)
                 st = {"outputActive": on, "outputTimecode": "00:01:02.000" if on else "00:00:00.000",
-                      "outputBytes": 375000 if on and self.connects else 0, "outputDuration": 1000}
+                      "outputBytes": self.sent if on and self.connects else 0, "outputDuration": self.duration}
                 if kind == "Stream":
-                    st.update(outputSkippedFrames=0, outputTotalFrames=30)
+                    st.update(outputSkippedFrames=0, outputTotalFrames=30, outputReconnecting=self.reconnecting)
+                    if self.congestion is not None:
+                        st["outputCongestion"] = self.congestion
                 return st
             if req == f"Start{kind}":
                 self.active[kind] = True
@@ -71,6 +95,10 @@ class FakeObs:
             if req == f"Stop{kind}":
                 self.active[kind] = False
                 return {}
+        if req == "GetStats":
+            return {"cpuUsage": 12.345, "memoryUsage": 512.4, "activeFps": 29.97,
+                    "averageFrameRenderTime": 3.21, "renderSkippedFrames": 2, "renderTotalFrames": 9000,
+                    "outputSkippedFrames": 1, "outputTotalFrames": 9000, "availableDiskSpace": 50000.7}
         if req == "GetProfileList":
             return {"currentProfileName": self.profile}
         if req == "SetCurrentProfile":
@@ -158,6 +186,7 @@ def obs(tmp_path, monkeypatch):
     monkeypatch.setattr(SF, "refocus_d5", fake_refocus)
     monkeypatch.setattr(SF, "feed_pids", lambda: [123])
     monkeypatch.setattr(SF, "LOCK", tmp_path / "show_flow.lock")
+    monkeypatch.setattr(SF, "_LAST_OUT", {})  # health()'s last reading, per test
     monkeypatch.setattr(SF.time, "sleep", lambda s: None)
     fake.title = "Pop's Games | eBay Stores \u2014 Mozilla Firefox"
     monkeypatch.setattr(SF, "window_title", lambda c: fake.title)
@@ -267,7 +296,68 @@ def test_get_reports_what_is_on_air(client, obs):
     assert r.status_code == 200 and r.json()["page"] == "intro"
     assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None,
                                  "preset": None, "presets": []}  # one poll, not two
+    assert r.json()["health"]["cpu"] == 12.3  # and the telemetry rides the same poll
     assert obs.closed
+
+
+def test_health_reports_obs_counters_and_bytes_per_destination(obs):
+    obs.active["Stream"] = True
+    h = SF.health(obs)
+    assert (h["cpu"], h["mem_mb"], h["fps"], h["frame_ms"]) == (12.3, 512, 30.0, 3.2)
+    assert (h["render_skipped"], h["encode_skipped"], h["disk_mb"]) == (2, 1, 50001)
+    assert h["outputs"]["ebay"] == {"live": True, "bytes": 375000, "kbps": None, "skipped": 0, "frames": 30,
+                                    "congestion": None, "reconnecting": False}
+    # Twitch rides the record output, which counts no frames: null, not 0
+    assert h["outputs"]["twitch"] == {"live": False, "bytes": 0, "kbps": None, "skipped": None, "frames": None,
+                                      "congestion": None, "reconnecting": False}
+    # on the Twitch profile the stream output is Twitch's, and eBay reads as off
+    obs.profile = SF.TWITCH_PROFILE
+    h = SF.health(obs)
+    assert h["outputs"]["twitch"]["bytes"] == 375000 and h["outputs"]["ebay"]["live"] is False
+    assert SF.streams(obs)["ebay"] == {"live": False, "timecode": None}
+
+
+def test_health_passes_obs_reconnecting_and_congestion_through(obs):
+    obs.active["Stream"] = True
+    obs.reconnecting, obs.congestion = True, 0.42
+    o = SF.health(obs)["outputs"]["ebay"]
+    assert o["reconnecting"] is True and o["congestion"] == 0.42
+    obs.reconnecting, obs.congestion = False, 0.0
+    o = SF.health(obs)["outputs"]["ebay"]
+    assert o["reconnecting"] is False and o["congestion"] == 0.0  # 0 is a reading, not "none"
+
+
+def test_kbps_is_the_rate_since_the_last_reading_timed_by_obs(obs):
+    obs.active["Stream"] = True
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None  # one reading: no rate yet
+    obs.sent, obs.duration = 375000 + 600000, 2000  # 600 kB in 1000 ms of OBS's clock
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 4800
+    obs.sent, obs.duration = 375000 + 600000 + 1000, 2200  # a second page polling 200 ms later
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 4800  # too close to time: the last rate
+    obs.sent, obs.duration = 1000, 300  # the output restarted: both counters went back
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None
+    obs.sent, obs.duration = 1000 + 250000, 1300
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] == 2000
+    obs.active["Stream"] = False
+    assert SF.health(obs)["outputs"]["ebay"]["kbps"] is None and SF._LAST_OUT == {}
+
+
+def test_the_poll_reads_each_output_once(client, obs):
+    client.get("/api/pager")
+    assert sorted(obs.reads) == ["GetRecordStatus", "GetStreamStatus"]  # shared by state and health
+
+
+def test_no_telemetry_still_answers_the_poll(client, obs, monkeypatch):
+    real = obs.call
+
+    def no_stats(req, data=None):
+        if req == "GetStats":
+            raise obsctl.ObsError("GetStats failed: code 500")
+        return real(req, data)
+    monkeypatch.setattr(obs, "call", no_stats)
+    r = client.get("/api/pager")
+    assert r.status_code == 200 and r.json()["page"] == "intro"
+    assert r.json()["health"] == {"error": "GetStats failed: code 500"}
 
 
 def test_post_switches_and_returns_state_plus_switch(client, obs):
@@ -280,6 +370,62 @@ def test_post_switches_and_returns_state_plus_switch(client, obs):
     obs.scene = "Up Next"
     body = client.post("/api/pager", json={"page": "item", "refocus": True}).json()
     assert body["switch"]["focused"] is True and obs.refocused == ["Up Next"]
+
+
+@pytest.fixture(autouse=True)
+def no_preview(monkeypatch):
+    monkeypatch.setitem(pager._preview, "page", None)  # the pager's preview bus, per test
+
+
+def test_take_puts_preview_on_air_with_its_transition_and_swaps(client, obs):
+    obs.scene = "Intro"
+    assert client.post("/api/pager/preview", json={"page": "item"}).json() == {"preview": "item"}
+    assert obs.switches == []  # lining a page up never touches the program
+    assert client.get("/api/pager").json()["preview"] == "item"
+    body = client.post("/api/pager/take", json={"transition": "Swipe", "duration_ms": 800}).json()
+    assert body["page"] == "item" and body["switch"]["changed"] is True
+    assert obs.cuts == [("eBay Main", "Swipe", 800)]
+    assert body["preview"] == "intro"  # what was on air is lined up next, like a vision mixer
+    # the page sends what was on preview when take was pressed, so a later click can't change it
+    body = client.post("/api/pager/take", json={"page": "next", "transition": "Cut"}).json()
+    assert body["page"] == "next" and obs.cuts[-1] == ("Up Next", "Cut", 800)  # Cut has no length
+    assert body["preview"] == "item"
+
+
+def test_take_with_nothing_on_preview_is_409_and_switches_nothing(client, obs):
+    r = client.post("/api/pager/take", json={})
+    assert r.status_code == 409 and "nothing on preview" in r.json()["detail"] and obs.switches == []
+
+
+def test_a_transition_obs_lacks_is_named_and_nothing_switches(client, obs):
+    r = client.post("/api/pager/take", json={"page": "item", "transition": "Stinger"})
+    assert r.status_code == 502 and "Stinger" in r.json()["detail"] and obs.switches == []
+    assert client.post("/api/pager/take", json={"page": "item", "duration_ms": 10}).status_code == 422
+
+
+def test_a_plain_switch_fades_again_after_a_cut(client, obs):
+    client.post("/api/pager", json={"page": "item", "transition": "Cut"})
+    SF.go(obs, "next")  # the shell's `page next`: the 300 ms fade, not the pager's last cut
+    assert obs.cuts == [("eBay Main", "Cut", 300), ("Up Next", "Fade", 300)]
+
+
+def test_a_refocus_after_a_slow_take_hides_with_the_fade_it_waits_for(client, obs):
+    obs.scene = "Intro"
+    client.post("/api/pager/take", json={"page": "item", "transition": "Swipe", "duration_ms": 800})
+    SF.refocus(obs)  # its sleep covers FADE_MS, so the hide must be that fade, not the 800 ms swipe
+    assert obs.cuts[1:] == [("Up Next", "Fade", SF.FADE_MS), ("eBay Main", "Fade", SF.FADE_MS)]
+
+
+def test_transitions_lists_the_collections(client, obs):
+    assert client.get("/api/pager/transitions").json() == {
+        "transitions": ["Cut", "Fade", "Swipe"], "current": "Fade", "duration_ms": 300}
+
+
+def test_preview_is_local_only(client, obs):
+    r = client.post("/api/pager/preview", json={"page": "item"}, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403 and pager._preview["page"] is None
+    assert client.post("/api/pager/preview", json={"page": "outro"}).status_code == 422
+    assert client.post("/api/pager/preview", json={"page": None}).json() == {"preview": None}
 
 
 def test_post_refocus(client, obs):
@@ -330,7 +476,7 @@ def test_camera_failure_is_502_and_stays_on_the_current_page(client, obs, monkey
 
 
 def test_obs_going_quiet_mid_request_is_504_not_a_bare_500(client, monkeypatch):
-    def hang(c):
+    def hang(c, outs=None):
         raise TimeoutError("timed out")
     monkeypatch.setattr(SF, "state", hang)
     r = client.get("/api/pager")
@@ -374,6 +520,31 @@ def test_preview_is_a_jpeg_of_the_program_scene(client, obs):
     assert obs.switches == [] and obs.refocused == [] and obs.closed
 
 
+def test_a_tile_is_a_small_jpeg_of_that_pages_scene_on_air_or_not(client, obs):
+    obs.scene = "Intro"
+    r = client.get("/api/pager/tile/item.jpg")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert r.content == b"\xff\xd8eBay Main" and r.headers["cache-control"] == "no-store"
+    assert obs.shots == [{"sourceName": "eBay Main", "imageFormat": "jpg",
+                          "imageWidth": 160, "imageCompressionQuality": 50}]
+    assert obs.switches == [] and obs.refocused == []  # looking never switches or touches a camera
+    assert client.get("/api/pager/tile/outro.jpg").status_code == 422
+    assert client.get("/api/pager/tile/item.jpg", headers={"host": "evil.example"}).status_code == 403
+
+
+def test_a_tile_for_a_scene_obs_lacks_names_it(client, obs, monkeypatch):
+    real = obs.call
+
+    def no_multi(req, data=None):
+        if req == "GetSourceScreenshot" and data["sourceName"] == SF.MULTI:
+            raise obsctl.ObsError("GetSourceScreenshot failed: code 600 No source was found by the "
+                                  f"name of `{SF.MULTI}`.")
+        return real(req, data)
+    monkeypatch.setattr(obs, "call", no_multi)
+    r = client.get("/api/pager/tile/multi.jpg")
+    assert r.status_code == 502 and "No source was found" in r.json()["detail"]
+
+
 def test_preview_never_waits_on_a_refocus(client, obs, monkeypatch):
     monkeypatch.setattr(SF, "LOCK_WAIT", 0)
     with SF.exclusive():
@@ -408,11 +579,22 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     # light polling, a deadline on every call, page clicks never wait on a refocus
     assert "setTimeout(poll, 1000)" in r.text and "document.hidden" in r.text
     assert "AbortController" in r.text and "refocuses first" not in r.text
-    assert "{ page }" in r.text and "refocus: true" not in r.text  # the page never asks for a refocus switch
+    assert "{ page, transition: 'Cut' }" in r.text and "refocus: true" not in r.text  # never a refocus switch
+    # preview / program: a click or 1-7 lines a page up, Enter takes it, Shift+1-7 cuts straight to air
+    assert "setPreview(b.dataset.page)" in r.text and "'/api/pager/take'" in r.text
+    assert "e.key === 'Enter'" in r.text and 'id="pvwshot"' in r.text and 'id="trans"' in r.text
+    # the preview monitor renders continuously only with Multiview on; a pick hands the keys back
+    assert "(tilesOn || pvwShot !== page)" in r.text and r.text.count("e.target.blur()") == 2
     assert "if (busy)" not in r.text
     # the On-air preview: one frame at a time, nothing while hidden or switched off
     assert "/api/pager/preview.jpg" in r.text and 'id="shottoggle"' in r.text
     assert "setTimeout(frame, 500)" in r.text and "previewOn && !document.hidden" in r.text
+    # the multiview: one tile at a time, off-air pages only, nothing while hidden or switched off
+    assert "/api/pager/tile/" in r.text and "tilesOn && !document.hidden" in r.text
+    assert "filter(p => p !== curPage && p !== pvw)" in r.text and 'id="tiletoggle"' in r.text
+    assert "/live/' + enc() + '/lineup'" in r.text and "e.key === ']'" in r.text
+    # risky buttons confirm in the page, never with confirm(): the app's browser pane blocks it
+    assert "confirm(" not in r.text and "sure(btn, dest + ' ' + action" in r.text
 
 
 # --- the Up Next window guard ----------------------------------------------
@@ -1290,8 +1472,11 @@ def test_watch_route_starts_and_stops_the_watch(client, obs, monkeypatch):
     assert r.status_code == 403 and len(calls) == 2
 
 
-def test_control_page_has_camera_chips_and_a_watch_button(client):
+def test_control_page_has_a_row_per_camera_and_a_watch_button(client):
     r = client.get("/pager")
-    assert 'id="cams"' in r.text and 'id="watch"' in r.text and "/api/pager/watch" in r.text
+    assert 'id="watch"' in r.text and "/api/pager/watch" in r.text
     for cam in SF.CAM_IDS:
-        assert f'data-cam="{cam}"' in r.text
+        assert f'id="s-{cam}"' in r.text  # the Sources row that shows the watch's verdict
+    # the page's copy of which cameras each page puts on air, in step with show_flow's
+    for page, cams in SF.PAGE_CAMS.items():
+        assert f"{page}: {cams}" in r.text.replace('"', "'")
