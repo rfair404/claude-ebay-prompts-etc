@@ -5,7 +5,7 @@ show_flow: `state()`, `go()`, `refocus()`), served as JSON so a control
 page, a phone, or another agent's web app can drive the show:
 
     GET  /pager                 the control page: a button per page, live status
-    GET  /api/pager             what's on air, plus "music": {"ready", "on", "db", "track"}
+    GET  /api/pager             what's on air, plus `music`: {"ready", "on", "db", "track"}
     GET  /api/pager/preview.jpg a small JPEG of the program scene (what viewers see), no audio
     POST /api/pager             {"page": "intro" | "item" | "closeup" | "next" | "desktop" | "webcam" | "multi", "refocus": false}
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
@@ -88,10 +88,6 @@ class StandinRequest(BaseModel):
     on: bool
 
 
-class MusicRequest(BaseModel):
-    on: bool
-
-
 class StreamRequest(BaseModel):
     dest: Literal["ebay", "twitch"]
     action: Literal["start", "stop"]
@@ -169,9 +165,9 @@ def pager_standin(req: StandinRequest) -> dict:
 
 
 # Not under show_flow's lock: a fade never touches the camera or the page, so
-# it can run during a refocus. show_music has its own lock, one fade at a time.
+# it can run during a refocus. The pager disables the button while one runs.
 @router.post("/api/pager/music")
-def pager_music(req: MusicRequest) -> dict:
+def pager_music(req: HoldRequest) -> dict:  # {"on": bool}
     with _obs() as c:
         r = _show_music.set_on(c, req.on)
         return {**_show_music.state(c), "fade": r}
