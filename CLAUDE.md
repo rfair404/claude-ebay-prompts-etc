@@ -101,6 +101,16 @@ functions with one name, two APIs for creating a no-returns policy, two
 `Store:` lines on one card, and the ignore-pattern gap above. Only one of the
 five collisions that day was a conflict git would show you.
 
+## Releases are SemVer — mark breaking PRs
+
+Releases are tagged `vMAJOR.MINOR.PATCH` on `main` by the technical director
+(rules in [`.claude/agents/technical-director.md`](.claude/agents/technical-director.md),
+"Versioning"). PR titles keep their `feat:` / `fix:` / `refactor:` / `docs:`
+prefix. If a PR stops something working until Russell acts (a config key renamed or
+newly required, a command or flag removed or changed that something still uses,
+a ledger column or locked format changed), add `!` to the prefix (`feat!:`) and a **Breaking** line to the
+description saying exactly what to do.
+
 ## Pick list requests → R2 links
 
 When asked for the pick list (to print, for today, what to ship), follow
