@@ -105,7 +105,9 @@ ledger_reconcile_report-*.json
 # reports/price_vs_actual.csv carries every ask and what it realised. All class 2.
 # Regenerate the whole directory with:
 #   python tools/sales_report.py
-/reports/
+# No trailing slash, for the same reason as /inventory below: in a worktree,
+# reports is a symlink/junction to the main checkout's (tools/worktree_link.py).
+/reports
 
 # Inventory working files — private business data + images (photos, per-item
 # phase output, comps, SKUs). The default content store; never tracked.

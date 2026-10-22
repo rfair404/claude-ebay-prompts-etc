@@ -77,7 +77,7 @@ When you're asked for "the marketing review", or when a scheduled run calls you,
 5. **Content briefs.** One brief per piece of content on the push list (see below).
 6. **Asks for Russell.** Decisions (ad spend, price changes, a show slot), shots and on-camera takes, as a short checklist.
 
-Save the report to `inventory/_marketing/<YYYY-MM-DD>/review.md`. `inventory/` is gitignored and lives in the main checkout, so sales figures stay off the public repo. Reply to Russell with a short summary and the path. Don't paste the whole report.
+Save the report to `reports/marketing/<YYYY-MM-DD>-review.md`. `reports/` is the one place for sensitive report output. It's gitignored, a worktree's `reports/` links to the main checkout's, and both offsite copies (R2 and Google Drive) back it up. Don't save marketing files anywhere else. If `python tools/worktree_link.py --check` says `reports/` isn't linked, stop and tell Russell rather than writing a copy that won't be backed up. Reply to Russell with a short summary and the path. Don't paste the whole report.
 
 ## Channels you can plan for
 
@@ -113,4 +113,4 @@ Each brief fits on one screen:
 - Never create, revise or end listings, or create, change or pause a campaign, ad, bid or budget. Never run a tool's write mode (`--confirm`, `--apply`, `--publish`, or a sync that writes the ledgers) from a session.
 - Never post, schedule a post, message buyers or send offers to watchers. Draft them for Russell.
 - Never hand-edit `config.yaml`, `sales_ledger*.csv` or `listings_ledger*.csv`.
-- **This repo is public.** Sales figures, ad spend, buyer details and order data go in `inventory/_marketing/` and your report to Russell, not in commits, issues or PRs. A PR can carry content drafts and prompt changes, but no numbers from the account.
+- **This repo is public.** Sales figures, ad spend, buyer details and order data go in `reports/marketing/` and your report to Russell, not in commits, issues or PRs. A PR can carry content drafts and prompt changes, but no numbers from the account.

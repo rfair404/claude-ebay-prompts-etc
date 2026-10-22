@@ -22,29 +22,40 @@ This rule exists because a session once ran `git checkout main` →
 `git checkout -b <feature>` directly in the shared directory, silently
 switching the working tree under every other concurrent session.
 
-### Pipeline data always goes to the main checkout's `inventory/`
+### Pipeline data always goes to the main checkout's `inventory/` and `reports/`
 
 `inventory/` (photos plus per-item phase output: identify.txt, price.txt,
 draft.md, NEEDS_REVIEW.md, review_card.*, listing/, .prep/) is gitignored and
 exists only in the main checkout. That is where pipeline output always goes,
 including from worktree sessions (user decision, 2026-09-29).
 
-To make that work, `.claude/settings.json` runs `tools/worktree_link.py` on
-SessionStart and CwdChanged. It makes the worktree's `inventory` a directory
-junction (a symlink off Windows) to `<main>/inventory/`. Then:
+`reports/` is the one place for sensitive report output: sales dashboards, ad
+reports, finance sync status, freight.db and the marketing reviews. Both
+offsite copies (R2 and Google Drive, `docs/offsite-storage.md`) take
+`reports/**`, so a file there is backed up twice. It gets the same link as
+`inventory/` (user decision, 2026-10-21), so a worktree session's report
+lands in main and survives the worktree being removed.
 
-- Write/Edit to `<worktree>/inventory/...` lands in main. Tools that resolve
-  `REPO / "inventory"` read the real store from a worktree.
+To make that work, `.claude/settings.json` runs `tools/worktree_link.py` on
+SessionStart and CwdChanged. It makes the worktree's `inventory` and `reports`
+directory junctions (symlinks off Windows) to `<main>/inventory/` and
+`<main>/reports/`. Then:
+
+- Write/Edit to `<worktree>/inventory/...` or `<worktree>/reports/...` lands
+  in main. Tools that resolve `REPO / "inventory"` or `REPO / "reports"` read
+  and write the real store from a worktree.
 - Write/Edit to `<main>/...` is still refused by the desktop app's built-in
   worktree write guard, `<main>/inventory/...` included. The guard compares
   paths lexically and has no exemption setting. That is why the carve-out is
-  a link, and why it covers exactly `inventory/` and nothing else. Code and
-  tracked files in the base checkout stay protected.
-- Only `inventory/` is linked. `config.yaml` and the ledgers are not, so the
-  "run ledger/sync tools from the main checkout" rule (GH #103) still holds.
-- If a worktree already has a real `inventory/` directory, the script leaves
-  it alone and warns. Move its contents into main and delete it to get the
-  link. `python tools/worktree_link.py --check` reports the state.
+  a link, and why it covers exactly `inventory/` and `reports/` (both
+  gitignored data) and nothing else. Code and tracked files in the base
+  checkout stay protected.
+- Only `inventory/` and `reports/` are linked. `config.yaml` and the ledgers
+  are not, so the "run ledger/sync tools from the main checkout" rule
+  (GH #103) still holds.
+- If a worktree already has a real `inventory/` or `reports/` directory, the
+  script leaves it alone and warns. Move its contents into main and delete it
+  to get the link. `python tools/worktree_link.py --check` reports the state.
 - Removing a worktree (`git worktree remove`, `rmtree`, `Remove-Item
   -Recurse`) unlinks the junction and does not touch main's data. This was
   tested. `git worktree remove` can leave the emptied folder behind.
