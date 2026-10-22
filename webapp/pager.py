@@ -397,6 +397,8 @@ button:disabled { opacity:.5; cursor:wait; }
 .dest + .dest { margin-top:6px; }
 .dh { display:flex; align-items:center; gap:8px; }
 .dh b { font-size:13px; } .dh .st { flex:1; color:var(--muted); font-family:ui-monospace, monospace; }
+.dest a.open { font-size:11px; color:var(--muted); text-decoration:none; white-space:nowrap; }
+.dest a.open:hover { color:var(--accent); }
 .dest .go { padding:4px 12px; border-radius:4px; border:1px solid var(--line); background:var(--panel); min-width:64px; }
 .dest.live { border-color:var(--pgm); } .dest.live .st { color:var(--pgm); font-weight:700; }
 .dest.live .go { background:var(--pgm); border-color:var(--pgm); color:#fff; }
@@ -506,14 +508,14 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
 <section class="panel" aria-label="Telemetry">
   <h2>Outputs</h2>
   <div class="dest" data-dest="ebay">
-    <div class="dh"><b>eBay</b><span class="st">off</span><button class="go">Start</button></div>
+    <div class="dh"><b>eBay</b><a class="open" href="https://www.ebay.com/ebaylive/studio" target="_blank" rel="noopener">Live Studio &#8599;</a><span class="st">off</span><button class="go">Start</button></div>
     <div class="kpis"><div class="kpi"><small>kbps</small><b class="kbps">-</b></div>
       <div class="kpi"><small>dropped</small><b class="drop">-</b></div>
       <div class="kpi"><small>congestion</small><b class="cong">-</b></div></div>
     <canvas class="spark" width="300" height="34"></canvas>
   </div>
   <div class="dest" data-dest="twitch">
-    <div class="dh"><b>Twitch</b><span class="st">off</span><button class="go">Start</button></div>
+    <div class="dh"><b>Twitch</b><a class="open" href="https://www.twitch.tv/popebasement" target="_blank" rel="noopener">popebasement &#8599;</a><span class="st">off</span><button class="go">Start</button></div>
     <div class="kpis"><div class="kpi"><small>kbps</small><b class="kbps">-</b></div>
       <div class="kpi"><small>dropped</small><b class="drop">-</b></div>
       <div class="kpi"><small>congestion</small><b class="cong">-</b></div></div>
