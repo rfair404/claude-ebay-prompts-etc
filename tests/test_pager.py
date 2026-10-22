@@ -820,6 +820,17 @@ def test_stop_clears_a_flag_a_crash_left_behind(obs, on_air_flag):
     assert not on_air_flag.exists()
 
 
+@pytest.mark.parametrize("argv", [["status"], ["status", "--json"]])
+def test_status_clears_a_stale_flag_and_keeps_a_live_one(obs, on_air_flag, monkeypatch, argv, capsys):
+    monkeypatch.setattr(SF, "connect", lambda: obs)
+    on_air_flag.write_text('{"live": ["twitch"]}')  # left by a show that ended without `stop`
+    assert SF.main(argv) == 0 and not on_air_flag.exists()  # both off: the guard stops blocking
+    obs.active["Stream"] = True  # eBay live: the flag is back, refreshed
+    assert SF.main(argv) == 0 and json.loads(on_air_flag.read_text())["live"] == ["ebay"]
+    assert obs.switches == [] and obs.active == {"Stream": True, "Record": False}  # status changed nothing in OBS
+    capsys.readouterr()
+
+
 def test_a_flag_it_cannot_write_never_stops_the_show(obs, monkeypatch, tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("")

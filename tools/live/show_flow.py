@@ -2207,6 +2207,7 @@ def cmd_twitch_setup(c, a):
 
 
 def cmd_status(c, a):
+    mark_on_air(c)  # a flag a crash left behind (nothing live now) goes; a live show's is refreshed
     if a.json:
         print(json.dumps(state(c)))
         return

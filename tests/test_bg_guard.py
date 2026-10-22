@@ -172,10 +172,11 @@ def test_on_air_denies_batch_jobs_even_backgrounded(on_air_flag, cmd, job):
 
 def test_on_air_message_never_points_at_stopping_the_stream(on_air_flag):
     """An agent that misjudges "no show is on air" must not end a live
-    broadcast: the way out is check status, then rm the flag."""
+    broadcast: the way out is `show_flow.py status`, which clears a stale flag
+    itself (never a hand `rm`: status can't reach OBS on a stream box mid-show)."""
     on_air_flag.write_text("{}")
     reason = verdict({"command": "python -m pytest", "run_in_background": True})
-    assert "show_flow.py status" in reason and f"rm {on_air_flag}" in reason
+    assert "show_flow.py status" in reason
     assert "show_flow.py stop" not in reason
 
 
