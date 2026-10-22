@@ -15,7 +15,40 @@
 # shutter) only work while this is stopped.
 DEV=${DEV:-/dev/video10}
 SNAP=${SNAP:-${TMPDIR:-/tmp}/d5100_latest.jpg}
+# The camera's clock: live view dies when the D5100's date has reset (Russell, 2026-10-22), so
+# every (re)start sets it to this computer's time first. A reset date (year before 2020) is
+# logged and noted in $CLOCK, one line "<when>\t<what the camera said>", which show_flow.py's
+# camera watch reads (clock_marker() there derives the same path). A sane date removes the
+# note. Best effort: bounded by CLOCK_TIMEOUT seconds per gphoto2 call, never fatal.
+case ${SNAP##*/} in ?*.*) CLOCK=${SNAP%.*}.clock ;; *) CLOCK=$SNAP.clock ;; esac
+CLOCK_TIMEOUT=${CLOCK_TIMEOUT:-15}
+
+set_clock() {
+  local out cur said year
+  # gphoto2 2.5 prints a DATE widget as "Type: DATE", "Current: <epoch>", "Printable: <%c>"
+  if out=$(timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --get-config datetime 2>&1); then
+    cur=$(sed -n 's/^Current: *\(-\{0,1\}[0-9][0-9]*\) *$/\1/p' <<<"$out" | head -n 1)
+    said=$(sed -n 's/^Printable: *//p' <<<"$out" | head -n 1)
+    if [ -n "$cur" ] && year=$(date -d "@$cur" +%Y 2>/dev/null); then
+      said=$(date -d "@$cur" '+%F %T')
+    else  # no epoch: a year in the printable date, or unknown
+      year=$(grep -o '\b[12][0-9]\{3\}\b' <<<"$said" | tail -n 1)
+    fi
+    if [ -n "$year" ] && [ "$year" -lt 2020 ]; then
+      echo "$(date +%T) D5100 clock reset (camera said $said); setting it to now" >&2
+      printf '%s\t%s\n' "$(date '+%F %T')" "$said" >"$CLOCK"
+    elif [ -n "$year" ]; then
+      rm -f "$CLOCK"
+    fi
+  else
+    echo "$(date +%T) couldn't read the D5100 clock (gphoto2 exit $?)" >&2
+  fi
+  timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --set-config datetime=now >/dev/null 2>&1 \
+    || echo "$(date +%T) couldn't set the D5100 clock; starting live view anyway" >&2
+}
+
 while true; do
+  set_clock
   gphoto2 --stdout --capture-movie 2>/dev/null \
     | ffmpeg -hide_banner -loglevel error -i - \
         -map 0:v -vcodec rawvideo -pix_fmt yuv420p -threads 0 -f v4l2 "$DEV" \
