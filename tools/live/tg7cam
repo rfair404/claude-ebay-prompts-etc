@@ -60,6 +60,7 @@ DEFAULT_UDP = "udp://127.0.0.1:5011"
 DCIM = "/DCIM/100OMSYS"
 PHOTOS = Path(os.environ.get("TG7_PHOTOS") or Path.home() / "Pictures" / "TG-7")
 RETRY = 3  # stream: seconds between tries while the camera isn't reachable
+CARD_WAIT = 15  # shoot: seconds to wait for the photo to be written to the card
 
 
 class CamError(RuntimeError):
@@ -176,9 +177,20 @@ def take(x=50, y=50):
     return xml_text(r, "take"), xml_text(r, "affocus")
 
 
-def last_jpeg():
-    """The full-size JPEG of the last shot (works while live view runs)."""
-    data = cgi("exec_takemisc", com="getlastjpg", raw=True, timeout=60)
+def last_jpeg(wait=CARD_WAIT):
+    """The full-size JPEG of the last shot (works while live view runs).
+    Right after a shot the camera refuses with error 1005 until the file is
+    on the card (seen 2026-10-21; a few seconds later the same call worked),
+    so that error is retried for up to `wait` seconds."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            data = cgi("exec_takemisc", com="getlastjpg", raw=True, timeout=60)
+            break
+        except CamError as e:
+            if "<errorcode>1005<" not in str(e) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.5)
     if not data.startswith(b"\xff\xd8"):
         raise CamError("the camera didn't send a JPEG for the last shot")
     return data
