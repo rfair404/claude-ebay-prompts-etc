@@ -257,8 +257,8 @@ Compare that with what the same issue adds inside a lot, about **$3–$4**:
 - Our own "Inside Sports Magazine Lot of 5" auction sold at $14.99 on
   2026-06-01, about $3 per issue (sales_ledger.csv).
 
-Below about $25, the fee, ad and postage take nearly all of a single's
-price, so common issues go in lots.
+At common-issue prices ($10–$17 *asking*, less when sold), fee, ad and
+postage take most or all of a single's price, so common issues go in lots.
 
 **Keys (single listings):** fixed price, main store, free shipping, at
 PRICE's tier.
