@@ -106,6 +106,14 @@ class FakeObs:
         self.closed = True
 
 
+@pytest.fixture(autouse=True)
+def no_tg7_feed(monkeypatch):
+    """The TG-7 feed's processes, stubbed: stopped unless a test starts it."""
+    pids = []
+    monkeypatch.setattr(SF, "tg7_pids", lambda: list(pids))
+    return pids
+
+
 @pytest.fixture
 def obs(tmp_path, monkeypatch):
     fake = FakeObs()
@@ -127,8 +135,9 @@ def obs(tmp_path, monkeypatch):
     return fake
 
 
-def test_pages_are_the_five_in_running_order():
-    assert list(SF.PAGES) == ["intro", "item", "next", "desktop", "webcam"]
+def test_pages_are_the_six_in_running_order():
+    assert list(SF.PAGES) == ["intro", "item", "closeup", "next", "desktop", "webcam"]
+    assert SF.PAGES["closeup"] == "Close-up"
     assert SF.PAGES["webcam"] == "Webcam Only"
     assert SF.PAGES["item"] == SF.PRODUCT and SF.PAGES["next"] == SF.UPNEXT
     # the HTTP body schema names the same pages
@@ -139,11 +148,12 @@ def test_state_maps_scene_to_page(obs):
     obs.active["Stream"] = True
     obs.snap.write_bytes(b"jpeg")
     assert SF.state(obs) == {
-        "page": "intro", "scene": "Intro", "pages": ["intro", "item", "next", "desktop", "webcam"],
+        "page": "intro", "scene": "Intro",
+        "pages": ["intro", "item", "closeup", "next", "desktop", "webcam"],
         "live": True, "timecode": "00:01:02.000", "feed": True, "feed_status": "running",
         "streams": {"ebay": {"live": True, "timecode": "00:01:02.000"},
                     "twitch": {"live": False, "timecode": None}}, "standin": False,
-        "refocusing": False}
+        "refocusing": False, "held": None, "tg7_status": "stopped"}
     obs.scene = "Desktop"  # switched by hand in OBS
     assert SF.state(obs)["page"] is None
 
@@ -319,7 +329,9 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     for dest in SF.DESTS:
         assert f'data-dest="{dest}"' in r.text
     assert "/api/pager/refocus" in r.text and "/api/pager/reconnect" in r.text
-    assert "'5': 'webcam'" in r.text and "feed_status" in r.text
+    assert "'5': 'webcam'" in r.text and "'6': 'closeup'" in r.text and "feed_status" in r.text
+    assert "/api/pager/hold" in r.text and "/api/pager/step" in r.text and "/api/pager/tg7" in r.text
+    assert "e.key === ' '" in r.text and "e.preventDefault()" in r.text  # Space steps, never clicks
     assert client.get("/pager", headers={"host": "evil.example"}).status_code == 403
     # light polling, a deadline on every call, page clicks never wait on a refocus
     assert "setTimeout(poll, 1000)" in r.text and "document.hidden" in r.text
@@ -755,3 +767,160 @@ def test_reconnect_route_and_cli(client, camera, monkeypatch, capsys):
     c.device_ids[SF.WEBCAM] = ""
     assert SF.main(["reconnect"]) == 1  # one failed: exit 1, after reopening the other
     assert c.sets[-1] == (SF.D5, "/dev/video10")
+
+
+# --- close-up, hold and the item sequence --------------------------------------
+class HoldObs(FakeObs):
+    """FakeObs plus the Hold Frame image source and OBS's own screenshots."""
+
+    def __init__(self, scene="eBay Main"):
+        super().__init__(scene)
+        self.hold_settings = {"file": "", "unload": False}
+        self.shots = []  # (scene, path, width, height)
+        self.has_hold = True
+
+    def call(self, req, data=None):
+        if req == "SaveSourceScreenshot":
+            self.shots.append((data["sourceName"], data["imageFilePath"],
+                               data["imageWidth"], data["imageHeight"]))
+            return {}
+        if req in ("GetInputSettings", "SetInputSettings") and data["inputName"] == SF.HOLD_FRAME:
+            if not self.has_hold:
+                raise obsctl.ObsError(f"{req} failed: code 600 No source was found")
+            if req == "SetInputSettings":
+                self.hold_settings.update(data["inputSettings"])
+            return {"inputSettings": dict(self.hold_settings)}
+        return super().call(req, data)
+
+
+@pytest.fixture
+def held(obs, tmp_path, monkeypatch):
+    monkeypatch.setattr(SF, "HOLD_DIR", tmp_path / "hold")
+    c = HoldObs()
+    c.title, c.refocused = obs.title, obs.refocused
+    return c
+
+
+def test_hold_freezes_the_camera_page_on_air(held):
+    held.scene = "Close-up"
+    assert SF.hold(held) == {"held": "closeup", "changed": True}
+    (scene, path, w, h), = held.shots
+    assert scene == "Close-up" and (w, h) == (SF.W, SF.H) and path.endswith("hold-a.jpg")
+    assert held.hold_settings["file"] == path and held.hold_settings[SF.HELD] == "closeup"
+    assert held.switches == ["Hold"]
+    st = SF.state(held)
+    assert st["page"] == "hold" and st["held"] == "closeup"
+
+
+def test_hold_takes_turns_between_two_files_and_never_holds_twice(held):
+    SF.hold(held)
+    assert SF.hold(held) == {"held": "item", "changed": False}  # already on hold: no new still
+    SF.release(held)
+    SF.hold(held)
+    assert [p.rsplit("/", 1)[1] for _, p, *_ in held.shots] == ["hold-a.jpg", "hold-b.jpg"]
+
+
+@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam"])
+def test_hold_is_only_for_camera_pages(held, page):
+    held.scene = SF.PAGES[page]
+    with pytest.raises(obsctl.ObsError, match="hold freezes a camera page"):
+        SF.hold(held)
+    assert held.shots == [] and held.switches == []
+
+
+def test_hold_before_setup_says_to_run_setup(held):
+    held.has_hold = False
+    with pytest.raises(obsctl.ObsError, match="setup"):
+        SF.hold(held)
+    assert held.switches == []
+
+
+def test_release_goes_back_to_the_page_held_or_where_asked(held):
+    assert SF.release(held)["changed"] is False  # not on hold: nothing to do
+    SF.hold(held)
+    assert SF.release(held)["page"] == "item"
+    SF.hold(held)
+    assert SF.release(held, "closeup")["page"] == "closeup"
+    assert held.switches == ["Hold", "eBay Main", "Hold", "Close-up"]
+    SF.hold(held)
+    with pytest.raises(ValueError):
+        SF.release(held, "next")
+
+
+def test_step_walks_wide_closeup_hold_and_alternates_after_the_hold(held):
+    seen = []
+    for _ in range(6):
+        seen.append(SF.step(held)["action"])
+    assert held.switches == ["Close-up", "Hold", "eBay Main", "Close-up", "Hold", "eBay Main"]
+    assert seen == ["page", "hold", "release", "page", "hold", "release"]
+    assert [s for s, *_ in held.shots] == ["Close-up", "Close-up"]
+
+
+def test_step_from_a_hold_of_the_wide_view_goes_to_the_closeup(held):
+    SF.hold(held)  # held by hand on item
+    assert SF.step(held)["page"] == "closeup"
+
+
+@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam"])
+def test_step_from_any_other_page_starts_at_item(held, page):
+    held.scene = SF.PAGES[page]
+    assert SF.step(held) == {"page": "item", "changed": True, "focused": None, "refocus_s": None,
+                             "action": "page"}
+
+
+def test_refocus_on_the_closeup_is_the_tg7s_and_leaves_the_d5_alone(obs, monkeypatch):
+    calls = []
+    cam = SimpleNamespace(autofocus=lambda: calls.append("af") or "ok", CamError=RuntimeError)
+    monkeypatch.setattr(SF, "tg7cam", lambda: cam)
+    obs.scene = "Close-up"
+    obs.standin_shown = True  # the D5 stand-in doesn't matter to the TG-7
+    r = SF.refocus(obs)
+    assert r["camera"] == "tg7" and r["focused"] is True
+    assert calls == ["af"] and obs.refocused == [] and obs.switches == []  # nothing hidden
+
+
+def test_a_tg7_refocus_failure_is_an_obs_error_for_the_pager(obs, monkeypatch):
+    class CamError(RuntimeError):
+        pass
+
+    def af():
+        raise CamError("can't reach the camera at 192.168.0.10")
+    monkeypatch.setattr(SF, "tg7cam", lambda: SimpleNamespace(autofocus=af, CamError=CamError))
+    obs.scene = "Close-up"
+    with pytest.raises(obsctl.ObsError, match="TG-7: can't reach"):
+        SF.refocus(obs)
+
+
+def test_closeup_page_is_a_plain_switch(obs):
+    obs.scene = "eBay Main"
+    assert SF.go(obs, "closeup")["changed"] is True
+    assert obs.switches == ["Close-up"] and obs.refocused == []
+
+
+def test_hold_step_and_tg7_routes(held, monkeypatch, no_tg7_feed):
+    monkeypatch.setattr(SF, "connect", lambda: held)
+    monkeypatch.setattr(SF, "tg7_start", lambda: no_tg7_feed.append(77) or True)
+    monkeypatch.setattr(SF, "tg7_stop", lambda: no_tg7_feed.clear())
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as client:
+        body = client.post("/api/pager/hold", json={"on": True}).json()
+        assert body["page"] == "hold" and body["held"] == "item" and body["hold"]["changed"] is True
+        body = client.post("/api/pager/hold", json={"on": False}).json()
+        assert body["page"] == "item" and body["switch"]["changed"] is True
+        body = client.post("/api/pager/step").json()
+        assert body["page"] == "closeup" and body["step"]["action"] == "page"
+        assert client.post("/api/pager/step").json()["page"] == "hold"
+        assert client.post("/api/pager/tg7", json={"action": "start"}).json()["tg7_status"] == "running"
+        assert client.post("/api/pager/tg7", json={"action": "stop"}).json()["tg7_status"] == "stopped"
+        assert client.post("/api/pager/tg7", json={"action": "reboot"}).status_code == 422
+        held.scene = "Intro"
+        r = client.post("/api/pager/hold", json={"on": True})
+        assert r.status_code == 502 and "camera page" in r.json()["detail"]
+
+
+def test_hold_release_and_step_on_the_cli(held, monkeypatch, capsys):
+    monkeypatch.setattr(SF, "connect", lambda: held)
+    assert SF.main(["step"]) == 0 and "on air: closeup" in capsys.readouterr().out
+    assert SF.main(["hold"]) == 0 and "on hold: a still of closeup" in capsys.readouterr().out
+    assert SF.main(["release", "--to", "item"]) == 0 and "on air: item" in capsys.readouterr().out
+    assert SF.main(["page", "next"]) == 0
+    assert SF.main(["hold"]) == 1 and "camera page" in capsys.readouterr().err

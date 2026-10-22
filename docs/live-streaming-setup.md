@@ -165,11 +165,15 @@ and probing on 2026-10-14:
   USB HDMI capture stick (any UVC one; shows up as a normal OBS camera). HDMI
   is disabled while USB is connected to a computer. No camera control over
   HDMI (HDMI Control/CEC is playback-only).
-- **Wi-Fi:** full remote control + low-res live view via the OM Image Share
+- **Wi-Fi:** full remote control + live view via the OM Image Share
   protocol at 192.168.0.10 — `tools/live/tg7cam` (focus point, AF, shoot,
-  zoom, properties, live view into /dev/video11 or UDP). Untested on the TG-7
-  itself; run `tg7cam probe` first. The laptop joins the *camera's* network,
-  so it needs internet from somewhere else (below).
+  sync the card, LED, zoom, properties, live view into /dev/video11 or UDP).
+  Tested on a TG-7 (firmware 1.1) 2026-10-21: live view runs 25 fps at
+  640x480 (1280x960 is 15 fps), and keeps running through AF, a shot, the
+  LED and downloading photos. The TG-7 has no `exec_shutter`; it shoots with
+  `exec_takemotion com=starttake` (focus at a point, then fire). The laptop
+  joins the *camera's* network, so it needs internet from somewhere else
+  (below).
 - **Bluetooth:** the camera advertises as its serial number with service
   `adc505f9-4e58-4b71-b8ca-983bb8c73e4f`; the laptop can connect without
   pairing. The documented BLE commands are only auth / power-on / Wi-Fi wake
@@ -180,9 +184,13 @@ and probing on 2026-10-14:
 Install `tg7cam`:
 
 ```bash
-mkdir -p ~/bin && install -m 755 tools/live/tg7cam ~/bin/tg7cam
+mkdir -p ~/bin && ln -sf "$PWD/tools/live/tg7cam" ~/bin/tg7cam   # a link, so updates apply
 tg7cam --help-setup        # loopback / OBS Media Source options
 ```
+
+(`~/bin` must be on `PATH`; otherwise call `~/bin/tg7cam`.) Photos from
+`tg7cam shoot` and `tg7cam sync` land in `~/Pictures/TG-7` unless `--to DIR`
+or `$TG7_PHOTOS` says otherwise.
 
 ### Wi-Fi control during a show needs a second internet path
 
@@ -200,7 +208,8 @@ iw list | grep -A8 'valid interface combinations'
 
 Then: **user** — camera menu Wi-Fi/Bluetooth Settings > Device Connection
 shows the SSID/password; `tg7cam connect <SSID>` prompts for the password;
-`tg7cam probe`; `tg7cam stream` in its own terminal.
+`tg7cam probe`. The camera's own controls lock while a computer is connected.
+During a show, `show_flow.py tg7 start` runs the stream (section 6).
 
 ## 6. Running the show without the OBS window
 
@@ -222,8 +231,26 @@ python tools/live/show_flow.py page intro     # 5. pre-show card, before going l
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
 python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
 python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus
+python tools/live/show_flow.py tg7 start      # TG-7 live view -> the closeup page (before 3 the first time)
+python tools/live/show_flow.py step           # item -> closeup -> hold -> item ...
+python tools/live/show_flow.py hold | release # freeze the camera page while the item turns
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
+
+**closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
+(`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
+source is a v4l2 camera on /dev/video11 when that loopback device exists,
+else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
+the device and it switches. `refocus` on the closeup page is the TG-7's
+half-press (0.3 s, live view keeps running), so nothing is hidden.
+
+**hold** (scene `Hold`) freezes the camera page on air: OBS screenshots the
+scene, and the Hold page shows that still under the live webcam strip, so
+the host can turn the item without viewers watching it spin. `release` fades
+back to the live camera. **step** is the item sequence on one key (Space on
+the pager): wide (item) -> close-up -> hold, turn the item -> wide again,
+and so on. From a hold it releases to the *other* camera; from any
+non-camera page it starts at item.
 
 `show_flow.py` and `obsctl.py` need only the standard library; the web app
 needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not
@@ -263,13 +290,15 @@ other page (and `setup`) only hides it.
 
 The local web app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve`,
 the repo venv) has a control page at
-http://localhost:8770/pager: one button per page, a Refocus button, the
-LIVE timer, the D5100 feed status, and keys 1-5 (intro, item, next,
-desktop, webcam) and R. The same pager is served as JSON for other
+http://localhost:8770/pager: one button per page, Hold and Step buttons, a
+Refocus button, a TG-7 feed button, the LIVE timer, both feeds' status, and
+keys 1-6 (intro, item, next, desktop, webcam, close-up), H (hold/release),
+Space (step) and R. The same pager is served as JSON for other
 pages or agents:
 `GET /api/pager`, `POST /api/pager {"page": "item"}`, `POST
-/api/pager/refocus` and `POST /api/pager/stream {"dest": "twitch",
-"action": "start"}`. The page has Start/Stop buttons for eBay and Twitch,
+/api/pager/refocus`, `POST /api/pager/hold {"on": true}`, `POST
+/api/pager/step`, `POST /api/pager/tg7 {"action": "start"}` and `POST
+/api/pager/stream {"dest": "twitch", "action": "start"}`. The page has Start/Stop buttons for eBay and Twitch,
 each with a confirmation. `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
 
@@ -287,7 +316,11 @@ stream.
 
 - TG-7 HDMI: buy a capture stick + micro-HDMI cable; confirm INFO hides the
   overlay on the HDMI feed and how long the battery lasts on HDMI.
-- TG-7 Wi-Fi: first real `tg7cam probe` once a second internet path exists.
+- TG-7 Wi-Fi: **user** — the one-time `sudo` for /dev/video11
+  (`tg7cam --help-setup`), then `show_flow.py setup`, to move the TG-7 off
+  UDP onto a v4l2 source (lower latency, and `reconnect` can reopen it).
+- The D5100 refocus could hide behind `hold` instead of Up Next (viewers
+  would see the item, frozen, instead of the card).
 - Optional: RM-WR1 + USB relay across its button for scripted AF/shoot over
   Bluetooth.
 - D5100 refocus in about 1 s: hold one libgphoto2 session (python-gphoto2)
