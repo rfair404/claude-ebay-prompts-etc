@@ -8,7 +8,8 @@ work he wants, and he types as little as he can. Every session and agent:
 - Takes decisions about code, reviews, merge order, process and tooling to the
   `technical-director` agent, not to Russell.
 - Brings Russell only money, prices, going live, anything a customer sees,
-  merges and hands-on steps, as one short card: numbered steps, one
+  permission and hook changes (`.claude/settings*.json`), merges and
+  hands-on steps, as one short card: numbered steps, one
   ready-to-run `bash` block with every value filled in, and yes/no questions
   with the recommendation first.
 - Never asks him to type an explanation, paste a value back or fill in a
