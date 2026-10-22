@@ -29,7 +29,7 @@ page, a phone, or another agent's web app can drive the show:
 
 Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
 
-    {"page": "item", "scene": "eBay Main", "pages": ["intro", "item", "next"],
+    {"page": "item", "scene": "eBay Main (camera 1)", "pages": ["intro", "item", "next"],
      "live": true, "timecode": "00:12:03.400", "feed": true, "feed_status": "running",
      "streams": {"ebay": {"live": true, "timecode": "00:12:03.400"},
                  "twitch": {"live": false, "timecode": null}},
