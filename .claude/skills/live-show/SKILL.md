@@ -123,7 +123,7 @@ One command puts any page on air:
   says `window hidden`; tell the user to open the next lot's eBay page in a
   window of its own and re-run `setup --window`. Up Next is the only page
   that ever shows that window; every other page hides it.
-- `watch start` runs the camera watch in the background. Once a second it
+- `watch start` runs the camera watch in the background. Every 2 seconds it
   looks at the D5100, the webcam and the TG-7; one that stays bad for 3
   looks (feed stopped, no frames, no picture or a frozen one in OBS) gets a
   black panel over its slot on every page that shows it, and the panel comes

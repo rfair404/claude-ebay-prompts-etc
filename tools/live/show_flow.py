@@ -50,7 +50,7 @@ OBS can sit black or frozen on a v4l2 camera whose device has frames again.
 frames but OBS's picture doesn't move; `reconnect` (the pager's Reconnect
 cameras button) reopens the D5 and the webcam by hand.
 
-`watch start` runs the camera watch in the background. Once a second it
+`watch start` runs the camera watch in the background. Every 2 seconds it
 looks at the D5100, the webcam and the TG-7. A camera that stays bad for 3
 looks (feed stopped, no frames, no picture in OBS, or a frozen one) gets a
 black panel over its slot on every page that shows it, so viewers see
@@ -277,7 +277,7 @@ SLOTS = {PRODUCT: {D5: (0, 0, W, H), WEBCAM: (0, 0, W, STRIP)},
 # The cameras each page puts on air.
 PAGE_CAMS = {"intro": [], "item": ["d5", "webcam"], "closeup": ["tg7", "webcam"], "next": ["webcam"],
              "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam", "tg7"]}
-WATCH_EVERY = 1.0  # seconds between looks
+WATCH_EVERY = 2.0  # seconds between looks (each takes up to 3 OBS screenshots)
 DOWN_AFTER = 3  # bad looks in a row before the panel goes on
 UP_AFTER = 5  # good looks in a row before it comes off
 D5_STALE = 5  # seconds without a feed frame (FEED_SNAP, every 2 s) before the D5 counts as sending nothing
