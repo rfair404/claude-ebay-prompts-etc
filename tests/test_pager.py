@@ -265,7 +265,8 @@ def client(obs, monkeypatch):
 def test_get_reports_what_is_on_air(client, obs):
     r = client.get("/api/pager")
     assert r.status_code == 200 and r.json()["page"] == "intro"
-    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None}  # one poll, not two
+    assert r.json()["music"] == {"ready": False, "on": False, "db": None, "track": None,
+                                 "preset": None, "presets": []}  # one poll, not two
     assert obs.closed
 
 

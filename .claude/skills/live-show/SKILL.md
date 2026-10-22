@@ -93,6 +93,7 @@ One command puts any page on air:
 | "watch the cameras", "black out a dead camera", "is the camera up?" | `show_flow.py watch start` / `watch status` / `watch stop` |
 | "battery's dead", "use the stand-in" / "camera's back" | `show_flow.py standin on` / `standin off` |
 | "music", "start the music" / "kill the music" | `show_music.py on` / `show_music.py off` |
+| "folk music", "switch to lo-fi" | `show_music.py use folk` / `show_music.py use lofi` |
 
 - `page next` fades (300 ms) to Up Next while the user changes the item.
 - Every `page` is one scene switch; it never refocuses or waits for the
@@ -139,8 +140,9 @@ One command puts any page on air:
 - `show_music.py on|off` fades the CC0 background music in or out over 2 s
   (`off` mutes and pauses it). It's the only music allowed on the show: never
   play anything else (eBay Live only allows music we hold rights to). If it
-  says to run `setup`, run `show_music.py setup` (and `build` first if the
-  file is missing); docs/live-streaming-setup.md section 7.
+  says to run `setup`, run `show_music.py setup` (and `build <preset>` first if
+  the file is missing); docs/live-streaming-setup.md section 7. `use lofi|folk`
+  switches the mix with the same fades; the pager has a button per preset.
 - `standin on` puts a white panel in the item view in place of the D5100;
   while it's on, `page item --refocus` skips the refocus and `refocus` refuses. The
   pager page has the same switch, and it stays on through reloads (it lives

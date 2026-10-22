@@ -426,24 +426,38 @@ So the show plays **public-domain (CC0) music from a local file**, never an
 internet radio or someone else's 24/7 stream: with a file, every track has a
 license on record.
 
-The music is HoliznaCC0's lo-fi. The artist dedicated the whole catalog to
-the public domain and asks for no credit (https://holiznacc0.bandcamp.com).
-Two packs from OpenGameArt, 13 tracks, about 37 minutes, looped:
-[Chill Beats](https://opengameart.org/content/chill-beats-collection) and
-[Happy Lo-Fi](https://opengameart.org/content/happy-lo-fi-lofi-collection).
+Each show picks one of two **presets** (`show_music.PRESETS`), and you can
+switch between them mid-show:
+
+- **`lofi`**: HoliznaCC0's lo-fi beats, shuffled. The artist dedicated the
+  whole catalog to the public domain and asks for no credit
+  (https://holiznacc0.bandcamp.com). 13 tracks, about 37 minutes, from
+  [Chill Beats](https://opengameart.org/content/chill-beats-collection) and
+  [Happy Lo-Fi](https://opengameart.org/content/happy-lo-fi-lofi-collection).
+- **`folk`**: solo acoustic guitar, in the sound-editor's running order
+  (`show_music.FOLK`). It draws on Monplaisir's
+  [Bonjour From Paris, Nantes And Montreal](https://freemusicarchive.org/music/Monplaisir/Bonjour_from_Paris_Nantes_and_Montreal)
+  and [Fifty Seconds Of Rain](https://freemusicarchive.org/music/Monplaisir/Fifty_seconds_of_rain),
+  with two tracks from jomusic's
+  [Chasing the Leviathan](https://opengameart.org/content/chasing-the-leviathan-adventure-world-music-album)
+  as a bridge. All CC0. Fifty Seconds' cover photo is CC-BY, so it never goes
+  on stream.
 
 ```bash
-python tools/live/show_music.py fetch    # once per machine: ~163 MB into ~/Music/show-bgm/src
-python tools/live/show_music.py build    # one shuffled, levelled file (~5 min of ffmpeg)
-python tools/live/show_music.py setup    # OBS: "Show Music" in every page, muted, ducked
-python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: status
+python tools/live/show_music.py fetch folk    # once per machine (lofi: ~163 MB, folk: the 17 tracks)
+python tools/live/show_music.py build folk    # levelled, crossfaded, looping file (~5 min of ffmpeg)
+python tools/live/show_music.py setup         # OBS: "Show Music" in every page, muted, ducked
+python tools/live/show_music.py use folk      # switch preset: fades out, swaps, fades back in if on
+python tools/live/show_music.py on|off        # 2 s fade in / fade out; also: status
 ```
 
-- `build` levels each track to -16 LUFS, crossfades them (3 s) and writes
-  `~/Music/show-bgm/show-mix.ogg`, `tracklist.json` (for the "now playing"
-  title) and `LICENSE.md`, the record of each track's source and license.
-  Keep `LICENSE.md`: it's the proof if a stream or replay is ever questioned.
-  Rebuild for a new running order.
+- `build <preset>` levels each track on its own (lofi -16 LUFS; folk -18
+  LUFS, with the silent intro and tail trimmed and 2:1 compression for the
+  plucked attacks), crossfades them (3 s), and writes
+  `~/Music/show-bgm/presets/<preset>.ogg`, `<preset>.tracklist.json` (for the
+  "now playing" title) and `<preset>.LICENSE.md`, the record of each track's
+  source and license. Keep the LICENSE files: they're the proof if a stream or
+  replay is ever questioned. Rebuild for a new running order.
 - `setup` adds one media source, `Show Music`, to every page and Hold, so a
   page switch never cuts or restarts it. It loops, starts muted and paused, and
   has a `Duck under mic` compressor keyed by `Mic/Aux` (settings:
@@ -452,9 +466,11 @@ python tools/live/show_music.py on|off   # 2 s fade in / fade out; also: status
   and the next fade-in lands on the new level. `off` fades to -45 dB, then
   mutes and pauses, so `on` resumes mid-track.
 - On the pager page, **Music > Start/Stop** (key **M**) does the same fade
-  and shows the current track. `GET /api/pager` carries its state as `music`;
-  `POST /api/pager/music {"on": true}` fades it. A fade doesn't take the page
-  lock, so it never holds up a page switch or refocus.
+  and shows the current track. Under it there's one button per built preset;
+  the lit one is playing. `GET /api/pager` carries the state as `music`
+  (`preset`, `presets`). `POST /api/pager/music {"on": true}` fades it, and
+  `{"preset": "folk"}` switches. A fade doesn't take the page lock, so it
+  never holds up a page switch or refocus.
 
 ## Open items
 
