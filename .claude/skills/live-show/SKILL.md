@@ -195,9 +195,8 @@ python tools/live/obsctl.py quit             # optional; refuses while live/reco
   OBS when the device has frames; `reconnect` or `page webcam` meanwhile.
   Log: `$TMPDIR/show_flow_watch.log`.
 - D5 reason `clock reset (camera said <date>)`: the feed sets the camera's
-  clock on every restart, so frames should return on their own. If it keeps
-  happening, UNVERIFIED (Russell to confirm): the D5100's clock battery is
-  probably drained; see docs/live-streaming-setup.md section 4, "Clock".
+  clock on every restart, so frames should return on their own. See
+  docs/live-streaming-setup.md section 4, "Clock".
 - gphoto2 commands (ISO, shutter, stills) need the feed stopped first. The
   camera takes one USB connection. Note that live-view brightness on the D5100
   is automatic: ISO and shutter only change stills, and more light is what

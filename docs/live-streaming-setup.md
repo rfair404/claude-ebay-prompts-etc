@@ -158,12 +158,7 @@ but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
 (re)start sets the camera clock to the computer's time first (`gphoto2
 --set-config datetime=now`, best effort). A reset date (before 2020) is
 logged in `$TMPDIR/d5100_feed.log` and the watch's reason becomes `clock
-reset (camera said <date>)`. **UNVERIFIED, Russell to confirm:** a date that
-keeps resetting usually means the camera's internal clock battery is drained.
-As recalled from the Nikon manual (not checked), it charges from the EN-EL14
-or the EP-5A/EH-5b AC adapter over a few days, so swapping the main battery,
-or the USB-drop power cycles when the camera is moved, would wipe it; keeping
-a battery in or running on the AC adapter may be the lasting fix.
+reset (camera said <date>)`.
 
 ## 5. OM System TG-7 (close-up camera)
 

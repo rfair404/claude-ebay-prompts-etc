@@ -278,7 +278,7 @@ UP_AFTER = 5  # good looks in a row before it comes off
 D5_STALE = 5  # seconds without a feed frame (FEED_SNAP, every 2 s) before the D5 counts as sending nothing
 RECONNECT_EVERY = 15  # at most one reopen in OBS per camera this often
 REASSERT_EVERY = 10  # seconds between re-writing each panel's state (someone may toggle it in OBS)
-WATCH_PATTERN = r"show_flow\.py watch run"
+WATCH_PATTERN = r"^\S*python\S* \S*show_flow\.py watch run"
 WATCH_LOG = Path(tempfile.gettempdir()) / "show_flow_watch.log"
 WATCH_LOCK = LOCK.with_name("show_flow.watch.lock")  # one watch; not the refocus LOCK
 CAMS_FILE = LOCK.with_name("show_flow.cams.json")  # the watch's verdicts, for state()
@@ -1522,18 +1522,16 @@ def build_hold(c) -> None:
 def build_down_panels(c) -> None:
     """The camera watch's black panels (DOWN): one item per scene that
     shows the camera, over its slot (SLOTS), directly above it, so the
-    webcam strip still covers the D5's. Each keeps the state it has in the
-    item view (the close-up for the TG-7); new ones start off, so setup
-    never flashes black on air. The stand-in wins over the D5's."""
-    was = panels_on(c)
-    sub = standin_on(c)
+    webcam strip still covers the D5's. All start off, so setup never
+    flashes black on air and never keeps one a dead watch left on; a
+    running watch puts a down camera's back within REASSERT_EVERY."""
     scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
     inputs = {i["inputName"] for i in c.call("GetInputList")["inputs"]}
     for scene, slots in SLOTS.items():
         if scene not in scenes:
             continue
         have = {i["sourceName"] for i in c.call("GetSceneItemList", {"sceneName": scene})["sceneItems"]}
-        for cam, name in CAM_IDS.items():
+        for name in CAM_IDS.values():
             if name not in slots or name not in have:
                 continue
             panel = DOWN[name]
@@ -1544,7 +1542,7 @@ def build_down_panels(c) -> None:
                 inputs.add(panel)
             elif panel not in have:
                 c.call("CreateSceneItem", {"sceneName": scene, "sourceName": panel, "sceneItemEnabled": False})
-            set_box(c, scene, panel, _panel_box(*slots[name]), enabled=was[cam] and not (name == D5 and sub))
+            set_box(c, scene, panel, _panel_box(*slots[name]), enabled=False)
         _seat_panels(c, scene)
 
 
@@ -1855,7 +1853,7 @@ def cmd_tg7(c, a):
 def cmd_watch(c, a):
     """start, stop and run get no `c` (main): they work with OBS down."""
     if a.action == "run":
-        return watch_run(a.interval)
+        return watch_run()
     if a.action == "start":
         print("camera watch " + ("started" if watch_start() else "already running") + f"  (log {WATCH_LOG})")
         return 0
@@ -1954,7 +1952,6 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_tg7)
     s = sub.add_parser("watch", help="black panel over a camera that drops (run: in the foreground)")
     s.add_argument("action", choices=["start", "stop", "status", "run"])
-    s.add_argument("--interval", type=float, default=WATCH_EVERY, help="run: seconds between looks")
     s.set_defaults(fn=cmd_watch)
     s = sub.add_parser("hold", help="freeze the camera page on air while the item turns")
     s.add_argument("--json", action="store_true")

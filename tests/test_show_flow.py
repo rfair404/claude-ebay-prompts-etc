@@ -549,19 +549,15 @@ def test_the_standin_keeps_the_panels_over_their_cameras_and_turns_the_d5s_off()
     assert c.order(SF.PRODUCT)[:5] == [SF.STANDIN, SF.D5, "D5 Down", SF.WEBCAM, "Webcam Down"]
 
 
-def test_setup_keeps_each_panel_as_it_was_but_the_standin_wins():
+def test_setup_turns_off_panels_a_dead_watch_left_on():
     c = built()
     SF.set_panel(c, SF.D5, True)
     SF.set_panel(c, SF.WEBCAM, True)
     SF.cmd_setup(c, args())
-    for scene in (SF.PRODUCT, SF.MULTI):
-        assert c.enabled(scene, "D5 Down") and c.enabled(scene, "Webcam Down")
-    assert c.enabled(SF.WEBCAM_ONLY, "Webcam Down") and not c.enabled(SF.CLOSEUP, "TG-7 Down")
-    c.scenes[SF.PRODUCT].append(c._new(SF.STANDIN, True))  # stand-in on, D5 Down switched on by hand
-    c.inputs.add(SF.STANDIN)
-    SF.cmd_setup(c, args())
+    for scene in (SF.PRODUCT, SF.MULTI, SF.WEBCAM_ONLY):
+        assert not c.enabled(scene, "Webcam Down")
     assert not c.enabled(SF.PRODUCT, "D5 Down") and not c.enabled(SF.MULTI, "D5 Down")
-    assert c.enabled(SF.PRODUCT, "Webcam Down")
+    assert not c.enabled(SF.CLOSEUP, "TG-7 Down")
 
 
 def moving(tag):

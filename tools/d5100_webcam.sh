@@ -21,10 +21,10 @@ SNAP=${SNAP:-${TMPDIR:-/tmp}/d5100_latest.jpg}
 # camera watch reads (clock_marker() there derives the same path). A sane date removes the
 # note. Best effort: bounded by CLOCK_TIMEOUT seconds per gphoto2 call, never fatal.
 case ${SNAP##*/} in ?*.*) CLOCK=${SNAP%.*}.clock ;; *) CLOCK=$SNAP.clock ;; esac
-CLOCK_TIMEOUT=${CLOCK_TIMEOUT:-15}
+CLOCK_TIMEOUT=${CLOCK_TIMEOUT:-5}
 
 set_clock() {
-  local out cur said year
+  local out cur said year rc
   # gphoto2 2.5 prints a DATE widget as "Type: DATE", "Current: <epoch>", "Printable: <%c>"
   if out=$(timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --get-config datetime 2>&1); then
     cur=$(sed -n 's/^Current: *\(-\{0,1\}[0-9][0-9]*\) *$/\1/p' <<<"$out" | head -n 1)
@@ -41,7 +41,8 @@ set_clock() {
       rm -f "$CLOCK"
     fi
   else
-    echo "$(date +%T) couldn't read the D5100 clock (gphoto2 exit $?)" >&2
+    rc=$?
+    echo "$(date +%T) couldn't read the D5100 clock (gphoto2 exit $rc)" >&2
   fi
   timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --set-config datetime=now >/dev/null 2>&1 \
     || echo "$(date +%T) couldn't set the D5100 clock; starting live view anyway" >&2
