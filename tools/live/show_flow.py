@@ -852,9 +852,25 @@ def tg7_refocus() -> dict:
 
 
 # The TG-7 preview's mark, beside LOCK so the shell and the web app share it:
-# {"owned": true} when the preview started the feed (and so may stop it).
+# {"pids": the TG-7 feed it was made for, "owned": the preview started that
+# feed (and so may stop it)}. A feed can exit on its own (battery, Wi-Fi), so
+# the mark only counts while one of its pids runs (_preview).
 def _preview_mark() -> Path:
     return LOCK.with_name("show_flow.tg7preview.json")
+
+
+def _preview() -> dict | None:
+    """The preview's mark while the feed it was made for runs; a mark a dead
+    feed left is dropped, so a later `tg7 start` by hand is never taken for
+    a preview (or stopped by the next still)."""
+    try:
+        m = json.loads(_preview_mark().read_text())
+    except (OSError, ValueError):
+        return None
+    if set(m.get("pids", ())) & set(tg7_pids()):
+        return m
+    _preview_mark().unlink(missing_ok=True)
+    return None
 
 
 def tg7_preview(c, on: bool) -> dict:
@@ -864,12 +880,9 @@ def tg7_preview(c, on: bool) -> dict:
     "stopped"}."""
     if not on:
         return {"preview": False, **tg7_preview_end(c)}
-    try:
-        owned = json.loads(_preview_mark().read_text()).get("owned", False)
-    except (OSError, ValueError):
-        owned = False
+    m = _preview()
     started = tg7_start()
-    _preview_mark().write_text(json.dumps({"owned": owned or started}))
+    _preview_mark().write_text(json.dumps({"pids": tg7_pids(), "owned": started or bool(m and m["owned"])}))
     return {"preview": True, "started": started}
 
 
@@ -878,12 +891,11 @@ def tg7_preview_end(c) -> dict:
     started it and no page with the TG-7 live (closeup, multi) is on air. A
     feed someone started by hand (`tg7 start`) keeps running.
     {"stopped": bool}."""
-    try:
-        owned = json.loads(_preview_mark().read_text()).get("owned", False)
-    except (OSError, ValueError):
+    m = _preview()
+    if m is None:
         return {"stopped": False}  # no preview up
     _preview_mark().unlink(missing_ok=True)
-    if owned and tg7_pids() and program(c) not in TG7_LIVE_PAGES:
+    if m["owned"] and program(c) not in TG7_LIVE_PAGES:
         tg7_stop()
         return {"stopped": True}
     return {"stopped": False}
@@ -1635,13 +1647,12 @@ def state(c, outs: dict | None = None) -> dict:
     on = [s["timecode"] for s in out.values() if s["live"]]
     pids = feed_pids()
     sub, busy, w = standin_on(c), refocusing(), watch_cams()
-    tg7_pids_now = tg7_pids()
     return {"page": page_of(scene), "scene": scene, "pages": list(PAGES),
             "live": bool(on), "timecode": max(on) if on else None,
             "streams": out, "feed": bool(pids), "feed_status": feed_status(pids),
             "standin": sub, "refocusing": busy,
-            "held": held_page(c) if scene == HOLD else None, "tg7_status": tg7_status(tg7_pids_now),
-            "tg7_preview": _preview_mark().exists() and bool(tg7_pids_now),
+            "held": held_page(c) if scene == HOLD else None, "tg7_status": tg7_status(),
+            "tg7_preview": _preview() is not None,
             "watch": w is not None, "cameras": cam_states(c, w, sub, busy)}
 
 
@@ -2121,7 +2132,7 @@ def still(c, refocus: bool = False, note: str | None = None) -> dict:
     c.call("SetCurrentProgramScene", {"sceneName": STILL})
     out.update(changed=True, still_s=round(time.monotonic() - t, 1))
     out = _blacked(c, "still", out)
-    if _preview_mark().exists():  # framed and shot: the TG-7's live view can rest
+    if _preview():  # framed and shot: the TG-7's live view can rest
         out["preview"] = tg7_preview_end(c)
     if refocus:
         time.sleep(FADE_MS / 1000)  # the D5 freezes only once the fade has covered it

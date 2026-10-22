@@ -1503,6 +1503,16 @@ def test_ending_the_preview_never_stops_a_tg7_on_air(preview):
     assert SF.tg7_preview(preview, False)["stopped"] is False and preview.pids == [77]
 
 
+def test_a_preview_whose_feed_died_never_claims_a_feed_started_by_hand(preview):
+    SF.tg7_preview(preview, True)
+    preview.pids.clear()  # tg7cam stream exits on its own: battery dead, Wi-Fi gone
+    preview.pids.append(5)  # then `tg7 start` by hand, for the close-up fallback
+    assert SF.state(preview)["tg7_preview"] is False  # the pager shows no preview nobody asked for
+    r = SF.still(preview)
+    assert "preview" not in r and preview.pids == [5]  # and the still leaves that feed running
+    assert SF.tg7_preview(preview, False) == {"preview": False, "stopped": False} and preview.pids == [5]
+
+
 def test_the_still_shoots_from_the_preview_and_ends_it(preview):
     SF.tg7_preview(preview, True)
     r = SF.still(preview)
