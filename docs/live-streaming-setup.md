@@ -262,7 +262,8 @@ python tools/live/show_flow.py page intro     # 5. pre-show card, before going l
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
 python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
 python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus, reconnect
-python tools/live/show_flow.py still          # TG-7 photo on air; refocus / wb the D5 behind it
+python tools/live/show_flow.py tg7 preview on   # optional: frame the TG-7 off air (pager key P)
+python tools/live/show_flow.py still          # TG-7 photo on air (ends the preview); refocus / wb the D5 behind it
 python tools/live/show_flow.py step           # item -> still -> item -> still ...
 python tools/live/show_flow.py tg7 start      # fallback only: TG-7 live view -> the closeup page
 python tools/live/show_flow.py hold | release # fallback: freeze the camera page while the item turns
@@ -301,6 +302,10 @@ until the host moves on (`page item` or `step`). A TG-7 failure (no Wi-Fi,
 focus didn't lock) leaves the page on air. With a photo shoot open the
 full-size frame goes into its item (`shoot.py`), else
 `inventory/_live/stills/<date>/`; OBS shows a screen-sized copy.
+To frame first, `tg7 preview on` (pager P) starts the TG-7's live view into
+scene `TG-7 Preview`, the still's slot and framing, off air: the pager
+renders it, nothing switches program to it. The still ends it, as does
+`tg7 preview off`, and the TG-7 feed stops if the preview started it.
 
 **closeup** (scene `Close-up (camera 2)`), the fallback, is the TG-7's live
 video below the same webcam strip (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
