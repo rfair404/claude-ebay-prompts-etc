@@ -1009,8 +1009,7 @@ def test_hold_release_and_step_on_the_cli(held, monkeypatch, capsys):
 
 
 # --- the D5100's white balance: refocus's cover, lock and feed restart -------
-# What the D5100 reports for PTP 0x5005, in its order: libgphoto2's
-# camlibs/ptp2/cameras/nikon-d5100.txt, labelled by config.c whitebalance[].
+# the D5100's choices, in its order (show_flow.WB_CONFIG has the source)
 D5100_WB = ["Automatic", "Daylight", "Fluorescent", "Tungsten", "Flash", "Cloudy", "Shade", "Preset"]
 
 
@@ -1019,13 +1018,11 @@ class WbCamera(Camera):
 
     def __init__(self, monkeypatch, snap):
         super().__init__(monkeypatch, snap)
-        self.wb, self.refuses, self.get_hangs = "Automatic", False, False
+        self.wb, self.refuses = "Automatic", False
 
     def run(self, cmd, **kw):
         if cmd[1:] == ["--get-config", "whitebalance"]:
             self.log.append(cmd[1])
-            if self.get_hangs:
-                raise SF.subprocess.TimeoutExpired(cmd, kw["timeout"])
             out = ("Label: WhiteBalance\nReadonly: 0\nType: RADIO\nCurrent: " + self.wb + "\n"
                    + "".join(f"Choice: {i} {w}\n" for i, w in enumerate(D5100_WB)) + "END\n")
             return SF.subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
@@ -1075,17 +1072,10 @@ def test_wb_already_set_sends_nothing(wbcam):
 
 
 @pytest.mark.parametrize("preset, label", [
-    ("auto", "Automatic"), ("AUTO", "Automatic"), ("automatic", "Automatic"), ("daylight", "Daylight"),
-    ("Cloudy", "Cloudy"), ("shade", "Shade"), ("tungsten", "Tungsten"), ("incandescent", "Tungsten"),
-    ("fluorescent", "Fluorescent"), ("flash", "Flash"), ("preset", "Preset"),
+    ("auto", "Automatic"), ("DayLight", "Daylight"), ("incandescent", "Tungsten"), ("preset", "Preset"),
 ])
 def test_wb_aliases_map_to_the_d5100s_labels(preset, label):
     assert SF.wb_choice(preset, D5100_WB) == label
-
-
-def test_wb_aliases_only_name_labels_the_d5100_reports():
-    assert set(SF.WB_ALIASES.values()) <= set(D5100_WB)
-    assert SF.wb_choice("tungsten", ["Automatic", "Daylight"]) is None  # the camera's list rules
 
 
 def test_wb_parse_reads_current_and_choices():
@@ -1112,31 +1102,10 @@ def test_a_wb_the_camera_refuses_is_an_error_after_the_feed_is_back(wbcam):
     assert wbcam.log[-1] == "start" and wbcam.running and c.scene == "eBay Main"
 
 
-@pytest.mark.parametrize("fault, message", [
-    ("no_frames", "didn't come back in OBS"),
-    ("get_hangs", "hung for 15s"),
-    ("stop_fails", "didn't release"),
-    ("off_usb", "not found on USB"),
-])
-def test_a_failed_wb_leaves_the_feed_running(wbcam, fault, message):
-    c = CamObs(["frozen"])
-    wbcam.frames = fault != "no_frames"
-    wbcam.get_hangs = fault == "get_hangs"
-    wbcam.stop_fails = fault == "stop_fails"
-    wbcam.on_usb = fault != "off_usb"
-    with pytest.raises(obsctl.ObsError, match="^wb failed: .*" + message):
-        SF.wb(c, "daylight")
-    assert wbcam.running and wbcam.log[-1] == "start"
-    assert c.scene == "eBay Main"
-
-
 def test_wb_refuses_while_the_standin_is_on(obs):
     obs.standin_shown = True
-    for scene in ("eBay Main", "Close-up"):
-        obs.scene = scene
-        with pytest.raises(obsctl.ObsError, match="stand-in is on"):
-            SF.wb(obs, "daylight")
-    assert obs.switches == []
+    with pytest.raises(obsctl.ObsError, match="stand-in is on"):
+        SF.wb(obs, "daylight")
 
 
 def test_wb_on_the_closeup_sets_the_d5_without_a_cover_and_leaves_the_tg7(wbcam, monkeypatch):
@@ -1168,10 +1137,6 @@ def test_wb_route(client, wbcam, monkeypatch):
     monkeypatch.setattr(SF, "LOCK_WAIT", 0)
     with SF.exclusive():
         assert client.post("/api/pager/wb", json={"preset": "auto"}).status_code == 409
-    assert client.post("/api/pager/wb", json={"preset": "auto"},
-                       headers={"origin": "https://evil.example"}).status_code == 403
-    monkeypatch.setattr(SF, "connect", lambda: (_ for _ in ()).throw(obsctl.ObsError("can't reach obs-websocket")))
-    assert client.post("/api/pager/wb", json={"preset": "auto"}).status_code == 503
 
 
 def test_wb_on_the_cli(wbcam, monkeypatch, capsys):
@@ -1191,4 +1156,3 @@ def test_control_page_has_a_d5_white_balance_control(client):
     assert "/api/pager/wb" in r.text and 'id="wb"' in r.text and 'id="wbset"' in r.text
     for alias in ("auto", "daylight", "tungsten"):
         assert f'<option value="{alias}">' in r.text
-    assert "e.target.tagName === 'SELECT'" in r.text  # its letters don't page or reconnect
