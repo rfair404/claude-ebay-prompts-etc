@@ -1,6 +1,6 @@
 ---
 name: live-show
-description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam, desktop = an app window like Claude + webcam), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
+description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam, desktop = an app window like Claude + webcam, multi = D5100 + webcam + desktop window at once), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
 ---
 
 # Live show: stream and camera views
@@ -75,8 +75,8 @@ the `obsctl.py call` for it); `twitch-setup` switches back.
 
 ## During the show: the pager
 
-A show has five pages. One command puts any of them on air:
-`show_flow.py page intro|item|next|desktop|webcam`.
+One command puts any page on air:
+`show_flow.py page intro|item|closeup|next|desktop|webcam|multi`.
 
 | User says | Run |
 |---|---|
@@ -84,6 +84,7 @@ A show has five pages. One command puts any of them on air:
 | "next item", "swap", "pause", "show what's coming up" | `show_flow.py page next` |
 | "back to the product", "ready", "item view" | `show_flow.py page item` |
 | "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
+| "everything at once", "both cameras and the screen", "multi view" | `show_flow.py page multi` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
 | "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
@@ -127,11 +128,17 @@ A show has five pages. One command puts any of them on air:
   "<title>" [--desktop-crop-left <px>]` under the webcam. The privacy guard
   doesn't check it (the host chose it), so remind the user that whatever is
   in that window is on air.
+- `page multi` (scene `Multi View`) is all three at once: the D5100 (left)
+  and the webcam (right) side by side in the top 1080x810, the same desktop
+  window as `page desktop` full width under them. `setup` builds it
+  together with the desktop page, so it needs `--desktop-window` once too;
+  same privacy note. `refocus` on it hides behind Up Next like the item
+  view, and the stand-in leaves its D5 slot dark.
 - Web: the local app (`/home/russ/EBAYBIZ/.venv/bin/python -m lib.cli
-  serve`) has a button page at http://localhost:8770/pager (keys 1-5 for
-  intro/item/next/desktop/webcam, R refocus, C reconnect cameras) and serves
-  the same pager at `/api/pager` (`GET` state, `POST {"page": ...}`, `POST
-  /api/pager/refocus`, `POST /api/pager/reconnect`).
+  serve`) has a button page at http://localhost:8770/pager (keys 1-7 for
+  intro/item/next/desktop/webcam/close-up/multi, R refocus, C reconnect
+  cameras) and serves the same pager at `/api/pager` (`GET` state, `POST
+  {"page": ...}`, `POST /api/pager/refocus`, `POST /api/pager/reconnect`).
   A switch made there shows up in `status` here, and vice versa.
 - "autofocus couldn't lock" means the center AF point sees nothing with
   contrast, usually an empty podium. Focus stays where it was. Ask the user to

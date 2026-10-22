@@ -153,3 +153,35 @@ def test_connect_pins_never_default_on_the_connection_actually_used(monkeypatch,
     T.cmd_connect(SimpleNamespace(ssid="034096", ifname=None, force=False))
     modify = next(c for c in runs if c[1:3] == ["connection", "modify"])
     assert modify[3] == "TG-7-P-BJPB37542" and "ipv4.never-default" in modify
+
+
+BUSY = T.CamError('camera refused exec_takemisc com=getlastjpg: HTTP 520 '
+                  '<?xml version="1.0"?><errorcode>1005</errorcode>')
+
+
+def test_shoot_waits_for_the_photo_to_reach_the_card(monkeypatch, tmp_path):
+    # 2026-10-21: getlastjpg right after a shot answered 1005; seconds later it worked
+    answers = [BUSY, BUSY, b"\xff\xd8jpeg\xff\xd9"]
+    cam = Cam(monkeypatch, {"starttake": TOOK})
+    real = cam.cgi
+
+    def cgi(name, body=None, timeout=5, raw=False, **params):
+        if params.get("com") == "getlastjpg":
+            cam.calls.append((name, params))
+            a = answers.pop(0)
+            if isinstance(a, Exception):
+                raise a
+            return a
+        return real(name, body, timeout, raw, **params)
+    monkeypatch.setattr(T, "cgi", cgi)
+    out, _ = T.shoot(to=tmp_path)
+    assert out.read_bytes().startswith(b"\xff\xd8") and answers == []
+
+
+def test_other_last_shot_errors_and_a_long_wait_still_fail(monkeypatch):
+    Cam(monkeypatch, {"getlastjpg": T.CamError("camera refused getlastjpg: HTTP 520 <errorcode>1001</errorcode>")})
+    with pytest.raises(T.CamError, match="1001"):
+        T.last_jpeg()
+    Cam(monkeypatch, {"getlastjpg": BUSY})
+    with pytest.raises(T.CamError, match="1005"):
+        T.last_jpeg(wait=0)
