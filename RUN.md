@@ -151,6 +151,13 @@ one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
 
+**While a live show is on air, batch jobs wait, backgrounded or not.**
+`show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
+it; while it is there the same hook denies pytest, `show_music.py build`,
+PREP, `single-pass` and listing runs (the 2026-10-21 show skipped 99.4% of
+its frames beside them). A flag over 8 h old is ignored; a leftover one
+clears with `rm inventory/_live/ON_AIR`. The opt-out is `# on-air-ok: <reason>`.
+
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — a
 `run_in_background` Bash call's output is available on demand without
