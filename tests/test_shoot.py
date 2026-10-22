@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "tools" / "live"))
 import obsctl  # noqa: E402
 import shoot as S  # noqa: E402
 import show_flow as SF  # noqa: E402
-from test_pager import CamObs, Camera, camera  # noqa: E402,F401  (camera: the fixture)
+from test_pager import CamObs, Camera, FakeTg7, StillObs, camera  # noqa: E402,F401  (camera: the fixture)
 
 
 def jpeg(path: Path, size=(1200, 800)) -> Path:
@@ -110,6 +110,50 @@ def test_tg7_unreachable_is_an_error_line(inv, capsys, monkeypatch):
     run(capsys, "item")
     rc, _, err = run(capsys, "capture", "tg7")
     assert rc == 1 and "TG-7: camera not reachable" in err
+
+
+@pytest.fixture
+def on_air_still(inv, tmp_path, monkeypatch):
+    """show_flow.still() on item over the fakes, its OBS copies in tmp_path."""
+    monkeypatch.setattr(SF, "STILL_DIR", tmp_path / "still")
+    monkeypatch.setattr(SF, "LIVE_STILLS", tmp_path / "stills")
+    monkeypatch.setattr(SF.time, "sleep", lambda s: None)
+    c = StillObs()
+    c.tg7 = FakeTg7(c)
+    monkeypatch.setattr(SF, "tg7cam", lambda: c.tg7)
+    return c
+
+
+def test_a_still_on_air_lands_in_the_open_shoot_item_and_its_log(inv, capsys, on_air_still, tmp_path):
+    run(capsys, "start", "s1")
+    run(capsys, "item", "lamp")
+    r = SF.still(on_air_still, note="maker mark")
+    item = inv / "s1" / "01-lamp"
+    frame = Path(r["file"])
+    assert frame.parent == item and r["item"] == "01-lamp" and on_air_still.scene == "TG-7 Still"
+    assert r["look"] == str(item / ".shoot" / frame.name)  # the agent's small copy, as capture makes
+    assert Path(r["look"]).exists()
+    assert f"capture **{frame.name}** (tg7) — maker mark" in (item / "shoot_log.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "stills").exists()
+    rc, out, _ = run(capsys, "status")
+    assert "frames: 1/10" in out
+
+
+def test_a_still_with_no_item_open_goes_to_the_live_stills_folder(inv, capsys, on_air_still, tmp_path):
+    run(capsys, "start", "s1")  # a shoot, but nothing on the podium yet
+    r = SF.still(on_air_still)
+    assert Path(r["file"]).parent.parent == tmp_path / "stills" and r["item"] is None
+    assert S.open_shoot() is None
+
+
+def test_a_still_that_misses_focus_in_a_shoot_is_logged_and_kept_off_air(inv, capsys, on_air_still):
+    run(capsys, "start", "s1")
+    run(capsys, "item")
+    on_air_still.tg7.focus = "ng"
+    with pytest.raises(obsctl.ObsError, match="focus didn't lock"):
+        SF.still(on_air_still)
+    assert on_air_still.switches == []
+    assert "(tg7, focus didn't lock)" in (inv / "s1" / "01" / "shoot_log.md").read_text(encoding="utf-8")
 
 
 def test_shoot_flag_takes_the_name_start_was_given(inv, capsys):

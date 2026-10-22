@@ -262,9 +262,10 @@ python tools/live/show_flow.py page intro     # 5. pre-show card, before going l
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
 python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
 python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus, reconnect
-python tools/live/show_flow.py tg7 start      # TG-7 live view -> the closeup page (before 3 the first time)
-python tools/live/show_flow.py step           # item -> closeup -> hold -> item ...
-python tools/live/show_flow.py hold | release # freeze the camera page while the item turns
+python tools/live/show_flow.py still          # TG-7 photo on air; refocus / wb the D5 behind it
+python tools/live/show_flow.py step           # item -> still -> item -> still ...
+python tools/live/show_flow.py tg7 start      # fallback only: TG-7 live view -> the closeup page
+python tools/live/show_flow.py hold | release # fallback: freeze the camera page while the item turns
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
@@ -291,8 +292,18 @@ check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
   (music analysis, pytest, listing runs) off this machine while a show is
   live.
 
-**closeup** (scene `Close-up (camera 2)`) is the TG-7 below the same
-webcam strip (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
+**still** (scene `TG-7 Still`, built by `setup`) is the TG-7's main job:
+`still` takes a full-size TG-7 photo while the page on air stays up, then
+fades to that photo, fit whole below the webcam strip. It covers the D5:
+`refocus`, `wb` and D5 stills run behind it without Up Next and leave it on
+air, and `still --refocus` does both at once (pager: T, Shift+T). It holds
+until the host moves on (`page item` or `step`). A TG-7 failure (no Wi-Fi,
+focus didn't lock) leaves the page on air. With a photo shoot open the
+full-size frame goes into its item (`shoot.py`), else
+`inventory/_live/stills/<date>/`; OBS shows a screen-sized copy.
+
+**closeup** (scene `Close-up (camera 2)`), the fallback, is the TG-7's live
+video below the same webcam strip (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
 source is a v4l2 camera on /dev/video11 when that loopback device exists,
 else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
 the device and it switches. `refocus` on the closeup page is the TG-7's
@@ -315,9 +326,9 @@ ends, and `watch stop` clears them too. A camera slot went black:
 scene, and the Hold page shows that still under the live webcam strip, so
 the host can turn the item without viewers watching it spin. `release` fades
 back to the live camera. **step** is the item sequence on one key (Space on
-the pager): wide (item) -> close-up -> hold, turn the item -> wide again,
-and so on. From a hold it releases to the *other* camera; from any
-non-camera page it starts at item.
+the pager): item (D5 live) -> still (the TG-7 shoots; turn the item, adjust
+the D5) -> item, and so on. From any other page, a hold included, it goes
+to item. Hold and the live closeup are manual pages, out of the loop.
 
 **Show mode: no batch jobs on air.** The 2026-10-21 show skipped 99.4% of
 its frames while the show laptop also ran pytest, a music build and other

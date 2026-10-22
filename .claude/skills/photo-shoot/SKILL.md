@@ -45,7 +45,7 @@ Wi-Fi, so in a sandboxed session they need the sandbox off.
 ```bash
 python tools/live/obsctl.py launch                  # no-op if OBS is up
 python tools/live/show_flow.py feed start           # D5100 live view (the viewfinder)
-python tools/live/show_flow.py tg7 start            # only if the TG-7 is on and its Wi-Fi joined
+# the TG-7 needs only its Wi-Fi joined for stills; `tg7 start` (live close-up) is a fallback
 python tools/live/show_flow.py setup                # pages; add --window/--desktop-window as live-show says
 python tools/live/shoot.py start [NAME]             # default shoot-YYYYMMDD; same NAME resumes
 ```
@@ -56,9 +56,9 @@ write it to `inventory/<shoot>/context.txt` in the format in
 goes on the `source:` line, which never reaches buyer copy.
 
 **Off air**, OBS is just the viewfinder and the pages are only for you, so
-skip `hold`. **On air**, viewers see every page: Up Next while the item
-changes, the item or closeup view while you shoot, and `hold` while Russell
-turns the item.
+skip the still page. **On air**, viewers see every page: Up Next while the
+item changes, the item view while you shoot, and the TG-7 still while
+Russell turns the item or the D5 is adjusted.
 
 ## Each item
 
@@ -86,12 +86,13 @@ turns the item.
      "Out of Focus" means autofocus found nothing with contrast: ask
      Russell to center the item, then retry.
    - `capture tg7` is the TG-7 still, with no pause. Use it for close-ups
-     of marks, labels and defects:
-     `show_flow.py page closeup && shoot.py capture tg7 --note "base mark"`.
-     `FOCUS DIDN'T LOCK` means move it closer or add light, then retry.
-   - On air, while Russell turns the item: `show_flow.py hold`, and once
-     it's set, `show_flow.py release` (or `step` to walk item, closeup,
-     hold).
+     of marks, labels and defects. On air, use
+     `show_flow.py still --note "base mark"` instead: the same capture into
+     the open item and its log, and the photo goes on air. "focus didn't
+     lock" means move it closer or add light, then retry.
+   - On air, while Russell turns the item: `show_flow.py still` (or `step`:
+     item -> still -> item). It covers the D5, so `show_flow.py refocus`
+     there needs no Up Next; `page item` once the item is set.
 3. **Russell calls it done for now** ("done", "next", "that's it for
    this one"):
    ```bash
@@ -128,6 +129,6 @@ frames.
   (`tools/live/tg7cam connect <SSID>`, Russell types the password) or the
   camera is off.
 - `look` shows Up Next or the intro card: put a camera page up first
-  (`page item` or `page closeup`).
+  (`page item`, or `still` for a TG-7 photo).
 - `a D5100 refocus, WB change or still is already running`: the pager
   or another session is using the camera. Wait 5 to 10 s and retry.

@@ -7,6 +7,7 @@ OBS, the camera, or a stream."""
 import base64
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -579,7 +581,8 @@ def test_control_page_has_a_button_per_page_and_calls_the_api(client):
     # light polling, a deadline on every call, page clicks never wait on a refocus
     assert "setTimeout(poll, 1000)" in r.text and "document.hidden" in r.text
     assert "AbortController" in r.text and "refocuses first" not in r.text
-    assert "{ page, transition: 'Cut' }" in r.text and "refocus: true" not in r.text  # never a refocus switch
+    assert "{ page, transition: 'Cut' }" in r.text  # a page switch never asks for a refocus:
+    assert not re.search(r"'/api/pager', \{[^}]*refocus: true", r.text)  # (the TG-7 still's option may)
     # preview / program: a click or 1-7 lines a page up, Enter takes it, Shift+1-7 cuts straight to air
     assert "setPreview(b.dataset.page)" in r.text and "'/api/pager/take'" in r.text
     assert "e.key === 'Enter'" in r.text and 'id="pvwshot"' in r.text and 'id="trans"' in r.text
@@ -1176,21 +1179,13 @@ def test_release_goes_back_to_the_page_held_or_where_asked(held):
         SF.release(held, "next")
 
 
-def test_step_walks_wide_closeup_hold_and_alternates_after_the_hold(held):
-    seen = []
-    for _ in range(6):
-        seen.append(SF.step(held)["action"])
-    assert held.switches == ["Close-up (camera 2)", "Hold", "eBay Main (camera 1)", "Close-up (camera 2)", "Hold", "eBay Main (camera 1)"]
-    assert seen == ["page", "hold", "release", "page", "hold", "release"]
-    assert [s for s, *_ in held.shots] == ["Close-up (camera 2)", "Close-up (camera 2)"]
+def test_step_from_a_hold_goes_to_item_whichever_camera_was_held(held):
+    held.scene = "Close-up (camera 2)"
+    SF.hold(held)  # held by hand on the live close-up
+    assert SF.step(held)["page"] == "item" and held.switches == ["Hold", "eBay Main (camera 1)"]
 
 
-def test_step_from_a_hold_of_the_wide_view_goes_to_the_closeup(held):
-    SF.hold(held)  # held by hand on item
-    assert SF.step(held)["page"] == "closeup"
-
-
-@pytest.mark.parametrize("page", ["intro", "next", "desktop", "webcam", "multi"])
+@pytest.mark.parametrize("page", ["intro", "closeup", "next", "desktop", "webcam", "multi"])
 def test_step_from_any_other_page_starts_at_item(held, page):
     held.scene = SF.PAGES[page]
     assert SF.step(held) == {"page": "item", "changed": True, "focused": None, "refocus_s": None,
@@ -1235,9 +1230,9 @@ def test_hold_step_and_tg7_routes(held, monkeypatch, no_tg7_feed):
         assert body["page"] == "hold" and body["held"] == "item" and body["hold"]["changed"] is True
         body = client.post("/api/pager/hold", json={"on": False}).json()
         assert body["page"] == "item" and body["switch"]["changed"] is True
+        held.scene = "Up Next"
         body = client.post("/api/pager/step").json()
-        assert body["page"] == "closeup" and body["step"]["action"] == "page"
-        assert client.post("/api/pager/step").json()["page"] == "hold"
+        assert body["page"] == "item" and body["step"]["action"] == "page"
         assert client.post("/api/pager/tg7", json={"action": "start"}).json()["tg7_status"] == "running"
         assert client.post("/api/pager/tg7", json={"action": "stop"}).json()["tg7_status"] == "stopped"
         assert client.post("/api/pager/tg7", json={"action": "reboot"}).status_code == 422
@@ -1248,11 +1243,218 @@ def test_hold_step_and_tg7_routes(held, monkeypatch, no_tg7_feed):
 
 def test_hold_release_and_step_on_the_cli(held, monkeypatch, capsys):
     monkeypatch.setattr(SF, "connect", lambda: held)
-    assert SF.main(["step"]) == 0 and "on air: closeup" in capsys.readouterr().out
+    held.scene = "Up Next"
+    assert SF.main(["step"]) == 0 and "on air: item" in capsys.readouterr().out
+    assert SF.main(["page", "closeup"]) == 0
     assert SF.main(["hold"]) == 0 and "on hold: a still of closeup" in capsys.readouterr().out
     assert SF.main(["release", "--to", "item"]) == 0 and "on air: item" in capsys.readouterr().out
     assert SF.main(["page", "next"]) == 0
     assert SF.main(["hold"]) == 1 and "camera page" in capsys.readouterr().err
+
+
+# --- the TG-7 still: a TG-7 photo on air, covering the D5 -------------------------
+class StillObs(HoldObs):
+    """HoldObs plus the TG-7 Still Frame image source."""
+
+    def __init__(self, scene="eBay Main (camera 1)"):
+        super().__init__(scene)
+        self.still_settings = {"file": "", "unload": False}
+        self.has_still = True
+
+    def call(self, req, data=None):
+        if req in ("GetInputSettings", "SetInputSettings") and data["inputName"] == SF.STILL_FRAME:
+            if not self.has_still:
+                raise obsctl.ObsError(f"{req} failed: code 600 No source was found")
+            if req == "SetInputSettings":
+                self.still_settings.update(data["inputSettings"])
+            return {"inputSettings": dict(self.still_settings)}
+        return super().call(req, data)
+
+
+class FakeTg7:
+    """tg7cam's shoot(), over a fake Wi-Fi: it writes a full-size JPEG and
+    notes what was on air while it shot. `fail` is the CamError it raises;
+    `focus` the camera's affocus answer; `during` runs mid-shot."""
+
+    class CamError(RuntimeError):
+        pass
+
+    def __init__(self, obs):
+        self.obs, self.fail, self.focus, self.during = obs, None, "ok", None
+        self.on_air, self.size, self.n = [], (2400, 1800), 0  # the TG-7's 4:3
+
+    def shoot(self, x=50, y=50, to=None):
+        self.on_air.append(self.obs.scene)
+        if self.during:
+            self.during(self.obs)
+        if self.fail:
+            raise self.CamError(self.fail)
+        self.n += 1
+        to = Path(to)
+        to.mkdir(parents=True, exist_ok=True)
+        path = to / f"TG7_20261022_10000{self.n}.jpg"
+        Image.new("RGB", self.size, "white").save(path, quality=95)
+        return path, self.focus
+
+
+@pytest.fixture
+def tg7(obs, tmp_path, monkeypatch, no_tg7_feed):
+    """A built show on item, the D5 refocus stubbed (obs), the TG-7 faked,
+    no photo shoot open, and every file the still writes in tmp_path."""
+    import shoot
+    monkeypatch.setattr(shoot, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(shoot, "CURRENT", tmp_path / "inventory" / ".current_shoot")
+    monkeypatch.setattr(SF, "HOLD_DIR", tmp_path / "hold")
+    monkeypatch.setattr(SF, "STILL_DIR", tmp_path / "still")
+    monkeypatch.setattr(SF, "LIVE_STILLS", tmp_path / "stills")
+    monkeypatch.setattr(SF, "tg7_start", lambda: pytest.fail("a still needs no TG-7 feed"))
+    c = StillObs()
+    c.title, c.refocused = obs.title, obs.refocused
+    cam = FakeTg7(c)
+    monkeypatch.setattr(SF, "tg7cam", lambda: cam)
+    c.tg7 = cam
+    return c
+
+
+def test_still_shoots_with_the_d5_on_air_then_fades_to_a_screen_copy(tg7, tmp_path):
+    r = SF.still(tg7)
+    assert tg7.tg7.on_air == ["eBay Main (camera 1)"]  # the D5 stayed up while the TG-7 shot
+    assert tg7.switches == ["TG-7 Still"] and tg7.cuts == [("TG-7 Still", "Fade", SF.FADE_MS)]
+    full = Path(r["file"])
+    assert full.parent == tmp_path / "stills" / time.strftime("%Y%m%d") and r["item"] is None
+    assert Image.open(full).size == (2400, 1800)  # the full-size frame, kept as shot
+    screen = Path(tg7.still_settings["file"])
+    assert screen == Path(r["screen"]) and screen.parent == tmp_path / "still"
+    assert Image.open(screen).size == (1080, 810)  # fit to the slot under the webcam strip
+    assert r["changed"] is True and r["page"] == "still" and "refocus" not in r
+    st = SF.state(tg7)
+    assert st["page"] == "still" and st["held"] is None
+
+
+def test_each_still_loads_a_new_file_so_obs_reloads(tg7):
+    names = []
+    for _ in range(3):
+        tg7.scene = "eBay Main (camera 1)"
+        names.append(Path(SF.still(tg7)["screen"]).name)
+    assert names == ["still-a.jpg", "still-b.jpg", "still-a.jpg"]
+
+
+def test_a_portrait_still_comes_upright_and_fits_the_slot(tg7):
+    tg7.tg7.size = (1800, 2400)
+    r = SF.still(tg7)
+    w, h = Image.open(r["screen"]).size
+    assert h == SF.H - SF.TG7_TOP and w < SF.W
+
+
+@pytest.mark.parametrize("fail, focus, message", [
+    ("can't reach the camera at 192.168.0.10", "ok", "TG-7: can't reach the camera"),
+    (None, "ng", "TG-7 focus didn't lock.*item stays on air"),
+])
+def test_a_tg7_failure_leaves_the_page_on_air(tg7, fail, focus, message):
+    tg7.tg7.fail, tg7.tg7.focus = fail, focus
+    with pytest.raises(obsctl.ObsError, match=message):
+        SF.still(tg7)
+    assert tg7.switches == [] and tg7.scene == "eBay Main (camera 1)"
+    assert tg7.still_settings["file"] == ""  # nothing loaded, so nothing stale to show later
+
+
+def test_a_focus_miss_keeps_the_frame(tg7, tmp_path):
+    tg7.tg7.focus = "ng"
+    with pytest.raises(obsctl.ObsError, match="Frame kept: .*TG7_"):
+        SF.still(tg7)
+    assert len(list((tmp_path / "stills").rglob("TG7_*.jpg"))) == 1
+
+
+def test_a_still_before_setup_says_so_without_shooting(tg7):
+    tg7.has_still = False
+    with pytest.raises(obsctl.ObsError, match="run `show_flow.py setup`"):
+        SF.still(tg7)
+    assert tg7.tg7.on_air == [] and tg7.switches == []
+
+
+def test_a_switch_made_while_the_tg7_shoots_wins(tg7):
+    tg7.tg7.during = lambda c: SF.go(c, "next")
+    r = SF.still(tg7)
+    assert r["changed"] is False and r["superseded_by"] == "next" and Path(r["file"]).exists()
+    assert tg7.scene == "Up Next" and tg7.switches == ["Up Next"]
+
+
+@pytest.mark.parametrize("fn", [SF.refocus, lambda c: SF.wb(c, "daylight")])
+def test_d5_work_with_the_still_on_air_hides_behind_it_and_leaves_it_up(tg7, monkeypatch, fn):
+    monkeypatch.setattr(SF, "wb_d5", lambda c, preset: tg7.refocused.append(c.scene) or {"wb": "Daylight"})
+    SF.still(tg7)
+    fn(tg7)
+    assert tg7.refocused == ["TG-7 Still"]  # the D5 froze behind the still, not behind Up Next
+    assert tg7.switches == ["TG-7 Still"] and tg7.scene == "TG-7 Still"  # and no fade back
+
+
+def test_a_d5_still_behind_the_tg7_still_leaves_it_up(tg7, monkeypatch, tmp_path):
+    shot = tmp_path / "D5_1.JPG"
+
+    def fake_usb(c, fn):
+        tg7.refocused.append(c.scene)
+        return SF.subprocess.CompletedProcess([], 0, stdout=f"Saving file as {shot}\n"), 6.0
+    monkeypatch.setattr(SF, "d5_usb", fake_usb)
+    SF.still(tg7)
+    assert SF.still_d5(tg7, tmp_path)["files"] == [str(shot)]
+    assert tg7.refocused == ["TG-7 Still"] and tg7.switches == ["TG-7 Still"]
+
+
+def test_still_with_refocus_puts_the_still_up_then_refocuses_the_d5_behind_it(tg7):
+    r = SF.still(tg7, refocus=True)
+    assert tg7.switches == ["TG-7 Still"] and tg7.refocused == ["TG-7 Still"]
+    assert r["refocus"] == {"focused": True, "refocus_s": 5.0}
+
+
+def test_a_failed_refocus_behind_the_still_keeps_the_still_up(tg7, monkeypatch):
+    def stuck(c):
+        raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
+    monkeypatch.setattr(SF, "refocus_d5", stuck)
+    r = SF.still(tg7, refocus=True)
+    assert r["changed"] is True and r["refocus"] == {
+        "error": "refocus failed: D5100 not found on USB; is it switched on and plugged in?"}
+    assert tg7.scene == "TG-7 Still"
+
+
+def test_step_goes_item_still_item_still(tg7):
+    actions = [SF.step(tg7)["action"] for _ in range(4)]
+    assert actions == ["still", "page", "still", "page"]
+    assert tg7.switches == ["TG-7 Still", "eBay Main (camera 1)", "TG-7 Still", "eBay Main (camera 1)"]
+    assert tg7.tg7.on_air == ["eBay Main (camera 1)"] * 2 and tg7.refocused == []
+    assert tg7.shots == []  # no hold screenshot anywhere in the loop
+
+
+def test_a_step_whose_still_fails_stays_on_item(tg7):
+    tg7.tg7.fail = "can't reach the camera at 192.168.0.10"
+    with pytest.raises(obsctl.ObsError, match="TG-7"):
+        SF.step(tg7)
+    assert tg7.scene == "eBay Main (camera 1)" and tg7.switches == []
+
+
+def test_still_route_and_cli(tg7, monkeypatch, capsys):
+    monkeypatch.setattr(SF, "connect", lambda: tg7)
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as client:
+        body = client.post("/api/pager/still", json={"refocus": True}).json()
+        assert body["page"] == "still" and body["still"]["changed"] is True
+        assert body["still"]["refocus"]["focused"] is True
+        body = client.post("/api/pager/step").json()
+        assert body["page"] == "item" and body["step"]["action"] == "page"
+        body = client.post("/api/pager/step").json()
+        assert body["page"] == "still" and body["step"]["action"] == "still"
+        tg7.scene, tg7.tg7.fail = "eBay Main (camera 1)", "can't reach the camera"
+        r = client.post("/api/pager/still", json={})
+        assert r.status_code == 502 and "TG-7: can't reach the camera" in r.json()["detail"]
+        assert tg7.scene == "eBay Main (camera 1)"
+        r = client.post("/api/pager/still", json={}, headers={"origin": "https://evil.example"})
+        assert r.status_code == 403
+    tg7.tg7.fail = None
+    assert SF.main(["still"]) == 0
+    assert "on air: TG-7 still TG7_" in capsys.readouterr().out
+    monkeypatch.setattr(SF, "refocus_d5", lambda c: (_ for _ in ()).throw(obsctl.ObsError("no USB")))
+    tg7.scene = "eBay Main (camera 1)"
+    assert SF.main(["still", "--refocus"]) == 1  # the still is up; the refocus behind it failed
+    out = capsys.readouterr()
+    assert "D5100 refocus failed: refocus failed: no USB" in out.out and tg7.scene == "TG-7 Still"
 
 
 # --- the D5100's white balance: refocus's cover, lock and feed restart -------
