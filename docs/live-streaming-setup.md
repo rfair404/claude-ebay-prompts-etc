@@ -48,14 +48,34 @@ two Linux substitutions:
 |---|---|---|
 | Output Mode Advanced, Rescale Disabled | same | |
 | CBR, 3000 Kbps, keyframe 1 s | same | |
-| CPU Usage: superfast | x264 `superfast`, `bframes=0` | WebRTC/WHIP can't carry B-frames |
+| CPU Usage: superfast | **VAAPI H.264** (`ffmpeg_vaapi_tex`), High, B-frames 0 | x264 superfast can't keep up on the show laptop (below); WebRTC/WHIP can't carry B-frames |
 | Audio 128 Kbps | same | |
 | Audio encoder CoreAudio AAC | **Opus** | CoreAudio is macOS-only; WHIP requires Opus (eBay: accept OBS's Opus prompt) |
 | 1080x1920 base + output, 30 FPS | same | |
 | Service | **WHIP**, Bearer Token blank | eBay's "No delay (WHIP)" option |
 
-If x264 drops frames on a weak CPU, switch Encoder to `ffmpeg_vaapi_tex`
-(FFmpeg VAAPI H.264) in Settings > Output > Streaming and keep CBR 3000.
+The eBay encode runs on the Intel GPU. On the show laptop (i7-8665U, 4
+cores, UHD 620) x264 `superfast` at 1080x1920 plus the Twitch encode skipped
+69,199 of 69,627 frames ("Encoding overloaded", show of 2026-10-21). The
+Flatpak's own Intel driver (iHD 26.x from `org.freedesktop.Platform.VAAPI.Intel`)
+does CBR H.264 at 1080x1920 faster than real time with the CPU pegged. Two
+notes:
+
+- The *host's* Debian `intel-media-va-driver` only offers CQP (no CBR) on
+  this GPU, so `ffmpeg -c:v h264_vaapi -b:v 3000k` fails outside the
+  Flatpak. That doesn't affect OBS, which uses the Flatpak's driver.
+- On a machine whose OBS log has no `FFmpeg VAAPI H264 encoding supported`
+  line, set `Encoder=obs_x264` in `basic.ini`. `streamEncoder.json` keeps
+  the x264 keys (`superfast`, `bframes=0`) for that case.
+
+OBS reads the encoder type only when it starts. To change it with OBS
+running, write it, then restart OBS with nothing live (`obsctl.py quit`
+refuses while either destination is on):
+
+```bash
+python tools/live/obsctl.py call SetProfileParameter '{"parameterCategory":"AdvOut","parameterName":"Encoder","parameterValue":"ffmpeg_vaapi_tex"}'
+python tools/live/obsctl.py quit && python tools/live/obsctl.py launch
+```
 
 Install (OBS must be **closed** — it rewrites these files on exit):
 
@@ -80,7 +100,10 @@ every event.
 once and start/stop independently. OBS has one stream output (eBay's WHIP),
 and Debian's ffmpeg 7.1 has no WHIP muxer for a relay, so Twitch goes out
 on the *recording* output: Custom Output (FFmpeg) > Output to URL, flv, x264
-veryfast 3000k, AAC. With nothing live, run `python
+superfast 3000k rescaled to 720x1280, AAC. (Custom Output can't use VAAPI, so
+this encode is on the CPU. 44% of the pixels at a faster preset is roughly
+a quarter of the old veryfast-at-1080x1920 work, an estimate, not a
+measurement.) With nothing live, run `python
 tools/live/show_flow.py twitch-setup` to set all of that except the URL.
 Then (**user**): OBS Settings > Output > Recording > "File path or URL",
 paste `rtmp://live.twitch.tv/app/<stream key>` (Twitch dashboard > Settings
@@ -237,6 +260,17 @@ python tools/live/show_flow.py step           # item -> closeup -> hold -> item 
 python tools/live/show_flow.py hold | release # freeze the camera page while the item turns
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
+
+**"Encoding overloaded" / skipped frames.** `obsctl.py status` prints
+`render skipped` (the GPU/compositor missed frames) and `output skipped`
+(the encoders couldn't keep up). Both should stay near 0. If they climb:
+check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
+(section 2), then check what else is running. The laptop has 4 cores and
+16 GB. During a Twitch run on 2026-10-22 its load average was 65, swap
+was full, and OBS took 71 ms to render each frame (the budget at 30 FPS
+is 33 ms). The cause was about 25 parallel ffmpeg loudness scans, a test
+suite and several browser and Claude windows. Keep batch jobs (music
+analysis, pytest, listing runs) off this machine while a show is live.
 
 **closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
 (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
