@@ -209,6 +209,8 @@ LOCK = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "show_
 LOCK_WAIT = 0.5
 FRAMES_WAIT = 30  # seconds for the D5's frames to come back after a refocus
 GPHOTO_TIMEOUT = 15  # a wedged camera mustn't hold the lock (and the feed) forever
+STILL_TIMEOUT = 30  # still_d5: autofocus, shutter and the download of a full-size frame
+SAVED = re.compile(r"^Saving file as (.+)$", re.M)  # gphoto2's line per downloaded file
 REOPEN_GRACE = 3  # seconds after reopen_d5 before the feed's own frame is taken as proof
 FEED_START_WAIT = 15  # `feed start`: seconds to wait for frames before reopening in OBS
 D5_DEVICE = "/dev/video10"  # the feed's v4l2loopback device (tools/d5100_webcam.sh DEV)
@@ -415,11 +417,11 @@ def feed_status(pids=None) -> str:
     return "running" if age <= FEED_STALE else f"running, no frames for {age:.0f}s"
 
 
-def _gphoto2(*args, **kw):
+def _gphoto2(*args, timeout=GPHOTO_TIMEOUT, **kw):
     try:
-        return subprocess.run(["gphoto2", *args], capture_output=True, timeout=GPHOTO_TIMEOUT, **kw)
+        return subprocess.run(["gphoto2", *args], capture_output=True, timeout=timeout, **kw)
     except subprocess.TimeoutExpired as e:
-        raise obsctl.ObsError(f"gphoto2 {' '.join(args)} hung for {GPHOTO_TIMEOUT}s; "
+        raise obsctl.ObsError(f"gphoto2 {' '.join(args)} hung for {timeout}s; "
                               "switch the D5100 off and on") from e
     except OSError as e:  # gphoto2 not installed
         raise obsctl.ObsError(f"can't run gphoto2: {e}") from e
@@ -501,11 +503,10 @@ def wait_d5_frames(c, frozen: str | None, since: float, snaps: list[Path], wait:
         time.sleep(0.1)
 
 
-def refocus_d5(c) -> tuple[bool, float]:
-    """Stop live view, autofocus, restart; returns (focus locked, seconds until
-    OBS shows moving D5 frames again). The D5100 refuses autofocus ("Unspecified
-    error") when its AF point sees nothing with contrast, e.g. an empty podium;
-    focus then stays where it was.
+def d5_offline(c, *gphoto_args, **kw) -> tuple[subprocess.CompletedProcess, float]:
+    """Stop live view, run one gphoto2 command with the camera to itself,
+    restart; returns (its result, seconds until OBS shows moving D5 frames
+    again). `kw` goes to _gphoto2 (timeout, text).
 
     Whatever fails, this never leaves the feed stopped: it's restarted if it
     was running before or the camera answered on USB (the feed loop then
@@ -519,7 +520,7 @@ def refocus_d5(c) -> tuple[bool, float]:
         if "usb:" not in found:  # fail now, not after the wait for frames below
             raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
         restart = True
-        af = _gphoto2("--set-config", "autofocusdrive=1")
+        r = _gphoto2(*gphoto_args, **kw)
         time.sleep(0.2)
         frozen = d5_hash(c)
         since = time.time()
@@ -527,10 +528,39 @@ def refocus_d5(c) -> tuple[bool, float]:
         started = True
         wait_d5_frames(c, frozen, since, feed_snaps(feed_pids()))
         time.sleep(0.25)  # let live view settle its exposure before it goes on air
-        return af.returncode == 0, time.monotonic() - t
+        return r, time.monotonic() - t
     finally:
         if restart and not started:
             feed_start()
+
+
+def refocus_d5(c) -> tuple[bool, float]:
+    """Autofocus with live view stopped (d5_offline); returns (focus locked,
+    seconds). The D5100 refuses autofocus ("Unspecified error") when its AF
+    point sees nothing with contrast, e.g. an empty podium; focus then stays
+    where it was."""
+    af, secs = d5_offline(c, "--set-config", "autofocusdrive=1")
+    return af.returncode == 0, secs
+
+
+def still_d5(c, dest: Path) -> dict:
+    """A full-size D5100 still, downloaded into `dest`: the camera's own
+    autofocus and shutter, with live view stopped for it (one USB
+    connection), covered like a refocus. RAW+JPEG gives two files.
+    Returns {"camera": "d5", "files": [...], "still_s": seconds}."""
+    if standin_on(c):
+        raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
+    dest.mkdir(parents=True, exist_ok=True)
+    with covered(c):
+        r, secs = d5_offline(c, "--capture-image-and-download", "--force-overwrite",
+                             "--filename", str(dest / "D5_%Y%m%d_%H%M%S.%C"),
+                             timeout=STILL_TIMEOUT, text=True)
+    files = [Path(f.strip()) for f in SAVED.findall(r.stdout or "")]
+    if r.returncode or not files:
+        why = (r.stderr or r.stdout or "").strip().splitlines()
+        raise obsctl.ObsError(f"the D5100 didn't take the still: {why[-1] if why else 'no file saved'}"
+                              " (autofocus can't lock on an empty or low-contrast frame)")
+    return {"camera": "d5", "files": [str(f) for f in files], "still_s": round(secs, 1)}
 
 
 # --- OM TG-7 (tools/live/tg7cam) ---------------------------------------------
@@ -1135,6 +1165,20 @@ def refocus(c) -> dict:
         return tg7_refocus()
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
+    with covered(c):
+        try:
+            locked, secs = refocus_d5(c)
+        except obsctl.ObsError as e:
+            raise obsctl.ObsError(f"refocus failed: {e}") from e
+    return {"focused": locked, "refocus_s": round(secs, 1)}
+
+
+@contextmanager
+def covered(c):
+    """Hold the camera lock for the D5100 work in the body. If a page showing
+    it (item, multi) is on air, Up Next covers it meanwhile and fades back
+    after, also when the body fails, but not if someone asked for a page
+    meanwhile (Next included, though it's already on air): that page stays."""
     with exclusive():
         _mark_switch(clear=True)
         back = program(c)
@@ -1144,13 +1188,10 @@ def refocus(c) -> dict:
             c.call("SetCurrentProgramScene", {"sceneName": UPNEXT})
             time.sleep(FADE_MS / 1000)
         try:
-            locked, secs = refocus_d5(c)
-        except obsctl.ObsError as e:
-            raise obsctl.ObsError(f"refocus failed: {e}") from e
+            yield
         finally:
             if hide and not _switch_asked() and program(c) == UPNEXT:
                 c.call("SetCurrentProgramScene", {"sceneName": back})
-        return {"focused": locked, "refocus_s": round(secs, 1)}
 
 
 def held_page(c) -> str | None:
