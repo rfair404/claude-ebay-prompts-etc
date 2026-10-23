@@ -17,6 +17,7 @@ command runs from a worktree.
 | `inventory_sheet*.csv`, `inventory_sheet*.json`, `.inventory_live*.json` | eBay exports (live-listing sheets built from the eBay APIs) |
 | `pick_lists/**`, `.pick_list_state*.json` | pick lists and their state |
 | `inventory/**/draft.md`, `inventory/**/identify.txt` | each item's draft and identification, at any depth (`fr/arquilt/draft.md`) |
+| `inventory/**/context.txt`, `inventory/**/RECOVERED.md` | a bucket's spend and source (`ESTATES/SCJ/context.txt`), and the post-wipe recovery map that ties sold SKUs to their folders |
 | `inventory/_pick_lists/**` | pick sheets staged for `offsite share` (`prompts/pick_list.md`) |
 | `reports/**`, `share-inventory/**` | reports and files staged for sharing |
 
