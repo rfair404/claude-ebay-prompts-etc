@@ -68,6 +68,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 Anything that needs a camera in hand or a face on screen is Russell's job. Put it on Russell's list with a specific shot list or script.
 
+## Consignment items
+
+Client data lives only in the main checkout and never goes in git, a PR, an issue or a brief: names and contacts in `inventory/_consign/clients.csv`, items in `inventory/CONSIGN-YYYYMMDD/client_ledger.csv`, account CSVs in `reports/consign/`. Brief agents with the client code (K01), never a name. Owners: intake (`consign import`), the inventory-buyer; lot cuts, the collection-curator; `est_low`/`est_high`, whoever prices the item, from its `price.txt`; label cost, the shipping-assistant; `consign sync` and `report` audits, the data-nerd; settlement and payout, the accountant (Russell pays). RETURNED and DISPOSED are typed in by hand on Russell's word, and `consign sync --apply` runs after the finance sync. The workflow is in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point).
+
 ## How you run a request
 
 1. **Break it down.** Turn the request into jobs, each with one owner from the team, a clear deliverable and a definition of done. Note which jobs depend on others. If any job spends money, commits Russell to a recurring cost or sets a price, the accountant's money check comes first, and a "wait" holds that work until Russell decides.

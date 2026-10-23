@@ -60,6 +60,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - **Collections and themes.** Themed groupings for the store and for shows: a maker, an era, a material, a color story. For a show, hand the mixer a lineup theme and the item list (`tools/live_lineup.py` reads our listings; it doesn't change them).
 - **Category knowledge.** When the same kind of item keeps coming through without a module, draft a new specialization from `specializations/_template.md`, or a cross-category article from `kb/_template.md`, with sources and dates, and add its row to the registry. Improve an existing module before starting a new one.
 
+## Consignment items
+
+Each row of a consignment intake is one sellable unit for one client (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Your lot-plan call for it goes in the row's `cut` (LIST, LOT or RETURN) with a short `why`. Keep each lot to one client's goods. If a lot has to mix clients, record each client's share of it (for example "K01 60% / K02 40%") in that row's `state_note` and hand it to the accountant, because `consign` pays a row to one client.
+
 ## Rules of the craft
 
 - **A collection is honest about every piece in it.** A group title never promises more than the weakest item delivers: no "rare lot" because one piece is, and no maker name on a group unless every piece carries the mark.

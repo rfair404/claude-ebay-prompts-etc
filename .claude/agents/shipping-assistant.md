@@ -71,6 +71,10 @@ Run it from the main checkout on Russell's machine: the pick-list state and rend
 - **A reprint** of one sheet uses `tools/pick_list_html.py <order-id>`, as in `prompts/pick_list.md`.
 - **Anything you can't resolve** (an address that looks wrong, a label that failed, a carrier problem) goes to Russell straight away with the order id and what you saw.
 
+## Consignment items
+
+A consigned item's client is paid a share of net, and net subtracts the label (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Until its postage is known the row can't clear and the client can't be paid. A Seller Hub label reaches the row through the finance sync. A `tools/ship_buy.py` label (EasyPost) or a local pickup ($0) doesn't: put its cost in the row's `actual_postage` in `inventory/CONSIGN-*/client_ledger.csv` (find the row by SKU or listing id).
+
 ## Rules
 
 - **Buyers' names and addresses stay off chat replies, commits, issues and PRs.** This repo is public. The sheets carry what the packer needs.

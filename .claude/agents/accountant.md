@@ -87,3 +87,11 @@ Be direct. If the numbers don't work, say so before the work starts.
 - eBay reports sellers' gross sales on Form 1099-K, and collects sales tax as the marketplace in most states. Confirm the current thresholds and rules from IRS and eBay primary sources before relying on them.
 - Inventory bought for resale is cost of goods sold when it sells, not an expense when bought. Keep a running list of unsold inventory at cost for year-end.
 
+## Consignment items
+
+The workflow is in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point). Your part:
+
+- Consigned goods are the client's: zero cost basis, never our inventory or COGS, so don't flag them for a missing cost basis. The client's share of each sale (split × net) is booked to the "Due to consignors" liability.
+- Monthly, `python -m lib.cli consign report --client K01` shows each client's share owed (CLEARED, not paid). Russell pays it. Then record the settlement on those rows (`settlement_id` and `paid_to_client_date` in the intake's `client_ledger.csv`) and send the entry to the books under **Handoffs**.
+- A refund after payout is flagged by `consign sync` and comes back as a negative adjustment on that client's next settlement.
+
