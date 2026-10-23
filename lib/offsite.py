@@ -92,6 +92,7 @@ REPO = Path(__file__).resolve().parent.parent
 LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
+    "unwound_orders*.csv*",
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",
@@ -110,6 +111,14 @@ DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # (`ebz serve` -> /review/<shoot>), not from the bucket.
     "inventory/**/draft.md",
     "inventory/**/identify.txt",
+    # a bucket's spend and source (lib/source_report.py), and the recovery
+    # map left by the 2026-10 wipe: which sold SKUs belong to which folder
+    "inventory/**/context.txt",
+    "inventory/**/RECOVERED.md",
+    # consignment: each intake's item ledger and the client registry
+    # (tools/consign.py). The registry is the one file with client names.
+    "inventory/**/client_ledger.csv",
+    "inventory/_consign/**",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",

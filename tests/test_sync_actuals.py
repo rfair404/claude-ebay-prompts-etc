@@ -667,6 +667,113 @@ def test_a_store_b_order_never_claims_or_overwrites_a_store_a_row(shop, monkeypa
     assert junk["aaaa1111"]["status"] == "SOLD"
 
 
+def test_a_sale_refunded_after_an_earlier_apply_leaves_the_sales_ledger(shop, monkeypatch):
+    # First --apply records the sale; a later one sees the same order fully
+    # refunded (flatten_orders drops it). The old row must not survive the
+    # merge, or it stays counted as revenue.
+    orders = [[_order(oid="R-1", sku="aaaa1111"), _order(oid="K-1", sku="cccc3333")],
+              [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+               _order(oid="K-1", sku="cccc3333")]]
+    monkeypatch.setattr(SA, "fetch_orders",
+                        lambda days, verbose=True, *, store=None: orders.pop(0))
+    for _ in range(2):
+        assert SA.sync_store("default", _args()) == 0
+    with (shop / "sales_ledger.csv").open(encoding="utf-8") as f:
+        assert [r["order_id"] for r in csv.DictReader(f)] == ["K-1"]
+
+
+def _read(path):
+    with path.open(encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _unwound_run(monkeypatch, store, batches, finances=None):
+    """sync_store --apply once per order batch, with a buyer on every order
+    and (optionally) a successful Finances read that returns `finances`."""
+    for batch in batches:
+        for o in batch:
+            o["buyer"] = {"username": "buyer_jane_q",
+                          "buyerRegistrationAddress": {"fullName": "Jane Q Buyer"}}
+            o["fulfillmentStartInstructions"] = [{"shippingStep": {"shipTo": {
+                "fullName": "Jane Q Buyer",
+                "contactAddress": {"addressLine1": "12 Elm St"}}}}]
+    monkeypatch.setattr(SA, "fetch_orders",
+                        lambda days, verbose=True, *, store=None: batches.pop(0))
+    if finances is not None:
+        monkeypatch.setattr(SA, "sync_finances", lambda days, verbose=True, *, store=None:
+                            (*finances, {"ok": True, "reason": None, "other_fee_labels": {}}))
+    while batches:
+        assert SA.sync_store(store, _args(skip_finances=finances is None)) == 0
+
+
+def test_refunded_and_cancelled_orders_land_in_unwound_orders_not_sales(shop, monkeypatch, capsys):
+    refunded = _order(oid="R-1", sku="aaaa1111", item=80.0, ship=6.0, refund=86.0, due=-0.40)
+    cancelled = _order(oid="C-1", sku="cccc3333", item=40.0, cancel="CANCELED")
+    kept = _order(oid="K-1", sku="aaaa1111")
+    _unwound_run(monkeypatch, "default", [[refunded, cancelled, kept]],
+                 finances=({"R-1": Decimal("-2.50")}, {"R-1": Decimal("-7.10")}))
+
+    assert [r["order_id"] for r in _read(shop / "sales_ledger.csv")] == ["K-1"]
+    got = {r["order_id"]: r for r in _read(shop / "unwound_orders.csv")}
+    assert set(got) == {"R-1", "C-1"}
+    r, c = got["R-1"], got["C-1"]
+    assert (r["reason"], r["store"], r["sku"], r["listing_id"]) == \
+        ("refunded", "default", "aaaa1111", "206000000001")
+    assert (r["original_gross"], r["refunded"]) == ("86.00", "86.00")
+    assert (r["ad_fee"], r["actual_postage"]) == ("2.50", "7.10")
+    assert r["sold_at"] == "2026-06-08"
+    assert (c["reason"], c["original_gross"], c["refunded"]) == ("cancelled", "40.00", "0.00")
+    # the Finances read succeeded, so no AD row is a known $0; postage stays unknown
+    assert (c["ad_fee"], c["actual_postage"]) == ("0.00", "")
+    stored = (shop / "unwound_orders.csv").read_text(encoding="utf-8")
+    printed = capsys.readouterr().out
+    for pii in ("Jane", "buyer_jane_q", "Elm"):
+        assert pii not in stored and pii not in printed
+
+
+def test_a_second_run_merges_unwound_orders_without_duplicating(shop, monkeypatch):
+    first = [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+             _order(oid="C-1", sku="cccc3333", cancel="CANCELED")]
+    # The second window still holds R-1 and adds C-2; C-1 has aged out of it.
+    second = [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+              _order(oid="C-2", sku="bbbb2222", cancel="CANCELED")]
+    _unwound_run(monkeypatch, "junk", [first, second])
+
+    rows = _read(shop / "unwound_orders-junk.csv")
+    assert sorted(r["order_id"] for r in rows) == ["C-1", "C-2", "R-1"]
+    assert all(r["store"] == "junk" for r in rows)
+    assert _read(shop / "sales_ledger-junk.csv") == []
+    assert not (shop / "unwound_orders.csv").exists()
+
+
+def test_a_skip_finances_rerun_keeps_known_unwound_ad_fee_and_postage(shop, monkeypatch):
+    def order():
+        return _order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40)
+    _unwound_run(monkeypatch, "default", [[order()]],
+                 finances=({"R-1": Decimal("-2.50")}, {"R-1": Decimal("-7.10")}))
+    _unwound_run(monkeypatch, "default", [[order()]])
+    (row,) = _read(shop / "unwound_orders.csv")
+    assert (row["ad_fee"], row["actual_postage"]) == ("2.50", "7.10")
+
+
+def test_an_unwound_order_sold_on_a_later_run_leaves_unwound_orders(shop, monkeypatch):
+    # Run 1 sees R-1 fully refunded; run 2 sees the refund reversed (a
+    # clean sale). It must move files, never sit in both.
+    _unwound_run(monkeypatch, "default",
+                 [[_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+                   _order(oid="C-1", sku="cccc3333", cancel="CANCELED")],
+                  [_order(oid="R-1", sku="aaaa1111")]])
+    assert [r["order_id"] for r in _read(shop / "unwound_orders.csv")] == ["C-1"]
+    assert [r["order_id"] for r in _read(shop / "sales_ledger.csv")] == ["R-1"]
+
+
+def test_a_dry_run_writes_no_unwound_orders(shop, monkeypatch):
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [_order(oid="C-1", sku="aaaa1111", cancel="CANCELED")])
+    assert SA.sync_store("default", _args(apply=False)) == 0
+    assert not (shop / "unwound_orders.csv").exists()
+
+
 def test_a_relisted_item_matches_its_folder_on_the_store_that_sold_it(shop, monkeypatch):
     monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
                         [_store_order("cccc3333", "Fenton Hobnail Milk Glass Vase", "J-2")])
@@ -720,3 +827,78 @@ def test_fetch_orders_and_finances_use_the_named_stores_account(monkeypatch):
 def test_store_json_is_refused_with_all_stores(shop):
     with pytest.raises(SystemExit):
         SA.main(["--all-stores", "--store-json", "x.json"])
+
+
+# --------------------------------------------------------------------------
+# RECOVERED.md folders (the 2026-10 wipe). A sold or unknown item came back
+# as a folder holding only RECOVERED.md, so no draft can claim its sale, and
+# without the fallback the sale lands on no folder and no bucket.
+# --------------------------------------------------------------------------
+def _write_recovered(root, rel, skus, store="default"):
+    """A RECOVERED.md in the shape the recovery wrote (one or more `- sku:`)."""
+    d = root / "inventory" / rel
+    d.mkdir(parents=True)
+    lines = ["# RECOVERED — not a draft", "",
+             "No photos or pipeline files survived; eBay is the record of truth.", ""]
+    lines += [f"- sku: {s}" for s in skus]
+    lines += ["- ebay_listing_id: 206418250860", f"- store: {store}",
+              "- title: Recovered item", "- confidence: guess"]
+    (d / "RECOVERED.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _add_ledger_rows(path, rows):
+    with path.open("a", newline="", encoding="utf-8") as f:
+        csv.DictWriter(f, fieldnames=["sku", "status", "title", "price", "listing_id"]) \
+            .writerows(rows)
+
+
+RECOVERED_CASES = [
+    pytest.param(
+        [("ESTATES/SCJ/ej-08-04/sold-cup", ["eeee5555"], "default")],
+        [{"sku": "eeee5555", "status": "SOLD", "title": "Cup", "price": "45.00"}],
+        "default", [("eeee5555", "Sterling Baby Cup Engraved", "D-1")],
+        {"D-1": ("inventory/ESTATES/SCJ/ej-08-04/sold-cup", "recovered", "45.00")},
+        id="recovered-sku-matches"),
+    pytest.param(
+        [("ESTATES/SCJ/dupe", ["aaaa1111"], "default")], [],
+        "default", [("aaaa1111", TITLE_A, "D-2")],
+        {"D-2": ("inventory/shootA/a", "sku", "80.00")},
+        id="draft-beats-recovered"),
+    pytest.param(
+        [("JUNK/lot/keys", ["ffff6666"], "junk")], [],
+        "default", [("ffff6666", "Brass Skeleton Key Ring", "D-3")],
+        {"D-3": ("", "unmatched", "")},
+        id="other-stores-recovered-ignored"),
+    pytest.param(
+        [("JUNK/lot/keys", ["ffff6666"], "junk")], [],
+        "junk", [("ffff6666", "Brass Skeleton Key Ring", "J-3")],
+        {"J-3": ("inventory/JUNK/lot/keys", "recovered", "")},
+        id="own-stores-recovered-matches"),
+    pytest.param(
+        [("ESTATES/KIM/pair", ["1111aaaa", "2222bbbb"], "default")], [],
+        "default", [("1111aaaa", "Left Brooch", "D-4"), ("2222bbbb", "Right Brooch", "D-5")],
+        {"D-4": ("inventory/ESTATES/KIM/pair", "recovered", ""),
+         "D-5": ("inventory/ESTATES/KIM/pair", "recovered", "")},
+        id="multi-sku-recovered-matches-each"),
+]
+
+
+@pytest.mark.parametrize("recovered, ledger_rows, store, orders, want", RECOVERED_CASES)
+def test_a_sale_falls_back_to_its_recovered_folder(shop, monkeypatch, recovered,
+                                                   ledger_rows, store, orders, want):
+    for rel, skus, rstore in recovered:
+        _write_recovered(shop, rel, skus, rstore)
+    _add_ledger_rows(stores.paths(store).listings_ledger, ledger_rows)
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [_store_order(sku, title, oid) for sku, title, oid in orders])
+
+    assert SA.sync_store(store, _args()) == 0
+
+    with stores.paths(store).sales_ledger.open(encoding="utf-8") as f:
+        got = {r["order_id"]: (r["shoot_dir"], r["matched_by"], r["listed_price"])
+               for r in csv.DictReader(f)}
+    assert got == want
+    # the sale is stamped into the folder it matched, and into no other
+    stamped = {p.parent.relative_to(shop).as_posix()
+               for p in (shop / "inventory").rglob("SOLD.md")}
+    assert stamped == {w[0] for w in want.values() if w[0]}

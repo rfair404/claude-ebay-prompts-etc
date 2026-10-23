@@ -1,3 +1,8 @@
+---
+version: 1.1.0
+updated: 2026-10-23
+---
+
 # RUN — v4 headless runbook
 
 The single entry point. To run the pipeline on a shoot, read THIS file
@@ -156,9 +161,8 @@ the command line, never silent.
 it; while it is there the same hook denies pytest, `show_music.py build`,
 PREP, `prep_sheet_html.py`, `single-pass` and listing runs (the 2026-10-21
 show skipped 99.4% of its frames beside them). A flag over 8 h old is
-ignored. A leftover one clears with `rm inventory/_live/ON_AIR`, only after
-`show_flow.py status` reads eBay and Twitch both off; never stop the stream
-to get past it. The opt-out is `# on-air-ok: <reason>`.
+ignored. A leftover one clears when `show_flow.py status` reads eBay and
+Twitch both off; never stop the stream to get past it. The opt-out is `# on-air-ok: <reason>`.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — a
@@ -318,6 +322,46 @@ REVIEW would build; anything a stage's own interactive HARD stop caught
 gate) → the specific exception, by name, never guessed. Full protocol:
 [prompts/single_pass.md](prompts/single_pass.md).
 
+**Consignment (`consign`).** A client's items live in one intake folder,
+`inventory/CONSIGN-YYYYMMDD/`, whose `context.txt` says `client: K01`. Its
+`client_ledger.csv` has one row per sellable unit (one listing, return,
+disposal or buyout). An intake, and every lot in it, belongs to one client.
+Names and contacts live only in `inventory/_consign/clients.csv`
+(`client_code,name,contact,split,terms,opened`; `split` 0.5 = 50/50 of net).
+
+    python -m lib.cli consign import CONSIGN-20261022 roster.csv --client K01
+    python -m lib.cli consign import CONSIGN-20261022 -    # paste a CSV/TSV on stdin
+    python lib/sync_actuals.py --all-stores --apply        # finance sync first
+    python -m lib.cli consign sync                         # dry run: what would change
+    python -m lib.cli consign sync --apply                 # write (backup first)
+    python -m lib.cli consign report --client K01 --csv    # -> reports/consign/K01-<date>.csv
+
+`import` needs a `description` (or `item`) column, gives each new row the
+next `C###` id and skips a row with the same bin and description. Run
+`consign sync` from the main checkout; from a worktree it refuses. `sync`
+reads the listings and sales ledgers only (no eBay calls) and moves each row
+through SHOT, DRAFTED, LISTED, SOLD, CLEARED (sold, ad fee and postage known,
+40 days since the sale: eBay's 30-day return window runs from delivery) and
+SETTLED (`paid_to_client_date` set). Typed by hand:
+
+- PREP: in hand and being prepped. It stays PREP through SHOT and DRAFTED
+  and gives way to LISTED and later.
+- RETURNED, or DISPOSED with a `state_note`. Terminal: these win.
+- EXCLUDED: Russell buys the item from the client. Terminal, and it needs a
+  `buyout_price` (0.00 is allowed, blank is not). That price is the client
+  share, with no split, and is owed until paid.
+
+There is no `set` command: edit the CSV, and `sync` refuses an unknown state,
+a DISPOSED row without a note, an EXCLUDED row without a buyout price, a bad
+amount, or two active rows on one `inventory_folder` (each sellable unit
+needs its own folder). A listing that ended unsold, and a sale that left the
+sales ledger (the finance sync drops refunded and cancelled orders), are
+flagged in `state_note`, not given a state. Net is eBay's net before postage
+minus ad fee, postage and other costs; a blank ad fee or postage is unknown,
+not zero, so the row can't clear. Once `paid_to_client_date` is set, the
+row's `client_share` is frozen at what was paid; a later change is flagged
+with the adjustment rather than written.
+
 ## Background dispatch (optional, #59)
 
 PRICE, IDENTIFY's non-photo research (maker/pattern lookups, forum
@@ -406,6 +450,12 @@ actually got, and feeds the gap back. Its two commands:
 the listings ledger only knows the ASK (an accepted Best Offer never writes
 back), and the Inventory API is blind to anything listed by hand on eBay.com.
 Orders are the only source that sees every sale and the price actually paid.
+Refunded and cancelled orders are left out of `sales_ledger*.csv` and written
+to `unwound_orders*.csv` instead (`reason` refunded or cancelled). An order is
+never in both. For 1099-K reconciliation, the 1099-K does not subtract
+refunds, and sales_ledger `gross` is already net of partial refunds, so add the
+refunds back: Σ sales_ledger (`gross` + `refunded`) + Σ unwound_orders
+`original_gross` where `reason` is refunded. Leave cancelled orders out.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 

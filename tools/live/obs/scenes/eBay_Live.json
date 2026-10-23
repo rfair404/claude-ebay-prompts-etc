@@ -177,7 +177,7 @@
         },
         {
             "prev_ver": 537001986,
-            "name": "eBay Main",
+            "name": "eBay Main (camera 1)",
             "uuid": "6b5f1b2a-e809-46ce-b3cf-e8646a4556c3",
             "id": "scene",
             "versioned_id": "scene",
@@ -496,11 +496,11 @@
     "groups": [],
     "scene_order": [
         {
-            "name": "eBay Main"
+            "name": "eBay Main (camera 1)"
         }
     ],
-    "current_scene": "eBay Main",
-    "current_program_scene": "eBay Main",
+    "current_scene": "eBay Main (camera 1)",
+    "current_program_scene": "eBay Main (camera 1)",
     "canvases": [],
     "current_transition": "Fade",
     "transition_duration": 300,

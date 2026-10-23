@@ -290,12 +290,44 @@ def build_draft(item: dict, offer: dict, sku: str, store: str,
     return fm, body, warnings
 
 
+class _DraftDumper(yaml.SafeDumper):
+    """safe_dump in the house style of draft_io._emit_meta_kv: string values
+    double-quoted and escaped (a multi-line one as a literal block, one
+    containing `"` single-quoted), keys plain, numbers / bools / null untouched.
+
+    Plain safe_dump writes `price: '77.00'`, `ebay_listing_id: '2065...'` and
+    an all-digit SKU single-quoted. Every regex reader in the repo
+    (sync_actuals, live_audit, report, _existing_drafts below) expects double
+    quotes, so on a rebuilt draft the listing-id match, the price/title drift
+    check and the ledger merge all failed silently."""
+
+
+def _represent_str(dumper: yaml.SafeDumper, s: str) -> yaml.ScalarNode:
+    # A value carrying `"` (an inches mark: `2" Gold Tone`) is single-quoted
+    # with any `'` doubled, as live_audit._yaml_str writes it, so no reader
+    # is handed a `\"` escape verbatim.
+    style = "|" if "\n" in s else "'" if '"' in s else '"'
+    return dumper.represent_scalar("tag:yaml.org,2002:str", s, style=style)
+
+
+def _represent_dict(dumper: yaml.SafeDumper, d: dict) -> yaml.MappingNode:
+    node = dumper.represent_dict(d)
+    for key, _ in node.value:           # keys go through _represent_str too
+        if key.tag == "tag:yaml.org,2002:str":
+            key.style = None
+    return node
+
+
+_DraftDumper.add_representer(str, _represent_str)
+_DraftDumper.add_representer(dict, _represent_dict)
+
+
 def render_draft(fm: dict, body: str) -> str:
     constraints = parse_draft(TEMPLATE).frontmatter.get("_field_constraints") or {}
     head = ("# Rebuilt from the live eBay listing by tools/draft_rebuild.py.\n"
             "# Field meanings and constraints: templates/listing-v1.md.\n")
-    dump = lambda d: yaml.safe_dump(d, sort_keys=False, allow_unicode=True,  # noqa: E731
-                                    default_flow_style=False, width=1000)
+    dump = lambda d: yaml.dump(d, Dumper=_DraftDumper, sort_keys=False,  # noqa: E731
+                               allow_unicode=True, default_flow_style=False, width=1000)
     return (f"---\n{head}{dump(fm)}{dump({'_field_constraints': constraints})}---\n\n"
             f"{body}\n")
 

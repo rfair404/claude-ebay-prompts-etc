@@ -7,6 +7,9 @@ work he wants, and he types as little as he can. Every session and agent:
 
 - Takes decisions about code, reviews, merge order, process and tooling to the
   `technical-director` agent, not to Russell.
+- Takes art questions (every PREP call, photo looks, overlays, cards,
+  thumbnails) to the `art-director` agent with the
+  [`/ad` skill](.claude/skills/ad/SKILL.md), not to Russell.
 - Brings Russell only money, prices, going live, anything a customer sees,
   permission and hook changes (`.claude/settings*.json`), merges and
   hands-on steps, as one short card: numbered steps, one
@@ -149,12 +152,11 @@ versioned"). Before adding a doc, extend the one that already covers the topic.
 
 ## Pick list requests → R2 links
 
-When asked for the pick list (to print, for today, what to ship), follow
-[`prompts/pick_list.md`](prompts/pick_list.md). In short: from the main
-checkout, run `tools/pick_list.py --poll --all-stores`. Copy each sheet into
-`inventory/_pick_lists/`, upload them with `lib.cli offsite share`, and reply
-with one presigned R2 link per order. Don't reply with `127.0.0.1` links, the
-terminal report, or a file path.
+When asked for the pick list (for today, what to ship), use the `pick-list`
+skill: `.claude/skills/pick-list/links.sh` polls every store, uploads one
+sheet per box to R2 and prints the links to reply with. To print on paper,
+use `/pl`. [`prompts/pick_list.md`](prompts/pick_list.md) has the details.
+Don't reply with `127.0.0.1` links, the terminal report, or a file path.
 
 ## Streaming setup on a new machine
 

@@ -177,6 +177,10 @@ Capture Device (V4L2) > "Nikon D5100".
 status` says `running`. `running, no frames for Ns` means the feed loop is up
 but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
 
+**Frame rate:** previews can be capped for a lighter load: `FPS=10` in the
+environment caps the D5100 feed (`tools/d5100_webcam.sh`; unset = the
+camera's ~24 fps), and `tg7cam stream --fps N` caps the TG-7 live view.
+
 **Clock:** live view dies when the D5100's date resets, so every feed
 (re)start sets the camera clock to the computer's time first (`gphoto2
 --set-config datetime=now`, best effort). A reset date (before 2020) is
@@ -262,9 +266,11 @@ python tools/live/show_flow.py page intro     # 5. pre-show card, before going l
 /home/russ/EBAYBIZ/.venv/bin/python -m lib.cli serve   # 6. optional: the /pager page (needs the repo venv)
 python tools/live/show_flow.py golive ebay --confirm    # 7. and/or: golive twitch --confirm
 python tools/live/show_flow.py page item | next | webcam   # the pager; also: refocus, reconnect
-python tools/live/show_flow.py tg7 start      # TG-7 live view -> the closeup page (before 3 the first time)
-python tools/live/show_flow.py step           # item -> closeup -> hold -> item ...
-python tools/live/show_flow.py hold | release # freeze the camera page while the item turns
+python tools/live/show_flow.py tg7 preview on   # optional: frame the TG-7 off air (pager key P)
+python tools/live/show_flow.py still          # TG-7 photo on air (ends the preview); refocus / wb the D5 behind it
+python tools/live/show_flow.py step           # item -> still -> item -> still ...
+python tools/live/show_flow.py tg7 start      # fallback only: TG-7 live view -> the closeup page
+python tools/live/show_flow.py hold | release # fallback: freeze the camera page while the item turns
 python tools/live/show_flow.py stop                     # both; or: stop ebay | stop twitch
 ```
 
@@ -291,8 +297,22 @@ check that the eBay encoder is VAAPI and Twitch is superfast at 720x1280
   (music analysis, pytest, listing runs) off this machine while a show is
   live.
 
-**closeup** (scene `Close-up`) is the TG-7 below the same webcam strip
-(`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
+**still** (scene `TG-7 Still`, built by `setup`) is the TG-7's main job:
+`still` takes a full-size TG-7 photo while the page on air stays up, then
+fades to that photo, fit whole below the webcam strip. It covers the D5:
+`refocus`, `wb` and D5 stills run behind it without Up Next and leave it on
+air, and `still --refocus` does both at once (pager: T, Shift+T). It holds
+until the host moves on (`page item` or `step`). A TG-7 failure (no Wi-Fi,
+focus didn't lock) leaves the page on air. With a photo shoot open the
+full-size frame goes into its item (`shoot.py`), else
+`inventory/_live/stills/<date>/`; OBS shows a screen-sized copy.
+To frame first, `tg7 preview on` (pager P) starts the TG-7's live view into
+scene `TG-7 Preview`, the still's slot and framing, off air: the pager
+renders it, nothing switches program to it. The still ends it, as does
+`tg7 preview off`, and the TG-7 feed stops if the preview started it.
+
+**closeup** (scene `Close-up (camera 2)`), the fallback, is the TG-7's live
+video below the same webcam strip (`setup --tg7-rotation 90|270` if it's mounted on its side). The TG-7
 source is a v4l2 camera on /dev/video11 when that loopback device exists,
 else a Media Source on `udp://127.0.0.1:5011`; re-run `setup` after adding
 the device and it switches. `refocus` on the closeup page is the TG-7's
@@ -315,9 +335,9 @@ ends, and `watch stop` clears them too. A camera slot went black:
 scene, and the Hold page shows that still under the live webcam strip, so
 the host can turn the item without viewers watching it spin. `release` fades
 back to the live camera. **step** is the item sequence on one key (Space on
-the pager): wide (item) -> close-up -> hold, turn the item -> wide again,
-and so on. From a hold it releases to the *other* camera; from any
-non-camera page it starts at item.
+the pager): item (D5 live) -> still (the TG-7 shoots; turn the item, adjust
+the D5) -> item, and so on. From any other page, a hold included, it goes
+to item. Hold and the live closeup are manual pages, out of the loop.
 
 **Show mode: no batch jobs on air.** The 2026-10-21 show skipped 99.4% of
 its frames while the show laptop also ran pytest, a music build and other
@@ -327,9 +347,9 @@ it once nothing is live. While it is there, the shell hook
 `prep_sheet_html.py`, `single-pass` and listing runs, even backgrounded,
 with "the show is live, so ... waits". Build the music before the show. If
 OBS dies without a `stop`, the flag stays: the guard ignores it after 8
-hours. To clear it sooner, check `show_flow.py status` first, and only if
-eBay and Twitch both read off, `rm inventory/_live/ON_AIR` (from the main
-checkout). Never stop the stream to get past the guard.
+hours. To clear it sooner, run `show_flow.py status`: when eBay and Twitch
+both read off, it removes the flag itself. Never stop the stream to get
+past the guard.
 
 `show_flow.py` and `obsctl.py` need only the standard library; the web app
 needs FastAPI, which is in the repo venv (`/home/russ/EBAYBIZ/.venv`), not
@@ -344,12 +364,14 @@ comes with it: the D5100 and the webcam side by side in the top 1080x810
 (each 540x810, the D5's on-its-side live view uncropped), that same app
 window full width under them). `--window` must name a window that is
 still open: OBS's window list keeps closed ones, and setup refuses them.
+A collection still on the old scene names (`eBay Main`, `Close-up`) has
+them renamed first, unless a scene by the new name is already there.
 **webcam** (scene `Webcam Only`) is the fallback page: the webcam alone,
 cover-cropped to the top 1080x1350 of the dark background, with the mic. It
 never touches the D5100, so it's where to go if the camera dies mid-show.
 **intro** (scene `Intro`) is the pre-show card: `--intro-text`, default
 "Starting soon", on a dark background with no cameras. **item** (scene
-`eBay Main`) is the D5100 full frame (rotated 270 for the side-mounted
+`eBay Main (camera 1)`) is the D5100 full frame (rotated 270 for the side-mounted
 camera) with the webcam full width across the top. **next** (scene `Up Next`)
 is the pause / next-item card: a desktop window centered on the dark
 background, under the same webcam strip. Every `page` is one scene switch

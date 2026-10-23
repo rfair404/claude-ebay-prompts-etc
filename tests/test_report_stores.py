@@ -94,3 +94,54 @@ def test_draft_store_field_reads_frontmatter_only():
     assert R.draft_store_field('---\ntitle: "x"\n---\nstore: junk\n') == "default"
     # an invalid name matches no real store rather than defaulting
     assert R.draft_store_field('---\nstore: "no good"\n---\n') == "no good"
+
+
+# The shape of a real published draft (inventory/ES/MON1020-M, 2026-10-23):
+# the ids live under `meta:`, `meta.notes` has its own `title:`/`price:` lines,
+# and `_field_constraints` repeats both keys. Only the top-level ones count.
+LIVE_DRAFT = """---
+template_version: v1
+store: ""
+meta:
+  drafted_at: "2026-10-23T00:53:32Z"
+  ebay_inventory_sku: "dddd4444"
+  ebay_listing_id: "880000000184"
+  notes: |
+    title: INVESTIGATE claim 1, 80/80; no lead word earned
+    price: 127.00 = Push-high (house rule: list at Push-high, ease down)
+  published_at: "2026-10-23T01:04:57Z"
+title: {title}
+price: "127.00"
+_field_constraints:
+  title:                                    {{ required: true, max_len: 80 }}
+  price:                                    {{ required: true, max_len: 13, numeric: true }}
+---
+body
+"""
+
+
+@pytest.mark.parametrize("title_yaml, title", [
+    ('"Pair of Wm Rogers Sterling Candlesticks"', "Pair of Wm Rogers Sterling Candlesticks"),
+    ("'Rhinestone Brooch 2\" Gold Tone'", 'Rhinestone Brooch 2" Gold Tone'),   # #270
+])
+def test_live_draft_ask_is_the_top_level_price_not_a_notes_line(repo, title_yaml, title):
+    d = repo / "inventory" / "d"
+    d.mkdir()
+    (d / "draft.md").write_text(LIVE_DRAFT.format(title=title_yaml), encoding="utf-8")
+    with (repo / "listings_ledger.csv").open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=["sku", "listing_id", "status", "title", "price"])
+        w.writeheader()
+        w.writerow({"sku": "dddd4444", "listing_id": "880000000184", "status": "PUBLISHED",
+                    "title": "ledger title", "price": "99.00"})
+
+    row, = [r for r in R.collect("default") if r["sku"] == "dddd4444"]
+    assert (row["price"], row["title"], row["listing_id"], row["published_at"], row["src"]) == \
+        ("127.00", title, "880000000184", "2026-10-23T01:04:57Z", "both")
+
+
+def test_a_draft_that_is_not_yaml_warns_and_leaves_the_ledger_values(repo, capsys):
+    (repo / "inventory" / "a" / "draft.md").write_text(
+        '---\ntitle: "item a\nprice: [\n---\nbody\n', encoding="utf-8")
+    row, = [r for r in R.collect("default") if r["sku"] == "aaaa1111"]
+    assert (row["price"], row["src"]) == ("10", "ledger")
+    assert "frontmatter is not valid YAML" in capsys.readouterr().err

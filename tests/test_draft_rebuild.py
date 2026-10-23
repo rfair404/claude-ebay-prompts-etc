@@ -15,9 +15,12 @@ matter more than the rest:
 Run:  python tests/test_draft_rebuild.py
   or: pytest tests/test_draft_rebuild.py
 """
+import csv
 import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -186,8 +189,8 @@ def test_dry_run_writes_nothing_and_reports_the_diff():
         with tempfile.TemporaryDirectory() as td:
             path = _rebuilt(Path(td))
             text = path.read_text(encoding="utf-8")
-            text = text.replace("pattern: Reflection", "pattern: Reflection Pierced")
-            text = text.replace("price: '17.99'", "price: '15.99'")
+            text = text.replace('pattern: "Reflection"', 'pattern: "Reflection Pierced"')
+            text = text.replace('price: "17.99"', 'price: "15.99"')
             path.write_text(text, encoding="utf-8")
             plan: list = []
             changed = L.update_listing_fields(path, ["aspects", "price"], creds=_Creds(),
@@ -254,14 +257,127 @@ def test_multi_value_aspects_survive():
                                      "Features": ["Boxed"], "Era": ["1960s"]}
 
 
+# ---------------------------------------------------------------------------
+# A rebuilt draft, moved into a lot folder, reads back through every reader.
+# safe_dump single-quoted price / listing id / all-digit SKU, and every regex
+# reader below expects double quotes: sync_actuals' listing-id match,
+# live_audit's drift check and report.collect's ledger merge all missed
+# rebuilt drafts without a word.
+# ---------------------------------------------------------------------------
+
+import live_audit as LA                                      # noqa: E402
+import report as RP                                          # noqa: E402
+import stores                                                # noqa: E402
+import sync_actuals as SA                                    # noqa: E402
+
+LOT_SKU, LOT_PRICE, LOT_LID = "56606948", "77.00", "206455986454"
+LOT_TITLES = [
+    pytest.param("Kutani Hand Painted Porcelain Teapot Red Gold", id="plain"),
+    pytest.param("Pop's Kutani Teapot 'Thousand Faces' Red", id="single-quote"),
+    pytest.param("Kutani Teapot: Thousand Faces, Red: Gold", id="colon-space"),
+]
+INCH_TITLE = 'Rhinestone Christmas Tree Brooch 2" Gold Tone'   # 8 of the 105 today
+
+
+def _isolate(root, monkeypatch):
+    """Every reader's inventory/, repo root and ledger path under `root`."""
+    monkeypatch.setattr(stores, "REPO", root)
+    monkeypatch.setattr(stores, "load_config", lambda: {})
+    for var in ("EBAYBIZ_STORE", "EBAYBIZ_LISTINGS_LEDGER", "EBAYBIZ_LISTINGS_LOG"):
+        monkeypatch.delenv(var, raising=False)
+    for mod in (SA, LA, RP):
+        monkeypatch.setattr(mod, "REPO", root)
+        monkeypatch.setattr(mod, "INVENTORY", root / "inventory")
+    monkeypatch.setattr(R, "REPO", root)
+
+
+def _lot_draft(root, monkeypatch, title) -> Path:
+    """build_draft + render_draft for a live listing, written where the
+    rebuilt drafts were moved to: a lot leaf, not inventory/_rebuilt/."""
+    import copy
+    item, offer = copy.deepcopy(ITEM), copy.deepcopy(OFFER)
+    item["sku"] = offer["sku"] = LOT_SKU
+    item["product"]["title"] = title
+    offer["pricingSummary"]["price"]["value"] = LOT_PRICE
+    offer["listing"]["listingId"] = LOT_LID
+    monkeypatch.setattr(L, "_ebay_extra",
+                        lambda f, store=None: {"fulfillment_policy_id": "F1"}.get(f))
+    fm, body, _w = R.build_draft(item, offer, LOT_SKU, "default")
+    path = root / "inventory" / "ESTATES" / "X" / "leaf" / "draft.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(R.render_draft(fm, body), encoding="utf-8")
+    return path
+
+
+def _read_back(root):
+    """What each reader makes of the one draft on disk, as
+    {reader: (sku, listing_id, price, title)}."""
+    with (root / "listings_ledger.csv").open("w", newline="", encoding="utf-8") as f:
+        # sku + listing id only, so collect()'s merged price/title are disk's
+        w = csv.DictWriter(f, fieldnames=["sku", "status", "title", "price", "listing_id"])
+        w.writeheader()
+        w.writerow({"sku": LOT_SKU, "status": "PUBLISHED", "listing_id": LOT_LID})
+    sa, = SA.scan_drafts("default", ledger=[])
+    la, = LA.scan_drafts("default", ledger=[])
+    merged = RP.collect("default")
+    assert len(merged) == 1, f"collect() did not merge the draft into its ledger row: {merged}"
+    rp, = merged
+    assert rp["src"] == "both", rp
+    pick = lambda d: (d["sku"], d["listing_id"], d["price"], d["title"])  # noqa: E731
+    return {"sync_actuals": pick(sa), "live_audit": pick(la), "report": pick(rp)}
+
+
+@pytest.mark.parametrize("title", LOT_TITLES + [pytest.param(INCH_TITLE, id="double-quote")])
+def test_rebuilt_lot_draft_ids_and_price_read_back_everywhere(tmp_path, monkeypatch, title):
+    _isolate(tmp_path, monkeypatch)
+    path = _lot_draft(tmp_path, monkeypatch, title)
+    got = _read_back(tmp_path)
+    for reader, (sku, lid, price, _t) in got.items():
+        assert (sku, lid, price) == (LOT_SKU, LOT_LID, LOT_PRICE), (reader, got[reader])
+    assert R._existing_drafts() == {LOT_SKU: path}
+    d = parse_draft(path)
+    assert (d.get("meta.ebay_inventory_sku"), d.get("meta.ebay_listing_id"),
+            d.get("price"), d.get("title")) == (LOT_SKU, LOT_LID, LOT_PRICE, title)
+
+
+@pytest.mark.parametrize("title", LOT_TITLES)
+def test_rebuilt_lot_draft_title_reads_back_everywhere(tmp_path, monkeypatch, title):
+    _isolate(tmp_path, monkeypatch)
+    _lot_draft(tmp_path, monkeypatch, title)
+    got = _read_back(tmp_path)
+    assert {reader: t for reader, (*_, t) in got.items()} == \
+        {reader: title for reader in got}
+
+
+def test_rebuilt_inch_mark_title_reads_back_in_report(tmp_path, monkeypatch):
+    # A `"` title is written single-quoted (as live_audit._yaml_str does).
+    # report.collect reads it back (#270); sync_actuals and live_audit don't yet.
+    _isolate(tmp_path, monkeypatch)
+    _lot_draft(tmp_path, monkeypatch, INCH_TITLE)
+    assert _read_back(tmp_path)["report"][3] == INCH_TITLE
+
+
+def test_live_audit_apply_row_really_changes_a_rebuilt_drafts_price(tmp_path, monkeypatch):
+    # The live price moved in Seller Hub. On a single-quoted price the audit
+    # saw no local price, and apply_row's `^price:\s*".*"$` rewrite matched
+    # nothing: it backed the draft up, said "price -> 69.00", and changed nothing.
+    _isolate(tmp_path, monkeypatch)
+    path = _lot_draft(tmp_path, monkeypatch, "Kutani Hand Painted Porcelain Teapot Red Gold")
+    offer = {"sku": LOT_SKU, "listing_id": LOT_LID, "status": "PUBLISHED",
+             "listing_status": "ACTIVE", "price": "69.00",
+             "title": "Kutani Hand Painted Porcelain Teapot Red Gold"}
+    row, = LA.reconcile([offer], {}, LA.scan_drafts("default", ledger=[]), [])
+    assert row["local_price"] == LOT_PRICE
+    assert "local price $77.00 != live $69.00" in row["issues"], row["issues"]
+
+    assert LA.apply_row(row, verbose=False) == ["price -> 69.00"]
+
+    d = parse_draft(path)
+    assert d.get("price") == "69.00"
+    assert "live-audit" in d.get("meta.notes") and "price -> 69.00" in d.get("meta.notes")
+    assert d.get("meta.ebay_listing_id") == LOT_LID     # nothing else moved
+    assert len(list((path.parent / ".history").glob("draft-*.md"))) == 1
+
+
 if __name__ == "__main__":
-    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
-    bad = 0
-    for fn in fns:
-        try:
-            fn()
-            print(f"PASS {fn.__name__}")
-        except Exception as e:                                # noqa: BLE001
-            bad += 1
-            print(f"FAIL {fn.__name__}: {e!r}")
-    sys.exit(1 if bad else 0)
+    sys.exit(pytest.main([__file__, "-q"]))

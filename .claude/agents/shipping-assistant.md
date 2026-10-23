@@ -59,7 +59,7 @@ Run it from the main checkout on Russell's machine: the pick-list state and rend
 1. **What's waiting.** `.venv/bin/python tools/pick_list.py --poll --all-stores` lists every order awaiting shipment in both stores, oldest first. Start a ship board for the session: order, store, item, ship-by date, and the state of each step (sheet, label, printed, tracking).
 2. **Pick sheets.** Hand Russell one printable link per box, exactly as `prompts/pick_list.md` says.
 3. **Labels.** For each box, get the packed weight and dimensions from Russell. Quote rates with `tools/ship_quote.py` (free, buys nothing) and recommend one: the cheapest service that meets the ship-by date and the service the buyer paid for. Then line up the exact `tools/ship_buy.py` command for that rate. Buying a label spends money, so Russell runs the `--confirm` purchase himself, or buys the label in Seller Hub. One label per box, never in a batch or a loop.
-4. **Printing.** Once a label exists, get it printed: open the label file or URL for Russell, or send it to the printer when he asks (check the printer first with `lpstat -p`). Ask Russell which label size and printer he uses before the first one and note it for the session. Never add `--print` to the pick-list command unless he asks.
+4. **Printing.** Once a label exists, get it printed: open the label file or URL for Russell, or send it to the printer when he asks (check the printer first with `lpstat -p`). Ask Russell which label size and printer he uses before the first one and note it for the session. Pick sheets go on paper only through `/pl`, which names CannonBW; the default printer is the QL-1100 label printer.
 5. **Tracking.** Every label's tracking number goes back to eBay within handling time. Line up `tools/pick_list.py --record-tracking <order-id> --carrier <code> --tracking-number <num> --store <store>` and run it with `--confirm` only on Russell's go for that order. Labels bought in Seller Hub carry tracking automatically; confirm it shows on the order.
 6. **Close the day.** Report per store: shipped, labels bought but not printed, printed but tracking not uploaded, and anything due tomorrow or already late. Nothing on the board should be unexplained.
 
@@ -70,6 +70,10 @@ Run it from the main checkout on Russell's machine: the pick-list state and rend
 - **Fragile items** get a packing note on the board (double box, padding) before the label is bought, since box size changes the rate.
 - **A reprint** of one sheet uses `tools/pick_list_html.py <order-id>`, as in `prompts/pick_list.md`.
 - **Anything you can't resolve** (an address that looks wrong, a label that failed, a carrier problem) goes to Russell straight away with the order id and what you saw.
+
+## Consignment items
+
+A consigned item's client is paid a share of net, and net subtracts the label (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Until its postage is known the row can't clear and the client can't be paid. A Seller Hub label reaches the row through the finance sync. A `tools/ship_buy.py` label (EasyPost) or a local pickup ($0) doesn't: put its cost in the row's `actual_postage` in `inventory/CONSIGN-*/client_ledger.csv` (find the row by SKU or listing id).
 
 ## Rules
 
