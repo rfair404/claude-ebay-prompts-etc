@@ -259,6 +259,7 @@ def test_unknown_page_is_refused(obs):
 
 def test_refocus_on_item_hides_behind_up_next(obs):
     obs.scene = "eBay Main (camera 1)"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     assert SF.refocus(obs) == {"focused": True, "refocus_s": 5.0}
     assert obs.refocused == ["Up Next"]
     assert obs.switches == ["Up Next", "eBay Main (camera 1)"]
@@ -267,6 +268,15 @@ def test_refocus_on_item_hides_behind_up_next(obs):
 def test_refocus_off_the_item_page_stays_put(obs):
     SF.refocus(obs)
     assert obs.refocused == ["Intro"] and obs.switches == []
+
+
+def test_refocus_on_item_off_air_stays_on_item(obs):
+    # nothing is streaming, so nobody sees the freeze: the host's page is left alone
+    obs.scene = "eBay Main (camera 1)"
+    assert not any(s["live"] for s in SF.streams(obs).values())
+    assert SF.refocus(obs) == {"focused": True, "refocus_s": 5.0}
+    assert obs.refocused == ["eBay Main (camera 1)"]  # froze on item, not behind Up Next
+    assert obs.switches == [] and obs.scene == "eBay Main (camera 1)"
 
 
 def test_a_page_switch_never_waits_for_a_refocus(obs, monkeypatch):
@@ -413,6 +423,7 @@ def test_a_plain_switch_fades_again_after_a_cut(client, obs):
 
 def test_a_refocus_after_a_slow_take_hides_with_the_fade_it_waits_for(client, obs):
     obs.scene = "Intro"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     client.post("/api/pager/take", json={"page": "item", "transition": "Swipe", "duration_ms": 800})
     SF.refocus(obs)  # its sleep covers FADE_MS, so the hide must be that fade, not the 800 ms swipe
     assert obs.cuts[1:] == [("Up Next", "Fade", SF.FADE_MS), ("eBay Main (camera 1)", "Fade", SF.FADE_MS)]
@@ -650,6 +661,7 @@ def test_safe_window_is_an_allowlist_with_a_veto():
 
 def test_refocus_checks_the_window_before_hiding_behind_up_next(obs):
     obs.scene, obs.title = "eBay Main (camera 1)", "Twitch \u2014 Mozilla Firefox"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     SF.refocus(obs)
     assert obs.window_shown is False
 
@@ -875,6 +887,7 @@ def test_multi_page_is_a_plain_switch_and_refocuses_only_when_asked(obs, client)
 
 def test_refocus_on_multi_hides_behind_up_next_and_comes_back(obs):
     obs.scene = "Multi View"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     assert SF.refocus(obs) == {"focused": True, "refocus_s": 5.0}
     assert obs.refocused == ["Up Next"]
     assert obs.switches == ["Up Next", "Multi View"]
@@ -886,6 +899,7 @@ def test_a_failed_refocus_on_item_fades_back_to_item(obs, monkeypatch):
         raise obsctl.ObsError("gphoto2 --set-config autofocusdrive=1 hung for 15s")
     monkeypatch.setattr(SF, "refocus_d5", fail)
     obs.scene = "eBay Main (camera 1)"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     with pytest.raises(obsctl.ObsError, match="^refocus failed: gphoto2"):
         SF.refocus(obs)
     assert obs.switches == ["Up Next", "eBay Main (camera 1)"]
@@ -897,6 +911,7 @@ def test_a_switch_made_during_a_refocus_wins(obs, monkeypatch):
         return True, 5.0
     monkeypatch.setattr(SF, "refocus_d5", host_clicks_intro)
     obs.scene = "eBay Main (camera 1)"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     SF.refocus(obs)
     assert obs.scene == "Intro"  # not yanked back to item
     obs.scene = "Up Next"
@@ -912,6 +927,7 @@ def test_next_asked_for_during_a_refocus_stays_on_next(obs, monkeypatch):
         return True, 5.0
     monkeypatch.setattr(SF, "refocus_d5", host_clicks_next)
     obs.scene = "eBay Main (camera 1)"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     SF.refocus(obs)
     assert obs.scene == "Up Next" and obs.switches == ["Up Next"]
     r = SF.go(obs, "item", refocus=True)  # from Up Next: the host asks for Next again
@@ -921,6 +937,7 @@ def test_next_asked_for_during_a_refocus_stays_on_next(obs, monkeypatch):
 def test_a_refocus_with_no_switch_meanwhile_fades_back_to_item(obs, monkeypatch):
     SF.go(obs, "intro")  # an earlier switch's mark doesn't count
     obs.scene = "eBay Main (camera 1)"
+    obs.active["Stream"] = True  # streaming: viewers would see the freeze
     SF.refocus(obs)
     assert obs.scene == "eBay Main (camera 1)"
 
@@ -1016,6 +1033,7 @@ def camera(tmp_path, monkeypatch):
 def test_refocus_survives_obs_702_right_after_the_standin_comes_off(camera):
     # 2026-10-19: no picture to compare (702) used to end the command with the feed stopped
     c = CamObs([None, None, "a", "b"])
+    c.active["Stream"] = True  # streaming: viewers would see the freeze
     r = SF.refocus(c)
     assert r["focused"] is True
     assert camera.running and camera.log[:2] == ["stop", "--auto-detect"] and "start" in camera.log
@@ -1600,9 +1618,12 @@ class WbCamera(Camera):
         return super().run(cmd, **kw)
 
 
-def moving_d5():
-    """A CamObs whose D5 picture changes on every screenshot, for several calls in a row."""
-    return CamObs([f"frame{i}" for i in range(500)])
+def moving_d5(live=False):
+    """A CamObs whose D5 picture changes on every screenshot, for several calls in a row.
+    live: a stream output is on air, so D5 camera work hides behind Up Next."""
+    c = CamObs([f"frame{i}" for i in range(500)])
+    c.active["Stream"] = live
+    return c
 
 
 @pytest.fixture
@@ -1612,7 +1633,7 @@ def wbcam(camera, monkeypatch):
 
 @pytest.mark.parametrize("scene", ["eBay Main (camera 1)", "Multi View"])
 def test_wb_sets_a_preset_behind_up_next_and_comes_back(wbcam, scene):
-    c = moving_d5()
+    c = moving_d5(live=True)
     c.scene = scene
     r = SF.wb(c, "tungsten")
     assert r == {"wb": "Tungsten", "choices": D5100_WB, "changed": True, "wb_s": r["wb_s"]}
@@ -1622,7 +1643,7 @@ def test_wb_sets_a_preset_behind_up_next_and_comes_back(wbcam, scene):
 
 
 def test_wb_without_a_preset_reads_it_and_still_restarts_the_feed(wbcam):
-    c = moving_d5()
+    c = moving_d5(live=True)
     r = SF.wb(c)
     assert (r["wb"], r["choices"], r["changed"]) == ("Automatic", D5100_WB, False)
     assert wbcam.log == ["stop", "--auto-detect", "--get-config", "start"]  # nothing set
