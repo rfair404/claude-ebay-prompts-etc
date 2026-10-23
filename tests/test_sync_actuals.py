@@ -667,6 +667,21 @@ def test_a_store_b_order_never_claims_or_overwrites_a_store_a_row(shop, monkeypa
     assert junk["aaaa1111"]["status"] == "SOLD"
 
 
+def test_a_sale_refunded_after_an_earlier_apply_leaves_the_sales_ledger(shop, monkeypatch):
+    # First --apply records the sale; a later one sees the same order fully
+    # refunded (flatten_orders drops it). The old row must not survive the
+    # merge, or it stays counted as revenue.
+    orders = [[_order(oid="R-1", sku="aaaa1111"), _order(oid="K-1", sku="cccc3333")],
+              [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+               _order(oid="K-1", sku="cccc3333")]]
+    monkeypatch.setattr(SA, "fetch_orders",
+                        lambda days, verbose=True, *, store=None: orders.pop(0))
+    for _ in range(2):
+        assert SA.sync_store("default", _args()) == 0
+    with (shop / "sales_ledger.csv").open(encoding="utf-8") as f:
+        assert [r["order_id"] for r in csv.DictReader(f)] == ["K-1"]
+
+
 def test_a_relisted_item_matches_its_folder_on_the_store_that_sold_it(shop, monkeypatch):
     monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
                         [_store_order("cccc3333", "Fenton Hobnail Milk Glass Vase", "J-2")])

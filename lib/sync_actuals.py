@@ -568,8 +568,15 @@ def _load_sales_ledger(path: Path) -> dict:
         return {_sale_key(r): r for r in csv.DictReader(f)}
 
 
-def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
+def write_sales_ledger(rows: list[dict], store: Optional[str] = None, *,
+                       unwound_order_ids=()) -> Path:
     """Merge `rows` into `store`'s sales ledger — never a wholesale overwrite.
+
+    `unwound_order_ids` are this run's cancelled and fully refunded orders
+    (flatten_orders' `excluded` lists). Their existing rows are dropped: a
+    sale refunded after an earlier --apply wrote it is no longer a sale, and
+    leaving the stale row would keep it counted as revenue (and, in
+    tools/consign.py, cleared and owed to the client).
 
     `rows` only covers the current `--days` window; a plain rewrite would
     drop every sale outside it. Existing rows survive untouched unless a
@@ -583,6 +590,8 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
     another store's sale. Returns the path written."""
     path = stores.paths(store).sales_ledger
     merged = _load_sales_ledger(path)
+    gone = set(unwound_order_ids)
+    merged = {k: v for k, v in merged.items() if k[0] not in gone}
     for r in rows:
         out = dict(r)
         for k in _MONEY_FIELDS:
@@ -994,7 +1003,9 @@ def sync_store(store: str, args) -> int:
         print(f"  • {p.listings_ledger.name} — advance matched SKUs to SOLD")
         return 0
 
-    written = write_sales_ledger(rows, store)
+    written = write_sales_ledger(
+        rows, store,
+        unwound_order_ids=excluded["cancelled_order_ids"] + excluded["refunded_order_ids"])
     stamped = declined = 0
     for r in rows:
         if r["shoot_dir"]:
