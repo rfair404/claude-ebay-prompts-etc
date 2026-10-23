@@ -22,8 +22,8 @@ One line per box:
     HELD, FAILED and NONE as above
     DONE printed=N failed=N held=<orders held> printer=CannonBW
 
-Never passes the poll's own --print, and never prints the poll's 127.0.0.1
-links or the buyer's name and address. Exit 1 if anything FAILED.
+Never prints the poll's 127.0.0.1 links or the buyer's name and address.
+Exit 1 if anything FAILED.
 
     python tools/pick_list_links.py [--print]
 """

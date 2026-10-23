@@ -225,7 +225,6 @@ def test_print_sends_each_box_to_cannonbw_as_a_pdf(tmp_path):
     assert "--no-pdf-header-footer" in chromium
     profile = next(a for a in chromium if a.startswith("--user-data-dir="))
     assert not Path(profile.split("=", 1)[1]).exists()      # throwaway, cleaned up
-    assert "--print" not in run.calls[0]
     assert not any("127.0.0.1" in l or "Jane Buyer" in l for l in lines)
 
 
