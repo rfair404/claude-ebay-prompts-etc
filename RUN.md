@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-23
+---
+
 # RUN — v4 headless runbook
 
 The single entry point. To run the pipeline on a shoot, read THIS file
@@ -316,6 +321,31 @@ REVIEW would build; anything a stage's own interactive HARD stop caught
 (PREP's confidence gate, IDENTIFY's maker-mark/poll gate, the marble crop
 gate) → the specific exception, by name, never guessed. Full protocol:
 [prompts/single_pass.md](prompts/single_pass.md).
+
+**Consignment (`consign`).** A client's items live in one intake folder,
+`inventory/CONSIGN-YYYYMMDD/`, whose `context.txt` says `client: K01`. Its
+`client_ledger.csv` has one row per sellable unit (one listing, return or
+disposal). Names and contacts live only in `inventory/_consign/clients.csv`
+(`client_code,name,contact,split,terms,opened`; `split` 0.5 = 50/50 of net).
+
+    python -m lib.cli consign import CONSIGN-20261022 roster.csv --client K01
+    python -m lib.cli consign import CONSIGN-20261022 -    # paste a CSV/TSV on stdin
+    python lib/sync_actuals.py --all-stores --apply        # finance sync first
+    python -m lib.cli consign sync                         # dry run: what would change
+    python -m lib.cli consign sync --apply                 # write (backup first)
+    python -m lib.cli consign report --client K01 --csv    # -> reports/consign/K01-<date>.csv
+
+`import` needs a `description` (or `item`) column, gives each new row the
+next `C###` id and skips a row with the same bin and description. `sync`
+reads the listings and sales ledgers only (no eBay calls) and moves each row
+through SHOT, DRAFTED, LISTED, SOLD, CLEARED (sold, ad fee and postage known,
+30-day return window passed) and SETTLED (`paid_to_client_date` set). Type
+RETURNED or DISPOSED (with a `state_note`) by hand; those win. There is no
+`set` command: edit the CSV, and `sync` refuses an unknown state, a DISPOSED
+row without a note or a bad amount. A listing that ended unsold, and a sale
+that left the sales ledger, are flagged in `state_note`, not given a state.
+Net is eBay's net before postage minus ad fee, postage and other costs; a
+blank ad fee or postage is unknown, not zero, so the row can't clear.
 
 ## Background dispatch (optional, #59)
 
