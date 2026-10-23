@@ -388,6 +388,8 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date) -> list[str]:
                     f"{r['paid_to_client_date']}: needs a negative adjustment")
         flags.append(msg)
         sales = []
+    elif r["order_id"]:                          # already pinned to its sale
+        sales = [h for h in sales if h[1].get("order_id") == r["order_id"]]
     elif len(sales) > 1:
         flags.append(f"{len(sales)} sales match this item; using the newest, "
                      f"{sales[0][1].get('order_id')}")
