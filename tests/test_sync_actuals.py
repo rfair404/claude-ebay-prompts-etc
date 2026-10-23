@@ -720,3 +720,78 @@ def test_fetch_orders_and_finances_use_the_named_stores_account(monkeypatch):
 def test_store_json_is_refused_with_all_stores(shop):
     with pytest.raises(SystemExit):
         SA.main(["--all-stores", "--store-json", "x.json"])
+
+
+# --------------------------------------------------------------------------
+# RECOVERED.md folders (the 2026-10 wipe). A sold or unknown item came back
+# as a folder holding only RECOVERED.md, so no draft can claim its sale, and
+# without the fallback the sale lands on no folder and no bucket.
+# --------------------------------------------------------------------------
+def _write_recovered(root, rel, skus, store="default"):
+    """A RECOVERED.md in the shape the recovery wrote (one or more `- sku:`)."""
+    d = root / "inventory" / rel
+    d.mkdir(parents=True)
+    lines = ["# RECOVERED — not a draft", "",
+             "No photos or pipeline files survived; eBay is the record of truth.", ""]
+    lines += [f"- sku: {s}" for s in skus]
+    lines += ["- ebay_listing_id: 206418250860", f"- store: {store}",
+              "- title: Recovered item", "- confidence: guess"]
+    (d / "RECOVERED.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _add_ledger_rows(path, rows):
+    with path.open("a", newline="", encoding="utf-8") as f:
+        csv.DictWriter(f, fieldnames=["sku", "status", "title", "price", "listing_id"]) \
+            .writerows(rows)
+
+
+RECOVERED_CASES = [
+    pytest.param(
+        [("ESTATES/SCJ/ej-08-04/sold-cup", ["eeee5555"], "default")],
+        [{"sku": "eeee5555", "status": "SOLD", "title": "Cup", "price": "45.00"}],
+        "default", [("eeee5555", "Sterling Baby Cup Engraved", "D-1")],
+        {"D-1": ("inventory/ESTATES/SCJ/ej-08-04/sold-cup", "recovered", "45.00")},
+        id="recovered-sku-matches"),
+    pytest.param(
+        [("ESTATES/SCJ/dupe", ["aaaa1111"], "default")], [],
+        "default", [("aaaa1111", TITLE_A, "D-2")],
+        {"D-2": ("inventory/shootA/a", "sku", "80.00")},
+        id="draft-beats-recovered"),
+    pytest.param(
+        [("JUNK/lot/keys", ["ffff6666"], "junk")], [],
+        "default", [("ffff6666", "Brass Skeleton Key Ring", "D-3")],
+        {"D-3": ("", "unmatched", "")},
+        id="other-stores-recovered-ignored"),
+    pytest.param(
+        [("JUNK/lot/keys", ["ffff6666"], "junk")], [],
+        "junk", [("ffff6666", "Brass Skeleton Key Ring", "J-3")],
+        {"J-3": ("inventory/JUNK/lot/keys", "recovered", "")},
+        id="own-stores-recovered-matches"),
+    pytest.param(
+        [("ESTATES/KIM/pair", ["1111aaaa", "2222bbbb"], "default")], [],
+        "default", [("1111aaaa", "Left Brooch", "D-4"), ("2222bbbb", "Right Brooch", "D-5")],
+        {"D-4": ("inventory/ESTATES/KIM/pair", "recovered", ""),
+         "D-5": ("inventory/ESTATES/KIM/pair", "recovered", "")},
+        id="multi-sku-recovered-matches-each"),
+]
+
+
+@pytest.mark.parametrize("recovered, ledger_rows, store, orders, want", RECOVERED_CASES)
+def test_a_sale_falls_back_to_its_recovered_folder(shop, monkeypatch, recovered,
+                                                   ledger_rows, store, orders, want):
+    for rel, skus, rstore in recovered:
+        _write_recovered(shop, rel, skus, rstore)
+    _add_ledger_rows(stores.paths(store).listings_ledger, ledger_rows)
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [_store_order(sku, title, oid) for sku, title, oid in orders])
+
+    assert SA.sync_store(store, _args()) == 0
+
+    with stores.paths(store).sales_ledger.open(encoding="utf-8") as f:
+        got = {r["order_id"]: (r["shoot_dir"], r["matched_by"], r["listed_price"])
+               for r in csv.DictReader(f)}
+    assert got == want
+    # the sale is stamped into the folder it matched, and into no other
+    stamped = {p.parent.relative_to(shop).as_posix()
+               for p in (shop / "inventory").rglob("SOLD.md")}
+    assert stamped == {w[0] for w in want.values() if w[0]}
