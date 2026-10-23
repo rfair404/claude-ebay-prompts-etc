@@ -70,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ebay_client import api_send, load_credentials, EbayAPIError, EbayAuthError  # noqa: E402
 import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
 import stores  # noqa: E402  the one store model (#156)
+from draft_io import iter_drafts  # noqa: E402
 from gdrive_mirror import ledger_changed  # noqa: E402  Drive copy after each write
 from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
 from stores import draft_belongs_to_store, draft_store_from_text, ledger_keys  # noqa: E402
@@ -471,7 +472,7 @@ def scan_drafts(store: Optional[str] = None,
         store = stores.resolve_store_name(store)
         keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
     out = []
-    for dr in sorted(INVENTORY.rglob("draft.md")):
+    for dr in iter_drafts(INVENTORY):
         try:
             t = dr.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -509,7 +510,7 @@ def scan_recovered(store: Optional[str] = None,
         store = stores.resolve_store_name(store)
         keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
     out = []
-    for rm in sorted(INVENTORY.rglob("RECOVERED.md")):
+    for rm in iter_drafts(INVENTORY, "RECOVERED.md"):
         try:
             t = rm.read_text(encoding="utf-8", errors="ignore")
         except OSError:

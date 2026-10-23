@@ -60,7 +60,7 @@ DEFAULT_UDP = "udp://127.0.0.1:5011"
 DCIM = "/DCIM/100OMSYS"
 PHOTOS = Path(os.environ.get("TG7_PHOTOS") or Path.home() / "Pictures" / "TG-7")
 RETRY = 3  # stream: seconds between tries while the camera isn't reachable
-CARD_WAIT = 15  # shoot: seconds to wait for the photo to be written to the card
+CARD_WAIT = 15  # shoot: seconds to wait for the new photo to show up on the card
 
 
 class CamError(RuntimeError):
@@ -177,34 +177,44 @@ def take(x=50, y=50):
     return xml_text(r, "take"), xml_text(r, "affocus")
 
 
-def last_jpeg(wait=CARD_WAIT):
-    """The full-size JPEG of the last shot (works while live view runs).
-    Right after a shot the camera refuses with error 1005 until the file is
-    on the card (seen 2026-10-21; a few seconds later the same call worked),
-    so that error is retried for up to `wait` seconds."""
-    deadline = time.monotonic() + wait
+def new_jpeg(before, wait=None):
+    """(name, size) of the newest JPG on the card that isn't in `before`.
+    The card's list is polled for up to `wait` (default CARD_WAIT) seconds:
+    right after a shot the file isn't on the card yet (getlastjpg answered
+    1005 for a few seconds, 2026-10-21). None if no new JPG turns up, which
+    is how a take the camera answered "ok" without firing looks (2026-10-22:
+    getlastjpg then handed back the previous photo, twice)."""
+    deadline = time.monotonic() + (CARD_WAIT if wait is None else wait)
     while True:
-        try:
-            data = cgi("exec_takemisc", com="getlastjpg", raw=True, timeout=60)
-            break
-        except CamError as e:
-            if "<errorcode>1005<" not in str(e) or time.monotonic() > deadline:
-                raise
-            time.sleep(0.5)
-    if not data.startswith(b"\xff\xd8"):
-        raise CamError("the camera didn't send a JPEG for the last shot")
-    return data
+        new = [(n, sz) for n, sz in card_photos()
+               if n not in before and Path(n).suffix.upper() == ".JPG"]
+        if new:
+            return max(new)
+        if time.monotonic() > deadline:
+            return None
+        time.sleep(0.5)
 
 
 def shoot(x=50, y=50, to=None):
-    """take() and copy the photo to `to` (PHOTOS by default). Returns the path."""
+    """take() and copy the new photo to `to` (PHOTOS by default). Returns
+    (path, focus). The card is listed before and after, and the new JPG is
+    downloaded by name, so a shot that didn't land is an error, never a copy
+    of the previous photo."""
+    before = {n for n, _ in card_photos()}
     took, focus = take(x, y)
     if took != "ok":
         raise CamError(f"the camera didn't take the shot (take={took!r})")
+    got = new_jpeg(before)
+    if got is None:
+        raise CamError("the TG-7 didn't take a new photo; the last one on the card is unchanged")
+    name, size = got
+    data = get_file(f"{DCIM}/{name}")
+    if not data.startswith(b"\xff\xd8") or (size is not None and len(data) != size):
+        raise CamError(f"the download of {name} was cut short ({len(data)} of {size} bytes)")
     to = Path(to or PHOTOS)
     to.mkdir(parents=True, exist_ok=True)
     out = to / f"TG7_{datetime.now():%Y%m%d_%H%M%S}.jpg"
-    out.write_bytes(last_jpeg())
+    out.write_bytes(data)
     return out, focus
 
 

@@ -5,7 +5,8 @@
 # (tg7_wifi_hop.sh, detached). USB comes first because the laptop has one
 # Wi-Fi card and the camera's Wi-Fi is usually off. Files already in DEST
 # with the same name and size are skipped. Photos land in ~/Pictures/TG-7
-# ($TG7_PHOTOS).
+# ($TG7_PHOTOS). TG7_USB_ONLY=1 stops after the USB tries, so an unattended
+# run (tools/tg7_import.sh) never touches the camera's Wi-Fi or hops.
 #
 #   tg7_pull.sh          pull (prints "HOP started; status at <path>" for a hop)
 #   tg7_pull.sh --wait   wait for a hop's status file and print it
@@ -61,6 +62,11 @@ if [ -n "$PORT" ]; then
   [ -z "$NUMS" ] && { echo "0 new photo(s) -> $DEST"; exit 0; }
   cd "$DEST" && gphoto2 --port "$PORT" --get-file "$NUMS" --skip-existing --filename "%f.%C"
   exit $?
+fi
+
+if [ -n "${TG7_USB_ONLY:-}" ]; then
+  echo "NOT FOUND (USB only): TG-7 not on USB"
+  exit 2
 fi
 
 # Wi-Fi, only when the TG-7 is not on USB: the camera is at 192.168.0.10

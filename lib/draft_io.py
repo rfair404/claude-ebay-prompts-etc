@@ -28,6 +28,22 @@ except ImportError as e:  # pragma: no cover
 
 _FRONTMATTER_RE = re.compile(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n(.*)$", re.DOTALL)
 
+# Folders under inventory/ that hold copies, not items: `_backups/<run>/` (a
+# whole-tree snapshot before a bulk rewrite) and `<shoot>/.history/`
+# (live_audit's per-draft backups). A draft found there is a second copy of a
+# real one, and a scanner that counts it can match a sale to the backup.
+NOT_ITEM_DIRS = frozenset({"_backups", ".history"})
+
+
+def iter_drafts(root: str | Path, pattern: str = "draft.md") -> list[Path]:
+    """Every `pattern` file under `root`, sorted, skipping NOT_ITEM_DIRS.
+
+    Only the path below `root` is checked, so pointing `root` into a backup
+    on purpose still finds its drafts."""
+    root = Path(root)
+    return [p for p in sorted(root.rglob(pattern))
+            if NOT_ITEM_DIRS.isdisjoint(p.relative_to(root).parts[:-1])]
+
 
 class DraftParseError(RuntimeError):
     """Raised when a draft file can't be parsed as frontmatter + body."""

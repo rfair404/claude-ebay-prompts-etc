@@ -61,7 +61,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import yaml                                                            # noqa: E402
 
 import stores                                                          # noqa: E402
-from draft_io import parse_draft                                       # noqa: E402
+from draft_io import iter_drafts, parse_draft                          # noqa: E402
 from ebay_client import (EbayAPIError, api_send, get_offers_for_sku,   # noqa: E402
                          load_credentials)
 import list_edit as L                                                  # noqa: E402
@@ -348,7 +348,7 @@ def _existing_drafts() -> dict[str, Path]:
     """sku -> draft.md for every draft on disk, rebuilt ones included."""
     out: dict[str, Path] = {}
     rx = re.compile(r'ebay_inventory_sku:\s*"?([0-9a-f]{8})')
-    for dm in (REPO / "inventory").rglob("draft.md"):
+    for dm in iter_drafts(REPO / "inventory"):
         try:
             m = rx.search(dm.read_text(encoding="utf-8", errors="replace"))
         except OSError:
