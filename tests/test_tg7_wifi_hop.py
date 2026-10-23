@@ -186,8 +186,10 @@ esac
 """
 
 
-def pull(tmp_path, *, mtp=False, cam_on_wifi=False, on_air=False):
+def pull(tmp_path, *, mtp=False, cam_on_wifi=False, on_air=False, usb_only=False):
     env = fake_env(tmp_path, on_air=on_air)
+    if usb_only:
+        env["TG7_USB_ONLY"] = "1"
     (tmp_path / "bin" / "gphoto2").write_text(GPHOTO2)
     (tmp_path / "bin" / "curl").write_text(
         '#!/bin/bash\necho "$*" >>"$FAKE_DIR/curl.calls"\n' + CURL.split("\n", 1)[1])
@@ -220,3 +222,13 @@ def test_pull_on_air_without_usb_skips_wifi_and_says_not_found(tmp_path):
     assert out.stdout.splitlines()[0].startswith("ON AIR: skipping the TG-7 Wi-Fi pull")
     assert out.stdout.splitlines()[-1].startswith("NOT FOUND")
     assert not (tmp_path / "curl.calls").exists()
+
+
+def test_pull_usb_only_never_tries_wifi_or_hops(tmp_path):
+    # the camera answers on Wi-Fi and its profile is in range, so only the flag stops it
+    out = pull(tmp_path, cam_on_wifi=True, usb_only=True)
+    assert out.returncode == 2
+    assert out.stdout.splitlines()[-1].startswith("NOT FOUND (USB only)")
+    assert not (tmp_path / "curl.calls").exists()
+    assert not (tmp_path / "nmcli.calls").exists()  # not even the hop's --check ran
+    assert not (tmp_path / "run" / "tg7_hop.status").exists()
