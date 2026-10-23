@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-23
 ---
 
@@ -361,6 +361,8 @@ minus ad fee, postage and other costs; a blank ad fee or postage is unknown,
 not zero, so the row can't clear. Once `paid_to_client_date` is set, the
 row's `client_share` is frozen at what was paid; a later change is flagged
 with the adjustment rather than written.
+
+Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
 
 ## Background dispatch (optional, #59)
 
