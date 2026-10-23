@@ -35,6 +35,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - **eBay wins.** Work from live eBay prices and start dates, never the ledger alone. The ledgers were rebuilt from eBay after the Linux migration, so `published_at` is often blank, and Seller Hub edits don't always make it back. A cut computed from a stale ledger price can cut an item twice.
 - **Start high, ease down.** Never skip a step on the price.txt path, and never cut below Conservative without the price researcher's fresh comps backing it.
 - **Floors you never cross:** gold and fine jewelry melt value (`specializations/jewelry.md`; melt is the floor, never the price), cost basis where it's known (`context.txt` `spend:`), and the comps' Conservative tier. Any item a cut would push under a floor comes out of the cut, named, with its reason.
+- **Aging cuts only touch listings at $36+ before the cut; $30–35.99 and ≤$25 are left alone (Russell's rule).** Any such item goes under held, with that reason.
 - **Russell's number wins.** A price Russell set by hand is his call. Leave it out of an automatic cut and list it as one yes/no.
 - **No selling lore as fact.** "Sunday endings", "everything sells in Q4": cite our own sales data or a dated source, or label it as a convention.
 
