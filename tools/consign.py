@@ -46,7 +46,7 @@ recalculation that differs is flagged and settled as an adjustment.
 
 Money. net = net_before_postage - ad_fee - actual_postage - handling -
 other_costs, and client_share = split x net. handling is a flat fee per
-sale for packing materials (DEFAULT_HANDLING, or clients.csv handling_fee),
+sale for packing materials (clients.csv handling_fee; blank = no fee),
 stamped on the row when it sells and kept from then on, like split_locked.
 A loss (net below zero) follows clients.csv loss_rule: split, client_never_owes
 or client_bears_loss (the client carries all of it).
@@ -172,11 +172,14 @@ DEFAULT_LISTING_DAYS = 180
 DEFAULT_PICKUP_DAYS = 30
 DEFAULT_SPLIT = Decimal("0.5")
 # Taken from net before the split, like postage, once per sale (a lot is one
-# sale), on every channel: the mall booth too (labels and data entry). It covers packing materials: about $1.48 for a small box and $2.63
-# for a medium one at 2026-10 Uline/Brother prices. Packing time is paid by
-# our side of the split. clients.csv handling_fee overrides it per client; a
-# figure typed into a row's handling column is kept (an oversize box).
-DEFAULT_HANDLING = Decimal("2.00")
+# sale), on every channel: the mall booth too (labels and data entry). The
+# standard fee is $2.00 (agreement §4.6): packing materials run about $1.48
+# for a small box and $2.63 for a medium one at 2026-10 Uline/Brother prices,
+# and packing time is paid by our side of the split. It is opt-in: a client
+# pays it only once clients.csv handling_fee is set, which happens when their
+# signed agreement names the fee. A figure typed into a row's handling column
+# is kept (an oversize box).
+DEFAULT_HANDLING = Decimal("0")
 CENT = Decimal("0.01")
 FLAG = "FLAG: "
 NOTE_SEP = " | "
@@ -1397,7 +1400,8 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
                f"  ·  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
     out.append(f"    handling kept         ${money(_sum(dec(r['handling']) for r in sold))}"
-               f"  ({sum(bool(r['handling']) for r in sold)} sale(s), taken before the split)")
+               f"  ({sum(bool(dec(r['handling'])) for r in sold)} sale(s), taken before "
+               f"the split)")
     out.append(f"    client share owed     ${money(owed)}  (CLEARED, not paid)")
     if excluded:
         out.append(f"    buyouts owed          "
