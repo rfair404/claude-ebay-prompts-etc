@@ -15,58 +15,45 @@ today. Asking for it means "give me the sheets to print". It does not mean
 
 ---
 
-## Steps
+## Run
 
-1. **Run from the main checkout, not a worktree.** The rendered sheets land
-   in `<repo>/pick_lists/.served/`, which is not linked into worktrees. The
-   idempotency state (`.pick_list_state*.json`) also lives only in the main
-   checkout.
+    .claude/skills/pick-list/links.sh
 
-2. **Render every shipment, all stores:**
+This is the `pick-list` skill ([`SKILL.md`](../.claude/skills/pick-list/SKILL.md)
+has the reply format). It works from a worktree and does the whole job:
 
-       .venv/bin/python tools/pick_list.py --poll --all-stores
+1. Runs `tools/pick_list.py --poll --all-stores` in the main checkout, where
+   the sheets (`pick_lists/.served/`) and the poll state
+   (`.pick_list_state*.json`) live. Never with `--print`. Orders for the same
+   buyer at the same address share one sheet. Orders polled earlier still get
+   their sheet, so re-running is safe and always gives the full list.
+2. Copies each box's sheet to `inventory/_pick_lists/pick_<order-id>.html`
+   (`pick_<id1>+<id2>.html` for a shared box), because `offsite share` only
+   uploads files its include globs cover.
+3. Uploads them all with one `.venv/bin/python -m lib.cli offsite share`,
+   presigned for 7 days. Re-running gives fresh links.
+4. Prints one `LINK <ids> <url> | <title> | ship by <date>` line per box,
+   with the title and date read from `pick_lists/pick_<order-id>.txt`.
 
-   The sandbox needs `api.ebay.com` in `allowed_domains`. For each box it
-   prints `<order-id>[ + <order-id>]  http://127.0.0.1:8770/pick/<token>`. The
-   rendered sheet is `pick_lists/.served/<token>.html`. Orders for the same
-   buyer at the same address share one sheet and one line.
-   Orders printed on an earlier poll still get their line, so re-running it is
-   safe and always gives the full list. Ignore the `SERVE_HINT` warning about
-   the local app not running, because you don't need the app for R2 links.
-   Never add `--print`, which sends the job to a printer without being asked.
+The sandbox needs `api.ebay.com` and the R2 endpoint host from `config.yaml`
+→ `offsite.endpoint` in `allowed_domains`.
 
-3. **Stage each sheet under `inventory/`.** `offsite share` only uploads
-   listing data that the offsite include globs cover, and `pick_lists/` isn't
-   one of them. Copy each line's sheet to
-   `inventory/_pick_lists/pick_<order-id>.html`. For a shared-box line, join
-   the ids with `+`, as in `pick_<id1>+<id2>.html`.
+Reply with one markdown link per box, labelled with what's in it:
 
-4. **Upload to R2 and get the links, all at once:**
+    - [L.L.Bean cable knit sweater (order 04-15279-11245)](https://<r2 presigned url>), ship by 10-09
 
-       .venv/bin/python -m lib.cli offsite share inventory/_pick_lists/pick_<id>.html [...]
-
-   It prints one presigned URL per file, in argument order. The sandbox needs
-   the R2 endpoint host from `config.yaml` → `offsite.endpoint` in
-   `allowed_domains`. Links expire after 7 days. Re-running steps 2–4 gives
-   fresh links.
-
-5. **Reply with the links.** Write one markdown link per order. Label each
-   one with what's in the box so the person knows which sheet is which:
-
-       - [L.L.Bean cable knit sweater (order 04-15279-11245)](https://<r2 presigned url>), ship by 10-09
-
-   For a shared box, give one link labelled with every order id in it. Get the
-   item title and ship-by date from `pick_lists/pick_<order-id>.txt`, or from
-   the plain report (`tools/pick_list.py --store <name>`). Keep the buyer's
-   name and address out of the chat reply, because the sheet already carries
-   what the picker needs.
+Keep the buyer's name and address out of the chat reply, because the sheet
+already carries what the picker needs.
 
 ## Edge cases
 
 - **Nothing awaiting shipment** in any store: say so in one line. No links.
 - **One order needs a sheet on its own** (a re-print, or a specific id): run
   `.venv/bin/python tools/pick_list_html.py <order-id> [--store NAME] --out
-  inventory/_pick_lists/pick_<order-id>.html`. Then do step 4 for that file.
+  inventory/_pick_lists/pick_<order-id>.html`, then
+  `.venv/bin/python -m lib.cli offsite share` on that file.
 - **The upload fails or is blocked:** say so plainly, with the error. Name the
-  orders and their sheet files, and give the one `offsite share` command that
-  would produce the links. Don't fall back to `127.0.0.1` links.
+  orders, and give the `RETRY` command the script printed. Don't fall back to
+  `127.0.0.1` links.
+- **Orders held for an eBay Live window:** the script prints a `HELD` line.
+  Pass it on in one line; those boxes get sheets after the window closes.
