@@ -60,7 +60,7 @@ You want us to sell some of your items for you. You keep owning them until they 
 5.1. An item is **Cleared** once every cost for it is known and:
 (a) for an eBay sale, at the later of 40 days after it sells or 30 days after the buyer receives it. eBay's 30-day return window runs from delivery, so this gives returns time to come in;
 (b) for any other sale, ____ days after we receive the funds (recommended: 30 days after we receive the funds), so a bounced payment, chargeback or dealer return has time to show up.
-We owe you your share once an item is Cleared, not when it sells. <!-- Internal: the 40 must match RETURN_WINDOW_DAYS in tools/consign.py; change the agreement and the code together. The code clears at sold_at + 40 and does not track delivery yet, so the 30-days-after-delivery leg is not enforced by the tooling (developer handoff). --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
+We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
 
 5.2. We pay monthly. Items Cleared by the last day of a month are paid by the 15th of the next month.
 
