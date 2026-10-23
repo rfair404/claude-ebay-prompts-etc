@@ -174,7 +174,10 @@ def test_inventory_keeps_only_draft_identify_recovery_and_pick_sheets():
                 "inventory/ESTATES/SCJ/context.txt", "inventory/MINE/context.txt",
                 "inventory/ESTATES/SCJ/ej-08-04/leaf/RECOVERED.md",
                 "inventory/CONSIGN-20261022/client_ledger.csv",
-                "inventory/_consign/clients.csv"):
+                "inventory/CONSIGN-K01/client_ledger.csv",
+                "inventory/_consign/clients.csv",
+                "inventory/_consign/K01/settlements.csv",
+                "reports/consign/K01/K01-S001.csv"):
         assert offsite.selected(rel, inc), rel
     for rel in ("inventory/a/review_card.html", "inventory/a/.prep/review.html",
                 "inventory/a/review_card.md", "inventory/a/price.txt",

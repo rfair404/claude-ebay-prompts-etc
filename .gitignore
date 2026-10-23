@@ -55,8 +55,10 @@ sales_ledger-*.csv
 # Consignment (tools/consign.py): each intake's client_ledger.csv (what a
 # client's items sold for and what we owe them, plus its .backup-* copies)
 # and the client registry, the one file with client names and contacts.
+# settlements.csv is each client's payout record (amounts paid, dates, method).
 client_ledger*.csv
 clients*.csv
+settlements*.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
 # Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
