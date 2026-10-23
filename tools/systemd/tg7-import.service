@@ -1,0 +1,18 @@
+# Starts tools/tg7_import.sh each time the TG-7 is plugged in by USB in
+# Storage mode (its card, volume label "OM SYSTEM", appears). KDE doesn't
+# automount it; tg7_pull.sh mounts it. Install as a user unit:
+#   cp tools/systemd/tg7-import.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable tg7-import.service
+[Unit]
+Description=Import new TG-7 photos and start IDENTIFY
+After=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
+Requisite=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
+
+[Service]
+Type=oneshot
+ExecStart=/home/russ/EBAYBIZ/tools/tg7_import.sh
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device

@@ -89,3 +89,9 @@ rules these serve.
 | `gold_eval.py` | Gold-set regression for the classifier: "am I right, or going soft?" |
 | `reindex_forum.py` / `reindex_full.py` | Re-crop and re-embed the marbleconnection forum index. `reindex_full.py` is the resumable production run. |
 | `marble_index_next.cmd` | What the scheduled Windows task runs to index one more forum page. |
+
+## Camera import (runs on its own)
+
+| Script | What it does |
+|---|---|
+| `tg7_import.sh` | Started by the `systemd/tg7-import.service` user unit when the TG-7 is plugged in by USB in Storage mode. Pulls new photos to `~/Pictures/TG-7` (`/r camera photos`), copies just the new JPGs into a new lot `inventory/tg7-<date>-<time>/`, and runs `identify` on it with the headless `claude` CLI. Desktop notifications say when it starts and ends; the log is the lot's `import.log`. |
