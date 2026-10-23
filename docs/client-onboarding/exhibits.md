@@ -51,10 +51,9 @@ Client initials: ______ Our initials: ______
 **Column key:** `description` is required. `why` is your notes: where the item came from, its history, anything we should know. `cut` is LIST (sell on its own), LOT (sell in a group) or RETURN (we give it back to you).
 
 <!-- Internal notes for whoever types this into the import file:
-- Keep these exact header names. `python -m lib.cli consign import` reads any column whose name matches a `client_ledger.csv` column, and ignores columns that don't match (# / floor / purchase_price).
+- Keep these exact header names. `python -m lib.cli consign import` reads any column whose name matches a `client_ledger.csv` column, and ignores columns that don't match (# / purchase_price). `floor` becomes the item's per-item `floor` once the Set B code PR (branch claude/consign-set-b-terms) merges.
 - Never add a `state`, `ask` or `buyout_price` column to Exhibit A (or rename purchase_price to one): import would read it into the consignment ledger.
 - Import skips a row whose intake, bin and description match another row. Use qty for identical items.
-- The ledger has no floor column yet, so a consignor floor lives only on this paper sheet. Handoff to developer.
 -->
 
 ## Exhibit B: Certification of authority

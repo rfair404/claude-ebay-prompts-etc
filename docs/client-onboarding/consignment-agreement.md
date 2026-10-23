@@ -45,24 +45,24 @@ You want us to sell some of your items for you. You keep owning them until they 
 4.2. **Net Proceeds** means:
 (a) for an eBay sale, eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, and (3) any other cost listed on Exhibit A or that you approve in writing;
 (b) for a sale anywhere else we choose (another marketplace, a furniture or other dealer, or our antique-mall booth), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, and (3) any other direct cost listed on Exhibit A or that you approve in writing.
-<!-- Internal: the ledger tooling (tools/consign.py, the finance sync) has no non-eBay sale path yet; developer handoff. Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
+<!-- Internal: a non-eBay sale is a `client_ledger.csv` row with `channel` set and its money typed by hand (the Set B code PR (branch claude/consign-set-b-terms)). Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
 
 4.3. **Your share** is 50% of Net Proceeds. We keep the rest.
 
 4.4. A cost we don't know yet is not zero. An item isn't Cleared until every cost for it is known, wherever it sold.
 
-4.5. If a sale's Net Proceeds come out below zero, we don't take that loss. Section 4.3 doesn't apply to that sale: your share is the whole shortfall (a negative amount), and we take it from your next payouts or you repay it as in section 8.1. We expect this to be rare, but we can't rule it out. The floors you set on Exhibit A are your protection against it (section 3.2). <!-- Internal: Russell's final answer (PR #286 comment, 2026-10-23): a below-zero sale is charged back to the client in full. tools/consign.py has no loss_rule for this yet (`split` charges only the client's split of a loss, `client_never_owes` charges nothing). TODO: loss_rule for full chargeback pending code PR. Until it ships, `split` under-charges a loss by our half. Not client wording. -->
+4.5. If a sale's Net Proceeds come out below zero, we don't take that loss. Section 4.3 doesn't apply to that sale: your share is the whole shortfall (a negative amount), and we take it from your next payouts or you repay it as in section 8.1. We expect this to be rare, but we can't rule it out. The floors you set on Exhibit A are your protection against it (section 3.2). <!-- Internal: Russell's final answer (PR #286 comment, 2026-10-23): a below-zero sale is charged back to the client in full. tools/consign.py has no loss_rule for this yet (`split` charges only the client's split of a loss, `client_never_owes` charges nothing). Set `loss_rule` to `client_bears_loss` in clients.csv (the Set B code PR (branch claude/consign-set-b-terms)); until that merges, `split` under-charges a loss by our half. Not client wording. -->
 
 ## 5. When you get paid
 
 5.1. An item is **Cleared** once every cost for it is known and:
 (a) for an eBay sale, at the later of 40 days after it sells or 30 days after the buyer receives it. eBay's 30-day return window runs from delivery, so this gives returns time to come in;
 (b) for any other sale, ____ days after we receive the funds (recommended: 30 days after we receive the funds), so a bounced payment, chargeback or dealer return has time to show up.
-We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
+We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: the Set B code clears a `channel` sale at sale + 40 days (no delivery date), so 40 days after the sale matches the code; any other number needs a code change too. 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
 
 5.2. We pay monthly. Items Cleared by the last day of a month are paid by the 15th of the next month.
 
-5.3. If your balance on a payout date is under $500, we carry it forward to the next payout. When this agreement ends, whether either of us ends it or its term runs out, the $500 minimum no longer applies: we pay the full balance owed in the next payout run, whatever the amount (see section 14.3).
+5.3. If your balance on a payout date is under $500, we carry it forward to the next payout. When this agreement ends, whether either of us ends it or its term runs out, the $500 minimum no longer applies: we pay the full balance owed in the next payout run, whatever the amount (see section 14.3). <!-- Internal: `min_payout` 500 in clients.csv; `consign settle --final` pays the full balance at the end (Set B code PR). Not client wording. -->
 
 5.4. Each payout comes with a statement listing each item sold, its sale date, Gross Proceeds, each cost, Net Proceeds and your share.
 
@@ -86,7 +86,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 ## 9. Unsold items
 
-9.1. If an item hasn't sold after 180 days listed, we tell you. You then have 30 days to pick it up or agree to a markdown.
+9.1. If an item hasn't sold after 180 days listed, we tell you. You then have 30 days to pick it up or agree to a markdown. <!-- Internal: `listing_days` 180 and `pickup_days` 30 in clients.csv; type the date into `return_notice_sent` on the item's row when the notice goes out (Set B code PR). Not client wording. -->
 
 9.2. If you don't pick it up or answer in that time, we may donate or dispose of the item, and you owe us nothing for it. <!-- TODO(attorney): confirm Georgia abandoned-property wording and notice requirements. -->
 
