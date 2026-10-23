@@ -14,7 +14,7 @@ use `/pl`.
     .claude/skills/pick-list/links.sh
 
 It works from a worktree. It runs `tools/pick_list.py --poll --all-stores` in
-the main checkout (never `--print`), copies each box's sheet to
+the main checkout, copies each box's sheet to
 `inventory/_pick_lists/pick_<id>[+<id2>].html`, uploads them with one
 `lib.cli offsite share`, and prints:
 

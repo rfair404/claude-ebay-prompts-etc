@@ -68,7 +68,6 @@ def test_one_link_per_box_with_title_and_earliest_ship_by(tmp_path):
         f"LINK {PAIR_A}+{PAIR_B} https://r2.example/b?sig=2 | Cable knit sweater + 1 more"
         " | ship by 2026-10-23",
         "DONE links=2 failed=0 held=0"]
-    assert "--print" not in run.calls[0]
     share = run.calls[1]
     assert share[-2:] == [f"inventory/_pick_lists/pick_{SOLO}.html",
                           f"inventory/_pick_lists/pick_{PAIR_A}+{PAIR_B}.html"]

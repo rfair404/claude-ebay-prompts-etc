@@ -12,8 +12,8 @@ inventory/_pick_lists/pick_<id>[+<id2>].html, uploads them all with one
     NONE
     DONE links=N failed=N held=<orders held>
 
-Never passes --print, and never prints the poll's 127.0.0.1 links or the
-buyer's name and address. Exit 1 if anything FAILED.
+Never prints the poll's 127.0.0.1 links or the buyer's name and address.
+Exit 1 if anything FAILED.
 
     python tools/pick_list_links.py
 """
