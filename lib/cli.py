@@ -94,6 +94,7 @@ COMMANDS = {
     "gdrive":       ("lib.gdrive_mirror",
                      "second offsite copy to Google Drive via rclone — auto after each "
                      "ledger write + daily timer; never deletes remotely"),
+    "consign":      ("tools.consign", "consignment ledger: bulk import, sync, client report"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }
