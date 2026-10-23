@@ -349,13 +349,9 @@ def test_rebuilt_lot_draft_title_reads_back_everywhere(tmp_path, monkeypatch, ti
         {reader: title for reader in got}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "#270: report._yaml_scalar misses a single-quoted title and returns the "
-    "_field_constraints `title:` line instead ('required: true')"))
 def test_rebuilt_inch_mark_title_reads_back_in_report(tmp_path, monkeypatch):
-    # A `"` title is written single-quoted (as live_audit._yaml_str does);
-    # its ids and price read back everywhere (the ids-and-price test). The
-    # title through report.collect is #270.
+    # A `"` title is written single-quoted (as live_audit._yaml_str does).
+    # report.collect reads it back (#270); sync_actuals and live_audit don't yet.
     _isolate(tmp_path, monkeypatch)
     _lot_draft(tmp_path, monkeypatch, INCH_TITLE)
     assert _read_back(tmp_path)["report"][3] == INCH_TITLE
