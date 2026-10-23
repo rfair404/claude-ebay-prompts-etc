@@ -19,14 +19,18 @@ Files
                                                  place a name or contact lives
   reports/consign/<client>-<YYYY-MM-DD>.csv      `report --csv`, no buyer data
 
-States. Hand-entered: INTAKE (the default), RETURNED, DISPOSED (needs a
-state_note). Derived by `sync`, each one upgrading the last: SHOT (the folder
-exists), DRAFTED (draft.md exists), LISTED (SKU or listing id in a listings
-ledger), SOLD (a sales_ledger row), CLEARED (sold, ad fee and postage known,
-return window passed), SETTLED (paid_to_client_date set). RETURNED and
-DISPOSED win over anything derived. Two cases are flagged in state_note
-rather than given a state: a listing that ended unsold, and a sale that has
-left the sales ledger (refund or cancel).
+States. Hand-entered: INTAKE (the default), PREP (in hand, being prepped,
+not listed), RETURNED, DISPOSED (needs a state_note) and EXCLUDED (Russell
+buys it; needs a buyout_price, which is the client's share, no split).
+Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
+DRAFTED (draft.md exists), LISTED (SKU or listing id in a listings ledger),
+SOLD (a sales_ledger row), CLEARED (sold, ad fee and postage known, return
+window passed), SETTLED (paid_to_client_date set). RETURNED, DISPOSED and
+EXCLUDED win over anything derived; PREP stands in for SHOT and DRAFTED but
+gives way to LISTED and later. Two cases are flagged in state_note rather
+than given a state: a listing that ended unsold, and a sale that has left
+the sales ledger (refund or cancel). Once paid_to_client_date is set the
+row's client_share is frozen; a recalculation that differs is flagged.
 
 There is no `set` command: edit the CSV by hand, and `sync` validates it.
 """
@@ -58,12 +62,12 @@ COLUMNS = [
     "est_source", "store", "sku", "listing_id", "ask", "order_id", "sold_at",
     "item_price", "buyer_shipping", "refunded", "gross", "ebay_fee",
     "net_before_postage", "ad_fee", "actual_postage", "other_costs",
-    "other_costs_note", "net", "client_share", "actuals_complete",
+    "other_costs_note", "buyout_price", "net", "client_share", "actuals_complete",
     "cleared_on", "settlement_id", "paid_to_client_date",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
-         "other_costs", "net", "client_share")
+         "other_costs", "buyout_price", "net", "client_share")
 DATES = ("sold_at", "cleared_on", "paid_to_client_date")
 # Copied from the sales ledger row on every sync. ad_fee / actual_postage are
 # copied only when the sales ledger knows them: a blank there means "not read
@@ -72,12 +76,15 @@ SALE_FIELDS = ("order_id", "sold_at", "item_price", "buyer_shipping", "refunded"
                "ebay_fee", "net_before_postage")
 SALE_OPTIONAL = ("ad_fee", "actual_postage")
 
-TERMINAL = ("RETURNED", "DISPOSED")
-STATES = ("INTAKE", "SHOT", "DRAFTED", "LISTED", "SOLD", "CLEARED", "SETTLED") + TERMINAL
+TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
+STATES = ("INTAKE", "PREP", "SHOT", "DRAFTED", "LISTED", "SOLD", "CLEARED",
+          "SETTLED") + TERMINAL
 SOLD_STATES = ("SOLD", "CLEARED", "SETTLED")
-ON_HAND = ("INTAKE", "SHOT", "DRAFTED")
+ON_HAND = ("INTAKE", "PREP", "SHOT", "DRAFTED")
 CUTS = ("", "LIST", "LOT", "RETURN")
-RETURN_WINDOW_DAYS = 30
+# eBay's 30-day return window runs from DELIVERY, but we only know sold_at;
+# 10 days covers handling plus transit, so a sale clears 40 days after it sold.
+RETURN_WINDOW_DAYS = 40
 DEFAULT_SPLIT = Decimal("0.5")
 CENT = Decimal("0.01")
 FLAG = "FLAG: "
@@ -96,8 +103,8 @@ EXPORT_COLUMNS = [
     "state", "note", "est_low", "est_high", "listing_id", "ask", "sold_at",
     "item_price", "buyer_shipping", "refunded", "gross", "ebay_fee",
     "net_before_postage", "ad_fee", "actual_postage", "other_costs",
-    "other_costs_note", "net", "client_share", "actuals_complete", "cleared_on",
-    "settlement_id", "paid_to_client_date",
+    "other_costs_note", "buyout_price", "net", "client_share", "actuals_complete",
+    "cleared_on", "settlement_id", "paid_to_client_date",
 ]
 
 
@@ -221,15 +228,16 @@ def load_registry() -> dict[str, dict]:
 
 def client_split(registry: dict, code: str) -> Decimal:
     raw = (registry.get(code) or {}).get("split") or ""
+    bad = SystemExit(f"[X] {registry_path().name}: client {code} split {raw!r} "
+                     f"is not a fraction between 0 and 1 (0.5 = 50/50)")
     try:
         s = dec(raw)
     except ValueError:
-        s = Decimal(-1)
+        raise bad from None
     if s is None:
         return DEFAULT_SPLIT
     if not Decimal(0) <= s <= Decimal(1):
-        raise SystemExit(f"[X] {registry_path().name}: client {code} split {raw!r} "
-                         f"is not a fraction between 0 and 1 (0.5 = 50/50)")
+        raise bad
     return s
 
 
@@ -254,6 +262,8 @@ def validate(rows: list[dict], unknown_columns: list[str]) -> list[str]:
             errs.append(f"{tag}: state {r['state']!r} is not one of {', '.join(STATES)}")
         if st == "DISPOSED" and not hand_note(r["state_note"]):
             errs.append(f"{tag}: DISPOSED needs a state_note saying how and why")
+        if st == "EXCLUDED" and not r["buyout_price"]:
+            errs.append(f"{tag}: EXCLUDED needs a buyout_price (0.00 is allowed)")
         if r["cut"].upper() not in CUTS:
             errs.append(f"{tag}: cut {r['cut']!r} is not one of LIST, LOT, RETURN")
         for k in MONEY:
@@ -267,6 +277,16 @@ def validate(rows: list[dict], unknown_columns: list[str]) -> list[str]:
                     date.fromisoformat(r[k])
                 except ValueError:
                     errs.append(f"{tag}: {k} {r[k]!r} is not a YYYY-MM-DD date")
+    # One folder, one sellable unit: a sale matched on the folder would land
+    # on every row that shares it. Terminal rows no longer sell, so they may.
+    sharing: dict[str, list[str]] = {}
+    for r in rows:
+        if r["inventory_folder"] and r["state"].upper() not in TERMINAL:
+            sharing.setdefault(norm_folder(r["inventory_folder"]), []).append(r["item_id"])
+    for f, ids in sharing.items():
+        if len(ids) > 1:
+            errs.append(f"{', '.join(ids)} share {f}: give each its own folder, "
+                        f"or blank all but one")
     return errs
 
 
@@ -341,15 +361,33 @@ def provisional_net(r: dict) -> Optional[Decimal]:
 # --------------------------------------------------------------------------- #
 # sync: derive state + fill eBay facts
 # --------------------------------------------------------------------------- #
+def _freeze_paid(r: dict, paid_share: str, flags: list[str]) -> None:
+    """Once the client is paid, client_share is the amount paid. A
+    recalculation that differs is flagged with the adjustment, not written."""
+    if not paid_share:
+        return
+    new = r["client_share"]
+    r["client_share"] = paid_share
+    if dec(new) != dec(paid_share):
+        adj = (dec(new) or Decimal(0)) - dec(paid_share)
+        flags.append(f"client was paid ${paid_share} on {r['paid_to_client_date']}; "
+                     f"recalculated share is ${new or '?'}: adjust by ${money(adj)}")
+
+
 def sync_row(r: dict, books: Books, split: Decimal, today: date) -> list[str]:
     """Update `r` in place from the books. Returns the flags raised."""
     r["state"] = r["state"].upper() or "INTAKE"
     r["cut"] = r["cut"].upper()
     note = hand_note(r["state_note"])
-    if r["state"] in TERMINAL:                   # hand-entered terminal wins
-        r["state_note"] = note
-        return []
     flags: list[str] = []
+    paid_share = r["client_share"] if r["paid_to_client_date"] else ""
+    if r["state"] in TERMINAL:                   # hand-entered terminal wins
+        if r["state"] == "EXCLUDED":             # Russell's buyout, no split
+            r["client_share"] = money(dec(r["buyout_price"]))
+            _freeze_paid(r, paid_share, flags)
+        r["state_note"] = NOTE_SEP.join(([note] if note else []) + [FLAG + f for f in flags])
+        return flags
+    was_prep = r["state"] == "PREP"
     folder = r["inventory_folder"] = norm_folder(r["inventory_folder"])
     state = "INTAKE"
     if folder:
@@ -412,6 +450,7 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date) -> list[str]:
                      "run the finance sync (lib/sync_actuals.py --all-stores --apply)")
 
     settle_money(r, split)
+    _freeze_paid(r, paid_share, flags)
     r["cleared_on"] = ""
     if sale and r["actuals_complete"] == "yes" and r["sold_at"]:
         window_end = date.fromisoformat(r["sold_at"]) + timedelta(days=RETURN_WINDOW_DAYS)
@@ -420,6 +459,8 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date) -> list[str]:
             r["cleared_on"] = window_end.isoformat()
     if sale and r["paid_to_client_date"]:
         state = "SETTLED"
+    if was_prep and state in ("INTAKE", "SHOT", "DRAFTED"):
+        state = "PREP"                           # PREP is the on-hand label until listed
     r["state"] = state
     r["state_note"] = NOTE_SEP.join(([note] if note else []) + [FLAG + f for f in flags])
     return flags
@@ -444,10 +485,6 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
     nflags = 0
     for r in rows:
         nflags += len(sync_row(r, books, split, today))
-    folders = Counter(r["inventory_folder"] for r in rows if r["inventory_folder"])
-    for f, n in folders.items():
-        if n > 1:
-            print(f"  ! {n} rows share {f}: one sale would land on each of them")
     changed = 0
     for old, new in zip(before, rows):
         diff = [k for k in COLUMNS if old[k] != new[k] and k not in ("state", "state_note")]
@@ -563,7 +600,8 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal) -> list[str]:
             continue
         lows.append(lo if lo is not None else hi)
         highs.append(hi if hi is not None else lo)
-    gone = sum(by_state[s] for s in TERMINAL)
+    gone = by_state["RETURNED"] + by_state["DISPOSED"]
+    excluded = [r for r in rows if r["state"] == "EXCLUDED"]
 
     out.append("  value:")
     out.append(f"    sold     {len(sold):>3}  net ${money(sold_net)}"
@@ -574,20 +612,31 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal) -> list[str]:
                   if any(a is None for a in listed_ask) else ""))
     out.append(f"    on hand  {len(hand):>3}  est ${money(_sum(lows))}–${money(_sum(highs))}"
                + (f"  (unpriced {unpriced})" if unpriced else ""))
+    if excluded:
+        out.append(f"    excluded {len(excluded):>3}  Russell buys at "
+                   f"${money(_sum(dec(r['buyout_price']) for r in excluded))}")
     if gone:
         out.append(f"    returned/disposed {gone}")
 
     owed = _sum(dec(r["client_share"]) for r in rows
                 if r["state"] == "CLEARED" and not r["paid_to_client_date"])
     pending_rows = [r for r in rows if r["state"] == "SOLD"]
-    pending = _sum(dec(r["client_share"]) if r["actuals_complete"] == "yes"
-                   else (provisional_net(r) * split if provisional_net(r) is not None else None)
-                   for r in pending_rows)
+    def pending_share(r):
+        if r["actuals_complete"] == "yes":
+            return dec(r["client_share"])
+        pn = provisional_net(r)
+        return None if pn is None else pn * split
+    pending = _sum(pending_share(r) for r in pending_rows)
+    buyouts_owed = [r for r in excluded if not r["paid_to_client_date"]]
     paid = _sum(dec(r["client_share"]) for r in rows if r["paid_to_client_date"])
     out.append("  totals:")
     out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
                f"  ·  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
     out.append(f"    client share owed     ${money(owed)}  (CLEARED, not paid)")
+    if excluded:
+        out.append(f"    buyouts owed          "
+                   f"${money(_sum(dec(r['client_share']) for r in buyouts_owed))}  "
+                   f"(EXCLUDED, Russell buys, not paid: {len(buyouts_owed)})")
     out.append(f"    client share pending  ${money(pending)}  (SOLD, return window "
                f"or actuals still open)"
                + ("  (upper bound)" if any(r in incomplete for r in pending_rows) else ""))

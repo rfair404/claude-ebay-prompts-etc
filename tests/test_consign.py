@@ -19,7 +19,7 @@ import consign  # noqa: E402
 import stores  # noqa: E402
 
 TODAY = date(2026, 12, 1)
-OLD = (TODAY - timedelta(days=40)).isoformat()     # return window passed
+OLD = (TODAY - timedelta(days=50)).isoformat()     # return window passed
 NEW = (TODAY - timedelta(days=5)).isoformat()      # return window open
 SALES_HEADER = ("order_id,sold_at,listing_id,sku,title,quantity,sold_format,item_price,"
                 "buyer_shipping,refunded,gross,ebay_fee,net_before_postage,listed_price,"
@@ -86,18 +86,25 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C005", {"inventory_folder": f("b/sold", sku="aaaa0005")}, "SOLD", ""),
         ("C006", {"inventory_folder": f("b/cleared", sku="aaaa0006")}, "CLEARED", ""),
         ("C007", {"inventory_folder": f("b/nopostage", sku="aaaa0007")}, "SOLD", ""),
-        ("C008", {"inventory_folder": f("b/settled", sku="aaaa0008"),
-                  "paid_to_client_date": "2026-11-20"}, "SETTLED", ""),
+        # paid 9.00; the books now say 8.10: the paid figure stays, flagged
+        ("C008", {"inventory_folder": f("b/settled", sku="aaaa0008"), "client_share": "9.00",
+                  "paid_to_client_date": "2026-11-20"}, "SETTLED", "adjust by $-0.90"),
         ("C009", {"inventory_folder": f("b/gone", sku="aaaa0009"), "state": "DISPOSED",
                   "state_note": "broken in transit, binned"}, "DISPOSED", ""),
         ("C010", {"inventory_folder": f("b/refunded", sku="aaaa0010"), "order_id": "9-9-9",
                   "client_share": "8.10", "paid_to_client_date": "2026-11-02"},
          "LISTED", "needs a negative adjustment"),
         ("C011", {"inventory_folder": f("b/ended", sku="aaaa0011")}, "LISTED", "ended unsold"),
+        ("C012", {"state": "EXCLUDED", "buyout_price": "5.00"}, "EXCLUDED", ""),
+        # PREP holds through SHOT/DRAFTED and gives way to LISTED
+        ("C013", {"state": "PREP"}, "PREP", ""),
+        ("C014", {"state": "PREP", "inventory_folder": f("b/prep", sku="")}, "PREP", ""),
+        ("C015", {"state": "PREP", "inventory_folder": f("b/prepped", sku="aaaa0015")},
+         "LISTED", ""),
     ]
     _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id"],
          [{"sku": f"aaaa{n:04d}", "status": "PUBLISHED", "price": "24.00"}
-          for n in (4, 5, 6, 7, 8, 9)]
+          for n in (4, 5, 6, 7, 8, 9, 15)]
          + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"}])
     _csv(shop / "sales_ledger.csv", SALES_HEADER,
          [_sale("1-1-5", "aaaa0005", NEW), _sale("1-1-7", "aaaa0007", OLD, actual_postage=""),
@@ -115,19 +122,30 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         assert note in got[item_id]["state_note"], item_id
     assert got["C006"]["store"] == "junk"
     assert got["C006"]["cleared_on"] == (TODAY - timedelta(days=10)).isoformat()
+    assert got["C008"]["client_share"] == "9.00"
+    assert got["C012"]["client_share"] == "5.00"
     assert got["C007"]["actuals_complete"] == "no" and got["C007"]["net"] == ""
     assert got["C004"]["ask"] == "24.00"
     assert got["C009"]["state_note"] == "broken in transit, binned"
     assert list((d).glob("client_ledger.backup-*.csv")), "no backup written"
 
 
-def test_hand_edit_errors_block_the_sync(shop):
+def test_hand_edit_errors_block_the_sync(shop, capsys):
+    shared = _folder(shop, "b/shared")
     d = _intake(shop, [{"item_id": "C001", "state": "LOST"},
                        {"item_id": "C002", "state": "DISPOSED"},
-                       {"item_id": "C003", "ad_fee": "two dollars"}])
+                       {"item_id": "C003", "ad_fee": "two dollars"},
+                       {"item_id": "C004", "state": "EXCLUDED"},
+                       {"item_id": "C005", "inventory_folder": shared},
+                       {"item_id": "C006", "inventory_folder": shared},
+                       {"item_id": "C007", "inventory_folder": shared, "state": "RETURNED"}])
     before = (d / "client_ledger.csv").read_text(encoding="utf-8")
     assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 1
     assert (d / "client_ledger.csv").read_text(encoding="utf-8") == before
+    out = capsys.readouterr().out
+    for want in ("C001: state 'LOST'", "C002: DISPOSED needs", "C003: ad_fee",
+                 "C004: EXCLUDED needs a buyout_price", "C005, C006 share"):
+        assert want in out, want
 
 
 @pytest.mark.parametrize("fields, split, net, share, complete", [
