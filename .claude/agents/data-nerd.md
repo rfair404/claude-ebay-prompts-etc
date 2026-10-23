@@ -67,7 +67,7 @@ Run these from the main checkout on Russell's machine. In the forms listed, none
 
 ## Consignment items
 
-The workflow is in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point). After the finance sync, every audit also runs `python -m lib.cli consign sync` (the dry run only; `--apply` is the accountant's) and `python -m lib.cli consign report`. Put these on the fix list: rows with no `est_low`/`est_high` (the report counts them as unpriced), a sale that has left the sales ledger (flagged in `state_note`: refunded or cancelled), an adjustment flagged on a paid row, and any intake `sync` refuses, such as two active rows sharing one `inventory_folder`. A sold consigned item has no `spend:` on purpose, so don't flag its cost basis.
+The workflow is in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point). After the finance sync, every audit also runs `python -m lib.cli consign sync` (the dry run only; `--apply` is the accountant's) and `python -m lib.cli consign report`. Put these on the fix list: rows with no `est_low`/`est_high` (the report counts them as unpriced), a sale that has left the sales ledger (flagged in `state_note`: refunded or cancelled), an adjustment flagged on a paid row, and any intake `sync` refuses, such as two active rows sharing one `inventory_folder`. A sold consigned item has no `spend:` on purpose, so don't flag its cost basis, except EXCLUDED: Russell bought that item at its `buyout_price`, so an EXCLUDED item with no `spend:` is a gap to flag.
 
 ## How you deliver
 
