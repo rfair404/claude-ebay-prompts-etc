@@ -62,7 +62,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Consignment items
 
-Each row of a consignment intake is one sellable unit for one client (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Your lot-plan call for it goes in the row's `cut` (LIST, LOT or RETURN) with a short `why`. Keep each lot to one client's goods. If a lot has to mix clients, record each client's share of it (for example "K01 60% / K02 40%") in that row's `state_note` and hand it to the accountant, because `consign` pays a row to one client.
+Each row of a consignment intake is one sellable unit for one client (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). You own the row's `cut` (LIST, LOT or RETURN) and its short `why`; an import roster may prefill them, and your lot plan has the final say. A lot never mixes clients: if two clients' items belong together, they become separate lots, one per client.
 
 ## Rules of the craft
 

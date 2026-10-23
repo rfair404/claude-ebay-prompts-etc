@@ -324,8 +324,9 @@ gate) → the specific exception, by name, never guessed. Full protocol:
 
 **Consignment (`consign`).** A client's items live in one intake folder,
 `inventory/CONSIGN-YYYYMMDD/`, whose `context.txt` says `client: K01`. Its
-`client_ledger.csv` has one row per sellable unit (one listing, return or
-disposal). Names and contacts live only in `inventory/_consign/clients.csv`
+`client_ledger.csv` has one row per sellable unit (one listing, return,
+disposal or buyout). An intake, and every lot in it, belongs to one client.
+Names and contacts live only in `inventory/_consign/clients.csv`
 (`client_code,name,contact,split,terms,opened`; `split` 0.5 = 50/50 of net).
 
     python -m lib.cli consign import CONSIGN-20261022 roster.csv --client K01
@@ -339,13 +340,26 @@ disposal). Names and contacts live only in `inventory/_consign/clients.csv`
 next `C###` id and skips a row with the same bin and description. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED (sold, ad fee and postage known,
-30-day return window passed) and SETTLED (`paid_to_client_date` set). Type
-RETURNED or DISPOSED (with a `state_note`) by hand; those win. There is no
-`set` command: edit the CSV, and `sync` refuses an unknown state, a DISPOSED
-row without a note or a bad amount. A listing that ended unsold, and a sale
-that left the sales ledger, are flagged in `state_note`, not given a state.
-Net is eBay's net before postage minus ad fee, postage and other costs; a
-blank ad fee or postage is unknown, not zero, so the row can't clear.
+40 days since the sale: eBay's 30-day return window runs from delivery) and
+SETTLED (`paid_to_client_date` set). Typed by hand:
+
+- PREP: in hand and being prepped. It stays PREP through SHOT and DRAFTED
+  and gives way to LISTED and later.
+- RETURNED, or DISPOSED with a `state_note`. Terminal: these win.
+- EXCLUDED: Russell buys the item from the client. Terminal, and it needs a
+  `buyout_price` (0.00 is allowed, blank is not). That price is the client
+  share, with no split, and is owed until paid.
+
+There is no `set` command: edit the CSV, and `sync` refuses an unknown state,
+a DISPOSED row without a note, an EXCLUDED row without a buyout price, a bad
+amount, or two active rows on one `inventory_folder` (each sellable unit
+needs its own folder). A listing that ended unsold, and a sale that left the
+sales ledger (the finance sync drops refunded and cancelled orders), are
+flagged in `state_note`, not given a state. Net is eBay's net before postage
+minus ad fee, postage and other costs; a blank ad fee or postage is unknown,
+not zero, so the row can't clear. Once `paid_to_client_date` is set, the
+row's `client_share` is frozen at what was paid; a later change is flagged
+with the adjustment rather than written.
 
 ## Background dispatch (optional, #59)
 

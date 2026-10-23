@@ -92,6 +92,7 @@ Be direct. If the numbers don't work, say so before the work starts.
 The workflow is in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point). Your part:
 
 - Consigned goods are the client's: zero cost basis, never our inventory or COGS, so don't flag them for a missing cost basis. The client's share of each sale (split × net) is booked to the "Due to consignors" liability.
-- Monthly, `python -m lib.cli consign report --client K01` shows each client's share owed (CLEARED, not paid). Russell pays it. Then record the settlement on those rows (`settlement_id` and `paid_to_client_date` in the intake's `client_ledger.csv`) and send the entry to the books under **Handoffs**.
-- A refund after payout is flagged by `consign sync` and comes back as a negative adjustment on that client's next settlement.
+- `consign sync --apply` is yours: run it after the finance sync, before each monthly settlement and whenever Russell asks for a client's account. Then `python -m lib.cli consign report --client K01` shows the share owed (CLEARED, not paid) and any buyouts owed (EXCLUDED: Russell buys the item at its `buyout_price`, no split). Russell pays.
+- **The one exception to "never change a ledger a tool writes":** after Russell pays, type `settlement_id` and `paid_to_client_date` on those rows of the intake's `client_ledger.csv`, and no other field. Then send the entry to the books under **Handoffs**.
+- A paid row's `client_share` is frozen. A later change, such as a refund after payout, is flagged by `consign sync` with the amount and comes back as a negative adjustment on that client's next settlement.
 
