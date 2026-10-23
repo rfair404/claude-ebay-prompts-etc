@@ -1,6 +1,6 @@
 ---
 name: pl
-description: Print today's pick lists on paper. Polls every store for orders awaiting shipment and sends one sheet per box to the default printer (CannonBW). Use when Russell types /pl or asks to print the pick lists.
+description: Print today's pick lists on paper. Polls every store for orders awaiting shipment and sends one sheet per box to CannonBW, named explicitly so the system default can be the label printer. Use when Russell types /pl or asks to print the pick lists.
 ---
 
 # /pl — print today's pick lists
@@ -16,10 +16,11 @@ confirming first. For R2 links instead of paper, use the `pick-list` skill
 The script finds the main checkout itself, so it works from a worktree. It
 runs `tools/pick_list.py --poll --all-stores` there, renders each box's HTML
 sheet to PDF with headless Chromium (CUPS here has no HTML filter) and sends
-it to the default printer with `lp`. Every box awaiting shipment prints, even
-ones polled earlier, so running it twice prints twice. It prints one
-`PRINTED <ids>` or `FAILED <ids>` line per box and a `DONE` line at the end.
-Allow about 20 seconds per sheet.
+it to CannonBW with `lp -d CannonBW`. The printer is named explicitly, never
+the system default, because the default is the QL-1100 label printer. Every
+box awaiting shipment prints, even ones polled earlier, so running it twice
+prints twice. It prints one `PRINTED <ids>` or `FAILED <ids>` line per box
+and a `DONE` line at the end. Allow about 20 seconds per sheet.
 
 Sandbox: the poll needs `api.ebay.com` in `allowed_domains`.
 
@@ -35,7 +36,7 @@ buyer's name and address.
 
 - **Nothing awaiting shipment:** say so in one line.
 - **A `FAILED` line, or the poll errors:** say which orders and what the
-  error was. If `lpstat -p` shows the printer is off or out of paper, tell
-  Russell that in one line, as the one hands-on step.
+  error was. If `lpstat -p CannonBW` shows the printer is off or out of
+  paper, tell Russell that in one line, as the one hands-on step.
 - **Orders held for an eBay Live window:** the poll says so. Pass that on in
   one line, because those boxes print after the window closes.

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Print every pick sheet awaiting shipment, all stores, on the default printer.
+# Print every pick sheet awaiting shipment, all stores, on CannonBW.
 # One sheet per box. Runs from the main checkout, where pick_lists/ and the
 # poll state live (prompts/pick_list.md step 1).
 set -uo pipefail
+
+# Named explicitly because the default printer is the QL-1100 label printer.
+PRINTER=CannonBW
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')
 cd "$MAIN" || exit 1
@@ -22,12 +25,12 @@ while IFS=$'\t' read -r token ids; do
   # keeps headless Chromium off Russell's open browser.
   chromium --headless --disable-gpu --no-pdf-header-footer \
     --user-data-dir="$TMP/profile" --print-to-pdf="$pdf" "file://$html" >/dev/null 2>&1
-  if [ -s "$pdf" ] && lp "$pdf" >/dev/null; then
+  if [ -s "$pdf" ] && lp -d "$PRINTER" "$pdf" >/dev/null; then
     echo "PRINTED $ids"; printed=$((printed+1))
   else
     echo "FAILED $ids (sheet $html)"; failed=$((failed+1))
   fi
 done < <(sed -nE 's#^  (.+)  [a-z]+://[^ ]+/pick/([A-Za-z0-9_-]+)$#\2\t\1#p' <<<"$OUT")
 
-echo "DONE printed=$printed failed=$failed printer=$(lpstat -d 2>/dev/null | sed 's/.*: //')"
+echo "DONE printed=$printed failed=$failed printer=$PRINTER"
 [ "$failed" -eq 0 ]
