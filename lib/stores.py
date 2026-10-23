@@ -137,6 +137,7 @@ class StorePaths:
     store: str
     listings_ledger: Path
     sales_ledger: Path
+    unwound_orders: Path
     inventory_sheet_csv: Path
     inventory_sheet_json: Path
     hand_listed_locations: Path
@@ -164,6 +165,7 @@ def paths(store: Optional[str] = None) -> StorePaths:
         store=name,
         listings_ledger=Path(ledger_env) if ledger_env else f("listings_ledger.csv"),
         sales_ledger=f("sales_ledger.csv"),
+        unwound_orders=f("unwound_orders.csv"),
         inventory_sheet_csv=f("inventory_sheet.csv"),
         inventory_sheet_json=f("inventory_sheet.json"),
         hand_listed_locations=f("hand_listed_locations.csv"),

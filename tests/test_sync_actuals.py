@@ -682,6 +682,98 @@ def test_a_sale_refunded_after_an_earlier_apply_leaves_the_sales_ledger(shop, mo
         assert [r["order_id"] for r in csv.DictReader(f)] == ["K-1"]
 
 
+def _read(path):
+    with path.open(encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def _unwound_run(monkeypatch, store, batches, finances=None):
+    """sync_store --apply once per order batch, with a buyer on every order
+    and (optionally) a successful Finances read that returns `finances`."""
+    for batch in batches:
+        for o in batch:
+            o["buyer"] = {"username": "buyer_jane_q",
+                          "buyerRegistrationAddress": {"fullName": "Jane Q Buyer"}}
+            o["fulfillmentStartInstructions"] = [{"shippingStep": {"shipTo": {
+                "fullName": "Jane Q Buyer",
+                "contactAddress": {"addressLine1": "12 Elm St"}}}}]
+    monkeypatch.setattr(SA, "fetch_orders",
+                        lambda days, verbose=True, *, store=None: batches.pop(0))
+    if finances is not None:
+        monkeypatch.setattr(SA, "sync_finances", lambda days, verbose=True, *, store=None:
+                            (*finances, {"ok": True, "reason": None, "other_fee_labels": {}}))
+    while batches:
+        assert SA.sync_store(store, _args(skip_finances=finances is None)) == 0
+
+
+def test_refunded_and_cancelled_orders_land_in_unwound_orders_not_sales(shop, monkeypatch, capsys):
+    refunded = _order(oid="R-1", sku="aaaa1111", item=80.0, ship=6.0, refund=86.0, due=-0.40)
+    cancelled = _order(oid="C-1", sku="cccc3333", item=40.0, cancel="CANCELED")
+    kept = _order(oid="K-1", sku="aaaa1111")
+    _unwound_run(monkeypatch, "default", [[refunded, cancelled, kept]],
+                 finances=({"R-1": Decimal("-2.50")}, {"R-1": Decimal("-7.10")}))
+
+    assert [r["order_id"] for r in _read(shop / "sales_ledger.csv")] == ["K-1"]
+    got = {r["order_id"]: r for r in _read(shop / "unwound_orders.csv")}
+    assert set(got) == {"R-1", "C-1"}
+    r, c = got["R-1"], got["C-1"]
+    assert (r["reason"], r["store"], r["sku"], r["listing_id"]) == \
+        ("refunded", "default", "aaaa1111", "206000000001")
+    assert (r["original_gross"], r["refunded"]) == ("86.00", "86.00")
+    assert (r["ad_fee"], r["actual_postage"]) == ("2.50", "7.10")
+    assert r["sold_at"] == "2026-06-08"
+    assert (c["reason"], c["original_gross"], c["refunded"]) == ("cancelled", "40.00", "0.00")
+    # the Finances read succeeded, so no AD row is a known $0; postage stays unknown
+    assert (c["ad_fee"], c["actual_postage"]) == ("0.00", "")
+    stored = (shop / "unwound_orders.csv").read_text(encoding="utf-8")
+    printed = capsys.readouterr().out
+    for pii in ("Jane", "buyer_jane_q", "Elm"):
+        assert pii not in stored and pii not in printed
+
+
+def test_a_second_run_merges_unwound_orders_without_duplicating(shop, monkeypatch):
+    first = [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+             _order(oid="C-1", sku="cccc3333", cancel="CANCELED")]
+    # The second window still holds R-1 and adds C-2; C-1 has aged out of it.
+    second = [_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+              _order(oid="C-2", sku="bbbb2222", cancel="CANCELED")]
+    _unwound_run(monkeypatch, "junk", [first, second])
+
+    rows = _read(shop / "unwound_orders-junk.csv")
+    assert sorted(r["order_id"] for r in rows) == ["C-1", "C-2", "R-1"]
+    assert all(r["store"] == "junk" for r in rows)
+    assert _read(shop / "sales_ledger-junk.csv") == []
+    assert not (shop / "unwound_orders.csv").exists()
+
+
+def test_a_skip_finances_rerun_keeps_known_unwound_ad_fee_and_postage(shop, monkeypatch):
+    def order():
+        return _order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40)
+    _unwound_run(monkeypatch, "default", [[order()]],
+                 finances=({"R-1": Decimal("-2.50")}, {"R-1": Decimal("-7.10")}))
+    _unwound_run(monkeypatch, "default", [[order()]])
+    (row,) = _read(shop / "unwound_orders.csv")
+    assert (row["ad_fee"], row["actual_postage"]) == ("2.50", "7.10")
+
+
+def test_an_unwound_order_sold_on_a_later_run_leaves_unwound_orders(shop, monkeypatch):
+    # Run 1 sees R-1 fully refunded; run 2 sees the refund reversed (a
+    # clean sale). It must move files, never sit in both.
+    _unwound_run(monkeypatch, "default",
+                 [[_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+                   _order(oid="C-1", sku="cccc3333", cancel="CANCELED")],
+                  [_order(oid="R-1", sku="aaaa1111")]])
+    assert [r["order_id"] for r in _read(shop / "unwound_orders.csv")] == ["C-1"]
+    assert [r["order_id"] for r in _read(shop / "sales_ledger.csv")] == ["R-1"]
+
+
+def test_a_dry_run_writes_no_unwound_orders(shop, monkeypatch):
+    monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
+                        [_order(oid="C-1", sku="aaaa1111", cancel="CANCELED")])
+    assert SA.sync_store("default", _args(apply=False)) == 0
+    assert not (shop / "unwound_orders.csv").exists()
+
+
 def test_a_relisted_item_matches_its_folder_on_the_store_that_sold_it(shop, monkeypatch):
     monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
                         [_store_order("cccc3333", "Fenton Hobnail Milk Glass Vase", "J-2")])

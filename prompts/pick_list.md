@@ -21,9 +21,9 @@ today. Asking for it means "give me the sheets to print". It does not mean
     .claude/skills/pick-list/links.sh
 
 This is the `pick-list` skill. It works from a worktree and does the whole
-job: it polls every store from the main checkout (never with `--print`),
-stages each box's sheet under `inventory/_pick_lists/`, uploads them with one
-`offsite share` and prints one `LINK` line per box. The format of each line is
+job: it polls every store from the main checkout, stages each box's sheet
+under `inventory/_pick_lists/`, uploads them with one `offsite share` and
+prints one `LINK` line per box. The format of each line is
 in the docstring of [`tools/pick_list_links.py`](../tools/pick_list_links.py).
 Links last 7 days, and re-running gives fresh ones.
 

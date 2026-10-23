@@ -1,10 +1,9 @@
 """LTL freight — quote across several brokers, book one, track it.
 
-The parcel path (lib/easypost_client.py, `ebz ship-quote`/`ship-buy`) stops at
-a box a carrier will take at the counter. Ship-risky items — the >25 lb /
->24 in pickup-only listings of docs/local-pickup-fragile.md — have so far
-offered freight "by quote in the description", with the quote itself got by
-hand. This package is that quote, done properly:
+Parcel labels are bought in eBay Seller Hub, which stops at a box a carrier
+will take at the counter. Ship-risky items — the >25 lb / >24 in pickup-only
+listings of docs/local-pickup-fragile.md — have so far offered freight "by
+quote in the description", with the quote itself got by hand. This package is that quote, done properly:
 
     models.py      FreightRequest / HandlingUnit / FreightQuote / BookResult
     providers/     one module per broker, all behind one Provider interface
@@ -24,8 +23,8 @@ Providers today (see each module's docstring for what is and isn't verified):
     manual      any quote got by phone or web form (uShip site, Freightquote,
                 a local carrier) — recorded so it ranks next to the API ones
 
-Guardrail — same shape as easypost_client.buy_label(): quoting spends nothing
-and runs freely; booking spends money and is a DRY RUN unless confirm=True.
+Guardrail: quoting spends nothing and runs freely; booking spends money and
+is a DRY RUN unless confirm=True.
 """
 from freight.models import (  # noqa: F401
     ACCESSORIALS, BookResult, FreightAddress, FreightQuote, FreightRequest,

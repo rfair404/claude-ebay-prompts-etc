@@ -14,8 +14,9 @@ inventory/_pick_lists/pick_<id>[+<id2>].html, uploads them all with one
 
 With --print it sends each box's sheet to CannonBW instead (the /pl skill):
 renders it to PDF with headless Chromium, because CUPS here has no HTML
-filter, and hands the PDF to `lp -d CannonBW`. The printer is named because
-the system default is the QL-1100 label printer. One line per box:
+filter, and hands the PDF to `lp -d CannonBW`. The printer is named so a
+change of system default can't send sheets to the QL-1100 label printer.
+One line per box:
 
     PRINTED <id>[+<id2>] | <title> | ship by <YYYY-MM-DD>
     HELD, FAILED and NONE as above
