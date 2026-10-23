@@ -48,6 +48,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from draft_io import iter_drafts
+
 REPO = Path(__file__).resolve().parent.parent
 INVENTORY = REPO / "inventory"
 
@@ -247,7 +249,7 @@ def _display_path(item_dir: Path, root: Path) -> str:
 def sweep(root: Path = INVENTORY) -> list[tuple[str, str, Blocked]]:
     """Every drafted item asserting a claim its estate contradicts."""
     hits: list[tuple[str, str, Blocked]] = []
-    for dr in sorted(root.rglob("draft.md")):
+    for dr in iter_drafts(root):
         ctx = load(dr.parent, root)
         if not ctx.blocked:
             continue

@@ -54,6 +54,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "lib"))
 
 import stores  # noqa: E402
+from draft_io import iter_drafts  # noqa: E402
 
 INVENTORY = REPO / "inventory"
 # The ledger is per store — stores.paths(store).listings_ledger, resolved at
@@ -168,9 +169,7 @@ def scan_drafts(store: str | None = None,
     # Recurse: drafts sit at any depth (inventory/more-mags-444/j-crew/3/draft.md
     # is three levels down, and a two-level glob silently misses every one of
     # them — which reads as "no local draft matches this sku").
-    for dr in sorted(INVENTORY.rglob("draft.md")):
-        if ".history" in dr.parts:
-            continue
+    for dr in iter_drafts(INVENTORY):
         try:
             t = dr.read_text(encoding="utf-8", errors="ignore")
         except OSError:

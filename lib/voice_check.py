@@ -30,9 +30,9 @@ import sys
 from pathlib import Path
 
 try:
-    from draft_io import Draft, parse_draft
+    from draft_io import Draft, iter_drafts, parse_draft
 except ImportError:                       # imported as lib.voice_check
-    from lib.draft_io import Draft, parse_draft  # type: ignore
+    from lib.draft_io import Draft, iter_drafts, parse_draft  # type: ignore
 
 # Everything after this marker in a body is internal, never buyer-visible.
 END_MARKER = "END BUYER DESCRIPTION"
@@ -189,7 +189,7 @@ def _iter_drafts(target: Path):
     if target.is_file():
         yield target
     else:
-        yield from sorted(target.rglob("draft.md"))
+        yield from iter_drafts(target)
 
 
 def main(argv=None) -> int:
