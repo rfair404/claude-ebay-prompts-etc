@@ -1,10 +1,10 @@
 """One JSON-over-HTTPS helper for every freight provider.
 
-Retry policy is easypost_client.api_send's, for the same reason: a 5xx is
-retried only on idempotent methods, and a network error is retried only when
-the caller says the call is safe to repeat. A booking is never safe to repeat
-— a lost response may be a pickup already dispatched and a card already
-charged — so book paths pass retry_network_errors=False.
+Retry policy: a 5xx is retried only on idempotent methods, and a network
+error is retried only when the caller says the call is safe to repeat. A
+booking is never safe to repeat — a lost response may be a pickup already
+dispatched and a card already charged — so book paths pass
+retry_network_errors=False.
 """
 from __future__ import annotations
 

@@ -92,6 +92,7 @@ REPO = Path(__file__).resolve().parent.parent
 LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
+    "unwound_orders*.csv*",
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",

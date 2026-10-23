@@ -101,11 +101,30 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C014", {"state": "PREP", "inventory_folder": f("b/prep", sku="")}, "PREP", ""),
         ("C015", {"state": "PREP", "inventory_folder": f("b/prepped", sku="aaaa0015")},
          "LISTED", ""),
+        # LISTED means live on eBay: DRAFTED and SYNCED ledger rows are not
+        ("C016", {"inventory_folder": f("b/ledger-drafted", sku="aaaa0016")}, "DRAFTED", ""),
+        ("C017", {"inventory_folder": f("b/ledger-synced", sku="aaaa0017")}, "DRAFTED", ""),
+        ("C018", {"state": "PREP", "inventory_folder": f("b/prep-synced", sku="aaaa0018")},
+         "PREP", ""),
+        ("C019", {"sku": "aaaa0019"}, "INTAKE", ""),
+        ("C020", {"inventory_folder": f("b/shipped", sku="aaaa0020")}, "LISTED", ""),
+        # DELETED after it was published is an ended listing; never published, never live
+        ("C021", {"inventory_folder": f("b/deleted-live", sku="aaaa0021")}, "LISTED",
+         "ended unsold"),
+        ("C022", {"inventory_folder": f("b/deleted-draft", sku="aaaa0022")}, "DRAFTED", ""),
+        ("C023", {"inventory_folder": f("b/out-of-stock", sku="aaaa0023")}, "LISTED", ""),
     ]
-    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id"],
+    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id", "published_at"],
          [{"sku": f"aaaa{n:04d}", "status": "PUBLISHED", "price": "24.00"}
           for n in (4, 5, 6, 7, 8, 9, 15)]
-         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"}])
+         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"},
+            {"sku": "aaaa0016", "status": "DRAFTED", "price": "30.00"},
+            {"sku": "aaaa0017", "status": "SYNCED", "price": "30.00"},
+            {"sku": "aaaa0018", "status": "SYNCED"}, {"sku": "aaaa0019", "status": "DRAFTED"},
+            {"sku": "aaaa0020", "status": "SHIPPED"},
+            {"sku": "aaaa0021", "status": "DELETED", "published_at": "2026-10-01"},
+            {"sku": "aaaa0022", "status": "DELETED"},
+            {"sku": "aaaa0023", "status": "OUT_OF_STOCK"}])
     _csv(shop / "sales_ledger.csv", SALES_HEADER,
          [_sale("1-1-5", "aaaa0005", NEW), _sale("1-1-7", "aaaa0007", OLD, actual_postage=""),
           _sale("1-1-8", "aaaa0008", OLD)])
@@ -116,7 +135,9 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
 
     assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
 
-    got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+    rows = consign.read_ledger(d / "client_ledger.csv")[0]
+    assert all(r["item_id"].startswith("K99-C") and r["client_code"] == "K99" for r in rows)
+    got = {r["item_id"].removeprefix("K99-"): r for r in rows}
     for item_id, _, state, note in table:
         assert got[item_id]["state"] == state, item_id
         assert note in got[item_id]["state_note"], item_id
@@ -126,6 +147,7 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
     assert got["C012"]["client_share"] == "5.00"
     assert got["C007"]["actuals_complete"] == "no" and got["C007"]["net"] == ""
     assert got["C004"]["ask"] == "24.00"
+    assert got["C017"]["ask"] == "20.00"           # the draft's price, not the ledger's
     assert got["C009"]["state_note"] == "broken in transit, binned"
     assert list((d).glob("client_ledger.backup-*.csv")), "no backup written"
 
@@ -207,8 +229,383 @@ def test_import_roster_and_stdin_tsv(shop, monkeypatch, capsys):
     assert "added 1 row(s), skipped 1 duplicate(s)" in capsys.readouterr().out
 
     rows = consign.read_ledger(d / "client_ledger.csv")[0]
-    assert [(r["item_id"], r["bin"], r["description"]) for r in rows] == [
-        ("C001", "01", "Brass bell, small"), ("C002", "01", "Tin cup"),
-        ("C003", "03", "Wood spool")]
+    assert [(r["item_id"], r["bin"], r["description"], r["intake"]) for r in rows] == [
+        ("K99-C001", "01", "Brass bell, small", "2099-02-02"),
+        ("K99-C002", "01", "Tin cup", "2099-02-02"),
+        ("K99-C003", "03", "Wood spool", "2099-02-02")]
     assert (rows[0]["qty"], rows[0]["why"], rows[0]["photos"]) == ("1", "ring it", "ZZ1 ZZ2")
     assert (rows[2]["est_low"], rows[2]["est_high"], rows[2]["state"]) == ("4", "8", "INTAKE")
+
+
+# --------------------------------------------------------------------------- #
+# per-client ledgers, lots, settlements, locked splits (#284)
+# --------------------------------------------------------------------------- #
+def _ledger(root, name, rows, context="", header=None):
+    """A CONSIGN-* folder with a ledger. `header` writes an older column set."""
+    d = root / "inventory" / name
+    d.mkdir(parents=True, exist_ok=True)
+    if context:
+        (d / "context.txt").write_text(context, encoding="utf-8")
+    cols = header or consign.COLUMNS
+    _csv(d / "client_ledger.csv", cols, [{c: r.get(c, "") for c in cols} for r in rows])
+    return d
+
+
+def _row(**kw):
+    r = {c: "" for c in consign.COLUMNS}
+    r.update(kw)
+    return r
+
+
+def _sold_item(shop, rel, sku, sold_at, order, **sale):
+    """A folder whose draft is live on eBay and has sold."""
+    folder = _folder(shop, rel, sku=sku)
+    for name, header, row in (
+            ("listings_ledger.csv", ["sku", "status", "price"],
+             {"sku": sku, "status": "PUBLISHED", "price": "24.00"}),
+            ("sales_ledger.csv", SALES_HEADER, _sale(order, sku, sold_at, **sale))):
+        p = shop / name
+        rows = list(csv.DictReader(p.open(encoding="utf-8"))) if p.exists() else []
+        _csv(p, header, rows + [row])
+    return folder
+
+
+F, G = "inventory/b/one", "inventory/b/two"
+
+
+@pytest.mark.parametrize("rows, want", [
+    # one lot, one folder: allowed (a lot row may leave the folder blank)
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C002", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C003", lot_id="L1")], None),
+    # two lots, or a lot and a single, on one folder
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C002", inventory_folder=F, lot_id="L2")], "C001, C002 share"),
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C002", inventory_folder=F)], "C001, C002 share"),
+    # one lot on two folders
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C002", inventory_folder=G, lot_id="L1")], "lot L1 is on 2 folders"),
+    # a returned lot row has left the lot
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+      dict(item_id="C002", inventory_folder=G, lot_id="L1", state="RETURNED")], None),
+    # ids: another client's prefix, or the same id bare and prefixed
+    ([dict(item_id="K98-C001")], "K98-C001: item_id is client K98's"),
+    ([dict(item_id="C001"), dict(item_id="K99-C001")], "K99-C001: item_id used twice"),
+    ([dict(item_id="C001", split_locked="1.5")], "split_locked '1.5'"),
+    ([dict(item_id="C001", sold_at="2026-11-02", delivered_at="2026-11-01")],
+     "delivered_at 2026-11-01 is before sold_at"),
+    # a lot-mate (not the lowest id) that already sold or was paid
+    *[([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+        dict(item_id="C005", inventory_folder=F, lot_id="L1", **{field: value})],
+       f"C005: in lot L1 but not its lead (C001) and has {field}: make the sold row "
+       f"the lowest item_id in the lot, or take it out of the lot")
+      for field, value in (("order_id", "1-1-5"), ("client_share", "8.10"),
+                           ("settlement_id", "K99-S001"),
+                           ("paid_to_client_date", "2026-11-20"))],
+    # ...the same figures on the lead are fine
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1", order_id="1-1-5",
+           client_share="8.10"),
+      dict(item_id="C005", inventory_folder=F, lot_id="L1")], None),
+    # one order on two active rows; a returned row no longer counts
+    ([dict(item_id="C001", order_id="1-1-5"), dict(item_id="C002", order_id="1-1-5")],
+     "C001, C002 all carry order 1-1-5"),
+    ([dict(item_id="C001", order_id="1-1-5"),
+      dict(item_id="C002", order_id="1-1-5", state="RETURNED")], None),
+])
+def test_validate_lots_and_ids(rows, want):
+    errs = consign.validate([_row(**r) for r in rows], [], "K99")
+    if want is None:
+        assert errs == []
+    else:
+        assert any(want in e for e in errs), errs
+
+
+def test_a_lot_sells_once_on_its_lead_row(shop, capsys):
+    folder = _sold_item(shop, "b/lot", "cccc0001", OLD, "3-3-1")
+    d = _intake(shop, [
+        {"item_id": "C001", "lot_id": "L1", "est_low": "4", "est_high": "6"},
+        {"item_id": "C002", "lot_id": "L1", "inventory_folder": folder,
+         "ask": "30.00", "state_note": "second basket"},
+        {"item_id": "C003", "inventory_folder": _folder(shop, "b/single")}])
+    for _ in range(2):                           # the second sync changes nothing
+        assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+        got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+        lead, mate = got["K99-C001"], got["K99-C002"]
+        assert (lead["state"], lead["inventory_folder"], lead["client_share"]) == (
+            "CLEARED", folder, "8.10")
+        assert (mate["state"], mate["sku"], mate["ask"], mate["order_id"]) == (
+            "CLEARED", "cccc0001", "", "")
+        assert mate["state_note"] == "second basket | in lot L1 with K99-C001"
+    assert consign.report([d], "K99", False, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert "sold       1  net $16.20" in out
+    assert "client share owed     $8.10" in out
+
+
+@pytest.mark.parametrize("ledgers, want", [
+    # one folder from two ledgers
+    ([("CONSIGN-20990101", "client: K99\n", [dict(item_id="C001", inventory_folder=F)]),
+      ("CONSIGN-K98", "", [dict(item_id="K98-C001", inventory_folder=F)])],
+     "inventory/b/one is claimed by K99-C001, K98-C001"),
+    # ...unless it is one client's lot, across its old and new ledger
+    ([("CONSIGN-20990101", "client: K99\n",
+       [dict(item_id="C001", inventory_folder=F, lot_id="L1")]),
+      ("CONSIGN-K99", "", [dict(item_id="K99-C002", inventory_folder=F, lot_id="L1")])],
+     None),
+    # two clients can't share a lot
+    ([("CONSIGN-20990101", "client: K99\n",
+       [dict(item_id="C001", inventory_folder=F, lot_id="L1")]),
+      ("CONSIGN-K98", "", [dict(item_id="K98-C001", inventory_folder=F, lot_id="L1")])],
+     "claimed by"),
+    # a returned row no longer claims its folder
+    ([("CONSIGN-20990101", "client: K99\n",
+       [dict(item_id="C001", inventory_folder=F, state="RETURNED")]),
+      ("CONSIGN-K98", "", [dict(item_id="K98-C001", inventory_folder=F)])], None),
+    # one item id in a client's old and new ledger
+    ([("CONSIGN-20990101", "client: K99\n", [dict(item_id="C001")]),
+      ("CONSIGN-K99", "", [dict(item_id="K99-C001")])],
+     "K99-C001 is in CONSIGN-20990101 and CONSIGN-K99"),
+    # the folder name and context.txt disagree
+    ([("CONSIGN-K99", "client: K98\n", [dict(item_id="K98-C001")])],
+     "CONSIGN-K99: context.txt says client K98"),
+])
+def test_validate_across_ledgers(shop, ledgers, want):
+    for name, ctx, rows in ledgers:
+        _ledger(shop, name, rows, ctx)
+    errs = consign.validate_all(consign.all_intakes())
+    if want is None:
+        assert errs == []
+    else:
+        assert any(want in e for e in errs), errs
+
+
+def test_sync_refuses_a_cross_ledger_clash(shop, monkeypatch, capsys):
+    monkeypatch.setattr(consign.offsite, "data_root", lambda start=None: shop)
+    a = _ledger(shop, "CONSIGN-20990101", [dict(item_id="C001", inventory_folder=F)],
+                "client: K99\n")
+    _ledger(shop, "CONSIGN-K98", [dict(item_id="K98-C001", inventory_folder=F)])
+    before = (a / "client_ledger.csv").read_bytes()
+    assert consign.main(["sync", "--apply"]) == 1
+    assert "is claimed by" in capsys.readouterr().out
+    assert (a / "client_ledger.csv").read_bytes() == before
+
+
+def test_split_is_locked_at_the_sale(shop):
+    folder = _sold_item(shop, "b/sold", "dddd0001", OLD, "4-4-1")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder},
+                       {"item_id": "C002", "inventory_folder": _folder(shop, "b/unsold")}])
+    for split in ("0.5", "0.6"):                 # net 16.20; the 0.5 at the sale holds
+        reg = {"K99": {"client_code": "K99", "split": split}}
+        assert consign.sync_intake(d, consign.Books(), reg, apply=True, today=TODAY) == 0
+        got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+        assert (got["K99-C001"]["split_locked"], got["K99-C001"]["client_share"]) == (
+            "0.5", "8.10")
+        assert got["K99-C002"]["split_locked"] == ""
+
+
+@pytest.mark.parametrize("loss_rule, share", [
+    ("", "-1.25"), ("split", "-1.25"), ("client_never_owes", "0.00")])
+def test_loss_rule(loss_rule, share):
+    terms = consign.client_terms({"K99": {"split": "0.5", "loss_rule": loss_rule}}, "K99")
+    r = _row(item_price="5.00", net_before_postage="3.00", ad_fee="1.00",
+             actual_postage="4.50")
+    consign.settle_money(r, terms["split"], terms["loss_rule"])
+    assert (r["net"], r["client_share"]) == ("-2.50", share)
+
+
+@pytest.mark.parametrize("field, value, want", [
+    ("loss_rule", "client_pays", "loss_rule"),
+    ("w9_on_file", "maybe", "w9_on_file"),
+    ("payout_method", "acct 0012345678", "last 4 only"),
+    ("agreement_signed", "last week", "agreement_signed"),
+])
+def test_registry_fields_are_checked(field, value, want):
+    with pytest.raises(SystemExit, match=want):
+        consign.client_terms({"K99": {field: value}}, "K99")
+    consign.client_terms({"K99": {"payout_method": "bank 1234"}}, "K99")
+
+
+def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys):
+    folder = _sold_item(shop, "b/sold", "eeee0001", OLD, "5-5-1")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder},
+                       {"item_id": "C002", "state": "EXCLUDED", "buyout_price": "12.50"},
+                       {"item_id": "C003", "state": "EXCLUDED", "buyout_price": "0.00"}])
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    through = ["settle", "K99", "--through", TODAY.isoformat()]
+    assert consign.main(through) == 0                       # dry run writes nothing
+    assert not (shop / "reports").exists() and not consign.read_settlements("K99")
+
+    assert consign.main(through + ["--apply"]) == 0
+    stmt = shop / "reports" / "consign" / "K99" / "K99-S001.csv"
+    s = consign.read_settlements("K99")
+    assert [(x["settlement_id"], x["item_ids"], x["net"], x["client_share"], x["paid_date"])
+            for x in s] == [("K99-S001", "K99-C001 K99-C002", "16.20", "20.60", "")]
+    lines = list(csv.DictReader(stmt.open(encoding="utf-8")))
+    assert [(x["line"], x["item_id"], x["amount"]) for x in lines] == [
+        ("sale", "K99-C001", "8.10"), ("buyout", "K99-C002", "12.50"), ("total", "", "20.60")]
+    first = stmt.read_bytes()
+
+    # Everything owed is on the open settlement now.
+    assert consign.main(through + ["--apply"]) == 0
+    assert "nothing to settle" in capsys.readouterr().out
+    # A statement is never overwritten, even if settlements.csv lost its row.
+    saved = consign.read_settlements("K99")
+    consign.settlements_path("K99").unlink()
+    with pytest.raises(SystemExit, match="never overwritten"):
+        consign.main(through + ["--apply"])
+    assert stmt.read_bytes() == first
+
+    # The accountant records the payment; the next sync settles the rows.
+    saved[0].update(paid_date="2026-11-28", amount_paid="20.60")
+    _csv(consign.settlements_path("K99"), consign.SETTLEMENT_COLUMNS, saved)
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+    for iid, state in (("K99-C001", "SETTLED"), ("K99-C002", "EXCLUDED")):
+        assert (got[iid]["state"], got[iid]["paid_to_client_date"],
+                got[iid]["settlement_id"]) == (state, "2026-11-28", "K99-S001")
+    assert got["K99-C003"]["paid_to_client_date"] == ""      # $0 buyout: nothing to pay
+    capsys.readouterr()
+    assert consign.report([d], "K99", False, today=TODAY) == 0
+    out = capsys.readouterr().out
+    assert "paid in 2026          $20.60" in out
+    assert "buyouts owed          $0.00" in out
+    assert "client share owed     $0.00" in out
+
+
+def test_settle_carries_an_adjustment_once(shop, capsys):
+    # Paid 9.00 before; the books now say 8.10.
+    folder = _sold_item(shop, "b/sold", "ffff0001", OLD, "6-6-1")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder,
+                        "client_share": "9.00", "paid_to_client_date": "2026-11-20"}])
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    note = consign.read_ledger(d / "client_ledger.csv")[0][0]["state_note"]
+    assert "adjust by $-0.90" in note
+    through = ["settle", "K99", "--through", TODAY.isoformat(), "--apply"]
+    assert consign.main(through) == 0
+    assert consign.read_settlements("K99")[0]["adjustments"] == "K99-C001=-0.90"
+    assert consign.main(through) == 0
+    assert "nothing to settle" in capsys.readouterr().out
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    row = consign.read_ledger(d / "client_ledger.csv")[0][0]
+    assert (row["client_share"], row["state_note"]) == ("9.00", "")
+
+
+def test_a_zero_buyout_closes_with_nothing_owed(shop, capsys):
+    _intake(shop, [{"item_id": "C001", "state": "EXCLUDED", "buyout_price": "0.00"}])
+    assert consign.main(["report"]) == 0
+    assert "(EXCLUDED, Russell buys, not paid: 0)" in capsys.readouterr().out
+    assert consign.main(["settle", "K99", "--through", TODAY.isoformat(), "--apply"]) == 0
+    assert "nothing to settle" in capsys.readouterr().out
+    assert not consign.settlements_path("K99").exists()
+
+
+def test_clearing_waits_for_the_later_of_sale_and_delivery(shop):
+    ago = lambda n: (TODAY - timedelta(days=n)).isoformat()  # noqa: E731
+    # (item, sold days ago, delivered days ago, state, cleared_on, "no delivery" flag)
+    table = [
+        ("C001", 50, None, "CLEARED", ago(10), True),        # sold + 40
+        ("C002", 30, None, "SOLD", "", True),
+        ("C003", 50, 25, "SOLD", "", False),                 # delivered + 30 still ahead
+        ("C004", 50, 35, "CLEARED", ago(5), False),          # delivered + 30 is later
+        ("C005", 50, 45, "CLEARED", ago(10), False),         # sold + 40 is later
+    ]
+    rows = []
+    for n, (iid, sold, delivered, *_rest) in enumerate(table, start=1):
+        folder = _sold_item(shop, f"b/{iid}", f"gggg{n:04d}", ago(sold), f"7-7-{n}")
+        rows.append({"item_id": iid, "inventory_folder": folder,
+                     "delivered_at": ago(delivered) if delivered else ""})
+    d = _intake(shop, rows)
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+    for iid, _, _, state, cleared, flagged in table:
+        r = got["K99-" + iid]
+        assert (r["state"], r["cleared_on"]) == (state, cleared), iid
+        assert ("no delivery date" in r["state_note"]) is flagged, iid
+
+
+@pytest.mark.parametrize("draft_format, sold_format, flagged", [
+    ("", "", False), ("AUCTION", "", True), ("", "AUCTION", True),
+    ("FIXED_PRICE", "FIXED_PRICE", False)])
+def test_an_auction_listing_is_flagged(shop, draft_format, sold_format, flagged):
+    folder = _sold_item(shop, "b/auction", "hhhh0001", NEW, "8-8-1", sold_format=sold_format)
+    draft = shop / folder / "draft.md"
+    draft.write_text(draft.read_text(encoding="utf-8").replace(
+        "---\n\nbody", f'format: "{draft_format}"\n---\n\nbody'), encoding="utf-8")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder}])
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    note = consign.read_ledger(d / "client_ledger.csv")[0][0]["state_note"]
+    assert ("auction format" in note) is flagged
+
+
+@pytest.mark.parametrize("context, intake", [
+    ("kind: event\nacquired: 2098-12-30\nclient: K99\n", "2098-12-30"),
+    ("kind: event\nclient: K99\n", "2099-01-01"),             # the folder's date
+])
+def test_an_older_ledger_loads_and_migrates_on_write(shop, capsys, context, intake):
+    old_cols = consign.COLUMNS[:consign.COLUMNS.index("paid_to_client_date") + 1]
+    d = _ledger(shop, "CONSIGN-20990101",
+                [dict(item_id="C001", description="Tin cup"),
+                 dict(item_id="C002", description="Brass bell", state="EXCLUDED",
+                      buyout_price="3.00")], context, header=old_cols)
+    assert consign.main(["report", "--client", "K99", "--csv"]) == 0
+    assert "buyouts owed          $3.00" in capsys.readouterr().out
+    export = next((shop / "reports" / "consign" / "K99").glob("K99-*.csv"))
+    rows = list(csv.DictReader(export.open(encoding="utf-8")))
+    assert [(x["item_id"], x["intake"]) for x in rows] == [
+        ("K99-C001", intake), ("K99-C002", intake)]
+    assert consign.read_ledger(d / "client_ledger.csv")[0][0]["item_id"] == "C001"
+
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    with (d / "client_ledger.csv").open(encoding="utf-8") as f:
+        assert next(csv.reader(f)) == consign.COLUMNS
+    rows = consign.read_ledger(d / "client_ledger.csv")[0]
+    assert [(r["item_id"], r["client_code"], r["intake"]) for r in rows] == [
+        ("K99-C001", "K99", intake), ("K99-C002", "K99", intake)]
+
+
+def test_import_numbers_per_client_across_its_ledgers(shop):
+    _ledger(shop, "CONSIGN-20990101", [dict(item_id="C001"), dict(item_id="C007")],
+            "client: K99\n")
+    roster = shop / "roster.csv"
+    roster.write_text("description,bin\nWood spool,03\n", encoding="utf-8")
+    assert consign.main(["import", "CONSIGN-K99", str(roster), "--intake", "2099-03-01"]) == 0
+    rows = consign.read_ledger(shop / "inventory" / "CONSIGN-K99" / "client_ledger.csv")[0]
+    assert [(r["item_id"], r["client_code"], r["intake"]) for r in rows] == [
+        ("K99-C008", "K99", "2099-03-01")]
+    assert not (shop / "inventory" / "CONSIGN-K99" / "context.txt").exists()
+    with pytest.raises(SystemExit, match="already belongs to client K99"):
+        consign.main(["import", "CONSIGN-K99", str(roster), "--client", "K98"])
+
+
+def test_a_paid_sale_put_behind_a_lead_is_refused_not_paid_twice(shop, monkeypatch, capsys):
+    # TD's reproduction: C005 sold and was paid; putting it in a lot behind
+    # C001 would hand the sale to C001 as CLEARED and unpaid.
+    monkeypatch.setattr(consign.offsite, "data_root", lambda start=None: shop)
+    folder = _sold_item(shop, "b/paid", "jjjj0005", OLD, "1-1-5")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder}])
+    _csv(d / "client_ledger.csv", consign.COLUMNS, [
+        _row(item_id="K99-C001", inventory_folder=folder, lot_id="L1", state="PREP"),
+        _row(item_id="K99-C005", inventory_folder=folder, lot_id="L1", state="SETTLED",
+             sku="jjjj0005", order_id="1-1-5", client_share="8.10",
+             settlement_id="K99-S001", paid_to_client_date="2026-11-20")])
+    before = (d / "client_ledger.csv").read_bytes()
+    assert consign.main(["sync", "--apply"]) == 1
+    assert "make the sold row the lowest item_id in the lot" in capsys.readouterr().out
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not list(d.glob("client_ledger.backup-*.csv"))
+
+
+def test_settle_blocks_only_on_its_own_clients_errors(shop, capsys):
+    # K98's two ledgers clash with each other; K99's payout isn't held up by it.
+    _ledger(shop, "CONSIGN-K98", [dict(item_id="K98-C001", inventory_folder=F)])
+    _ledger(shop, "CONSIGN-20990303", [dict(item_id="C002", inventory_folder=F)],
+            "client: K98\n")
+    _intake(shop, [{"item_id": "C001", "state": "EXCLUDED", "buyout_price": "4.00"}])
+    through = ["settle", "K99", "--through", TODAY.isoformat()]
+    assert consign.main(through) == 0
+    out = capsys.readouterr().out
+    assert "! inventory/b/one is claimed by" in out and "(not K99's" in out
+    assert "amount due $4.00" in out
+    assert consign.main(["settle", "K98", "--through", TODAY.isoformat()]) == 1
+    assert "[X] inventory/b/one is claimed by" in capsys.readouterr().out

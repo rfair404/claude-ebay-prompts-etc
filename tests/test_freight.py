@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """lib/freight — LTL quote/book/track, tested offline.
 
-Booking freight spends real money, so as with tests/test_easypost_client.py
-the first job here is proving the gate: no provider's book endpoint is ever
-called without confirm=True, a confirmed book is never retried on a network
-error, and the web app's book route needs an explicit confirm too.
+Booking freight spends real money, so the first job here is proving the
+gate: no provider's book endpoint is ever called without confirm=True, a
+confirmed book is never retried on a network error, and the web app's book
+route needs an explicit confirm too.
 
 All HTTP is faked (urlopen patched); no network, no keys.
 """
