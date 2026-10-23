@@ -36,6 +36,11 @@ BOX_RE = re.compile(r"^  (\S+(?: \+ \S+)*)  [a-z]+://\S+/pick/([A-Za-z0-9_-]+)$"
 # publish_sheet()'s warning when a box got no link at all
 NO_LINK_RE = re.compile(r"^  ! could not publish a link for (.+?) \((.*)\);")
 ORDER_ID_RE = re.compile(r"\A[A-Za-z0-9-]+\Z")
+# Per-store verdicts. NONE needs a "nothing" verdict and no "new pick list(s)"
+# one, so a change to the poll's wording fails loudly instead of reading as
+# "nothing to ship" while orders wait.
+NOTHING_RE = re.compile(r"^\[OK\] (?:.+ )?nothing (?:else )?awaiting shipment$")
+PENDING_RE = re.compile(r"^\[OK\] (?:.+ )?\d+ new pick list\(s\)")
 
 
 def parse_poll(out: str) -> tuple[list[tuple[list[str], str]], list[str], int,
@@ -118,7 +123,7 @@ def run(main: Path, *, runner=subprocess.run) -> tuple[list[str], int]:
 
     links = 0
     if staged:
-        up = runner([py, "-m", "lib.cli", "offsite", "share", *(str(p) for _, p in staged)],
+        up = runner([py, "-m", "lib.cli", "offsite", "share", *(p.as_posix() for _, p in staged)],
                     cwd=main, capture_output=True, text=True)
         # `offsite share` prints one URL per file, in argument order, and
         # stops at the first error.
@@ -132,13 +137,20 @@ def run(main: Path, *, runner=subprocess.run) -> tuple[list[str], int]:
                 links += 1
             else:
                 lines.append(f"FAILED {'+'.join(ids)} (upload of {rel}: {err[0]})")
-                retry.append(str(rel))
+                retry.append(rel.as_posix())
                 failed += 1
         if retry:
             lines.append(f"RETRY cd {main} && .venv/bin/python -m lib.cli offsite share "
                          + " ".join(retry))
     if not boxes and not no_link:
-        lines.append("NONE")
+        verdicts = poll.stdout.splitlines()
+        if (any(NOTHING_RE.match(v) for v in verdicts)
+                and not any(PENDING_RE.match(v) for v in verdicts)):
+            lines.append("NONE")
+        else:
+            lines.append("FAILED poll (output not recognised; run tools/pick_list.py"
+                         " --poll --all-stores to read it)")
+            failed += 1
     lines.append(f"DONE links={links} failed={failed} held={held_orders}")
     return lines, failed
 

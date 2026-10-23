@@ -127,6 +127,20 @@ def test_poll_error_is_one_failed_line(tmp_path):
     assert lines == ["FAILED poll (exit 1: boom)", "DONE links=0 failed=1 held=0"]
 
 
+def test_unrecognised_poll_output_is_failed_not_none(tmp_path):
+    """Orders are waiting but the box lines changed shape: never say NONE."""
+    main, _ = _main(tmp_path)
+    reworded = ("[OK] junk: nothing awaiting shipment\n"
+                "[OK] 1 new pick list(s)  (01-11111-11111)\n"
+                f"  box {SOLO} -> http://127.0.0.1:8770/sheet/abc\n")
+    for out in (reworded, "Polled 2 stores.\n", ""):
+        lines, failed = pick_list_links.run(main, runner=Runner(out))
+        assert failed == 1, out
+        assert "NONE" not in lines
+        assert lines[0].startswith("FAILED poll (output not recognised")
+        assert lines[-1] == "DONE links=0 failed=1 held=0"
+
+
 def test_box_whose_sheet_never_published_is_failed(tmp_path):
     main, _ = _main(tmp_path)
     poll = (f"  ! could not publish a link for {PAIR_A}, {PAIR_B} (disk full); "
