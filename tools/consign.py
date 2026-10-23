@@ -635,7 +635,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal) -> list[str]:
     out.append(f"    client share owed     ${money(owed)}  (CLEARED, not paid)")
     if excluded:
         out.append(f"    buyouts owed          "
-                   f"${money(_sum(dec(r['client_share']) for r in buyouts_owed))}  "
+                   f"${money(_sum(dec(r['buyout_price']) for r in buyouts_owed))}  "
                    f"(EXCLUDED, Russell buys, not paid: {len(buyouts_owed)})")
     out.append(f"    client share pending  ${money(pending)}  (SOLD, return window "
                f"or actuals still open)"

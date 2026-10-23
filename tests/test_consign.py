@@ -148,6 +148,13 @@ def test_hand_edit_errors_block_the_sync(shop, capsys):
         assert want in out, want
 
 
+def test_report_owes_an_excluded_buyout_before_sync(shop, capsys):
+    # Straight from buyout_price: client_share is still blank until sync runs.
+    _intake(shop, [{"item_id": "C001", "state": "EXCLUDED", "buyout_price": "12.50"}])
+    assert consign.main(["report"]) == 0
+    assert "buyouts owed          $12.50" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("fields, split, net, share, complete", [
     # net = net_before_postage - ad_fee - actual_postage - other_costs
     ({"ad_fee": "1.00", "actual_postage": "4.50", "other_costs": "2.00"},
