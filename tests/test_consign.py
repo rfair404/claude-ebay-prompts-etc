@@ -295,6 +295,23 @@ F, G = "inventory/b/one", "inventory/b/two"
     ([dict(item_id="C001", split_locked="1.5")], "split_locked '1.5'"),
     ([dict(item_id="C001", sold_at="2026-11-02", delivered_at="2026-11-01")],
      "delivered_at 2026-11-01 is before sold_at"),
+    # a lot-mate (not the lowest id) that already sold or was paid
+    *[([dict(item_id="C001", inventory_folder=F, lot_id="L1"),
+        dict(item_id="C005", inventory_folder=F, lot_id="L1", **{field: value})],
+       f"C005: in lot L1 but not its lead (C001) and has {field}: make the sold row "
+       f"the lowest item_id in the lot, or take it out of the lot")
+      for field, value in (("order_id", "1-1-5"), ("client_share", "8.10"),
+                           ("settlement_id", "K99-S001"),
+                           ("paid_to_client_date", "2026-11-20"))],
+    # ...the same figures on the lead are fine
+    ([dict(item_id="C001", inventory_folder=F, lot_id="L1", order_id="1-1-5",
+           client_share="8.10"),
+      dict(item_id="C005", inventory_folder=F, lot_id="L1")], None),
+    # one order on two active rows; a returned row no longer counts
+    ([dict(item_id="C001", order_id="1-1-5"), dict(item_id="C002", order_id="1-1-5")],
+     "C001, C002 all carry order 1-1-5"),
+    ([dict(item_id="C001", order_id="1-1-5"),
+      dict(item_id="C002", order_id="1-1-5", state="RETURNED")], None),
 ])
 def test_validate_lots_and_ids(rows, want):
     errs = consign.validate([_row(**r) for r in rows], [], "K99")
@@ -309,7 +326,7 @@ def test_a_lot_sells_once_on_its_lead_row(shop, capsys):
     d = _intake(shop, [
         {"item_id": "C001", "lot_id": "L1", "est_low": "4", "est_high": "6"},
         {"item_id": "C002", "lot_id": "L1", "inventory_folder": folder,
-         "client_share": "5.00", "state_note": "second basket"},
+         "ask": "30.00", "state_note": "second basket"},
         {"item_id": "C003", "inventory_folder": _folder(shop, "b/single")}])
     for _ in range(2):                           # the second sync changes nothing
         assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
@@ -317,7 +334,7 @@ def test_a_lot_sells_once_on_its_lead_row(shop, capsys):
         lead, mate = got["K99-C001"], got["K99-C002"]
         assert (lead["state"], lead["inventory_folder"], lead["client_share"]) == (
             "CLEARED", folder, "8.10")
-        assert (mate["state"], mate["sku"], mate["client_share"], mate["order_id"]) == (
+        assert (mate["state"], mate["sku"], mate["ask"], mate["order_id"]) == (
             "CLEARED", "cccc0001", "", "")
         assert mate["state_note"] == "second basket | in lot L1 with K99-C001"
     assert consign.report([d], "K99", False, today=TODAY) == 0
@@ -559,3 +576,36 @@ def test_import_numbers_per_client_across_its_ledgers(shop):
     assert not (shop / "inventory" / "CONSIGN-K99" / "context.txt").exists()
     with pytest.raises(SystemExit, match="already belongs to client K99"):
         consign.main(["import", "CONSIGN-K99", str(roster), "--client", "K98"])
+
+
+def test_a_paid_sale_put_behind_a_lead_is_refused_not_paid_twice(shop, monkeypatch, capsys):
+    # TD's reproduction: C005 sold and was paid; putting it in a lot behind
+    # C001 would hand the sale to C001 as CLEARED and unpaid.
+    monkeypatch.setattr(consign.offsite, "data_root", lambda start=None: shop)
+    folder = _sold_item(shop, "b/paid", "jjjj0005", OLD, "1-1-5")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder}])
+    _csv(d / "client_ledger.csv", consign.COLUMNS, [
+        _row(item_id="K99-C001", inventory_folder=folder, lot_id="L1", state="PREP"),
+        _row(item_id="K99-C005", inventory_folder=folder, lot_id="L1", state="SETTLED",
+             sku="jjjj0005", order_id="1-1-5", client_share="8.10",
+             settlement_id="K99-S001", paid_to_client_date="2026-11-20")])
+    before = (d / "client_ledger.csv").read_bytes()
+    assert consign.main(["sync", "--apply"]) == 1
+    assert "make the sold row the lowest item_id in the lot" in capsys.readouterr().out
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not list(d.glob("client_ledger.backup-*.csv"))
+
+
+def test_settle_blocks_only_on_its_own_clients_errors(shop, capsys):
+    # K98's two ledgers clash with each other; K99's payout isn't held up by it.
+    _ledger(shop, "CONSIGN-K98", [dict(item_id="K98-C001", inventory_folder=F)])
+    _ledger(shop, "CONSIGN-20990303", [dict(item_id="C002", inventory_folder=F)],
+            "client: K98\n")
+    _intake(shop, [{"item_id": "C001", "state": "EXCLUDED", "buyout_price": "4.00"}])
+    through = ["settle", "K99", "--through", TODAY.isoformat()]
+    assert consign.main(through) == 0
+    out = capsys.readouterr().out
+    assert "! inventory/b/one is claimed by" in out and "(not K99's" in out
+    assert "amount due $4.00" in out
+    assert consign.main(["settle", "K98", "--through", TODAY.isoformat()]) == 1
+    assert "[X] inventory/b/one is claimed by" in capsys.readouterr().out

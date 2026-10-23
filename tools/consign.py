@@ -631,14 +631,36 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
         if len(fs) > 1:
             errs.append(f"lot {lot} is on {len(fs)} folders ({', '.join(sorted(fs))}): "
                         f"a lot is one listing, in one folder")
+    # A lot's sale lives on its lead. A lot-mate that already sold or was
+    # paid would hand its sale to the lead and be owed (or paid) again.
+    for iid, (lot, lead) in lot_plan(rows).items():
+        m = next(r for r in rows if r["item_id"] == iid)
+        held = [k for k in ("order_id", "client_share", "settlement_id",
+                            "paid_to_client_date") if m[k]]
+        if held:
+            errs.append(f"{iid}: in lot {lot} but not its lead ({lead['item_id']}) and has "
+                        f"{', '.join(held)}: make the sold row the lowest item_id in the "
+                        f"lot, or take it out of the lot")
+    orders: dict[str, list[str]] = {}
+    for r in rows:
+        if r["order_id"] and is_active(r):
+            orders.setdefault(r["order_id"], []).append(r["item_id"])
+    for order, ids in orders.items():
+        if len(ids) > 1:
+            errs.append(f"{', '.join(ids)} all carry order {order}: one sale, one row")
     return errs
 
 
 def validate_all(dirs: list[Path]) -> list[str]:
-    """Checks across ledgers: a folder claimed from two ledgers (unless the
-    rows are one client's lot), a lot on two folders, and one client's item
-    id in two of its ledgers."""
-    errs = []
+    return [msg for msg, _ in cross_errors(dirs)]
+
+
+def cross_errors(dirs: list[Path]) -> list[tuple[str, frozenset[str]]]:
+    """Checks across ledgers, each with the ledger folders it involves: a
+    folder claimed from two ledgers (unless the rows are one client's lot), a
+    lot on two folders, one client's item id in two of its ledgers, and a
+    folder name that disagrees with its context.txt."""
+    errs: list[tuple[str, frozenset[str]]] = []
     claims: dict[str, list[tuple[str, str, str, str]]] = {}
     lots: dict[tuple[str, str], set[tuple[str, str]]] = {}
     ids: dict[tuple[str, str], set[str]] = {}
@@ -657,23 +679,27 @@ def validate_all(dirs: list[Path]) -> list[str]:
                 lots.setdefault((code, r["lot_id"]), set()).add((d.name, f))
     for (code, cid), names in sorted(ids.items()):
         if len(names) > 1:
-            errs.append(f"{cid} is in {' and '.join(sorted(names))}: one item, one ledger")
+            errs.append((f"{cid} is in {' and '.join(sorted(names))}: one item, one ledger",
+                         frozenset(names)))
     for f, cl in sorted(claims.items()):
-        if len({c[0] for c in cl}) < 2:
+        names = frozenset(c[0] for c in cl)
+        if len(names) < 2:
             continue                             # one ledger: validate() covers it
         units = {(c[1], c[2]) for c in cl}
         if len(units) > 1 or any(not lot for _, lot in units):
-            errs.append(f"{f} is claimed by {', '.join(c[3] for c in cl)} in "
-                        f"{' and '.join(sorted({c[0] for c in cl}))}: one folder is one "
-                        f"sellable unit, unless the rows are one client's lot")
+            errs.append((f"{f} is claimed by {', '.join(c[3] for c in cl)} in "
+                         f"{' and '.join(sorted(names))}: one folder is one "
+                         f"sellable unit, unless the rows are one client's lot", names))
     for (code, lot), placed in sorted(lots.items()):
-        if len({f for _, f in placed}) > 1 and len({n for n, _ in placed}) > 1:
-            errs.append(f"client {code} lot {lot} is on {len({f for _, f in placed})} "
-                        f"folders across {' and '.join(sorted({n for n, _ in placed}))}")
+        names = frozenset(n for n, _ in placed)
+        if len({f for _, f in placed}) > 1 and len(names) > 1:
+            errs.append((f"client {code} lot {lot} is on {len({f for _, f in placed})} "
+                         f"folders across {' and '.join(sorted(names))}", names))
     for d in dirs:
         have, named = context_client(d), folder_code(d)
         if have and named and have != named:
-            errs.append(f"{d.name}: context.txt says client {have}, the folder name {named}")
+            errs.append((f"{d.name}: context.txt says client {have}, the folder name "
+                         f"{named}", frozenset([d.name])))
     return errs
 
 
@@ -1121,8 +1147,8 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append(f"    listed   {len(listed):>3}  at ask ${money(_sum(listed_ask))}"
                + (f"  (unpriced {sum(a is None for a in listed_ask)})"
                   if any(a is None for a in listed_ask) else ""))
-    out.append(f"    on hand  {sum(r['item_id'] not in mates for r in hand):>3}  "
-               f"est ${money(_sum(lows))}–${money(_sum(highs))}"
+    out.append(f"    on hand  {sum(r['item_id'] not in mates for r in hand):>3} unit(s), "
+               f"{len(hand)} item(s)  est ${money(_sum(lows))}–${money(_sum(highs))}"
                + (f"  (unpriced {unpriced})" if unpriced else ""))
     if excluded:
         out.append(f"    excluded {len(excluded):>3}  Russell buys at "
@@ -1256,7 +1282,13 @@ def settle(code: str, through: date, *, apply: bool) -> int:
         raise SystemExit(f"[X] no consignment ledger for client {code}")
     settlements = read_settlements(code)
     rows: list[dict] = []
-    errs = validate_all(all_intakes()) + settlement_errors(settlements)
+    own = {d.name for d in dirs}
+    errs = settlement_errors(settlements)
+    for msg, names in cross_errors(all_intakes()):
+        if names & own:
+            errs.append(msg)
+        else:                                    # another client's problem, not this payout's
+            print(f"! {msg} (not {code}'s; it blocks that client's sync)")
     for d in dirs:
         rs, unknown = read_ledger(d / LEDGER_NAME)
         errs += [f"{d.name}: {e}" for e in validate(rs, unknown, code)]
