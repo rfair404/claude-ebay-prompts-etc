@@ -8,6 +8,8 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
@@ -189,7 +191,10 @@ class PrintRunner:
         if "tools/pick_list.py" in argv:
             return subprocess.CompletedProcess(argv, 0, self.poll_out, "")
         step = argv[0]
-        body = Path(argv[-1].removeprefix("file://")).read_text(encoding="utf-8")
+        src = argv[-1]
+        if src.startswith("file:"):                         # file:///C:/... on Windows
+            src = url2pathname(urlparse(src).path)
+        body = Path(src).read_text(encoding="utf-8")
         if self.fail.get(step) == "hang":
             raise subprocess.TimeoutExpired(argv, timeout)
         if self.fail.get(step) and self.fail[step] in body:

@@ -24,7 +24,8 @@ earlier, so running it twice prints twice. It prints one
 box, `HELD` and `NONE` lines as the links do, and a `DONE` line at the end
 (formats in that tool's docstring). Allow about 20 seconds per sheet.
 
-Sandbox: the poll needs `api.ebay.com` in `allowed_domains`.
+Sandbox: run it with the Bash sandbox off. Chromium crashes inside it, and
+every box comes back `FAILED (render: no PDF ...)`.
 
 ## Reply
 
