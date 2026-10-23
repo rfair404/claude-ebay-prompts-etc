@@ -69,7 +69,9 @@
       "Bash(gh pr list:*)",
       "Bash(gh pr diff:*)",
       "Bash(gh pr checks:*)",
-      "Bash(.claude/skills/r/tg7_pull.sh:*)"
+      "Bash(.claude/skills/r/tg7_pull.sh:*)",
+      "Edit(//home/russ/EBAYBIZ/.pick_list_state.json)",
+      "Edit(//home/russ/EBAYBIZ/.pick_list_state-junk.json)"
     ]
   },
   "worktree": {
