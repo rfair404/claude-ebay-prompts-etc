@@ -43,6 +43,11 @@ sale that has left the sales ledger (refund or cancel). Once
 paid_to_client_date is set the row's client_share is frozen; a
 recalculation that differs is flagged and settled as an adjustment.
 
+Money. net = net_before_postage - ad_fee - actual_postage - handling -
+other_costs, and client_share = split x net. handling is a flat fee per
+sale for packing materials (DEFAULT_HANDLING, or clients.csv handling_fee),
+stamped on the row when it sells and kept from then on, like split_locked.
+
 Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
 client share; its lot-mates follow its state with blank money fields.
@@ -85,10 +90,12 @@ COLUMNS = [
     # added for the per-client ledger (#284); an older file without them loads
     # with them blank, and the next write fills them
     "client_code", "intake", "lot_id", "split_locked", "delivered_at",
+    # the per-order handling fee (boxes, fill, tape, label), set when it sells
+    "handling",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
-         "other_costs", "buyout_price", "net", "client_share")
+         "other_costs", "handling", "buyout_price", "net", "client_share")
 # Blank on a lot-mate: the lead row carries the lot's sale. The estimates stay,
 # since they describe the item itself.
 SALE_MONEY = tuple(k for k in MONEY if k not in ("est_low", "est_high", "buyout_price"))
@@ -119,6 +126,12 @@ CUTS = ("", "LIST", "LOT", "RETURN")
 RETURN_WINDOW_DAYS = 40
 DELIVERY_WINDOW_DAYS = 30
 DEFAULT_SPLIT = Decimal("0.5")
+# Taken from net before the split, like postage, once per sale (a lot is one
+# sale). It covers packing materials: about $1.48 for a small box and $2.63
+# for a medium one at 2026-10 Uline/Brother prices. Packing time is paid by
+# our side of the split. clients.csv handling_fee overrides it per client; a
+# figure typed into a row's handling column is kept (an oversize box).
+DEFAULT_HANDLING = Decimal("2.00")
 CENT = Decimal("0.01")
 FLAG = "FLAG: "
 NOTE_SEP = " | "
@@ -126,7 +139,7 @@ NOTE_SEP = " | "
 REGISTRY_COLUMNS = ["client_code", "name", "contact", "split", "terms", "opened",
                     "agreement_signed", "w9_on_file", "payee_type", "payout_method",
                     "payout_cadence", "floor_main", "floor_junk", "loss_rule",
-                    "abandon_election"]
+                    "abandon_election", "handling_fee"]
 # client_never_owes: a sale that loses money pays the client $0, never less.
 # split: the client carries their split of a loss too (the default).
 LOSS_RULES = ("split", "client_never_owes")
@@ -143,12 +156,13 @@ SETTLEMENT_COLUMNS = [
     "settlement_id", "client_code", "period_start", "period_end", "item_ids",
     "gross", "fees", "ad", "postage", "other", "net", "client_share",
     "adjustments", "amount_paid", "paid_date", "method", "receipt_ref", "client_ack",
+    "handling",
 ]
 STATEMENT_COLUMNS = [
     "settlement_id", "client_code", "line", "item_id", "intake", "description",
     "lot_id", "sold_at", "delivered_at", "cleared_on", "item_price", "buyer_shipping",
-    "refunded", "gross", "ebay_fee", "ad_fee", "actual_postage", "other_costs", "net",
-    "split", "client_share", "amount", "note",
+    "refunded", "gross", "ebay_fee", "ad_fee", "actual_postage", "handling",
+    "other_costs", "net", "split", "client_share", "amount", "note",
 ]
 
 # What `import` accepts beyond the ledger's own column names (roster.csv).
@@ -158,7 +172,7 @@ EXPORT_COLUMNS = [
     "client_code", "intake", "item_id", "lot_id", "bin", "description", "qty", "cut",
     "state", "note", "est_low", "est_high", "listing_id", "ask", "sold_at",
     "delivered_at", "item_price", "buyer_shipping", "refunded", "gross", "ebay_fee",
-    "net_before_postage", "ad_fee", "actual_postage", "other_costs",
+    "net_before_postage", "ad_fee", "actual_postage", "handling", "other_costs",
     "other_costs_note", "buyout_price", "net", "split_locked", "client_share",
     "actuals_complete", "cleared_on", "settlement_id", "paid_to_client_date",
 ]
@@ -412,12 +426,16 @@ def client_terms(registry: dict, code: str) -> dict:
     if re.search(r"\d{5,}", re.sub(r"[\s.-]", "", reg.get("payout_method", ""))):
         raise SystemExit(f"{where} payout_method holds more than 4 digits: keep "
                          f"the last 4 only (e.g. 'check' or 'bank 1234')")
-    for k in ("floor_main", "floor_junk"):
+    for k in ("floor_main", "floor_junk", "handling_fee"):
         try:
             dec(reg.get(k, ""))
         except ValueError:
             raise SystemExit(f"{where} {k} {reg[k]!r} is not an amount") from None
+    handling = dec(reg.get("handling_fee", ""))
+    if handling is not None and handling < 0:
+        raise SystemExit(f"{where} handling_fee {reg['handling_fee']!r} is below zero")
     return {"split": client_split(registry, code), "loss_rule": loss,
+            "handling": DEFAULT_HANDLING if handling is None else handling,
             "agreement_signed": reg.get("agreement_signed", ""),
             "w9_on_file": reg.get("w9_on_file", "").lower()}
 
@@ -461,8 +479,8 @@ def settlement_errors(settlements: list[dict]) -> list[str]:
         for k in ("period_start", "period_end", "paid_date"):
             if s[k] and not iso(s[k]):
                 errs.append(f"{SETTLEMENTS_NAME}: {sid} {k} {s[k]!r} is not a YYYY-MM-DD date")
-        for k in ("gross", "fees", "ad", "postage", "other", "net", "client_share",
-                  "amount_paid"):
+        for k in ("gross", "fees", "ad", "postage", "handling", "other", "net",
+                  "client_share", "amount_paid"):
             try:
                 dec(s[k])
             except ValueError:
@@ -768,7 +786,8 @@ def row_split(r: dict, split: Decimal) -> Decimal:
 def settle_money(r: dict, split: Decimal, loss_rule: str = "split") -> None:
     """gross, net, client_share and actuals_complete from the row's own
     figures. A blank ad_fee or actual_postage is unknown, not zero: the row
-    stays actuals_complete=no with net and client_share blank."""
+    stays actuals_complete=no with net and client_share blank. A blank
+    handling is zero (a row that sold before the fee existed)."""
     price = dec(r["item_price"])
     if price is None:
         r["gross"] = r["net"] = r["client_share"] = r["actuals_complete"] = ""
@@ -780,7 +799,7 @@ def settle_money(r: dict, split: Decimal, loss_rule: str = "split") -> None:
         r["net"] = r["client_share"] = ""
         r["actuals_complete"] = "no"
         return
-    net = nbp - ad - post - z("other_costs")
+    net = nbp - ad - post - z("handling") - z("other_costs")
     r["net"] = money(net)
     r["client_share"] = money(share_of(net, split, loss_rule))
     r["actuals_complete"] = "yes"
@@ -792,7 +811,8 @@ def provisional_net(r: dict) -> Optional[Decimal]:
     if nbp is None:
         return None
     return nbp - sum((dec(r[k]) or Decimal(0)
-                      for k in ("ad_fee", "actual_postage", "other_costs")), Decimal(0))
+                      for k in ("ad_fee", "actual_postage", "handling", "other_costs")),
+                     Decimal(0))
 
 
 def recalculated_share(r: dict, split: Decimal, loss_rule: str) -> Optional[Decimal]:
@@ -859,7 +879,8 @@ def draft_format(fdir: Path) -> str:
 
 
 def sync_row(r: dict, books: Books, split: Decimal, today: date,
-             loss_rule: str = "split", adjusted: Decimal = Decimal(0)) -> list[str]:
+             loss_rule: str = "split", adjusted: Decimal = Decimal(0),
+             handling: Decimal = DEFAULT_HANDLING) -> list[str]:
     """Update `r` in place from the books. Returns the flags raised."""
     r["state"] = r["state"].upper() or "INTAKE"
     r["cut"] = r["cut"].upper()
@@ -929,6 +950,8 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         r["listing_id"] = r["listing_id"] or srow.get("listing_id", "")
         if not r["split_locked"]:                # the split at the moment it sold
             r["split_locked"] = str(split)
+        if not r["handling"] and not r["paid_to_client_date"]:  # likewise the fee
+            r["handling"] = money(handling)
         fmt = (srow.get("sold_format") or "").strip().upper() or fmt
     elif listing and listing_status(listing[1]) == "ENDED":
         flags.append(f"listing {r['listing_id'] or r['sku']} ended unsold: "
@@ -990,7 +1013,8 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
     for r in rows:
         if r["item_id"] not in mates:
             nflags += len(sync_row(r, books, terms["split"], today, terms["loss_rule"],
-                                   adjusted.get(r["item_id"], Decimal(0))))
+                                   adjusted.get(r["item_id"], Decimal(0)),
+                                   terms["handling"]))
     for r in rows:
         if r["item_id"] in mates:
             follow_lead(r, *mates[r["item_id"]])
@@ -1175,6 +1199,8 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append("  totals:")
     out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
                f"  ·  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
+    out.append(f"    handling kept         ${money(_sum(dec(r['handling']) for r in sold))}"
+               f"  ({sum(bool(r['handling']) for r in sold)} sale(s), taken before the split)")
     out.append(f"    client share owed     ${money(owed)}  (CLEARED, not paid)")
     if excluded:
         out.append(f"    buyouts owed          "
@@ -1327,6 +1353,7 @@ def settle(code: str, through: date, *, apply: bool) -> int:
                 item_ids=" ".join(r["item_id"] for r in cleared + buyouts),
                 gross=money(tot("gross")), fees=money(tot("ebay_fee")),
                 ad=money(tot("ad_fee")), postage=money(tot("actual_postage")),
+                handling=money(tot("handling")),
                 other=money(tot("other_costs")), net=money(tot("net")),
                 client_share=money(share),
                 adjustments=" ".join(f"{i}={money(a)}" for i, a in adjustments))
@@ -1338,7 +1365,7 @@ def settle(code: str, through: date, *, apply: bool) -> int:
         lines.append(_statement_line(
             sid, code, "sale", r, **{k: money(dec(r[k])) for k in (
                 "item_price", "buyer_shipping", "refunded", "gross", "ebay_fee", "ad_fee",
-                "actual_postage", "other_costs", "net", "client_share")},
+                "actual_postage", "handling", "other_costs", "net", "client_share")},
             split=str(row_split(r, split)), amount=money(dec(r["client_share"])),
             note=r["other_costs_note"]))
         for mid, (lot, lead) in mates.items():
@@ -1360,14 +1387,15 @@ def settle(code: str, through: date, *, apply: bool) -> int:
                   "client_code": code, "line": "total",
                   **{k: srow[k2] for k, k2 in (("gross", "gross"), ("ebay_fee", "fees"),
                                                ("ad_fee", "ad"), ("actual_postage", "postage"),
+                                               ("handling", "handling"),
                                                ("other_costs", "other"), ("net", "net"),
                                                ("client_share", "client_share"))},
                   "amount": money(due),
                   "note": f"period {srow['period_start']} to {srow['period_end']}"})
 
     print(f"{sid}  client {code}  {srow['period_start']} to {srow['period_end']}")
-    print(f"  sales {len(cleared)}  gross ${srow['gross']}  net ${srow['net']}  "
-          f"share ${money(tot('client_share'))}")
+    print(f"  sales {len(cleared)}  gross ${srow['gross']}  handling ${srow['handling']}  "
+          f"net ${srow['net']}  share ${money(tot('client_share'))}")
     if buyouts:
         print(f"  buyouts {len(buyouts)}  ${money(_sum(dec(r['buyout_price']) for r in buyouts))}")
     for iid, amt in adjustments:

@@ -192,9 +192,16 @@ def test_report_owes_an_excluded_buyout_before_sync(shop, capsys):
 
 
 @pytest.mark.parametrize("fields, split, net, share, complete", [
-    # net = net_before_postage - ad_fee - actual_postage - other_costs
+    # net = net_before_postage - ad_fee - actual_postage - handling - other_costs
     ({"ad_fee": "1.00", "actual_postage": "4.50", "other_costs": "2.00"},
      Decimal("0.5"), "14.20", "7.10", "yes"),
+    ({"ad_fee": "1.00", "actual_postage": "4.50", "handling": "2.00"},
+     Decimal("0.5"), "14.20", "7.10", "yes"),
+    ({"ad_fee": "1.00", "actual_postage": "4.50", "handling": "2.00", "other_costs": "3.00"},
+     Decimal("0.5"), "11.20", "5.60", "yes"),
+    # a blank handling (sold before the fee) is zero, not unknown
+    ({"ad_fee": "1.00", "actual_postage": "4.50", "handling": ""},
+     Decimal("0.5"), "16.20", "8.10", "yes"),
     # zero ad fee is a known zero; a blank one is unknown
     ({"ad_fee": "0.00", "actual_postage": "4.50"}, Decimal("0.5"), "17.20", "8.60", "yes"),
     ({"ad_fee": "", "actual_postage": "4.50"}, Decimal("0.5"), "", "", "no"),
@@ -333,14 +340,15 @@ def test_a_lot_sells_once_on_its_lead_row(shop, capsys):
         got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
         lead, mate = got["K99-C001"], got["K99-C002"]
         assert (lead["state"], lead["inventory_folder"], lead["client_share"]) == (
-            "CLEARED", folder, "8.10")
-        assert (mate["state"], mate["sku"], mate["ask"], mate["order_id"]) == (
-            "CLEARED", "cccc0001", "", "")
+            "CLEARED", folder, "7.10")
+        assert (mate["state"], mate["sku"], mate["ask"], mate["order_id"], mate["handling"]) == (
+            "CLEARED", "cccc0001", "", "", "")      # one sale, one handling fee
         assert mate["state_note"] == "second basket | in lot L1 with K99-C001"
     assert consign.report([d], "K99", False, today=TODAY) == 0
     out = capsys.readouterr().out
-    assert "sold       1  net $16.20" in out
-    assert "client share owed     $8.10" in out
+    assert "sold       1  net $14.20" in out
+    assert "handling kept         $2.00  (1 sale(s)" in out
+    assert "client share owed     $7.10" in out
 
 
 @pytest.mark.parametrize("ledgers, want", [
@@ -395,12 +403,12 @@ def test_split_is_locked_at_the_sale(shop):
     folder = _sold_item(shop, "b/sold", "dddd0001", OLD, "4-4-1")
     d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder},
                        {"item_id": "C002", "inventory_folder": _folder(shop, "b/unsold")}])
-    for split in ("0.5", "0.6"):                 # net 16.20; the 0.5 at the sale holds
+    for split in ("0.5", "0.6"):                 # net 14.20; the 0.5 at the sale holds
         reg = {"K99": {"client_code": "K99", "split": split}}
         assert consign.sync_intake(d, consign.Books(), reg, apply=True, today=TODAY) == 0
         got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
         assert (got["K99-C001"]["split_locked"], got["K99-C001"]["client_share"]) == (
-            "0.5", "8.10")
+            "0.5", "7.10")
         assert got["K99-C002"]["split_locked"] == ""
 
 
@@ -419,6 +427,8 @@ def test_loss_rule(loss_rule, share):
     ("w9_on_file", "maybe", "w9_on_file"),
     ("payout_method", "acct 0012345678", "last 4 only"),
     ("agreement_signed", "last week", "agreement_signed"),
+    ("handling_fee", "two", "handling_fee"),
+    ("handling_fee", "-1.00", "below zero"),
 ])
 def test_registry_fields_are_checked(field, value, want):
     with pytest.raises(SystemExit, match=want):
@@ -440,10 +450,12 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
     stmt = shop / "reports" / "consign" / "K99" / "K99-S001.csv"
     s = consign.read_settlements("K99")
     assert [(x["settlement_id"], x["item_ids"], x["net"], x["client_share"], x["paid_date"])
-            for x in s] == [("K99-S001", "K99-C001 K99-C002", "16.20", "20.60", "")]
+            for x in s] == [("K99-S001", "K99-C001 K99-C002", "14.20", "19.60", "")]
+    assert s[0]["handling"] == "2.00"
     lines = list(csv.DictReader(stmt.open(encoding="utf-8")))
-    assert [(x["line"], x["item_id"], x["amount"]) for x in lines] == [
-        ("sale", "K99-C001", "8.10"), ("buyout", "K99-C002", "12.50"), ("total", "", "20.60")]
+    assert [(x["line"], x["item_id"], x["handling"], x["amount"]) for x in lines] == [
+        ("sale", "K99-C001", "2.00", "7.10"), ("buyout", "K99-C002", "", "12.50"),
+        ("total", "", "2.00", "19.60")]
     first = stmt.read_bytes()
 
     # Everything owed is on the open settlement now.
@@ -457,7 +469,7 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
     assert stmt.read_bytes() == first
 
     # The accountant records the payment; the next sync settles the rows.
-    saved[0].update(paid_date="2026-11-28", amount_paid="20.60")
+    saved[0].update(paid_date="2026-11-28", amount_paid="19.60")
     _csv(consign.settlements_path("K99"), consign.SETTLEMENT_COLUMNS, saved)
     assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
     got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
@@ -468,7 +480,7 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
     capsys.readouterr()
     assert consign.report([d], "K99", False, today=TODAY) == 0
     out = capsys.readouterr().out
-    assert "paid in 2026          $20.60" in out
+    assert "paid in 2026          $19.60" in out
     assert "buyouts owed          $0.00" in out
     assert "client share owed     $0.00" in out
 
@@ -609,3 +621,33 @@ def test_settle_blocks_only_on_its_own_clients_errors(shop, capsys):
     assert "amount due $4.00" in out
     assert consign.main(["settle", "K98", "--through", TODAY.isoformat()]) == 1
     assert "[X] inventory/b/one is claimed by" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reg, typed, paid, want", [
+    ({}, "", "", "2.00"),                                   # the default
+    ({"handling_fee": "1.00"}, "", "", "1.00"),             # the client's own fee
+    ({"handling_fee": "0"}, "", "", "0.00"),                # waived
+    ({}, "6.50", "", "6.50"),                               # oversize box, typed by hand
+    ({}, "", "2026-11-28", ""),                             # paid before the fee: untouched
+])
+def test_handling_is_stamped_at_the_sale_and_kept(shop, reg, typed, paid, want):
+    folder = _sold_item(shop, "b/sold", "ffff0001", OLD, "6-6-1")
+    row = {"item_id": "C001", "inventory_folder": folder, "handling": typed}
+    if paid:
+        row.update(order_id="6-6-1", paid_to_client_date=paid, client_share="8.10")
+    d = _intake(shop, [row, {"item_id": "C002", "inventory_folder": _folder(shop, "b/unsold")}])
+    registry = {"K99": {"client_code": "K99", **reg}}
+    for fee in (None, "3.00"):                   # a later change to the fee doesn't move it
+        if fee:
+            registry["K99"]["handling_fee"] = fee
+        assert consign.sync_intake(d, consign.Books(), registry, apply=True, today=TODAY) == 0
+        got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+        assert got["K99-C001"]["handling"] == want
+        assert got["K99-C002"]["handling"] == ""              # unsold: no fee
+    if not paid:                                 # net 16.20 before handling, split 0.5
+        net = Decimal("16.20") - Decimal(want)
+        assert got["K99-C001"]["net"] == consign.money(net)
+        assert got["K99-C001"]["client_share"] == consign.money(net / 2)
+    else:
+        assert got["K99-C001"]["client_share"] == "8.10"      # frozen, no adjustment
+        assert "adjust" not in got["K99-C001"]["state_note"]
