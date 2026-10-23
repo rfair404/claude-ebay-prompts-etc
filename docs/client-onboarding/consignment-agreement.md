@@ -5,11 +5,9 @@ updated: 2026-10-23
 
 # Consignment Agreement
 
-DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
+DRAFT. This is a template, not legal advice. A Georgia-licensed attorney reviews it before any client sees it.
 
-<!-- TODO(Russell): confirm the state of formation. -->
-
-**Us:** Russell Fair Enterprises, LLC, a ______ limited liability company, d/b/a The Fair Hand ("we", "us").
+**Us:** Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand ("we", "us").
 Address: __________ Phone: __________ Email: __________
 
 **You (the Consignor):** __________ (your name, or the legal name of the trust, estate or company you sign for)
@@ -28,43 +26,35 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 ## 2. Where and how we sell
 
-2.1. We may sell your items through eBay or any other channel we choose. eBay includes our eBay store(s), such as Pop's Games, and eBay Live. Other channels include other online marketplaces, furniture or other dealers, and our antique-mall booth.
+2.1. We sell your items only on eBay: through our eBay store(s) and on eBay Live.
 
-2.2. We choose the channel for each item, and we may move an item from one channel to another. Wherever we sell it, the same terms apply, including any floor you set (section 3.2). <!-- Internal: sales tax on non-eBay sales of consigned items is still open (GH #281). Not client wording. -->
-
-2.3. We photograph, describe and list the items, and pack, ship or deliver them when they sell. We describe condition honestly, including the defects you tell us about.
+2.2. We photograph, describe and list the items, and pack and ship them when they sell. We describe condition honestly, including the defects you tell us about.
 
 ## 3. Prices
 
-3.1. We choose where and how to sell each item: the channel, the format (for example, fixed price or auction), the price and any markdowns. We do this within any floor you set on Exhibit A.
+3.1. We list every item at a fixed price. We don't sell your items by auction. We choose the price and any markdowns, within any floor you set on Exhibit A. <!-- Internal: matches tools/consign.py, which flags an auction-format listing of a consigned item. Not client wording. -->
 
-3.2. You may set a lowest price (a "floor") for any item in the `floor` column of Exhibit A. The floor is the lowest price you'll accept for the item, before any shipping. It applies wherever we sell the item, and we won't sell it for less without your written OK. Floors are your price protection: they are how you control the lowest price an item can sell for.
+3.2. You may set a lowest price (a "floor") for any item in the `floor` column of Exhibit A. The floor is the lowest price you'll accept for the item, before any shipping. We won't sell it for less without your written OK. Floors are your price protection: they are how you control the lowest price an item can sell for.
 
 ## 4. The money
 
-4.1. **Gross Proceeds** for an eBay sale means the item price plus the shipping the buyer paid, less any refund. Sales tax that eBay collects is not part of Gross Proceeds.
+4.1. **Gross Proceeds** means the item price plus the shipping the buyer paid, less any refund. Sales tax that eBay collects is not part of Gross Proceeds.
 
-4.2. **Net Proceeds** means:
-(a) for an eBay sale, eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, and (3) any other cost listed on Exhibit A or that you approve in writing;
-(b) for a sale anywhere else we choose (another marketplace, a furniture or other dealer, or our antique-mall booth), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, and (3) any other direct cost listed on Exhibit A or that you approve in writing.
-<!-- Internal: the ledger tooling (tools/consign.py, the finance sync) has no non-eBay sale path yet; developer handoff. Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
+4.2. **Net Proceeds** means eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, and (3) any other cost listed on Exhibit A or that you approve in writing.
 
 4.3. **Your share** is 50% of Net Proceeds. We keep the rest.
 
-4.4. A cost we don't know yet is not zero. An item isn't Cleared until every cost for it is known, wherever it sold.
+4.4. A cost we don't know yet is not zero. An item isn't Cleared until every cost for it is known.
 
-4.5. If a sale's Net Proceeds come out below zero, we don't take that loss. Section 4.3 doesn't apply to that sale: your share is the whole shortfall, and we take it from your next payouts or you repay it as in section 8.1. We expect this to be rare, but we can't rule it out. The floors you set on Exhibit A are your protection against it (section 3.2). <!-- Internal: Russell's answer to Q9 (2026-10-23): the business does not absorb a loss on a consigned sale; the client carries the WHOLE shortfall. No loss_rule value in #285 does this: `split` charges only the client's split of a loss (net x split), and `client_never_owes` charges nothing. Developer handoff: add a loss_rule value (suggested name `client_carries_loss`) where share_of() returns the full net when net < 0, and make it the value for clients on this agreement. Until it ships, `split` under-charges a loss by the business's half. Not client wording. -->
+4.5. If a sale's Net Proceeds come out below zero, your share of that sale is $0. We carry the loss, and you never owe us for it. <!-- Internal: set loss_rule to client_never_owes for this client in inventory/_consign/clients.csv; tools/consign.py defaults to split. Not client wording. -->
 
 ## 5. When you get paid
 
-5.1. An item is **Cleared** once every cost for it is known and:
-(a) for an eBay sale, at the later of 40 days after it sells or 30 days after the buyer receives it. eBay's 30-day return window runs from delivery, so this gives returns time to come in;
-(b) for any other sale, ____ days after we receive the funds (recommended: 30 days after we receive the funds), so a bounced payment, chargeback or dealer return has time to show up.
-We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
+5.1. An item is **Cleared** once every cost for it is known, at the later of 40 days after it sells or 30 days after the buyer receives it. eBay's 30-day return window runs from delivery, so this gives returns time to come in. We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. -->
 
 5.2. We pay monthly. Items Cleared by the last day of a month are paid by the 15th of the next month.
 
-5.3. If your balance on a payout date is under $500, we carry it forward to the next payout. When this agreement ends, whether either of us ends it or its term runs out, the $500 minimum no longer applies: we pay the full balance owed in the next payout run, whatever the amount (see section 14.3).
+5.3. If your balance on a payout date is under $25, we carry it forward to the next payout. When this agreement ends, whether either of us ends it or its term runs out, the $25 minimum no longer applies: we pay the full balance owed in the next payout run, whatever the amount (see section 14.3).
 
 5.4. Each payout comes with a statement listing each item sold, its sale date, Gross Proceeds, each cost, Net Proceeds and your share.
 
@@ -78,17 +68,17 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 7.1. We may offer to buy an item from you outright at a stated buyout price. A buyout only happens if you agree in writing (a signed note or an email reply is enough), naming the item and the price.
 
-7.2. We pay the buyout price in full, with no split, __________ (recommended: in the next payout run after you agree). The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- TODO(Russell): set when buyouts are paid. TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
+7.2. We pay the buyout price in full, with no split, in the next payout run after you agree. The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
 
 ## 8. Returns and claims after payout
 
-8.1. If a buyer returns an item, files a chargeback or wins an eBay Money Back Guarantee claim after we have paid you for it, we recalculate your share for that sale and take the difference out of your next payout. If there is no next payout, or it doesn't cover the difference, you repay the rest within 30 days of our written notice. A shortfall under section 4.5 is taken from your payouts and repaid the same way.
+8.1. If a buyer returns an item, files a chargeback or wins an eBay Money Back Guarantee claim after we have paid you for it, we recalculate your share for that sale and take the difference out of your next payout. If there is no next payout, or it doesn't cover the difference, you repay the rest within 30 days of our written notice.
 
 8.2. A returned item goes back on sale under this agreement.
 
 ## 9. Unsold items
 
-9.1. If an item hasn't sold after 180 days listed, we tell you. You then have 30 days to pick it up or agree to a markdown.
+9.1. If an item hasn't sold after 90 days listed, we tell you. You then have 30 days to pick it up or agree to a markdown.
 
 9.2. If you don't pick it up or answer in that time, we may donate or dispose of the item, and you owe us nothing for it. <!-- TODO(attorney): confirm Georgia abandoned-property wording and notice requirements. -->
 
@@ -100,7 +90,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 ## 11. Shipping
 
-We pack and ship every sale that needs shipping. Postage, or transport or delivery for a sale outside eBay, comes out of Net Proceeds (section 4.2).
+We pack and ship every sale. Postage comes out of Net Proceeds (section 4.2).
 
 ## 12. Your promises
 
@@ -115,7 +105,7 @@ If any of these turns out to be untrue, we may return the items, and you cover a
 
 ## 13. Items we don't accept
 
-We don't take firearms or firearm parts, ivory or other animal parts, or anything the channel we sell through doesn't allow. <!-- TODO(Russell): confirm the restricted-items list. Internal: precious metals/jewelry dealer registration is still open (GH #281); don't decide here. -->
+We don't take firearms or firearm parts, ivory or other animal parts, or anything eBay's policies don't allow us to list. <!-- Internal: precious metals/jewelry dealer registration is still open (GH #281); don't decide here. -->
 
 ## 14. Term and ending
 
@@ -159,7 +149,7 @@ Legal name of company (as on the Secretary of State record): __________
 By (signature): __________ Name: __________ Title: __________ Date: __________
 [ ] Exhibit B signed and proof attached
 
-### Russell Fair Enterprises, LLC d/b/a The Fair Hand
+### Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand
 
 By (signature): __________ Name: __________ Title: __________ Date: __________
 

@@ -5,11 +5,9 @@ updated: 2026-10-23
 
 # Purchase Agreement and Bill of Sale
 
-DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
+DRAFT. This is a template, not legal advice. A Georgia-licensed attorney reviews it before any client sees it.
 
-<!-- TODO(Russell): confirm the state of formation. -->
-
-**Buyer:** Russell Fair Enterprises, LLC, a ______ limited liability company, d/b/a The Fair Hand ("we", "us").
+**Buyer:** Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand ("we", "us").
 Address: __________ Phone: __________ Email: __________
 
 **Seller:** __________ (your name, or the legal name of the trust, estate or company you sign for) ("you")
@@ -89,7 +87,7 @@ Legal name of company (as on the Secretary of State record): __________
 By (signature): __________ Name: __________ Title: __________ Date: __________
 [ ] Exhibit B signed and proof attached
 
-### Russell Fair Enterprises, LLC d/b/a The Fair Hand
+### Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand
 
 By (signature): __________ Name: __________ Title: __________ Date: __________
 

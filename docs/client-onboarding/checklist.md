@@ -5,7 +5,7 @@ updated: 2026-10-23
 
 # Client onboarding checklist
 
-DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
+DRAFT. This is a template, not legal advice. A Georgia-licensed attorney reviews it before any client sees it.
 
 Client code: K____ (we assign it) Date: __________ Taken by: __________
 
@@ -40,6 +40,7 @@ Commands for each step are in [RUN.md, "Consignment (`consign`)"](../../RUN.md).
 - **Purchases:** `python -m lib.cli context <folder> --spend <amount>`. Record the lot price once.
 - **Buyouts:** `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item` (our cost basis), and set its row to `EXCLUDED` with the same `buyout_price` in `inventory/CONSIGN-K##/client_ledger.csv` (what we owe the client). These are two sides of one purchase, not two costs: the accountant books one inventory purchase at `buyout_price` when Russell pays, and nothing to "Due to consignors".
 - **Agreement and W-9 flags:** once the agreement is signed and the W-9 is in, set `agreement_signed` (the date) and `w9_on_file` (`yes`) for the client in `inventory/_consign/clients.csv`. Never record the TIN.
+- **Terms in `clients.csv`:** `split` 0.5 and `loss_rule` `client_never_owes`, to match the agreement (sections 4.3 and 4.5).
 - **Signed paper, W-9s and the ID check:**
   - Signed originals and W-9s stay on paper in a locked file box, one folder per K## code.
   - Never scan or photograph a W-9 or an ID. Don't shoot paperwork with the item cameras: camera imports land in `inventory/`.
