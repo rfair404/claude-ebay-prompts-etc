@@ -7,7 +7,7 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
 
-<!-- TODO(Russell): confirm the DBA name on client paperwork. -->
+<!-- TODO(Russell): confirm legal name, state of formation and DBA on client paperwork. -->
 
 **Buyer:** Russell Fair Enterprises, LLC, a Georgia limited liability company, d/b/a The Fair Hand ("we", "us").
 Address: __________ Phone: __________ Email: __________

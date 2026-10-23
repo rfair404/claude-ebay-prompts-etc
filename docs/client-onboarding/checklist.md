@@ -22,9 +22,12 @@ Paperwork: [Consignment agreement](consignment-agreement.md) · [Purchase agreem
 | [ ] | IRS Form W-9 | Not needed (CPA to confirm) | Before first payout | Before first payout | Yes | Yes (trust/estate's) | Yes (company's) |
 | [ ] | Payment or payout method | Payment method and reference | Payout method | Both | Yes | Yes | Yes |
 | [ ] | Signed paperwork with Exhibit A | Bill of sale | Consignment agreement | Consignment agreement + written buyout for each item bought | Yes | Yes | Yes |
-| [ ] | Red-flag check done; restricted items set aside | Yes | Yes | Yes | Yes | Yes | Yes |
-| [ ] | Heavy, oversized or fragile items marked on Exhibit A | Yes | Yes | Yes | Yes | Yes | Yes |
-| [ ] | Copy of everything signed given to the client | Yes | Yes | Yes | Yes | Yes | Yes |
+
+**Every client:**
+
+- [ ] Red-flag check done; restricted items set aside
+- [ ] Heavy, oversized or fragile items marked on Exhibit A
+- [ ] Copy of everything signed given to the client
 
 **Red flags:** fresh retail tags or many of the same item, removed or filed-off serial numbers, can't explain where items came from, pressure for quick cash, liens or loans on the items. Stop and ask before going ahead. Heirs with no letters or court order: see the note on [Exhibit B](exhibits.md#exhibit-b-certification-of-authority).
 
@@ -33,8 +36,14 @@ Paperwork: [Consignment agreement](consignment-agreement.md) · [Purchase agreem
 Commands for each step are in [RUN.md, "Consignment (`consign`)"](../../RUN.md).
 
 - **Client name and contact:** only in `inventory/_consign/clients.csv`. Never in git, a PR, an issue or a brief. Everywhere else, use the K## code.
-- **Consignment items:** imported into the intake's ledger with no spend.
+- **Consignment items:** imported into `inventory/CONSIGN-K##/client_ledger.csv` with no spend.
 - **Purchases:** `python -m lib.cli context <folder> --spend <amount>`. Record the lot price once.
-- **Buyouts:** `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item` (our cost basis), and set its row to `EXCLUDED` with the same `buyout_price` in the intake's `client_ledger.csv` (what we owe the client). These are two sides of one purchase, not two costs: the accountant books one inventory purchase at `buyout_price` when Russell pays, and nothing to "Due to consignors".
-- **Signed paper, ID-check notes and W-9s:** kept outside the repo. <!-- TODO(TD/accountant): decide where signed paperwork is stored. -->
+- **Buyouts:** `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item` (our cost basis), and set its row to `EXCLUDED` with the same `buyout_price` in `inventory/CONSIGN-K##/client_ledger.csv` (what we owe the client). These are two sides of one purchase, not two costs: the accountant books one inventory purchase at `buyout_price` when Russell pays, and nothing to "Due to consignors".
+- **Agreement and W-9 flags:** once the agreement is signed and the W-9 is in, set `agreement_signed` (the date) and `w9_on_file` (`yes`) for the client in `inventory/_consign/clients.csv`. Never record the TIN.
+- **Signed paper, W-9s and the ID check:**
+  - Signed originals and W-9s stay on paper in a locked file box, one folder per K## code.
+  - Never scan or photograph a W-9 or an ID. Don't shoot paperwork with the item cameras: camera imports land in `inventory/`.
+  - You may scan signed agreements (never W-9s or IDs) into `~/fairhand-records/K##/`. That folder is outside the repo, `inventory/` and `reports/`, so it is never backed up offsite or read by a session.
+  - Record the ID check on this paper checklist only: ID type, date and initials.
+  - The files hold only the `agreement_signed` date and the `w9_on_file` yes/no.
 - **Purchase packet** (date, amount, payment method with last 4 only, receipt) goes to the accountant, for direct purchases and buyouts alike.

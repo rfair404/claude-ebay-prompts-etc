@@ -7,7 +7,7 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
 
-<!-- TODO(Russell): confirm the DBA name on client paperwork. -->
+<!-- TODO(Russell): confirm legal name, state of formation and DBA on client paperwork. -->
 
 These exhibits attach to the [Consignment Agreement](consignment-agreement.md) and the [Purchase Agreement and Bill of Sale](purchase-agreement.md) between you and Russell Fair Enterprises, LLC d/b/a The Fair Hand. There is one copy of each here so the two agreements always use the same forms.
 
@@ -19,9 +19,8 @@ Client code: K____ Date: __________ Agreement: [ ] Consignment [ ] Purchase Shee
 
 - **Consignment:** use `floor` if you want a lowest price for an item. Leave `purchase_price` blank.
 - **Purchase:** put a price per line in `purchase_price`, or leave it blank and write the lot total at the bottom. Leave `floor` blank.
-- **Office use** columns are filled in by us after intake.
 
-| # | description | qty | why | floor | purchase_price | bin (office) | cut (office) | est_low (office) | est_high (office) |
+| # | description | qty | why | floor | purchase_price | bin | cut | est_low | est_high |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | | | | | | | | | |
 | 2 | | | | | | | | | |
@@ -39,6 +38,8 @@ Client code: K____ Date: __________ Agreement: [ ] Consignment [ ] Purchase Shee
 | 14 | | | | | | | | | |
 | 15 | | | | | | | | | |
 
+`bin`, `cut`, `est_low`, `est_high` are filled in by us after intake.
+
 More items? Continue on another sheet.
 
 Purchase lot total (if not priced per line): $__________
@@ -54,7 +55,7 @@ Client initials: ______ Our initials: ______
 <!-- Internal notes for whoever types this into the import file:
 - Keep these exact header names. `python -m lib.cli consign import` reads any column whose name matches a `client_ledger.csv` column, and ignores columns that don't match (# / floor / purchase_price).
 - Never add a `state`, `ask` or `buyout_price` column to Exhibit A (or rename purchase_price to one): import would read it into the consignment ledger.
-- Import skips a row whose bin + description match another row. Use qty for identical items.
+- Import skips a row whose intake, bin and description match another row. Use qty for identical items.
 - The ledger has no floor column yet, so a consignor floor lives only on this paper sheet. Handoff to developer.
 -->
 

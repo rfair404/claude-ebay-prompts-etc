@@ -7,7 +7,7 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
 
-<!-- TODO(Russell): confirm the DBA name on client paperwork. -->
+<!-- TODO(Russell): confirm legal name, state of formation and DBA on client paperwork. -->
 
 **Us:** Russell Fair Enterprises, LLC, a Georgia limited liability company, d/b/a The Fair Hand ("we", "us").
 Address: __________ Phone: __________ Email: __________
@@ -38,7 +38,7 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 3.1. We set prices, choose the format (fixed price or auction) and decide markdowns.
 
-3.2. You may set a lowest price (a "floor") for any item in the `floor` column of Exhibit A. The floor is the item price, not counting shipping. We won't sell that item for less without your written OK. We only use the auction format for items with no floor.
+3.2. You may set a lowest price (a "floor") for any item in the `floor` column of Exhibit A. The floor is the item price, not counting shipping. We won't sell that item for less without your written OK.
 
 ## 4. The money
 
@@ -53,9 +53,12 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 4.4. A cost we don't know yet is not zero. An item isn't Cleared until every cost for it is known.
 
+4.5. If a sale's Net Proceeds come out below zero (tick one; we both initial): [ ] you share the loss at your split, and it is taken from your next payout as in section 8.1 [ ] you never owe; your share of that sale is $0, including when we recalculate it under section 8.1
+(Recommended: you never owe.) Initials: You ____ Us ____ <!-- Internal: recommend client_never_owes because we set the price, format, ads and postage, so a below-zero sale is our call, and the amounts are too small to be worth collecting from a client. The ticked box is the loss_rule in clients.csv (split / client_never_owes). TODO(Russell): confirm the recommended option. -->
+
 ## 5. When you get paid
 
-5.1. An item is **Cleared** ____ days (recommended: 40) after it sells, once all its costs are known. eBay's 30-day return window runs from delivery, so this gives returns time to come in. We owe you your share once an item is Cleared, not when it sells. <!-- TODO(Russell): set the clearing period. 40 matches RETURN_WINDOW_DAYS in tools/consign.py; change both together. -->
+5.1. An item is **Cleared** at the later of ____ days after it sells (recommended: 40) or ____ days after the buyer receives it (recommended: 30), with all costs known. eBay's 30-day return window runs from delivery, so this gives returns time to come in. We owe you your share once an item is Cleared, not when it sells. <!-- TODO(Russell): set both clearing periods. 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py; change the agreement and the code together. -->
 
 5.2. Payout schedule: __________ (recommended: monthly. Items Cleared by the last day of a month are paid by the 15th of the next month.) <!-- TODO(Russell): set the payout schedule. -->
 
