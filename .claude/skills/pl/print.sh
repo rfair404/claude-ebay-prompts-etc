@@ -16,8 +16,7 @@ printed=0 failed=0
 # Poll prints one line per box: "  <id>[ + <id>]  http://.../pick/<token>"
 while IFS=$'\t' read -r token ids; do
   # A sheet the poll saved in an item folder has only a meta file in
-  # pick_lists/.served/, so read it through pick_store (as pick_list_links.py
-  # does) instead of by path.
+  # pick_lists/.served/, so read it through pick_store instead of by path.
   html="$TMP/$token.html"
   if ! why=$(.venv/bin/python - "$token" "$html" 2>&1 <<'PY'
 import sys
