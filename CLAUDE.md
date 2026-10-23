@@ -151,9 +151,9 @@ versioned"). Before adding a doc, extend the one that already covers the topic.
 
 When asked for the pick list (for today, what to ship), use the `pick-list`
 skill: `.claude/skills/pick-list/links.sh` polls every store, uploads one
-sheet per box to R2 and prints the links to reply with. Paper is `/pl`.
-[`prompts/pick_list.md`](prompts/pick_list.md) has the details. Don't reply
-with `127.0.0.1` links, the terminal report, or a file path.
+sheet per box to R2 and prints the links to reply with. To print on paper,
+use `/pl`. [`prompts/pick_list.md`](prompts/pick_list.md) has the details.
+Don't reply with `127.0.0.1` links, the terminal report, or a file path.
 
 ## Streaming setup on a new machine
 

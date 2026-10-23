@@ -1,8 +1,9 @@
-# PICK LIST — answering "give me / print today's pick list"
+# PICK LIST — answering "give me today's pick list"
 
 Obeys [`_shared.md`](_shared.md) house style.
 
-**Output:** one clickable **R2 link** per order. Each link is a printable
+**Output:** one clickable **R2 link** per box (orders for the same buyer at
+the same address share one sheet). Each link is a printable
 sheet uploaded to the offsite bucket (`lib/offsite.py`) and presigned for 7
 days. Never give the terminal report, a file path, or a
 `http://127.0.0.1:8770/...` link. The local app is only reachable from this
@@ -11,7 +12,7 @@ machine, and the person wants links that open anywhere (user decision,
 
 Applies to any request for the pick list, the packing list, or what to ship
 today. Asking for it means "give me the sheets to print". It does not mean
-"summarise the queue".
+"summarise the queue". To print them on paper, use the `/pl` skill.
 
 ---
 
@@ -19,29 +20,17 @@ today. Asking for it means "give me the sheets to print". It does not mean
 
     .claude/skills/pick-list/links.sh
 
-This is the `pick-list` skill ([`SKILL.md`](../.claude/skills/pick-list/SKILL.md)
-has the reply format). It works from a worktree and does the whole job:
-
-1. Runs `tools/pick_list.py --poll --all-stores` in the main checkout, where
-   the sheets (`pick_lists/.served/`) and the poll state
-   (`.pick_list_state*.json`) live. Never with `--print`. Orders for the same
-   buyer at the same address share one sheet. Orders polled earlier still get
-   their sheet, so re-running is safe and always gives the full list.
-2. Copies each box's sheet to `inventory/_pick_lists/pick_<order-id>.html`
-   (`pick_<id1>+<id2>.html` for a shared box), because `offsite share` only
-   uploads files its include globs cover.
-3. Uploads them all with one `.venv/bin/python -m lib.cli offsite share`,
-   presigned for 7 days. Re-running gives fresh links.
-4. Prints one `LINK <ids> <url> | <title> | ship by <date>` line per box,
-   with the title and date read from `pick_lists/pick_<order-id>.txt`.
+This is the `pick-list` skill. It works from a worktree and does the whole
+job: it polls every store from the main checkout (never with `--print`),
+stages each box's sheet under `inventory/_pick_lists/`, uploads them with one
+`offsite share` and prints one `LINK` line per box. The format of each line is
+in the docstring of [`tools/pick_list_links.py`](../tools/pick_list_links.py).
+Links last 7 days, and re-running gives fresh ones.
 
 The sandbox needs `api.ebay.com` and the R2 endpoint host from `config.yaml`
 → `offsite.endpoint` in `allowed_domains`.
 
-Reply with one markdown link per box, labelled with what's in it:
-
-    - [L.L.Bean cable knit sweater (order 04-15279-11245)](https://<r2 presigned url>), ship by 10-09
-
+Reply as [`SKILL.md`](../.claude/skills/pick-list/SKILL.md) ("Reply") says.
 Keep the buyer's name and address out of the chat reply, because the sheet
 already carries what the picker needs.
 

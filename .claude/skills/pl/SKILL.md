@@ -6,8 +6,8 @@ description: Print today's pick lists on paper. Polls every store for orders awa
 # /pl — print today's pick lists
 
 Typing `/pl` is the ask to print, so send the sheets to the printer without
-confirming first. For R2 links instead of paper, follow
-[`prompts/pick_list.md`](../../../prompts/pick_list.md).
+confirming first. For R2 links instead of paper, use the `pick-list` skill
+([`prompts/pick_list.md`](../../../prompts/pick_list.md)).
 
 ## Run
 
