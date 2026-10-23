@@ -110,23 +110,32 @@ COMPETITOR_MIN_LISTINGS = 5
 _CHARM_ENDING_CENTS = {0: ".00", 99: ".99", 97: ".97", 95: ".95"}
 
 # Tokens that mark a listing as multi-item (a "lot"), used by the unit filter.
+# "complete" is NOT one: on a single it means nothing is missing ("Playboy
+# March 1990 complete with centerfold"). The lot sense is "complete year/run",
+# matched as a phrase in _COUNT_RE.
 _MULTI_ITEM_WORDS = {
     "lot", "lots", "set", "sets", "bundle", "bundles", "collection",
-    "complete", "pair", "pairs", "group", "grouping", "joblot",
+    "pair", "pairs", "group", "grouping", "joblot",
 }
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 # A digit that touches a quote/inch mark (7" x 6") or a length unit (6 in) is
 # a physical DIMENSION, not a quantity. Used to stop the x-multiplier count
 # patterns from false-positiving on eBay size strings.
 _DIM_AFTER = r'(?:["″′\']|\s*(?:in|inch|inches|cm|mm|ft|feet|foot)\b)'
-# "5 pcs", "lot of 3", "x12", "12 pieces/issues/cards/vols". The x-multiplier
-# forms ("x12" / "12x") only count when the number is NOT a dimension, so
-# 7" x 6" / 13" X 10" stay single-item (see looks_multi_item doctests).
+# "5 pcs", "lot of 3", "x12", "12 pieces/issues/magazines/cards/vols",
+# "complete year". A year is not a count, so "1990 Issue" stays single. The
+# x-multiplier forms ("x12" / "12x") only count when the number is NOT a
+# dimension, so 7" x 6" / 13" X 10" stay single-item (see looks_multi_item
+# doctests).
 _COUNT_RE = re.compile(
     r'\b(?:'
     r'lot of\s*\d+'
     r'|set of\s*\d+'
-    r'|\d+\s*(?:pcs?|pieces?|issues?|cards?|vol(?:ume)?s?|pc)'
+    r'|(?:complete|full|entire|whole)\s+(?:calendar\s+|calander\s+)?'
+    r'(?:years?|runs?)'
+    r'|(?!(?:19|20)\d{2}\b)\d+\s*'
+    r'(?:pcs?|pieces?|issues?|cards?|vol(?:ume)?s?|pc'
+    r'|(?:[a-z]+\s+)?(?:magazines|mags))'
     r'|x\s*\d+(?!' + _DIM_AFTER + r')'
     r'|(?<!["″′\'])\d+\s*x'
     r')\b',
