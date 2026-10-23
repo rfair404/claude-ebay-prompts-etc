@@ -141,6 +141,7 @@ def test_selects_listing_data_only():
         "listings_ledger.csv": b"a", "listings_ledger-junk.csv": b"b",
         "listings_ledger.csv.backup-20261008-232617": b"b2",
         "sales_ledger.csv": b"c", "inventory/shoot1/IMG_1.jpg": b"d",
+        "unwound_orders.csv": b"u", "unwound_orders-junk.csv": b"uj",
         "inventory/shoot1/IMG_2.JPG": b"d", "inventory/shoot1/clip.mov": b"v",
         "inventory/_ebay_photos/206566144144.jpg": b"p",
         "inventory/shoot1/draft.md": b"e", "inventory/shoot1/review_card.html": b"r",
@@ -163,7 +164,8 @@ def test_selects_listing_data_only():
                    "listings_ledger-junk.csv", "listings_ledger.csv",
                    "listings_ledger.csv.backup-20261008-232617",
                    "pick_lists/pick_06-1.html", "pick_lists/picks_2026-10-05.pdf",
-                   "reports/x.json", "sales_ledger.csv"]
+                   "reports/x.json", "sales_ledger.csv",
+                   "unwound_orders-junk.csv", "unwound_orders.csv"]
 
 
 def test_inventory_keeps_only_draft_identify_recovery_and_pick_sheets():
