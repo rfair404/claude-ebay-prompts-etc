@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Copy new TG-7 photos (JPG + ORF) off the card: over the camera's Wi-Fi if
-# it answers, else over USB (Storage mode mounts as a drive, MTP goes through
-# gphoto2), else by hopping the laptop's Wi-Fi onto the camera's network
-# (tg7_wifi_hop.sh, detached). Files already in DEST with the same name and
-# size are skipped. Photos land in ~/Pictures/TG-7 ($TG7_PHOTOS).
+# Copy new TG-7 photos (JPG + ORF) off the card: over USB first (Storage mode
+# mounts as a drive, MTP goes through gphoto2), else over the camera's Wi-Fi
+# if it answers, else by hopping the laptop's Wi-Fi onto the camera's network
+# (tg7_wifi_hop.sh, detached). USB comes first because the laptop has one
+# Wi-Fi card and the camera's Wi-Fi is usually off. Files already in DEST
+# with the same name and size are skipped. Photos land in ~/Pictures/TG-7
+# ($TG7_PHOTOS).
 #
 #   tg7_pull.sh          pull (prints "HOP started; status at <path>" for a hop)
 #   tg7_pull.sh --wait   wait for a hop's status file and print it
@@ -26,15 +28,6 @@ if [ "${1:-}" = --wait ]; then
 fi
 
 mkdir -p "$DEST"
-
-# Wi-Fi: the camera is at 192.168.0.10 when the laptop is on its network.
-# On air, the stream owns the network, so leave the camera's Wi-Fi alone.
-if [ -e "$MAIN/inventory/_live/ON_AIR" ]; then
-  echo "ON AIR: skipping the TG-7 Wi-Fi pull (inventory/_live/ON_AIR is set)"
-elif curl -s -m 3 -o /dev/null -A "OI.Share v2" http://192.168.0.10/get_caminfo.cgi; then
-  echo "VIA wifi"
-  exec python3 "$MAIN/tools/live/tg7cam" sync --to "$DEST"
-fi
 
 # USB Storage: a mounted card with an OM SYSTEM DCIM folder. If the card
 # (volume label "OM SYSTEM") is plugged in but not mounted yet, mount it.
@@ -70,9 +63,18 @@ if [ -n "$PORT" ]; then
   exit $?
 fi
 
-# Wi-Fi hop: no USB either, but a saved TG-7 Wi-Fi profile is in range. The
-# laptop has one Wi-Fi adapter, so joining the camera drops the network it is
-# on, Claude included. The hop runs detached, needs nothing from Claude, and
+# Wi-Fi, only when the TG-7 is not on USB: the camera is at 192.168.0.10
+# when the laptop is on its network. On air, the stream owns the network, so leave the camera's Wi-Fi alone.
+if [ -e "$MAIN/inventory/_live/ON_AIR" ]; then
+  echo "ON AIR: skipping the TG-7 Wi-Fi pull (inventory/_live/ON_AIR is set)"
+elif curl -s -m 3 -o /dev/null -A "OI.Share v2" http://192.168.0.10/get_caminfo.cgi; then
+  echo "VIA wifi"
+  exec python3 "$MAIN/tools/live/tg7cam" sync --to "$DEST"
+fi
+
+# Wi-Fi hop: not on USB and the camera did not answer, but a saved TG-7 Wi-Fi
+# profile is in range. The laptop has one Wi-Fi adapter, so joining the
+# camera drops the network it is on, Claude included. The hop runs detached, needs nothing from Claude, and
 # always reconnects; its result lands in $STATUS.
 if [ ! -e "$MAIN/inventory/_live/ON_AIR" ] && bash "$HOP" --check >/dev/null 2>&1; then
   rm -f "$STATUS"
@@ -81,5 +83,5 @@ if [ ! -e "$MAIN/inventory/_live/ON_AIR" ] && bash "$HOP" --check >/dev/null 2>&
   exit 0
 fi
 
-echo "NOT FOUND: TG-7 not on its Wi-Fi (192.168.0.10) and not on USB"
+echo "NOT FOUND: TG-7 not on USB and not on its Wi-Fi (192.168.0.10)"
 exit 2

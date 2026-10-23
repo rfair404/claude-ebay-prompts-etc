@@ -172,3 +172,51 @@ def test_pull_without_the_camera_in_range_does_not_hop(tmp_path):
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 2 and "NOT FOUND" in out.stdout
     assert not (tmp_path / "run" / "tg7_hop.status").exists()
+
+
+# a TG-7 in MTP mode next to a D5100; --get-file copies the numbered files into the cwd
+GPHOTO2 = """#!/bin/bash
+[ -n "$FAKE_MTP" ] || exit 0
+case "$*" in
+  "--auto-detect") printf 'Model  Port\\nNikon DSC D5100  usb:001,004\\nOlympus TG-7  usb:001,005\\n' ;;
+  "--port usb:001,005 --list-files") printf '#1     P1010001.JPG  rd  4000 KB\\n#2     P1010001.ORF  rd  20000 KB\\n#3     P1010002.MOV  rd  90000 KB\\n' ;;
+  "--port usb:001,005 --get-file 1,2 "*) touch P1010001.JPG P1010001.ORF ;;
+  *) exit 1 ;;
+esac
+"""
+
+
+def pull(tmp_path, *, mtp=False, cam_on_wifi=False, on_air=False):
+    env = fake_env(tmp_path, on_air=on_air)
+    (tmp_path / "bin" / "gphoto2").write_text(GPHOTO2)
+    (tmp_path / "bin" / "curl").write_text(
+        '#!/bin/bash\necho "$*" >>"$FAKE_DIR/curl.calls"\n' + CURL.split("\n", 1)[1])
+    if cam_on_wifi:  # the laptop is already on the camera's network
+        (tmp_path / "active").write_text(TG7_UUID + "\n")
+    env["FAKE_MTP"] = "1" if mtp else ""
+    return subprocess.run(["bash", str(PULL)], env=env, stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_pull_takes_usb_first_even_when_the_camera_answers_on_wifi(tmp_path):
+    out = pull(tmp_path, mtp=True, cam_on_wifi=True)
+    assert out.returncode == 0
+    assert out.stdout.splitlines()[0] == "VIA usb-mtp usb:001,005"
+    assert sorted(p.name for p in (tmp_path / "photos").iterdir()) == ["P1010001.JPG", "P1010001.ORF"]
+    assert not (tmp_path / "curl.calls").exists()  # never touched the camera's Wi-Fi
+
+
+def test_pull_falls_back_to_wifi_when_the_tg7_is_not_on_usb(tmp_path):
+    out = pull(tmp_path, cam_on_wifi=True)
+    assert out.returncode == 0
+    assert out.stdout.splitlines()[0] == "VIA wifi"
+    assert "192.168.0.10" in (tmp_path / "curl.calls").read_text()
+    assert sorted(p.name for p in (tmp_path / "photos").iterdir()) == ["P1010001.JPG", "P1010001.ORF"]
+
+
+def test_pull_on_air_without_usb_skips_wifi_and_says_not_found(tmp_path):
+    out = pull(tmp_path, cam_on_wifi=True, on_air=True)
+    assert out.returncode == 2
+    assert out.stdout.splitlines()[0].startswith("ON AIR: skipping the TG-7 Wi-Fi pull")
+    assert out.stdout.splitlines()[-1].startswith("NOT FOUND")
+    assert not (tmp_path / "curl.calls").exists()
