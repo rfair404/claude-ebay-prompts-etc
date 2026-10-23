@@ -23,7 +23,7 @@ and runs freely. Booking spends money: DRY RUN unless --confirm.
     python -m lib.cli freight status 3 delivered
     python -m lib.cli freight providers
 
-Origin defaults to the store's storefront `ship_from` (same as ship-quote);
+Origin defaults to the store's storefront `ship_from`;
 any --from-* flag overrides it. The web app shows the same shipments at
 http://127.0.0.1:8770/freight.
 """
