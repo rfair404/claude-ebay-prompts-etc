@@ -28,9 +28,11 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 2.1. We may sell your items through eBay or any other channel we choose. eBay includes our eBay store(s) and eBay Live. Other channels include other online marketplaces, furniture or other dealers, and our antique-mall booth.
 
-2.2. We choose the channel for each item, and we may move an item from one channel to another. Wherever we sell it, the same terms apply, including any floor you set (section 3.2). <!-- Internal: sales tax on non-eBay sales of consigned items is still open (GH #281). Not client wording. -->
+2.2. We choose the channel for each item, and we may move an item from one channel to another, except that antiques are sold at our antique-mall booth (section 2.4). Wherever we sell it, the same terms apply, including any floor you set (section 3.2). <!-- Internal: sales tax on non-eBay sales of consigned items is still open (GH #281). Not client wording. -->
 
 2.3. We photograph, describe and list the items, and pack, ship or deliver them when they sell. We describe condition honestly, including the defects you tell us about.
+
+2.4. **Antiques.** Every antique among your items is sold at our antique-mall booth, not online. We decide which items are antiques, and we tell you which ones when we confirm Exhibit A. <!-- Internal: Russell, 2026-10-23: all antiques found in a consignment are sold at the antique mall. Not marked on Exhibit A: a `channel` column there would be read into client_ledger.csv by `consign import`. Not client wording. -->
 
 ## 3. Prices
 
@@ -44,8 +46,9 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 4.2. **Net Proceeds** means:
 (a) for an eBay sale, eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, (3) the handling fee in section 4.6, and (4) any other cost listed on Exhibit A or that you approve in writing;
-(b) for a sale anywhere else we choose (another marketplace, a furniture or other dealer, or our antique-mall booth), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, (3) the handling fee in section 4.6 if we pack the item to ship it, and (4) any other direct cost listed on Exhibit A or that you approve in writing.
-<!-- Internal: a non-eBay sale is a `client_ledger.csv` row with `channel` set and its money typed by hand (the Set B code PR (branch claude/consign-set-b-terms)). Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
+(b) for a sale at our antique-mall booth, the price the buyer pays (not counting sales tax), less any refund, minus (1) the mall's commission of 10% of that price and (2) the mall's card fee of 3% of any part the buyer pays by credit or debit card. There is no postage and no handling fee on a booth sale;
+(c) for a sale anywhere else we choose (another marketplace, or a furniture or other dealer), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, (3) the handling fee in section 4.6 if we pack the item to ship it, and (4) any other direct cost listed on Exhibit A or that you approve in writing.
+<!-- Internal: the mall's 10% commission and 3% card fee are its current terms (Russell, 2026-10-23); if the mall changes them, change (b) and the code together. A non-eBay sale is a `client_ledger.csv` row with `channel` set and its money typed by hand (the Set B code PR (branch claude/consign-set-b-terms)). Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
 
 4.3. **Your share** is 50% of Net Proceeds. We keep the rest.
 
