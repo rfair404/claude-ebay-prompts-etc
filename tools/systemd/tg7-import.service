@@ -11,7 +11,7 @@ Requisite=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
 
 [Service]
 Type=oneshot
-ExecStart=/home/russ/EBAYBIZ/tools/tg7_import.sh
+ExecStart=%h/EBAYBIZ/tools/tg7_import.sh
 TimeoutStartSec=30min
 
 [Install]
