@@ -42,7 +42,7 @@ while `tools/live/show_flow.py` says the show is on air, the batch jobs in
 takes the same CPU. The signal is the flag file `show_flow.py golive` writes
 and `show_flow.py stop` removes (`on_air_flag()`), read once per call; no OBS
 call from a hook. A flag older than ON_AIR_STALE_H is left over from a crash
-and ignored; `rm` clears it sooner. One instant read of a listed tool opts out
+and ignored; `show_flow.py status` clears it sooner when nothing is live. One instant read of a listed tool opts out
 with a leading `# on-air-ok: <reason>`, the same trace-leaving escape as above.
 
     echo '{"tool_name":"Bash","tool_input":{"command":"python -m pytest"}}' \
@@ -198,8 +198,8 @@ def verdict(tool_input: dict) -> str | None:
             f"the show is live, so {job} waits: run it after the show (flag: {live}).\n"
             f"Batch work beside the 2026-10-21 show skipped 99.4% of its frames.\n"
             f"Never stop the stream to get past this. If you think the flag is left over, "
-            f"check `python tools/live/show_flow.py status`: only if eBay and Twitch both "
-            f"read off, `rm {live}`. A flag older than {ON_AIR_STALE_H} h is ignored.\n"
+            f"run `python tools/live/show_flow.py status`: when eBay and Twitch both read "
+            f"off, it removes the flag itself. A flag older than {ON_AIR_STALE_H} h is ignored.\n"
             f"One instant read of this tool (--status, --check) runs with a leading "
             f"`# on-air-ok: <reason>`."
         )

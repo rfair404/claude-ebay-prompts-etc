@@ -18,8 +18,13 @@ page, a phone, or another agent's web app can drive the show:
     POST /api/pager/refocus     refocus without changing page (D5100; on closeup the TG-7)
     POST /api/pager/wb          {"preset": "daylight"}: the D5100's white balance (no preset: read it)
     POST /api/pager/hold        {"on": true}: freeze the camera page on air; false: back to it live
-    POST /api/pager/step        the item sequence: item -> closeup -> hold -> the other camera
+    POST /api/pager/still       {"refocus": false}: a TG-7 photo on air (the TG-7
+                                still), covering the D5; refocus: then refocus the D5 behind it
+    POST /api/pager/step        the item sequence: item -> still (the TG-7 shoots) -> item -> ...
     POST /api/pager/tg7         {"action": "start" | "stop"}: the TG-7 feed (tg7cam stream)
+    POST /api/pager/tg7preview  {"on": true}: the TG-7 preview, off air (starts the feed if it's off);
+                                false: ends it (show_flow.tg7_preview). The next still ends it too.
+    GET  /api/pager/tg7preview.jpg  a JPEG of the TG-7 preview scene (?width=80-540, default 270)
     POST /api/pager/watch       {"action": "start" | "stop"}: the camera watch (black over a dead camera)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
     POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
@@ -43,9 +48,14 @@ Every answer is the state object, plus `switch`, `refocus` or `wb` on a POST:
      "switch": {"page": "item", "changed": true, "focused": null, "refocus_s": null,
                 "blacked": ["d5"]}}
 
-`page` is null when OBS is on a scene that isn't one of the pager's, and
-"hold" on the hold still; `held` then names the page the still was taken of.
-A hold or step answers with `hold` / `step` (show_flow.hold() / step()).
+`page` is null when OBS is on a scene that isn't one of the pager's,
+"hold" on the hold still (`held` then names the page the still was taken
+of) and "still" on the TG-7 still. A hold, still or step answers with
+`hold` / `still` / `step` (show_flow.hold() / still() / step()). A still
+takes a few seconds (the TG-7 focuses, shoots and sends the full-size
+photo over Wi-Fi) with the page on air unchanged; a TG-7 failure is 502
+and nothing switches. `still.refocus` is the D5 refocus's result, or
+`{"error"}` if it failed with the still already on air.
 `feed_status` is "stopped", "running", or "running, no frames for Ns" (the
 feed loop is up but the camera sends nothing). eBay and
 Twitch start and stop independently (show_flow DESTS: eBay on OBS's stream
@@ -167,6 +177,10 @@ class HoldRequest(BaseModel):
     on: bool
 
 
+class StillRequest(BaseModel):
+    refocus: bool = False  # then refocus the D5100 behind the still (~5 s)
+
+
 class MusicRequest(BaseModel):
     on: bool | None = None
     preset: Literal[tuple(_show_music.PRESETS)] | None = None
@@ -174,6 +188,10 @@ class MusicRequest(BaseModel):
 
 class Tg7Request(BaseModel):
     action: Literal["start", "stop"]
+
+
+class Tg7PreviewRequest(BaseModel):
+    on: bool
 
 
 class WatchRequest(BaseModel):
@@ -326,6 +344,13 @@ def pager_hold(req: HoldRequest) -> dict:
         return {**_show_flow.state(c), "switch": r}
 
 
+@router.post("/api/pager/still")
+def pager_still(req: StillRequest) -> dict:
+    with _obs() as c:
+        r = _show_flow.still(c, refocus=req.refocus)
+        return {**_show_flow.state(c), "still": r}
+
+
 @router.post("/api/pager/step")
 def pager_step() -> dict:
     with _obs() as c:
@@ -341,6 +366,20 @@ def pager_tg7(req: Tg7Request) -> dict:
         else:
             _show_flow.tg7_stop()
         return _show_flow.state(c)
+
+
+@router.post("/api/pager/tg7preview")
+def pager_tg7_preview(req: Tg7PreviewRequest) -> dict:
+    with _obs() as c:
+        r = _show_flow.tg7_preview(c, req.on)
+        return {**_show_flow.state(c), "tg7preview": r}
+
+
+@router.get("/api/pager/tg7preview.jpg")
+def pager_tg7_preview_shot(width: int = Query(270, ge=80, le=540)) -> Response:
+    with _obs() as c:  # a render of the scene, never a switch: the preview stays off air
+        jpg = _show_flow.preview_shot(c, width=width)
+    return Response(jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/pager/watch")
@@ -360,15 +399,17 @@ def pager_watch(req: WatchRequest) -> dict:
 # shell or in OBS shows up here too, and is logged. Page clicks are sent one
 # at a time, latest wins: clicking 2 then 3 fast ends on 3, never on
 # whichever request OBS happened to get last. A page click is never blocked
-# by a refocus or a stream start in flight. Hold / release / step join the
-# same queue, so a step pressed during a switch lands after it, never before.
+# by a refocus or a stream start in flight. Hold / release / still / step join
+# the same queue, so a step pressed during a switch lands after it, never before.
 # The program monitor fetches a frame ~2x a second (the next only after the
 # last one lands). The multiview's pictures are off unless switched on (each
 # is an OBS render, and the show laptop is short of CPU); on, it refreshes
 # one off-air tile a second, round robin. Both stop while the tab is hidden.
 # A click's answer and every poll are diffed by changes() into the log.
 # Keys: 1 intro, 2 item, 3 next, 4 desktop, 5 webcam, 6 close-up, 7 multi, H hold/release,
-# Space step, R refocus, C reconnect cameras, M music on/off, [ / ] previous / next lot.
+# P TG-7 preview (off air, for framing), T TG-7 still (Shift+T: and refocus the D5 behind it),
+# Space step (item <-> still),
+# R refocus, C reconnect cameras, M music on/off, [ / ] previous / next lot.
 # Keys are ignored while a list or text box has focus (the white balance list's own
 # letters pick a preset; the show name is typed).
 PAGE_HTML = r"""<!doctype html>
@@ -427,7 +468,8 @@ button:disabled { opacity:.5; cursor:wait; }
            border:3px solid var(--line); border-radius:4px; }
 .pvw img { border-color:var(--ok); } .pgmon img { border-color:#5a1d1f; } .pgmon.live img { border-color:var(--pgm); }
 .mon.stale img { opacity:.35; }
-.bus.off .mon img, .bus.off #shotnote { display:none; }
+.bus.off .mon:not(.tg7mon) img, .bus.off #shotnote { display:none; }
+.tg7mon figcaption b { background:var(--warn); color:#111; } .tg7mon img { border-color:var(--warn); }
 #shotnote { color:var(--muted); font-size:11px; text-align:center; max-width:220px; }
 .pgmon.stale #shotnote { color:var(--warn); }
 .tbar { display:flex; flex-direction:column; justify-content:center; gap:8px; width:128px; flex:none; }
@@ -487,8 +529,8 @@ button:disabled { opacity:.5; cursor:wait; }
 .mv.off .tile img { height:0; }
 .mv.off .tile .flag { left:auto; right:6px; top:5px; }  /* no picture: tally beside the label, not over its key */
 .mv.off .tile.on.pvw .pv { display:none; }
-#hold.on { border-color:var(--warn); }
-#hold.on .lab, #hold.on .sub { background:var(--warn); color:#111; }
+#hold.on, #still.on { border-color:var(--warn); }
+#hold.on .lab, #hold.on .sub, #still.on .lab, #still.on .sub { background:var(--warn); color:#111; }
 .ctl { display:grid; grid-template-columns:repeat(auto-fit, minmax(118px, 1fr)); gap:6px; margin-top:8px; }
 .ctl button, .ctl select, .ctl label { padding:9px 10px; border-radius:4px; border:1px solid var(--line); background:var(--panel2);
                                        text-align:left; }
@@ -588,6 +630,8 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
       <img id="shot" alt="What OBS is sending now"
            src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==">
       <div id="shotnote">waiting for OBS...</div></figure>
+    <figure class="mon tg7mon" id="tg7mon" hidden><figcaption><b>TG-7 PREVIEW</b> off air: frame it, then T</figcaption>
+      <img id="tg7shot" alt="The TG-7's live view, off air, framed as the still will be"></figure>
   </div>
   <div class="mv" id="mv">
     <button class="tile page" data-page="intro"><span class="flag">ON AIR</span><span class="pv">PVW</span><img alt=""><span class="note">no scene in OBS</span>
@@ -606,9 +650,13 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
       <span class="lab"><span class="key">7</span><span class="name">Multi</span></span><span class="sub">D5100 + webcam + TG-7 + window</span></button>
     <button class="tile" id="hold"><span class="flag">ON AIR</span><img alt="">
       <span class="lab"><span class="key">H</span><span class="name">Hold still</span></span><span class="sub">Freeze the camera page</span></button>
+    <button class="tile" id="still"><span class="flag">ON AIR</span><img alt="">
+      <span class="lab"><span class="key">T</span><span class="name">TG-7 still</span></span><span class="sub">Shoot, put it on air, adjust the D5 behind it</span></button>
   </div>
   <div class="ctl">
-    <button id="step">Step <small>Space</small></button>
+    <button id="step">Step <small>Space: item / TG-7 still</small></button>
+    <button id="stillfocus">TG-7 still + D5 refocus <small>Shift+T</small></button>
+    <button id="tg7prev">TG-7 preview <small>P</small></button>
     <button id="refocus">Refocus <small>R</small></button>
     <button id="reconnect">Reconnect cams <small>C</small></button>
     <button id="tg7">TG-7 feed</button>
@@ -671,18 +719,24 @@ canvas.spark { display:block; width:100%; height:34px; margin-top:6px; }
 </div>
 <script>
 const $ = s => document.querySelector(s), buttons = [...document.querySelectorAll('.page')];
-const tileOf = p => p === 'hold' ? $('#hold') : document.querySelector('.tile[data-page="' + p + '"]');
+const tileOf = p => p === 'hold' || p === 'still' ? $('#' + p) : document.querySelector('.tile[data-page="' + p + '"]');
 const LABEL = { intro: 'Intro', item: 'Item', closeup: 'Close-up', next: 'Next', desktop: 'Desktop',
-                webcam: 'Webcam only', multi: 'Multi view', hold: 'Hold' };
+                webcam: 'Webcam only', multi: 'Multi view', hold: 'Hold', still: 'TG-7 still' };
 const D5_PAGES = ['item', 'multi'];  // pages with the D5100 on air
 const CAM_LABEL = { d5: 'D5100', webcam: 'Webcam', tg7: 'TG-7' };
 // the cameras each page puts on air (show_flow.PAGE_CAMS)
 const PAGE_CAMS = { intro: [], item: ['d5', 'webcam'], closeup: ['tg7', 'webcam'], next: ['webcam'],
-                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam', 'tg7'] };
+                    desktop: ['webcam'], webcam: ['webcam'], multi: ['d5', 'webcam', 'tg7'], still: ['webcam'] };
 const NAMES = { ebay: 'eBay', twitch: 'Twitch' };
-// Hold, release and step ride the page queue as actions: one at a time, in order.
+// Hold, release, still and step ride the page queue as actions: one at a time, in order.
+// A still (and a step onto one) waits for the TG-7's shot over Wi-Fi, so it gets a longer deadline.
 const ACTION = { '@hold': ['/api/pager/hold', { on: true }], '@release': ['/api/pager/hold', { on: false }],
-                 '@step': ['/api/pager/step', null] };
+                 '@still': ['/api/pager/still', { refocus: false }, 60000],
+                 '@stillfocus': ['/api/pager/still', { refocus: true }, 90000],
+                 '@step': ['/api/pager/step', null, 60000] };
+const ACTION_NAME = { '@hold': 'Hold', '@release': 'Release', '@still': 'TG-7 still',
+                      '@stillfocus': 'TG-7 still', '@step': 'Step' };
+let tg7Preview = false, tg7PrevBusy = false;  // the TG-7 preview: off air, on the pager only
 let held = null, tg7Busy = false, watchBusy = false, curPage = null, prev = null;
 let pvw = null, pendingTake = null;  // the preview bus; the take waiting in the queue
 // Each control has its own in-flight flag: a refocus or stream start never blocks a page click.
@@ -755,6 +809,9 @@ function show(st, own = []) {
   hb.classList.toggle('on', !!held);
   hb.querySelector('.name').textContent = held ? 'Release' : 'Hold still';
   hb.querySelector('.sub').textContent = held ? 'Back to ' + LABEL[held] + ' live' : 'Freeze the camera page';
+  const sb = $('#still');
+  if (st.page !== 'still' && sb.classList.contains('on')) sb.querySelector('img').removeAttribute('src');
+  sb.classList.toggle('on', st.page === 'still');
   // the D5 refocus needs the D5; the TG-7's works on the close-up page whatever the stand-in
   $('#refocus').hidden = !!st.standin && st.page !== 'closeup';
   $('#refocus').disabled = refocusing || !!st.refocusing;
@@ -762,6 +819,10 @@ function show(st, own = []) {
   $('#wbset').disabled = wbBusy || !!st.refocusing;
   if (!musicBusy && st.music) showMusic(st.music);  // only GET /api/pager carries it
   if (!tg7Busy) $('#tg7').textContent = st.tg7_status === 'running' ? 'Stop TG-7 feed' : 'Start TG-7 feed';
+  tg7Preview = !!st.tg7_preview;
+  $('#tg7mon').hidden = !tg7Preview;
+  if (!tg7Preview) $('#tg7shot').removeAttribute('src');
+  if (!tg7PrevBusy) $('#tg7prev').firstChild.textContent = tg7Preview ? 'End TG-7 preview ' : 'TG-7 preview ';
   // sources
   const d5Air = D5_PAGES.includes(st.page) && !st.standin;
   const fs = st.feed_status || (st.feed ? 'running' : 'stopped');
@@ -1053,18 +1114,28 @@ async function takeNow() {
   } catch (e) { say(LABEL[body.page] + ' did not go on air: ' + e.message, 'err'); }
 }
 async function act(name) {
-  const [path, body] = ACTION[name];
+  const [path, body, ms] = ACTION[name];
+  if (path === '/api/pager/still' || (name === '@step' && curPage === 'item'))
+    $('#msg').textContent = 'TG-7 shooting (the page on air stays until the photo is in)...';
   try {
-    const st = await api('POST', path, body, 12000);
+    const st = await api('POST', path, body, ms || 12000);
     epoch++;
     if (pending) return;
     show(st, ['page']);
-    const r = st.hold || st.step || st.switch || {};
+    const r = st.hold || st.still || st.step || st.switch || {};
+    const f = r.refocus;
     if (st.page === 'hold') say('Holding a still of ' + LABEL[st.held || r.held] +
                                 ': turn the item, then Step or Release.', 'warn');
+    else if (r.superseded_by) say('TG-7 photo saved, not put on air: ' + r.superseded_by + ' went on air first.', 'warn');
+    else if (f && f.error) say('TG-7 still on air, but the D5100 refocus behind it failed: ' +
+                               f.error.replace(/^refocus failed: /, ''), 'err');
+    else if (st.page === 'still') say('On air: TG-7 still' + (r.item ? ' (saved to ' + r.item + ')' : '') +
+                                      '. ' + (r.preview ? 'TG-7 preview ended. ' : '') +
+                                      (f ? focusText(f) + ' ' : '') + 'Adjust the D5100 (R, WB), then Item (2) or Step.',
+                                      f && !f.focused ? 'warn' : 'ok');
     else if (r.changed === false && name === '@release') say('Not on hold.');
     else say('On air: ' + LABEL[st.page] + '.');
-  } catch (e) { say({ '@hold': 'Hold', '@release': 'Release', '@step': 'Step' }[name] + ' failed: ' + e.message, 'err'); }
+  } catch (e) { say(ACTION_NAME[name] + ' failed: ' + e.message, 'err'); }
 }
 function holdKey() { go(held ? '@release' : '@hold'); }
 
@@ -1083,6 +1154,37 @@ async function tg7() {
   catch (e) { say('TG-7 feed ' + action + ' failed: ' + e.message, 'err'); }
   tg7Busy = false; $('#tg7').disabled = false;
 }
+// The TG-7 preview: never a page, never on program. On starts the TG-7 feed if it's off;
+// the still (T) or this toggle ends it, and the feed stops again if the preview started it.
+async function tg7PreviewToggle() {
+  if (tg7PrevBusy) return;
+  const on = !tg7Preview;
+  tg7PrevBusy = true; $('#tg7prev').disabled = true; epoch++;
+  say(on ? 'TG-7 preview: starting its live view (off air)...' : 'Ending the TG-7 preview...');
+  try { const st = await api('POST', '/api/pager/tg7preview', { on }, 15000);
+        tg7PrevBusy = false; if (!switching) show(st, ['tg7']);
+        say(on ? 'TG-7 preview on (off air' + (st.tg7preview.started ? '; feed started, a few seconds to picture' : '') +
+                 '). Frame it, then T shoots and puts it on air.'
+               : 'TG-7 preview off' + (st.tg7preview.stopped ? '; TG-7 live view stopped.' : '.')); }
+  catch (e) { say('TG-7 preview ' + (on ? 'on' : 'off') + ' failed: ' + e.message, 'err'); }
+  tg7PrevBusy = false; $('#tg7prev').disabled = false;
+}
+async function tg7Frame() {  // one frame at a time, only while the preview is up and the tab visible
+  if (tg7Preview && !document.hidden) {
+    const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 5000);
+    try {
+      const r = await fetch('/api/pager/tg7preview.jpg?width=360', { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const url = URL.createObjectURL(await r.blob()), old = $('#tg7shot').src;
+      if (tg7Preview) $('#tg7shot').src = url; else URL.revokeObjectURL(url);
+      if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+      $('#tg7mon').classList.remove('stale');
+    } catch (e) { $('#tg7mon').classList.add('stale'); }
+    finally { clearTimeout(timer); }
+  }
+  setTimeout(tg7Frame, 400);
+}
+tg7Frame();
 async function watch() {
   if (watchBusy) return;
   const action = $('#watch').textContent.startsWith('Stop') ? 'stop' : 'start';
@@ -1099,7 +1201,8 @@ async function refocus() {
   if (refocusing || $('#refocus').hidden) return;
   refocusing = true; $('#refocus').disabled = true; epoch++;
   say(curPage === 'closeup' ? 'TG-7 autofocus...'
-                            : 'Refocusing the D5100 (about 5 s; a D5100 view hides behind Next)...');
+      : curPage === 'still' ? 'Refocusing the D5100 behind the TG-7 still (about 5 s)...'
+      : 'Refocusing the D5100 (about 5 s; a D5100 view hides behind Next)...');
   try { const st = await api('POST', '/api/pager/refocus', null, 60000);
         refocusing = false;
         if (!switching) show(st);
@@ -1349,6 +1452,9 @@ $('#reconnect').addEventListener('click', reconnect);
 $('#wbset').addEventListener('click', setWb);
 $('#hold').addEventListener('click', holdKey);
 $('#step').addEventListener('click', () => go('@step'));
+$('#still').addEventListener('click', () => go('@still'));
+$('#stillfocus').addEventListener('click', () => go('@stillfocus'));
+$('#tg7prev').addEventListener('click', tg7PreviewToggle);
 $('#tg7').addEventListener('click', tg7);
 $('#watch').addEventListener('click', watch);
 $('#music .go').addEventListener('click', music);
@@ -1375,6 +1481,8 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'r' || e.key === 'R') refocus();
   else if (e.key === 'c' || e.key === 'C') reconnect();
   else if (e.key === 'h' || e.key === 'H') holdKey();
+  else if (e.code === 'KeyT') go(e.shiftKey ? '@stillfocus' : '@still');
+  else if (e.key === 'p' || e.key === 'P') tg7PreviewToggle();
   else if (e.key === ' ') { e.preventDefault(); go('@step'); }  // not also a click on a focused button
   else if (e.key === 'm' || e.key === 'M') music();
   else if (e.key === '[') stepLot(-1);

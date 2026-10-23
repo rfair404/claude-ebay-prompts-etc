@@ -477,6 +477,42 @@ def test_setup_builds_the_closeup_and_hold_pages_idempotently():
     assert all(c.enabled(SF.HOLD, s) and c.enabled(SF.CLOSEUP, s) for s in (SF.WEBCAM, SF.MIC))
 
 
+def test_setup_builds_the_tg7_still_page_idempotently():
+    c = live_obs()
+    SF.cmd_setup(c, args(tg7_rotation=270))
+    SF.cmd_setup(c, args())
+    # the photo on the dark card, the live webcam strip (and its panel) over it; no TG-7 panel:
+    # a photo can't drop out, so the watch never blacks it
+    assert c.order(SF.STILL) == [SF.BG, SF.STILL_FRAME, SF.WEBCAM, "Webcam Down", SF.MIC]
+    assert c.kinds[SF.STILL_FRAME] == "image_source"
+    box = c.transforms[(SF.STILL, SF.STILL_FRAME)]
+    # the close-up's slot under the strip, fit whole, upright whatever the TG-7's live rotation
+    assert (box["boundsWidth"], box["boundsHeight"]) == (SF.W, SF.H - SF.TG7_TOP)
+    assert box["positionY"] == SF.TG7_TOP + (SF.H - SF.TG7_TOP) / 2 and box["rotation"] == 0
+    assert box["boundsType"] == "OBS_BOUNDS_SCALE_INNER" and box["cropToBounds"] is False
+    assert c.transforms[(SF.STILL, SF.WEBCAM)] == SF.WEBCAM_BOX
+    assert all(c.enabled(SF.STILL, s) for s in (SF.BG, SF.STILL_FRAME, SF.WEBCAM, SF.MIC))
+    c.scenes[SF.STILL].append(c._new(SF.WINDOW, True))  # added by hand in OBS
+    SF.cmd_setup(c, args())
+    assert c.enabled(SF.STILL, SF.WINDOW) is False
+
+
+def test_setup_builds_the_off_air_tg7_preview_in_the_stills_slot():
+    c = live_obs()
+    SF.cmd_setup(c, args())
+    SF.cmd_setup(c, args())
+    # the TG-7 live on the dark card and nothing else: no webcam, no mic, no black panel
+    assert c.order(SF.TG7_PREVIEW) == [SF.BG, SF.TG7]
+    prev, still = c.transforms[(SF.TG7_PREVIEW, SF.TG7)], c.transforms[(SF.STILL, SF.STILL_FRAME)]
+    same = ("positionX", "positionY", "boundsType", "boundsWidth", "boundsHeight", "cropToBounds")
+    assert {k: prev[k] for k in same} == {k: still[k] for k in same}  # framed as the still will show it
+    assert SF.TG7_PREVIEW not in SF.SLOTS and SF.page_of(SF.TG7_PREVIEW) is None  # never a page
+    SF.cmd_setup(c, args(tg7_rotation=90))  # on its side: the live view turns, its bounds with it
+    prev = c.transforms[(SF.TG7_PREVIEW, SF.TG7)]
+    assert prev["rotation"] == 90 and (prev["boundsWidth"], prev["boundsHeight"]) == (SF.H - SF.TG7_TOP, SF.W)
+    assert c.program == SF.INTRO  # setup never puts it on air
+
+
 def test_setup_turns_the_tg7_bounds_with_its_rotation():
     c = live_obs()
     SF.cmd_setup(c, args(tg7_rotation=270))
@@ -554,7 +590,8 @@ def test_setup_puts_a_hidden_black_panel_over_each_camera_on_every_page_that_sho
     c = built()
     SF.cmd_setup(c, args())  # twice: nothing doubles
     shows = {SF.D5: {SF.PRODUCT, SF.MULTI}, SF.TG7: {SF.CLOSEUP, SF.MULTI},
-             SF.WEBCAM: {SF.PRODUCT, SF.MULTI, SF.CLOSEUP, SF.UPNEXT, SF.DESKTOP, SF.HOLD, SF.WEBCAM_ONLY}}
+             SF.WEBCAM: {SF.PRODUCT, SF.MULTI, SF.CLOSEUP, SF.UPNEXT, SF.DESKTOP, SF.HOLD, SF.STILL,
+                         SF.WEBCAM_ONLY}}
     for cam, panel in SF.DOWN.items():
         assert c.kinds[panel] == "color_source_v3" and c.settings[panel]["color"] == 0xFF000000
         assert {s for s in c.scenes if panel in c.order(s)} == shows[cam]
@@ -836,3 +873,14 @@ def test_a_second_watch_exits_at_once(monkeypatch, capsys):
         SF._lock_nb(f)  # a watch is running
         assert SF.main(["watch", "run"]) == 0
     assert "camera watch already running" in capsys.readouterr().out
+
+
+def test_a_stopped_tg7_feed_never_blacks_the_preview_or_the_still(watch):
+    # the preview ended and stopped the feed: the TG-7 is "off", not "down", and
+    # its panel only covers the pages that show it live (close-up, multi)
+    watch.tg7 = []
+    cams = watch.tick(4)
+    assert cams["tg7"]["state"] == "off"
+    touched = {scene for scene, src, _ in watch.c.writes if src == SF.DOWN[SF.TG7]}
+    assert touched == {SF.CLOSEUP, SF.MULTI}
+    assert SF.DOWN[SF.TG7] not in watch.c.order(SF.TG7_PREVIEW) + watch.c.order(SF.STILL)

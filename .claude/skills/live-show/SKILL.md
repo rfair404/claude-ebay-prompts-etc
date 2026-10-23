@@ -1,6 +1,6 @@
 ---
 name: live-show
-description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam, desktop = an app window like Claude + webcam, multi = D5100 + webcam + desktop window at once), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
+description: Run the eBay Live / Twitch show from the shell with no OBS GUI — launch OBS headless, start the Nikon D5100 feed, go live, page between the show's views (intro pre-show card, item view = D5100 + webcam, next/pause view = desktop window + webcam, desktop = an app window like Claude + webcam, multi = D5100 + webcam + desktop window at once, TG-7 still = a TG-7 photo on air while the D5100 is adjusted), refocus the D5100 hidden from viewers, and stop. Use when the user asks to start/stop the stream, go live, switch camera views, show what's up next, swap items, or refocus the camera.
 ---
 
 # Live show: stream and camera views
@@ -35,7 +35,7 @@ In this order:
 python tools/live/obsctl.py launch                    # OBS, no window (no-op if running)
 python tools/live/show_flow.py feed start              # D5100 live view -> OBS (runs tools/d5100_webcam.sh)
 python tools/live/show_flow.py feed status             # "running"; "running, no frames for Ns" = camera not sending
-python tools/live/show_flow.py setup --window "<title>" # build the intro, item, next and webcam pages
+python tools/live/show_flow.py setup --window "<title>" # build the intro, item, next, webcam and TG-7 still pages
 python tools/live/show_flow.py watch start   # black panel over any camera that drops
 python tools/live/show_flow.py standin on              # only if the D5100 is out; setup keeps this state
 python tools/live/show_flow.py page intro              # pre-show card while you get ready
@@ -87,6 +87,9 @@ One command puts any page on air:
 | "desktop", "show my screen", "face cam view" | `show_flow.py page desktop` |
 | "everything at once", "both cameras and the screen", "multi view" | `show_flow.py page multi` |
 | "camera's dead", "just the webcam", "fallback" | `show_flow.py page webcam` |
+| "TG-7", "show it close", "cover the camera while I fix it" | `show_flow.py still` (`--refocus`: and refocus the D5 behind it) |
+| "TG-7 preview", "let me frame the TG-7" | `show_flow.py tg7 preview on` (off air; `still` or `tg7 preview off` ends it) |
+| "next side", "turn it", "step" | `show_flow.py step` (item -> still -> item -> ...) |
 | "refocus", "it's blurry" | `show_flow.py refocus` |
 | "too orange", "too blue", "white balance", "set WB to daylight" | `show_flow.py wb` (read) / `show_flow.py wb daylight` |
 | "camera's black", "picture froze" | `show_flow.py reconnect` (or `reconnect d5` / `reconnect webcam`) |
@@ -104,6 +107,22 @@ One command puts any page on air:
   unless the user asked for a page meanwhile (that page stays). A second
   refocus while one runs is refused (`Busy`), not queued. If it fails, the
   feed is left running and the error starts with `refocus failed:`.
+- `still` takes a full-size TG-7 photo (the page on air stays while the
+  TG-7 shoots, a few seconds over Wi-Fi), then fades to the TG-7 still: the
+  photo under the live webcam strip. It stays until `page item` or `step`
+  (no timer). With it on air, `refocus`, `wb` and D5 stills run behind it
+  (no Up Next) and leave it up, so adjust the D5 there. A TG-7 failure (no
+  Wi-Fi, focus didn't lock) leaves the page on air and says why. With a
+  photo shoot open the frame lands in its item and log (`shoot.py`), else in
+  `inventory/_live/stills/<date>/`. `step` goes item -> still -> item; the
+  live TG-7 close-up (`tg7 start`, `page closeup`) and `hold` are manual
+  fallbacks a normal show doesn't need.
+- `tg7 preview on` is for framing the next still: it starts the TG-7's live
+  view if it's off, into scene `TG-7 Preview` (the still's slot and
+  framing), which never goes on air; the pager shows it big (key P). The
+  next `still` ends it, as does `tg7 preview off`; the feed stops again if
+  the preview started it (battery, Wi-Fi), unless the close-up or multi
+  page is on air. A stopped TG-7 reads "off", never a black panel on air.
 - `wb [PRESET]` reads or sets the D5100's white balance: `auto`,
   `daylight`, `cloudy`, `shade`, `tungsten` (or `incandescent`),
   `fluorescent`, `flash`, or a label the camera lists (`wb` alone prints
@@ -162,7 +181,9 @@ One command puts any page on air:
   and program monitors with a transition bar: a tile click or key 1-7
   lines up intro/item/next/desktop/webcam/close-up/multi on preview, Enter
   takes it with the chosen transition, Shift+Enter cuts, Shift+1-7 cut
-  straight to air; R refocus, C reconnect
+  straight to air; P TG-7 preview (off air), T TG-7 still, Shift+T still + D5 refocus,
+  Space step;
+  R refocus, C reconnect
   cameras, stream and OBS telemetry, the lineup with `[` / `]`, an event
   log) and serves the same pager at `/api/pager` (`GET` state + `health`, `POST
   {"page": ...}`, `POST /api/pager/refocus`, `POST /api/pager/reconnect`).

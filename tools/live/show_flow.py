@@ -8,8 +8,9 @@ A show is three pages on the vertical 1080x1920 canvas (scene collection
           background. No cameras.
   item    scene "eBay Main (camera 1)": the Nikon D5100 full frame, the webcam full
           width across the top third.
-  closeup scene "Close-up (camera 2)": the OM TG-7 (over Wi-Fi, tools/live/tg7cam)
-          under the same webcam strip. `tg7 start` runs its feed.
+  closeup scene "Close-up (camera 2)": the OM TG-7's live video (over Wi-Fi,
+          tools/live/tg7cam) under the same webcam strip. A fallback: `tg7
+          start` runs its feed, which a normal show doesn't need.
   next    scene "Up Next": the pause / next-item card. A desktop window (the
           next lot's page, the store, ...) centered on the dark background,
           the same webcam strip on top.
@@ -34,16 +35,29 @@ A failed refocus never leaves the D5 feed stopped. On the closeup page,
 nothing is hidden. `wb` reads or sets the D5100's white balance the same
 way, hidden like a refocus; it never touches the TG-7.
 
-`hold` freezes the camera page on air (item or closeup) as a still, with the
-live webcam strip still on top, so the host can turn the item without
-viewers watching it spin; `release` fades back to the live camera. `step`
-walks the item sequence one key at a time:
+The TG-7 is mainly the stills camera. `still` takes a full-size TG-7 photo
+(the D5 stays on air while it shoots), then fades to scene "TG-7 Still":
+that photo, fit whole under the live webcam strip. It holds until the host
+moves on (no timer), and it covers the D5: `refocus`, `wb` and a D5 still
+run behind it with no Up Next and leave it on air. `still --refocus` does
+both. With a photo shoot open (tools/live/shoot.py) the full-size frame
+lands in its item and its log; otherwise in inventory/_live/stills/<date>/.
+A TG-7 failure (Wi-Fi down, focus didn't lock) leaves the page on air.
+To aim first, `tg7 preview on` starts the TG-7's live view (if it's off)
+into scene "TG-7 Preview": the same slot and framing as the still, never on
+air. The pager shows it big from OBS's render of that scene. The next
+`still` ends it, and so does `tg7 preview off`: the feed stops if the
+preview started it (the TG-7 runs on battery and Wi-Fi), unless a page
+with the TG-7 live (closeup, multi) is on air.
+`step` walks the item sequence one key at a time:
 
-    item (D5100, wide) -> closeup (TG-7) -> hold (turn the item now)
-      -> item (the new side, wide) -> closeup -> hold -> ...
+    item (D5100 live) -> still (TG-7 shoots; turn the item, adjust the D5)
+      -> item (the new side) -> still -> ...
 
-From a hold, `step` releases to the *other* camera than the one held; from
-any other page it goes to item.
+From any page but item (a hold included) `step` goes to item. `hold`
+freezes the camera page on air (item or closeup) as OBS's own screenshot,
+with the live webcam strip on top; `release` fades back to the live camera.
+Hold and the live closeup are manual pages now, out of the step loop.
 
 OBS can sit black or frozen on a v4l2 camera whose device has frames again.
 `feed start` and a refocus make OBS reopen the D5 source when the feed has
@@ -65,14 +79,16 @@ Panels are only on while a watch runs: it clears them when it ends, and
     python tools/live/show_flow.py feed start|stop|status
     python tools/live/show_flow.py reconnect [d5|webcam]  # OBS reopens a black/frozen camera
     python tools/live/show_flow.py tg7 start|stop|status   # TG-7 live view -> OBS (tg7cam stream)
+    python tools/live/show_flow.py tg7 preview on|off      # frame the next still off air
     python tools/live/show_flow.py watch start|stop|status # black panel over any camera that drops
     python tools/live/show_flow.py page intro|item|closeup|next|desktop|webcam|multi [--json] [--refocus]
     python tools/live/show_flow.py next              # = page next
     python tools/live/show_flow.py back              # = page item
     python tools/live/show_flow.py hold [--json]     # freeze the camera page on air
     python tools/live/show_flow.py release [--to item|closeup] [--json]
-    python tools/live/show_flow.py step [--json]     # item -> closeup -> hold -> item ...
-    python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air
+    python tools/live/show_flow.py still [--refocus] [--note TEXT] [--json]  # TG-7 photo on air
+    python tools/live/show_flow.py step [--json]     # item -> still -> item -> still ...
+    python tools/live/show_flow.py refocus [--json]  # hidden behind Up Next if item is on air (the still: behind it)
     python tools/live/show_flow.py wb [PRESET] [--json]  # D5100 white balance: auto, daylight, tungsten, ...
     python tools/live/show_flow.py standin on|off    # white panel for the D5100 (dead battery)
     python tools/live/show_flow.py golive ebay|twitch --confirm   # each independently; both can run
@@ -167,8 +183,17 @@ HOLD, HOLD_FRAME = "Hold", "Hold Frame"
 HOLDABLE = ("item", "closeup")  # pages with a camera worth freezing
 HELD = "show_flow_held"  # Hold Frame setting: the page the still was taken of
 HOLD_DIR = Path(os.environ.get("OBS_CONFIG_DIR") or obsctl.DEFAULT_CONFIG_DIR) / "show_flow_hold"
-# step: what the item sequence does next, by what's on air
-SWAP = {"item": "closeup", "closeup": "item"}
+# The TG-7 still: a TG-7 photo in the close-up's slot under the live webcam
+# strip, covering the D5 while it's adjusted. OBS shows a screen-sized copy
+# (STILL_BOX, written beside the hold stills where the Flatpak OBS can read
+# it); the full-size frame goes to the open photo shoot's item, else here.
+STILL, STILL_FRAME = "TG-7 Still", "TG-7 Still Frame"
+STILL_DIR = HOLD_DIR.with_name("show_flow_still")
+LIVE_STILLS = REPO / "inventory" / "_live" / "stills"
+# The TG-7 preview: its live view in the still's slot, off air, for framing
+# the next still. Never a page: nothing here switches program to it.
+TG7_PREVIEW = "TG-7 Preview"
+TG7_LIVE_PAGES = (CLOSEUP, MULTI)  # scenes with the TG-7's live view on air
 BG = "Up Next BG"
 INTRO_TEXT = "Intro Text"
 # White panel in the item view in place of the D5100 (dead battery, rehearsal).
@@ -181,6 +206,7 @@ DESKTOP_WIN = "Desktop Window"
 OVERLAY = "Live Overlay"  # eBay draws its own lot overlay; ours stays hidden
 FADE_MS = 300
 W, H = 1080, 1920
+STILL_BOX = (W, H - TG7_TOP)  # the TG-7 still's slot, and the most its screen copy needs
 # Both destinations run at once from the one "Ebay" profile: eBay on OBS's
 # stream output (WHIP), Twitch on its *recording* output, set to Custom Output
 # (FFmpeg) -> Output to URL. OBS has a single stream output, and this ffmpeg
@@ -286,10 +312,13 @@ SLOTS = {PRODUCT: {D5: (0, 0, W, H), WEBCAM: (0, 0, W, STRIP)},
          UPNEXT: {WEBCAM: (0, 0, W, STRIP)},
          DESKTOP: {WEBCAM: (0, 0, W, STRIP)},
          HOLD: {WEBCAM: (0, 0, W, STRIP)},
+         STILL: {WEBCAM: (0, 0, W, STRIP)},  # a photo, not the TG-7 live: no TG-7 panel
          WEBCAM_ONLY: {WEBCAM: (0, 0, W, WEBCAM_ONLY_BOX["boundsHeight"])}}
-# The cameras each page puts on air.
+# The cameras each page puts on air (and the TG-7 still, which isn't a
+# `page`: still() fills it first).
 PAGE_CAMS = {"intro": [], "item": ["d5", "webcam"], "closeup": ["tg7", "webcam"], "next": ["webcam"],
-             "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam", "tg7"]}
+             "desktop": ["webcam"], "webcam": ["webcam"], "multi": ["d5", "webcam", "tg7"],
+             "still": ["webcam"]}
 WATCH_EVERY = 2.0  # seconds between looks (each takes up to 3 OBS screenshots)
 DOWN_AFTER = 3  # bad looks in a row before the panel goes on
 UP_AFTER = 5  # good looks in a row before it comes off
@@ -772,7 +801,9 @@ def tg7_start() -> bool:
 
 
 def tg7_stop() -> None:
-    """Ctrl+C first, so tg7cam stops the camera's live view on its way out."""
+    """Ctrl+C first, so tg7cam stops the camera's live view on its way out.
+    A TG-7 preview ends with it."""
+    _preview_mark().unlink(missing_ok=True)
     pids = tg7_pids()
     for p in pids:
         os.kill(p, 2)
@@ -788,15 +819,92 @@ def tg7_status(pids=None) -> str:
     return "running" if pids else "stopped"
 
 
+def tg7_call(name: str, **kw):
+    """tg7cam's `name`(**kw), its CamError (no Wi-Fi, a refused command) as
+    ObsError "TG-7: ..."."""
+    cam = tg7cam()
+    try:
+        return getattr(cam, name)(**kw)
+    except cam.CamError as e:
+        raise obsctl.ObsError(f"TG-7: {e}") from e
+
+
+def tg7_focused(af) -> bool:
+    """The TG-7's affocus answer as focus locked: only "ng" is a miss (no
+    answer counts as locked, as the camera sometimes gives none)."""
+    return af != "ng"
+
+
+def tg7_shot(to: Path) -> tuple[Path, bool]:
+    """A full-size TG-7 photo into `to` (tg7cam.shoot, live view or not):
+    (path, focus locked). The one TG-7 capture: still() and `shoot.py
+    capture tg7` both come through here."""
+    path, af = tg7_call("shoot", to=to)
+    return Path(path), tg7_focused(af)
+
+
 def tg7_refocus() -> dict:
     """The TG-7's half-press at the center. Its live view keeps running
     through it (measured), so nothing needs hiding."""
     t = time.monotonic()
+    af = tg7_call("autofocus")
+    return {"camera": "tg7", "focused": tg7_focused(af), "refocus_s": round(time.monotonic() - t, 1)}
+
+
+# The TG-7 preview's mark, beside LOCK so the shell and the web app share it:
+# {"pids": the TG-7 feed it was made for, "owned": the preview started that
+# feed (and so may stop it)}. A feed can exit on its own (battery, Wi-Fi), so
+# the mark only counts while one of its pids runs (_preview).
+def _preview_mark() -> Path:
+    return LOCK.with_name("show_flow.tg7preview.json")
+
+
+def _preview() -> dict | None:
+    """The preview's mark while the feed it was made for runs; a mark a dead
+    feed left is dropped, so a later `tg7 start` by hand is never taken for
+    a preview (or stopped by the next still)."""
     try:
-        af = tg7cam().autofocus()
-    except tg7cam().CamError as e:
-        raise obsctl.ObsError(f"TG-7: {e}") from e
-    return {"camera": "tg7", "focused": af != "ng", "refocus_s": round(time.monotonic() - t, 1)}
+        m = json.loads(_preview_mark().read_text())
+    except (OSError, ValueError):
+        return None
+    if set(m.get("pids", ())) & set(tg7_pids()):
+        return m
+    _preview_mark().unlink(missing_ok=True)
+    return None
+
+
+def tg7_preview(c, on: bool) -> dict:
+    """Show or end the TG-7 preview (module docstring). On: start the TG-7
+    feed if it's off; the preview scene shows it (the pager renders it). It
+    never touches program. Off: tg7_preview_end. {"preview", "started" |
+    "stopped"}."""
+    if not on:
+        return {"preview": False, **tg7_preview_end(c)}
+    m = _preview()
+    started = tg7_start()
+    _preview_mark().write_text(json.dumps({"pids": tg7_pids(), "owned": started or bool(m and m["owned"])}))
+    return {"preview": True, "started": started}
+
+
+def tg7_preview_end(c) -> dict:
+    """End the preview: drop its mark and stop the TG-7 feed if the preview
+    started it and no page with the TG-7 live (closeup, multi) is on air. A
+    feed someone started by hand (`tg7 start`) keeps running.
+    {"stopped": bool}."""
+    m = _preview()
+    if m is None:
+        return {"stopped": False}  # no preview up
+    _preview_mark().unlink(missing_ok=True)
+    if m["owned"] and program(c) not in TG7_LIVE_PAGES:
+        tg7_stop()
+        return {"stopped": True}
+    return {"stopped": False}
+
+
+def preview_shot(c, width: int = 270, quality: int = 70) -> bytes:
+    """A JPEG of the TG-7 preview scene, for the pager. Off air: rendering a
+    scene never puts it on program."""
+    return scene_shot(c, TG7_PREVIEW, width, quality)
 
 
 # --- the camera watch: black in place of a camera that drops ------------------
@@ -1195,16 +1303,19 @@ def cmd_setup(c, a):
         build_multi(c, a.d5_rotation, a.desktop_crop_left)
 
     build_hold(c)
+    build_still(c)
+    build_tg7_preview(c, a.tg7_rotation)  # after build_closeup, which makes the TG-7 source
 
     # Only Up Next may show the desktop window (a stray one turned up in Intro)
     scenes = {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}
-    for scene in [*PAGES.values(), HOLD]:
+    for scene in [*PAGES.values(), HOLD, STILL, TG7_PREVIEW]:
         if scene != UPNEXT and scene in scenes:
             hide_window(c, scene)
 
     build_down_panels(c)  # last: over every camera every page above has
     set_transition(c, "Fade", FADE_MS)
-    print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items()) + f"; fade {FADE_MS} ms")
+    print("pages ready: " + ", ".join(f"{k} = {v!r}" for k, v in PAGES.items())
+          + f"; hold = {HOLD!r}, still = {STILL!r}, off air: {TG7_PREVIEW!r}; fade {FADE_MS} ms")
 
 
 def feed_up(c) -> str:
@@ -1453,9 +1564,12 @@ def twitch_setup(c) -> None:
 
 
 def page_of(scene: str) -> str | None:
-    """The pager page for an OBS scene; "hold" for the hold still."""
+    """The pager page for an OBS scene; "hold" for the hold still, "still"
+    for the TG-7 still (neither is a `page`: hold() and still() fill them)."""
     if scene == HOLD:
         return "hold"
+    if scene == STILL:
+        return "still"
     return next((k for k, v in PAGES.items() if v == scene), None)
 
 
@@ -1538,6 +1652,7 @@ def state(c, outs: dict | None = None) -> dict:
             "streams": out, "feed": bool(pids), "feed_status": feed_status(pids),
             "standin": sub, "refocusing": busy,
             "held": held_page(c) if scene == HOLD else None, "tg7_status": tg7_status(),
+            "tg7_preview": _preview() is not None,
             "watch": w is not None, "cameras": cam_states(c, w, sub, busy)}
 
 
@@ -1649,6 +1764,46 @@ def build_hold(c) -> None:
     set_box(c, HOLD, WEBCAM, WEBCAM_BOX)
     item(c, HOLD, MIC)
     stack(c, HOLD, [HOLD_FRAME, WEBCAM])
+
+
+def build_still(c) -> None:
+    """The TG-7 still page: a TG-7 photo (still() fills STILL_FRAME) fit
+    whole in the close-up's slot below the webcam strip, on the dark
+    background, under the live webcam strip, with the mic. No rotation: the
+    photo comes upright from its EXIF orientation (still_copy)."""
+    if STILL not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        c.call("CreateScene", {"sceneName": STILL})
+    if STILL_FRAME not in {i["inputName"] for i in c.call("GetInputList")["inputs"]}:
+        c.call("CreateInput", {"sceneName": STILL, "inputName": STILL_FRAME, "inputKind": "image_source",
+                               "inputSettings": {"file": "", "unload": False}})
+    set_box(c, STILL, BG)
+    w, h = STILL_BOX
+    set_box(c, STILL, STILL_FRAME, {"positionX": W / 2, "positionY": TG7_TOP + h / 2, "alignment": 0,
+                                    "rotation": 0, "boundsType": "OBS_BOUNDS_SCALE_INNER",
+                                    "boundsAlignment": 0, "boundsWidth": w, "boundsHeight": h,
+                                    "cropToBounds": False})
+    set_box(c, STILL, WEBCAM, WEBCAM_BOX)
+    item(c, STILL, MIC)
+    stack(c, STILL, [BG, STILL_FRAME, WEBCAM])
+
+
+def build_tg7_preview(c, rotation: float = 0) -> None:
+    """The TG-7 preview: the TG-7's live view fit whole in the still's slot
+    (STILL_BOX) on the dark background, so what's framed is what the still
+    shows. Off air only: no webcam, no mic, and no black panel (not in
+    SLOTS), so the camera watch never paints over it. `rotation` is the
+    close-up's (the live view has no EXIF to turn it upright)."""
+    if TG7_PREVIEW not in {s["sceneName"] for s in c.call("GetSceneList")["scenes"]}:
+        c.call("CreateScene", {"sceneName": TG7_PREVIEW})
+    w, h = STILL_BOX
+    if rotation % 180:  # mounted on its side: the bounds turn with it
+        w, h = h, w
+    set_box(c, TG7_PREVIEW, BG)
+    set_box(c, TG7_PREVIEW, TG7, {"positionX": W / 2, "positionY": TG7_TOP + STILL_BOX[1] / 2, "alignment": 0,
+                                  "rotation": rotation, "boundsType": "OBS_BOUNDS_SCALE_INNER",
+                                  "boundsAlignment": 0, "boundsWidth": w, "boundsHeight": h,
+                                  "cropToBounds": False})
+    stack(c, TG7_PREVIEW, [BG, TG7])
 
 
 def build_down_panels(c) -> None:
@@ -1789,11 +1944,15 @@ def _blacked(c, page: str, out: dict) -> dict:
 
 
 def d5_covered(c, what: str, fn):
-    """Run fn(c), D5100 camera work that freezes its picture, under the lock.
-    If a page showing the D5 (item, multi) is on air it hides behind Up Next
-    for the ~5 s the camera is frozen, then fades back to that page, also when
-    fn fails (the feed is left running), but not if someone asked for a page
-    meanwhile (Next included, though it's already on air): that page stays.
+    """Run fn(c), D5100 camera work that freezes its picture, under the lock,
+    never with the frozen D5 on air. A page that doesn't show the D5 (not
+    in D5_PAGES: the TG-7 still, hold, Up Next, closeup, ...) is its own
+    cover: nothing switches, and it stays on air afterwards (the TG-7 still
+    is made for this). A page showing the D5
+    (item, multi) hides behind Up Next for the ~5 s the camera is frozen,
+    then fades back to that page, also when fn fails (the feed is left
+    running), but not if someone asked for a page meanwhile (Next included,
+    though it's already on air): that page stays.
     Errors start with "<what> failed:"."""
     if standin_on(c):
         raise obsctl.ObsError("the D5100 stand-in is on; turn it off (standin off) to use the camera")
@@ -1816,7 +1975,8 @@ def d5_covered(c, what: str, fn):
 
 
 def refocus(c) -> dict:
-    """Refocus the D5100 without changing page, hidden as d5_covered says.
+    """Refocus the D5100 without changing page, hidden as d5_covered says
+    (behind Up Next on item or multi; behind the TG-7 still when it's up).
 
     On the closeup page it's the TG-7's autofocus instead (tg7_refocus):
     no lock, no cover, the D5 is left alone."""
@@ -1900,18 +2060,101 @@ def release(c, to: str | None = None) -> dict:
     return go(c, to or held_page(c) or "item")
 
 
+def tg7_photo(note: str | None = None) -> dict:
+    """A full-size TG-7 photo (tg7cam.shoot): into the open photo shoot's
+    item, logged there (shoot.capture, as `shoot.py capture tg7`), or with no
+    item open into LIVE_STILLS/<YYYYMMDD>/. Live view needn't run.
+    Returns {"file", "focused", "item", "look"}: item and look (the shoot's
+    small copy for the agent) are None outside a shoot."""
+    import shoot  # here, not at the top: shoot imports this module
+    opened = shoot.open_shoot()
+    try:
+        if opened:
+            r = shoot.capture(*opened, "tg7", note)
+            return {"file": r["files"][0], "focused": r["focused"], "item": r["item"],
+                    "look": (r["look"] or [None])[0]}
+        path, focused = tg7_shot(LIVE_STILLS / time.strftime("%Y%m%d"))
+        return {"file": str(path), "focused": focused, "item": None, "look": None}
+    except shoot.ShootError as e:
+        raise obsctl.ObsError(str(e)) from e
+
+
+def still_copy(src: Path, last: str) -> Path:
+    """A screen-sized copy of `src`, upright and within STILL_BOX, in
+    STILL_DIR, for OBS. Two files in turn (never `last`, the one loaded): a
+    new path makes the image source load the new photo. The full-size frame
+    is left as it is."""
+    from PIL import Image, ImageOps  # only the still needs Pillow
+    STILL_DIR.mkdir(parents=True, exist_ok=True)
+    out = STILL_DIR / ("still-b.jpg" if last.endswith("still-a.jpg") else "still-a.jpg")
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im)
+        im.thumbnail(STILL_BOX)
+        im.convert("RGB").save(out, quality=90)
+    return out
+
+
+def still(c, refocus: bool = False, note: str | None = None) -> dict:
+    """Shoot a TG-7 photo and put it on air as the TG-7 still page (module
+    docstring). Whatever is on air stays there while the TG-7 shoots; the
+    still fades in only once a photo that focused is on disk and loaded, so
+    a failure (no Wi-Fi, focus didn't lock, no still scene) is an ObsError
+    with the page unchanged. A focus miss keeps the frame (a shoot logs it)
+    but doesn't put it on air. If the page changed while the TG-7 shot,
+    that page stays (`superseded_by`).
+
+    refocus=True then refocuses the D5100 behind the still (d5_covered: the
+    still stays on air). Its failure doesn't undo the still; the answer
+    carries `refocus: {"error"}`."""
+    t = time.monotonic()
+    before = program(c)
+    try:  # before the shot, so a show without `setup` fails fast
+        last = c.call("GetInputSettings", {"inputName": STILL_FRAME})["inputSettings"].get("file", "")
+    except obsctl.ObsError as e:
+        raise obsctl.ObsError(f"OBS has no {STILL_FRAME!r}; run `show_flow.py setup`") from e
+    shot = tg7_photo(note)
+    stays = f"{page_of(before) or before} stays on air"
+    if not shot["focused"]:
+        raise obsctl.ObsError(f"TG-7 focus didn't lock (move it closer or add light); {stays}. "
+                              f"Frame kept: {shot['file']}")
+    try:
+        copy = still_copy(Path(shot["file"]), last)
+    except OSError as e:  # an unreadable photo (PIL raises OSError), an unwritable folder
+        raise obsctl.ObsError(f"couldn't make the screen copy of {shot['file']}: {e}; {stays}") from e
+    out = {"page": "still", "changed": False, "file": shot["file"], "item": shot["item"],
+           "look": shot["look"], "screen": str(copy), "still_s": None}
+    now = program(c)
+    if now != before:  # the host switched while the TG-7 shot: theirs stays
+        return {**out, "page": page_of(now) or now, "superseded_by": page_of(now) or now}
+    c.call("SetInputSettings", {"inputName": STILL_FRAME, "inputSettings": {"file": str(copy)}})
+    hide_window(c, STILL)
+    set_transition(c, "Fade", FADE_MS)  # the still's own fade, whatever the pager took last
+    c.call("SetCurrentProgramScene", {"sceneName": STILL})
+    out.update(changed=True, still_s=round(time.monotonic() - t, 1))
+    out = _blacked(c, "still", out)
+    if _preview():  # framed and shot: the TG-7's live view can rest
+        out["preview"] = tg7_preview_end(c)
+    if refocus:
+        time.sleep(FADE_MS / 1000)  # the D5 freezes only once the fade has covered it
+        try:
+            locked, secs = d5_covered(c, "refocus", refocus_d5)  # the still is the cover
+            out["refocus"] = {"focused": locked, "refocus_s": round(secs, 1)}
+        except obsctl.ObsError as e:
+            out["refocus"] = {"error": str(e)}
+    return out
+
+
 def step(c) -> dict:
-    """One step of the item sequence (module docstring): item -> closeup ->
-    hold -> the other camera. Anything else on air goes to item."""
+    """One step of the item sequence (module docstring): item (the D5100
+    live) -> still (the TG-7 shoots and covers the D5 while the item turns)
+    -> item -> ... Anything else on air, a hold or the live closeup
+    included, goes to item. A failed still leaves item on air (the error
+    says why; `hold` still works)."""
     scene = program(c)
-    page = page_of(scene)
+    if page_of(scene) == "item":
+        return {**still(c), "action": "still"}
     if scene == HOLD:
-        r = release(c, SWAP.get(held_page(c) or "closeup", "item"))
-        return {**r, "action": "release"}
-    if page == "item":
-        return {**go(c, "closeup"), "action": "page"}
-    if page == "closeup":
-        return {**hold(c), "action": "hold"}
+        return {**release(c, "item"), "action": "release"}
     return {**go(c, "item"), "action": "page"}
 
 
@@ -1983,17 +2226,49 @@ def cmd_release(c, a):
         print(f"on air: {r['page']}" + ("" if r["changed"] else " (wasn't on hold)"))
 
 
+def still_note(r: dict) -> str:
+    """still()'s answer in a line or two."""
+    where = f"shoot item {r['item']}" if r.get("item") else str(Path(r["file"]).parent)
+    if r.get("superseded_by"):
+        return (f"TG-7 photo {Path(r['file']).name} saved ({where}); not on air: "
+                f"{r['superseded_by']} went on air while it shot")
+    line = (f"on air: TG-7 still {Path(r['file']).name} ({where}, {r['still_s']}s); "
+            "adjust the D5, then `page item` (or step)")
+    if r.get("look"):
+        line += f"\nlook: {r['look']}"
+    f = r.get("refocus")
+    if f:
+        line += ("\n  D5100 " + (f"refocus failed: {f['error']}" if "error" in f else
+                                 f"behind it: {focus_note(f['focused'])} ({f['refocus_s']}s)"))
+    return line
+
+
+def cmd_still(c, a):
+    r = still(c, refocus=a.refocus, note=a.note)
+    print(json.dumps({**state(c), "still": r}) if a.json else still_note(r))
+    if "error" in r.get("refocus", {}):
+        raise obsctl.ObsError("the still is on air, but the D5100 refocus behind it failed (above)")
+
+
 def cmd_step(c, a):
     r = step(c)
     if a.json:
         print(json.dumps({**state(c), "step": r}))
-    elif r["action"] == "hold":
-        print(f"on hold: a still of {r['held']}; turn the item, then step again")
+    elif r["action"] == "still":
+        print(still_note(r))
     else:
         print(f"on air: {r['page']}")
 
 
 def cmd_tg7(c, a):
+    if a.action == "preview":
+        r = tg7_preview(c, a.state == "on")
+        if r["preview"]:
+            print("TG-7 preview on" + (" (feed started; it waits for the camera's Wi-Fi)" if r["started"] else "")
+                  + f": scene {TG7_PREVIEW!r}, off air; the pager shows it. `still` shoots and ends it")
+        else:
+            print("TG-7 preview off" + ("; TG-7 feed stopped" if r["stopped"] else ""))
+        return
     if a.action == "stop":
         tg7_stop()
     elif a.action == "start":
@@ -2049,6 +2324,7 @@ def cmd_twitch_setup(c, a):
 
 
 def cmd_status(c, a):
+    mark_on_air(c)  # a flag a crash left behind (nothing live now) goes; a live show's is refreshed
     if a.json:
         print(json.dumps(state(c)))
         return
@@ -2099,8 +2375,9 @@ def main(argv=None) -> int:
                                                             refocus=False)
     sub.add_parser("back", help="= page item").set_defaults(fn=cmd_page, page="item", json=False,
                                                             refocus=False)
-    s = sub.add_parser("tg7", help="TG-7 live view -> OBS (tg7cam stream, detached)")
-    s.add_argument("action", choices=["start", "stop", "status"])
+    s = sub.add_parser("tg7", help="TG-7 live view -> OBS (tg7cam stream, detached); preview on|off: frame off air")
+    s.add_argument("action", choices=["start", "stop", "status", "preview"])
+    s.add_argument("state", nargs="?", choices=["on", "off"], default="on", help="preview only")
     s.set_defaults(fn=cmd_tg7)
     s = sub.add_parser("watch", help="black panel over a camera that drops (run: in the foreground)")
     s.add_argument("action", choices=["start", "stop", "status", "run"])
@@ -2112,13 +2389,19 @@ def main(argv=None) -> int:
     s.add_argument("--to", choices=list(HOLDABLE), help="default: the page held")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_release)
-    s = sub.add_parser("step", help="item -> closeup -> hold -> the other camera ...")
+    s = sub.add_parser("still", help="TG-7 photo on air under the webcam; the D5 can be adjusted behind it")
+    s.add_argument("--refocus", action="store_true", help="then refocus the D5 behind the still (~5 s)")
+    s.add_argument("--note", help="for the photo shoot's log, when one is open (what the frame is for)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_still)
+    s = sub.add_parser("step", help="item -> still (TG-7 shoots) -> item -> still ...")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_step)
     s = sub.add_parser("standin", help="white panel instead of the D5100 in the item view")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn=cmd_standin)
-    s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item/multi is on air)")
+    s = sub.add_parser("refocus", help="refocus the D5 (hidden behind Up Next if item/multi is on air, "
+                                       "behind the TG-7 still if that is)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_refocus)
     s = sub.add_parser("wb", help="D5100 white balance: show it, or set PRESET (hidden like refocus)")
