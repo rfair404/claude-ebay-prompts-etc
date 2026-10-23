@@ -7,7 +7,7 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. A Georgia-licensed attorney reviews it before any client sees it.
 
-These exhibits attach to the [Consignment Agreement](consignment-agreement.md) and the [Purchase Agreement and Bill of Sale](purchase-agreement.md) between you and Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand. There is one copy of each here so the two agreements always use the same forms.
+These exhibits attach to the [Consignment Agreement](consignment-agreement.md) and the [Purchase Agreement and Bill of Sale](purchase-agreement.md) between you and Russell Fair Enterprises, LLC, a Georgia limited liability company, d/b/a The Fair Hand. There is one copy of each here so the two agreements always use the same forms.
 
 ## Exhibit A: Item schedule
 

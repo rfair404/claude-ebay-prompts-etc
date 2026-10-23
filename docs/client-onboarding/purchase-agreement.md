@@ -7,7 +7,7 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. A Georgia-licensed attorney reviews it before any client sees it.
 
-**Buyer:** Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand ("we", "us").
+**Buyer:** Russell Fair Enterprises, LLC, a Georgia limited liability company, d/b/a The Fair Hand ("we", "us").
 Address: __________ Phone: __________ Email: __________
 
 **Seller:** __________ (your name, or the legal name of the trust, estate or company you sign for) ("you")
@@ -87,7 +87,7 @@ Legal name of company (as on the Secretary of State record): __________
 By (signature): __________ Name: __________ Title: __________ Date: __________
 [ ] Exhibit B signed and proof attached
 
-### Russell Fair Enterprises, LLC, a Georgia LLC, d/b/a The Fair Hand
+### Russell Fair Enterprises, LLC, a Georgia limited liability company, d/b/a The Fair Hand
 
 By (signature): __________ Name: __________ Title: __________ Date: __________
 
