@@ -4,7 +4,8 @@
 # poll state live (prompts/pick_list.md step 1).
 set -uo pipefail
 
-# Named explicitly because the default printer is the QL-1100 label printer.
+# Named explicitly so a change of system default can't send sheets to the
+# QL-1100 label printer.
 PRINTER=CannonBW
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')

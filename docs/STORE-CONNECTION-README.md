@@ -387,10 +387,9 @@ python -m lib.cli --all-stores dashboard
 ```
 
 `--all-stores` is refused on commands that bulk-write to eBay or spend money
-(`policy-sweep`, `listing`, `promote`, `ship-buy`, `ship-quote`): name the
-store, once, by hand. `ebz help` tags the store-aware commands `[store]`; a
-store-neutral command (`voice`, `prep`, ...) refuses a store rather than
-ignoring it.
+(`policy-sweep`, `listing`, `promote`): name the store, once, by hand.
+`ebz help` tags the store-aware commands `[store]`; a store-neutral command
+(`voice`, `prep`, ...) refuses a store rather than ignoring it.
 
 **Identity keys never inherit** from the default store: `display_name`,
 `closing_block`, `tagline`, `storefront_url`, `seller_username`. A junk pick

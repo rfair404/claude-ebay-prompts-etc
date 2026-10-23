@@ -77,7 +77,7 @@ A test that can't be rewritten into a behavior test should be deleted, and the P
 
 Coverage percentage is a map, not a goal. Measure it with `pytest-cov` in your scratchpad venv (`--cov=lib --cov=tools --cov=webapp --cov-report=term-missing`). Then rank the gaps by what a bug would cost:
 
-1. **Anything that writes to eBay, moves money or authorizes a publish:** `lib/ebay_client.py`, `lib/list_edit.py` (the review card and the `--confirm` gates), offers and pricing, label purchase (`lib/easypost_client.py`), the ledger writers. A bug here is a wrong live listing, a wrong price or a wrong label.
+1. **Anything that writes to eBay, moves money or authorizes a publish:** `lib/ebay_client.py`, `lib/list_edit.py` (the review card and the `--confirm` gates), offers and pricing, freight booking (`lib/freight/`), the ledger writers. A bug here is a wrong live listing, a wrong price or a wrong booking.
 2. **What Russell acts on at the bench or on air:** pick lists, the pager and show flow, prep decisions.
 3. **Reports and audits.** These are read-only, but people believe their numbers.
 4. **Last:** the CLIP indexing and research tools. They are slow, rarely run, and optional at import time.
@@ -95,7 +95,7 @@ The workflow is `.github/workflows/tests.yml`: a compile check of every tracked 
 - **Matrix:** test the OS and Python version the pipeline really runs on. That can change (the Windows box was replaced by Linux in 2026-10). Before you drop a leg, ask Russell what still runs where.
 - **Coverage:** report it in CI first, with no threshold. A `--cov-fail-under` gate is Russell's decision. If Russell approves one, set it at the measured baseline and only ever raise it.
 
-Never call live eBay, EasyPost, R2, Apify or Twitch from a test or from CI, and never add credentials or secrets to the workflow. Anything that needs a live API or a logged-in browser is a manual smoke check. Document those in `RUN.md`; don't automate them.
+Never call live eBay, R2, Apify or Twitch from a test or from CI, and never add credentials or secrets to the workflow. Anything that needs a live API or a logged-in browser is a manual smoke check. Document those in `RUN.md`; don't automate them.
 
 ## How you report
 

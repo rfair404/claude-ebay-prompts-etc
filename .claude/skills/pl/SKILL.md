@@ -1,6 +1,6 @@
 ---
 name: pl
-description: Print today's pick lists on paper. Polls every store for orders awaiting shipment and sends one sheet per box to CannonBW, named explicitly so the system default can be the label printer. Use when Russell types /pl or asks to print the pick lists.
+description: Print today's pick lists on paper. Polls every store for orders awaiting shipment and sends one sheet per box to CannonBW, named explicitly so pick sheets never land on the QL-1100 label printer. Use when Russell types /pl or asks to print the pick lists.
 ---
 
 # /pl — print today's pick lists
@@ -17,7 +17,8 @@ The script finds the main checkout itself, so it works from a worktree. It
 runs `tools/pick_list.py --poll --all-stores` there, renders each box's HTML
 sheet to PDF with headless Chromium (CUPS here has no HTML filter) and sends
 it to CannonBW with `lp -d CannonBW`. The printer is named explicitly, never
-the system default, because the default is the QL-1100 label printer. Every
+the system default, so a change of default can't send sheets to the QL-1100
+label printer. Every
 box awaiting shipment prints, even ones polled earlier, so running it twice
 prints twice. It prints one `PRINTED <ids>` or `FAILED <ids>` line per box
 and a `DONE` line at the end. Allow about 20 seconds per sheet.
