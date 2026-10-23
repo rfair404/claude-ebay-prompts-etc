@@ -8,6 +8,7 @@ the state of each item, what it is worth and what we owe.
     python -m lib.cli consign sync CONSIGN-K01 --apply
     python -m lib.cli consign report --client K01 --csv
     python -m lib.cli consign settle K01 --through 2026-11-30  # dry run; --apply writes
+    python -m lib.cli consign settle K01 --through 2026-11-30 --final  # agreement ended
 
 Order of work: the finance sync first (`python lib/sync_actuals.py
 --all-stores --apply`), then `consign sync`. This tool reads the local
@@ -47,6 +48,21 @@ Money. net = net_before_postage - ad_fee - actual_postage - handling -
 other_costs, and client_share = split x net. handling is a flat fee per
 sale for packing materials (DEFAULT_HANDLING, or clients.csv handling_fee),
 stamped on the row when it sells and kept from then on, like split_locked.
+A loss (net below zero) follows clients.csv loss_rule: split, client_never_owes
+or client_bears_loss (the client carries all of it).
+
+Channels. A blank channel is eBay, read from the sales ledgers. Any other
+channel is a sale typed by hand (sold_at, item_price, ebay_fee for that
+channel's fee, actual_postage) that sync never overwrites or calls vanished;
+it clears 40 days after sold_at. channel `mall` is the antique-mall booth:
+type sold_at, item_price and card_paid, and sync works out the fee (10% plus
+3% of card_paid), with no postage. Every sold row pays handling, whatever
+the channel.
+
+Set B flags (no state change): an ask or sale below the client's floor (a
+lot's floor is its rows' total), a listing live longer than listing_days
+(180), and an unsold item past return_notice_sent + pickup_days (30).
+settle holds a balance under clients.csv min_payout; --final pays it all.
 
 Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
@@ -124,6 +140,15 @@ LOT_COPY = ("store", "sku", "listing_id", "sold_at", "cleared_on", "channel")
 # from the eBay ledgers. net_before_postage = gross - ebay_fee there.
 EBAY = "ebay"
 CHANNEL_RE = re.compile(r"^[a-z0-9_-]+$")
+# The antique-mall booth, where every consigned antique sells. Its fee is
+# worked out, not typed: MALL_COMMISSION of item_price plus MALL_CARD_RATE of
+# card_paid (the part paid by card; 0.00 for cash, blank = unknown). No
+# postage; the handling fee still applies (labels and data entry, Russell
+# 2026-10-23). These must match the consignment agreement
+# §4.2(b) (docs/client-onboarding/consignment-agreement.md): change both together.
+MALL = "mall"
+MALL_COMMISSION = Decimal("0.10")
+MALL_CARD_RATE = Decimal("0.03")
 
 TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
 # Listings-ledger statuses (lib/list_edit.upsert_listing, lib/sync_actuals)
@@ -147,7 +172,7 @@ DEFAULT_LISTING_DAYS = 180
 DEFAULT_PICKUP_DAYS = 30
 DEFAULT_SPLIT = Decimal("0.5")
 # Taken from net before the split, like postage, once per sale (a lot is one
-# sale). It covers packing materials: about $1.48 for a small box and $2.63
+# sale), on every channel: the mall booth too (labels and data entry). It covers packing materials: about $1.48 for a small box and $2.63
 # for a medium one at 2026-10 Uline/Brother prices. Packing time is paid by
 # our side of the split. clients.csv handling_fee overrides it per client; a
 # figure typed into a row's handling column is kept (an oversize box).
@@ -675,6 +700,16 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
         if r["channel"] and not CHANNEL_RE.match(r["channel"].lower()):
             errs.append(f"{tag}: channel {r['channel']!r} is not one word of letters, "
                         f"digits, - and _ (blank is ebay)")
+        if r["card_paid"] and channel_of(r) != MALL:
+            errs.append(f"{tag}: card_paid is for a {MALL} sale only (channel is "
+                        f"{channel_of(r)})")
+        try:
+            card, price = dec(r["card_paid"]), dec(r["item_price"])
+        except ValueError:
+            card = price = None                  # reported as a bad amount below
+        if card is not None and (card < 0 or price is None or card > price):
+            errs.append(f"{tag}: card_paid {r['card_paid']} must be between 0.00 and "
+                        f"item_price")
         for k in MONEY:
             try:
                 dec(r[k])
@@ -877,6 +912,12 @@ def settle_money(r: dict, split: Decimal, loss_rule: str = "split") -> None:
     z = lambda k: dec(r[k]) or Decimal(0)  # noqa: E731
     gross = price + z("buyer_shipping") - z("refunded")
     r["gross"] = money(gross)
+    if channel_of(r) == MALL:
+        # The mall's fee is worked out (§4.2(b)); nothing is shipped.
+        card = dec(r["card_paid"])
+        r["ebay_fee"] = "" if card is None else money(
+            MALL_COMMISSION * price + MALL_CARD_RATE * card)
+        r["actual_postage"] = "0.00"
     if off_ebay(r):
         # A sale typed by hand: net before postage is gross less that
         # channel's fee (blank = unknown). Off eBay there is no ad fee.
@@ -1070,6 +1111,8 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         state = "SOLD"
         if not r["split_locked"]:
             r["split_locked"] = str(split)
+        if not r["handling"] and not r["paid_to_client_date"]:  # every channel pays it
+            r["handling"] = money(handling)
     elif listing and listing_status(listing[1]) == "ENDED":
         flags.append(f"listing {r['listing_id'] or r['sku']} ended unsold: "
                      f"relist, return or dispose")
@@ -1083,8 +1126,13 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
     sold = bool(sale) or hand_sold
     settle_money(r, row_split(r, split), loss_rule)
     if hand_sold and r["actuals_complete"] != "yes":
-        flags.append(f"{channel} sale: type item_price, ebay_fee (the {channel} fee, "
-                     f"0.00 if none) and actual_postage (0.00 if none) so it can clear")
+        if channel == MALL:
+            flags.append(f"{MALL} sale: type item_price and card_paid (0.00 if paid in "
+                         f"cash) so it can clear")
+        else:
+            flags.append(f"{channel} sale: type item_price, ebay_fee (the {channel} fee, "
+                         f"0.00 if none) and actual_postage (0.00 if none) so it can "
+                         f"clear")
     target = Decimal(0) if vanished else dec(r["client_share"])
     _freeze_paid(r, paid_share, target, adjusted, flags, gone=vanished)
     r["cleared_on"] = ""
@@ -1444,13 +1492,15 @@ def _statement_line(sid: str, code: str, line: str, r: dict, **kw) -> dict:
     return rec
 
 
-def settle(code: str, through: date, *, apply: bool) -> int:
+def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int:
     """Gather what is owed to `code` through `through` into one settlement:
     CLEARED rows not paid, unpaid buyouts above 0.00, and pending
     adjustments. --apply writes the statement (once; never overwritten) and
     appends the row to settlements.csv. Payment is recorded by hand:
     the accountant sets paid_date and amount_paid, and the next sync copies
-    paid_date onto the rows."""
+    paid_date onto the rows. Below the client's min_payout nothing is
+    written and the balance carries forward; final (the agreement has ended)
+    pays the full balance whatever it is, a negative one included."""
     terms = client_terms(load_registry(), code)
     dirs = client_dirs(code)
     if not dirs:
@@ -1507,6 +1557,12 @@ def settle(code: str, through: date, *, apply: bool) -> int:
                 client_share=money(share),
                 adjustments=" ".join(f"{i}={money(a)}" for i, a in adjustments))
     due = settlement_due(srow)
+    if not final and terms["min_payout"] and due < terms["min_payout"]:
+        print(f"{code}: ${money(due)} owed through {through.isoformat()} is under the "
+              f"${money(terms['min_payout'])} minimum payout (clients.csv min_payout): "
+              f"carried forward, nothing written. `settle --final` pays it when the "
+              f"agreement ends.")
+        return 0
 
     by_id = {r["item_id"]: r for r in rows}
     lines = []
@@ -1542,7 +1598,8 @@ def settle(code: str, through: date, *, apply: bool) -> int:
                   "amount": money(due),
                   "note": f"period {srow['period_start']} to {srow['period_end']}"})
 
-    print(f"{sid}  client {code}  {srow['period_start']} to {srow['period_end']}")
+    print(f"{sid}  client {code}  {srow['period_start']} to {srow['period_end']}"
+          + ("  FINAL: full balance, no minimum" if final else ""))
     print(f"  sales {len(cleared)}  gross ${srow['gross']}  handling ${srow['handling']}  "
           f"net ${srow['net']}  share ${money(tot('client_share'))}")
     if buyouts:
@@ -1607,6 +1664,9 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="settle rows cleared on or before this date")
     p.add_argument("--apply", action="store_true",
                    help="write the statement and the settlements.csv row")
+    p.add_argument("--final", action="store_true",
+                   help="the agreement has ended: pay the full balance, ignoring "
+                        "min_payout, even if it is negative")
     args = ap.parse_args(argv)
 
     if args.cmd == "import":
@@ -1623,7 +1683,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         through = iso(args.through)
         if through is None:
             raise SystemExit(f"[X] --through {args.through!r} is not a YYYY-MM-DD date")
-        return settle(args.client, through, apply=args.apply)
+        return settle(args.client, through, apply=args.apply, final=args.final)
 
     # Only sync is refused in a worktree: inventory/ links to main's real
     # ledgers but the listings/sales ledgers don't, so sync would regress every
