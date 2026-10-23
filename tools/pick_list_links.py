@@ -1,7 +1,7 @@
 """Today's pick sheets as R2 links, in one go (the /pick-list skill).
 
-Does steps 1-4 of prompts/pick_list.md so a session doesn't follow them by
-hand: polls every store from the main checkout, stages each box's sheet as
+Does the whole flow described in prompts/pick_list.md ("Run"): polls every
+store from the main checkout, stages each box's sheet as
 inventory/_pick_lists/pick_<id>[+<id2>].html, uploads them all with one
 `lib.cli offsite share`, and prints one line per box for the reply:
 
@@ -10,7 +10,7 @@ inventory/_pick_lists/pick_<id>[+<id2>].html, uploads them all with one
     FAILED <id>[+<id2>]|poll (<reason>)
     RETRY <the one offsite share command for the sheets that didn't upload>
     NONE
-    DONE links=N failed=N held=N
+    DONE links=N failed=N held=<orders held>
 
 Never passes --print, and never prints the poll's 127.0.0.1 links or the
 buyer's name and address. Exit 1 if anything FAILED.
@@ -38,19 +38,23 @@ NO_LINK_RE = re.compile(r"^  ! could not publish a link for (.+?) \((.*)\);")
 ORDER_ID_RE = re.compile(r"\A[A-Za-z0-9-]+\Z")
 
 
-def parse_poll(out: str) -> tuple[list[tuple[list[str], str]], list[str], list[tuple[str, str]]]:
-    """(boxes, held, no_link) from `pick_list.py --poll` stdout. boxes is
-    [(order_ids, token)]. held keeps only the per-show summary line, never the
-    per-order lines that carry the buyer's username."""
+def parse_poll(out: str) -> tuple[list[tuple[list[str], str]], list[str], int,
+                                  list[tuple[str, str]]]:
+    """(boxes, held, held_orders, no_link) from `pick_list.py --poll` stdout.
+    boxes is [(order_ids, token)]. held keeps only the per-show summary lines;
+    the per-order lines carry the buyer's username, so they are only counted."""
     boxes, held, no_link = [], [], []
+    held_orders = 0
     for line in out.splitlines():
         if m := BOX_RE.match(line):
             boxes.append((m.group(1).split(" + "), m.group(2)))
         elif line.startswith("[..] ") and " held until " in line:
             held.append(line[5:])
+        elif line.startswith("  held "):
+            held_orders += 1
         elif m := NO_LINK_RE.match(line):
             no_link.append((m.group(1).replace(", ", "+"), m.group(2)))
-    return boxes, held, no_link
+    return boxes, held, held_orders, no_link
 
 
 def sheet_summary(main: Path, order_ids: list[str]) -> tuple[str, str]:
@@ -89,7 +93,7 @@ def stage(main: Path, order_ids: list[str], token: str) -> Path:
 
 def run(main: Path, *, runner=subprocess.run) -> tuple[list[str], int]:
     """Do the whole flow. Returns (output lines, failed count)."""
-    py = str(main / ".venv" / "bin" / "python")
+    py = sys.executable
     lines: list[str] = []
     failed = 0
     poll = runner([py, "tools/pick_list.py", "--poll", "--all-stores"],
@@ -98,7 +102,7 @@ def run(main: Path, *, runner=subprocess.run) -> tuple[list[str], int]:
         tail = (poll.stderr or poll.stdout or "").strip().splitlines()[-1:] or ["no output"]
         return [f"FAILED poll (exit {poll.returncode}: {tail[0]})",
                 "DONE links=0 failed=1 held=0"], 1
-    boxes, held, no_link = parse_poll(poll.stdout)
+    boxes, held, held_orders, no_link = parse_poll(poll.stdout)
     lines += [f"HELD {h}" for h in held]
     for ids, why in no_link:
         lines.append(f"FAILED {ids} (no sheet published: {why})")
@@ -131,10 +135,11 @@ def run(main: Path, *, runner=subprocess.run) -> tuple[list[str], int]:
                 retry.append(str(rel))
                 failed += 1
         if retry:
-            lines.append("RETRY .venv/bin/python -m lib.cli offsite share " + " ".join(retry))
+            lines.append(f"RETRY cd {main} && .venv/bin/python -m lib.cli offsite share "
+                         + " ".join(retry))
     if not boxes and not no_link:
         lines.append("NONE")
-    lines.append(f"DONE links={links} failed={failed} held={len(held)}")
+    lines.append(f"DONE links={links} failed={failed} held={held_orders}")
     return lines, failed
 
 

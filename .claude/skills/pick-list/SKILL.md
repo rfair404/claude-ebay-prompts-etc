@@ -23,7 +23,7 @@ the main checkout (never `--print`), copies each box's sheet to
     FAILED <ids>|poll (<reason>)
     RETRY <the offsite share command for sheets that didn't upload>
     NONE
-    DONE links=N failed=N held=N
+    DONE links=N failed=N held=<orders held>
 
 Links last 7 days. Running it again gives fresh links. Sandbox: needs
 `api.ebay.com` and the R2 endpoint host (`*.r2.cloudflarestorage.com`) in

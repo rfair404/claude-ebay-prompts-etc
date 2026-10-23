@@ -87,7 +87,7 @@ def test_upload_stopping_partway_fails_the_rest_with_a_retry_command(tmp_path):
     assert lines[0].startswith(f"LINK {SOLO} https://r2.example/a?sig=1")
     assert lines[1].startswith(f"FAILED {PAIR_A}+{PAIR_B} (upload of")
     assert "HTTP 403 Forbidden" in lines[1]
-    assert lines[2] == ("RETRY .venv/bin/python -m lib.cli offsite share "
+    assert lines[2] == (f"RETRY cd {main} && .venv/bin/python -m lib.cli offsite share "
                         f"inventory/_pick_lists/pick_{PAIR_A}+{PAIR_B}.html")
     assert lines[-1] == "DONE links=1 failed=1 held=0"
 
@@ -109,13 +109,15 @@ def test_nothing_to_ship_with_held_live_orders_keeps_buyer_out(tmp_path):
     poll = ("[..] 2 order(s) from eBay Live show 'Fri' held until Fri 10:00 PM ET "
             "(8 h combined-shipping window)\n"
             f"  held {SOLO}  buyer_handle  until Fri 10:00 PM ET\n"
+            f"  held {PAIR_A}  other_handle  until Fri 10:00 PM ET\n"
             "[OK] nothing else awaiting shipment\n")
     lines, failed = pick_list_links.run(main, runner=Runner(poll))
 
     assert failed == 0
     assert lines == ["HELD 2 order(s) from eBay Live show 'Fri' held until Fri 10:00 PM ET "
                      "(8 h combined-shipping window)",
-                     "NONE", "DONE links=0 failed=0 held=1"]
+                     "NONE", "DONE links=0 failed=0 held=2"]
+    assert not any("_handle" in l for l in lines)
 
 
 def test_poll_error_is_one_failed_line(tmp_path):
@@ -132,3 +134,25 @@ def test_box_whose_sheet_never_published_is_failed(tmp_path):
     lines, failed = pick_list_links.run(main, runner=Runner(poll))
     assert failed == 1
     assert lines[0] == f"FAILED {PAIR_A}+{PAIR_B} (no sheet published: disk full)"
+
+
+def test_item_folder_sheet_is_staged_from_its_source(tmp_path, monkeypatch):
+    """A sold item's sheet lives in its folder under inventory/, and
+    pick_lists/.served/ holds only a meta file pointing at it."""
+    main, _ = _main(tmp_path)
+    monkeypatch.setattr(pick_store, "ROOT", main)
+    folder = main / "inventory" / "shoot" / "item-1"
+    folder.mkdir(parents=True)
+    (folder / f"pick_{SOLO}.html").write_text("<p>item folder sheet</p>", encoding="utf-8")
+    served = main / "pick_lists" / ".served"
+    sheet = pick_store.publish("<p>not this</p>", order_ids=[SOLO], store_dir=served,
+                               source=folder / f"pick_{SOLO}.html")
+    assert not (served / f"{sheet.token}.html").exists()
+    poll = f"  {SOLO}  http://127.0.0.1:8770/pick/{sheet.token}\n"
+    lines, failed = pick_list_links.run(
+        main, runner=Runner(poll, share_out="https://r2.example/a?sig=1\n"))
+
+    assert failed == 0
+    assert lines[0].startswith(f"LINK {SOLO} https://r2.example/a?sig=1")
+    staged = main / "inventory" / "_pick_lists" / f"pick_{SOLO}.html"
+    assert staged.read_text(encoding="utf-8") == "<p>item folder sheet</p>"
