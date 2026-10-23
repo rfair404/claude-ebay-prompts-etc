@@ -72,6 +72,23 @@ def test_the_necklace_set_is_the_comp_that_gets_dropped():
         assert "necklace" not in c["title"].lower()
 
 
+# Magazine singles are not lots (#263): a year before "Issue" is a date and
+# "Complete" alone describes one copy. Titles from a 2026-10-22 Playboy pull.
+MULTI_ITEM_TABLE = [
+    ("Vintage Playboy Magazine March 1990 Issue Donald Trump", False),
+    ("Playboy Magazine March 1990 Donald Trump Cover Interview Vintage "
+     "Complete", False),
+    ("Playboy March 1990 Donald Trump Newsstand Edition Complete Centerfold "
+     "Inserts NM", False),
+    ("1990 Playboy Complete Year Lot of 12", True),
+]
+
+
+def test_looks_multi_item_magazine_table():
+    for title, want in MULTI_ITEM_TABLE:
+        assert price_stats.looks_multi_item(title) is want, title
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

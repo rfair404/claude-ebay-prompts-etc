@@ -110,10 +110,15 @@ COMPETITOR_MIN_LISTINGS = 5
 _CHARM_ENDING_CENTS = {0: ".00", 99: ".99", 97: ".97", 95: ".95"}
 
 # Tokens that mark a listing as multi-item (a "lot"), used by the unit filter.
+# "complete" is not here: sellers use it for one copy ("Complete Centerfold",
+# "Vintage Complete"). "Complete set/collection" still flag via set/collection,
+# and _MULTI_ITEM_PHRASE_RE catches "complete year"/"complete run" (#263).
 _MULTI_ITEM_WORDS = {
     "lot", "lots", "set", "sets", "bundle", "bundles", "collection",
-    "complete", "pair", "pairs", "group", "grouping", "joblot",
+    "pair", "pairs", "group", "grouping", "joblot",
 }
+_MULTI_ITEM_PHRASE_RE = re.compile(r"\bcomplete\s+(?:years?|runs?)\b",
+                                   re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 # A digit that touches a quote/inch mark (7" x 6") or a length unit (6 in) is
 # a physical DIMENSION, not a quantity. Used to stop the x-multiplier count
@@ -122,11 +127,13 @@ _DIM_AFTER = r'(?:["″′\']|\s*(?:in|inch|inches|cm|mm|ft|feet|foot)\b)'
 # "5 pcs", "lot of 3", "x12", "12 pieces/issues/cards/vols". The x-multiplier
 # forms ("x12" / "12x") only count when the number is NOT a dimension, so
 # 7" x 6" / 13" X 10" stay single-item (see looks_multi_item doctests).
+# A 19xx/20xx year before "issue" is a date, not a count ("March 1990 Issue").
 _COUNT_RE = re.compile(
     r'\b(?:'
     r'lot of\s*\d+'
     r'|set of\s*\d+'
-    r'|\d+\s*(?:pcs?|pieces?|issues?|cards?|vol(?:ume)?s?|pc)'
+    r'|\d+\s*(?:pcs?|pieces?|cards?|vol(?:ume)?s?|pc)'
+    r'|(?!(?:19|20)\d{2}\b)\d+\s*issues?'
     r'|x\s*\d+(?!' + _DIM_AFTER + r')'
     r'|(?<!["″′\'])\d+\s*x'
     r')\b',
@@ -328,6 +335,8 @@ def looks_multi_item(title: str) -> bool:
     t = title.lower()
     words = set(re.findall(r"[a-z]+", t))
     if words & _MULTI_ITEM_WORDS:
+        return True
+    if _MULTI_ITEM_PHRASE_RE.search(title):
         return True
     if _COUNT_RE.search(title):
         return True
