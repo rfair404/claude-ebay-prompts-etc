@@ -7,8 +7,6 @@ updated: 2026-10-23
 
 DRAFT. This is a template, not legal advice. Have it reviewed by a Georgia-licensed attorney before use.
 
-<!-- TODO(Russell): confirm legal name, state of formation and DBA on client paperwork. -->
-
 These exhibits attach to the [Consignment Agreement](consignment-agreement.md) and the [Purchase Agreement and Bill of Sale](purchase-agreement.md) between you and Russell Fair Enterprises, LLC d/b/a The Fair Hand. There is one copy of each here so the two agreements always use the same forms.
 
 ## Exhibit A: Item schedule
@@ -17,7 +15,7 @@ Client code: K____ Date: __________ Agreement: [ ] Consignment [ ] Purchase Shee
 
 **How to fill it in:** one row per item, or per group of identical items. Describe each item, including its condition and any marks, chips, cracks, repairs or missing parts. For identical items, use one row and put the count in `qty`. Every row must be different from the others.
 
-- **Consignment:** use `floor` if you want a lowest price for an item. Leave `purchase_price` blank.
+- **Consignment:** use `floor` to set the lowest price you'll accept for an item, before any shipping. It applies wherever we sell the item. Leave it blank for no floor. Leave `purchase_price` blank.
 - **Purchase:** put a price per line in `purchase_price`, or leave it blank and write the lot total at the bottom. Leave `floor` blank.
 
 | # | description | qty | why | floor | purchase_price | bin | cut | est_low | est_high |
