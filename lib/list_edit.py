@@ -98,7 +98,7 @@ from typing import Optional
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
 from gdrive_mirror import ledger_changed
-from draft_io import (Draft, parse_draft, resolve_photo_paths, set_photo_order,
+from draft_io import (Draft, iter_drafts, parse_draft, resolve_photo_paths, set_photo_order,
                        update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
@@ -2677,7 +2677,7 @@ def _cli() -> None:
             target = Path(args.status or args.repair_meta)
             repair = bool(args.repair_meta)
             drafts = ([target] if target.is_file()
-                      else sorted(target.rglob("draft.md")))
+                      else iter_drafts(target))
             if not drafts:
                 raise SystemExit(f"no draft.md under {target}")
             creds = load_credentials(store=_resolve_store(args.status or args.repair_meta, args.store))
