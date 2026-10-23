@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-23
 ---
 
@@ -43,8 +43,8 @@ You want us to sell some of your items for you. You keep owning them until they 
 4.1. **Gross Proceeds** for an eBay sale means the item price plus the shipping the buyer paid, less any refund. Sales tax that eBay collects is not part of Gross Proceeds.
 
 4.2. **Net Proceeds** means:
-(a) for an eBay sale, eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, and (3) any other cost listed on Exhibit A or that you approve in writing;
-(b) for a sale anywhere else we choose (another marketplace, a furniture or other dealer, or our antique-mall booth), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, and (3) any other direct cost listed on Exhibit A or that you approve in writing.
+(a) for an eBay sale, eBay's payout for the sale before postage (Gross Proceeds less eBay's fees), minus (1) promoted-listing (advertising) fees for the item, (2) the actual postage to ship it, (3) the handling fee in section 4.6, and (4) any other cost listed on Exhibit A or that you approve in writing;
+(b) for a sale anywhere else we choose (another marketplace, a furniture or other dealer, or our antique-mall booth), the sale price we actually receive, less any refund, minus (1) that channel's commission or fees, unless they were already taken out before we were paid, (2) transport or delivery, (3) the handling fee in section 4.6 if we pack the item to ship it, and (4) any other direct cost listed on Exhibit A or that you approve in writing.
 <!-- Internal: a non-eBay sale is a `client_ledger.csv` row with `channel` set and its money typed by hand (the Set B code PR (branch claude/consign-set-b-terms)). Sales tax on non-eBay sales is not decided here (GH #281). Not client wording. -->
 
 4.3. **Your share** is 50% of Net Proceeds. We keep the rest.
@@ -52,6 +52,8 @@ You want us to sell some of your items for you. You keep owning them until they 
 4.4. A cost we don't know yet is not zero. An item isn't Cleared until every cost for it is known, wherever it sold.
 
 4.5. If a sale's Net Proceeds come out below zero, we don't take that loss. Section 4.3 doesn't apply to that sale: your share is the whole shortfall (a negative amount), and we take it from your next payouts or you repay it as in section 8.1. We expect this to be rare, but we can't rule it out. The floors you set on Exhibit A are your protection against it (section 3.2). <!-- Internal: Russell's final answer (PR #286 comment, 2026-10-23): a below-zero sale is charged back to the client in full. tools/consign.py has no loss_rule for this yet (`split` charges only the client's split of a loss, `client_never_owes` charges nothing). Set `loss_rule` to `client_bears_loss` in clients.csv (the Set B code PR (branch claude/consign-set-b-terms)); until that merges, `split` under-charges a loss by our half. Not client wording. -->
+
+4.6. **Handling fee.** Each sale we pack and ship carries a handling fee of $2.00 for packing materials (box, padding, tape and shipping label). It is one fee per sale, even when the sale is a lot of several items. For an item marked heavy, oversized or fragile on Exhibit A, the fee is instead the actual cost of the packing materials it needs, and the statement shows that amount. The fee comes out of Net Proceeds before your share is worked out, so at your 50% share it costs you $1.00 on a $2.00 fee. We don't charge for our packing time. <!-- Internal: $2.00 is DEFAULT_HANDLING in tools/consign.py (#295); the fee is stamped on the row's `handling` column at the sale, and an oversize box is typed into `handling` by hand. Change the agreement and the code together. Russell approved $2.00 on 2026-10-23. Not client wording. -->
 
 ## 5. When you get paid
 
@@ -98,7 +100,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 ## 11. Shipping
 
-We pack and ship every sale that needs shipping. Postage, or transport or delivery for a sale outside eBay, comes out of Net Proceeds (section 4.2).
+We pack and ship every sale that needs shipping. Postage, or transport or delivery for a sale outside eBay, and the handling fee in section 4.6 come out of Net Proceeds (section 4.2).
 
 ## 12. Your promises
 
