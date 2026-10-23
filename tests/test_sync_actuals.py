@@ -756,6 +756,17 @@ def test_a_skip_finances_rerun_keeps_known_unwound_ad_fee_and_postage(shop, monk
     assert (row["ad_fee"], row["actual_postage"]) == ("2.50", "7.10")
 
 
+def test_an_unwound_order_sold_on_a_later_run_leaves_unwound_orders(shop, monkeypatch):
+    # Run 1 sees R-1 fully refunded; run 2 sees the refund reversed (a
+    # clean sale). It must move files, never sit in both.
+    _unwound_run(monkeypatch, "default",
+                 [[_order(oid="R-1", sku="aaaa1111", refund=80.0, due=-0.40),
+                   _order(oid="C-1", sku="cccc3333", cancel="CANCELED")],
+                  [_order(oid="R-1", sku="aaaa1111")]])
+    assert [r["order_id"] for r in _read(shop / "unwound_orders.csv")] == ["C-1"]
+    assert [r["order_id"] for r in _read(shop / "sales_ledger.csv")] == ["R-1"]
+
+
 def test_a_dry_run_writes_no_unwound_orders(shop, monkeypatch):
     monkeypatch.setattr(SA, "fetch_orders", lambda days, verbose=True, *, store=None:
                         [_order(oid="C-1", sku="aaaa1111", cancel="CANCELED")])

@@ -451,9 +451,11 @@ the listings ledger only knows the ASK (an accepted Best Offer never writes
 back), and the Inventory API is blind to anything listed by hand on eBay.com.
 Orders are the only source that sees every sale and the price actually paid.
 Refunded and cancelled orders are left out of `sales_ledger*.csv` and written
-to `unwound_orders*.csv` instead (`reason` refunded or cancelled). For 1099-K
-reconciliation, add the sales_ledger `gross` sum to the `original_gross` of the
-`refunded` rows; leave the cancelled rows out.
+to `unwound_orders*.csv` instead (`reason` refunded or cancelled). An order is
+never in both. For 1099-K reconciliation, the 1099-K does not subtract
+refunds, and sales_ledger `gross` is already net of partial refunds, so add the
+refunds back: Σ sales_ledger (`gross` + `refunded`) + Σ unwound_orders
+`original_gross` where `reason` is refunded. Leave cancelled orders out.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 

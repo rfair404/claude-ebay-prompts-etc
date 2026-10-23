@@ -674,20 +674,25 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None, *,
     return path
 
 
-def write_unwound_orders(rows: list[dict], store: Optional[str] = None) -> Path:
+def write_unwound_orders(rows: list[dict], store: Optional[str] = None, *,
+                         sold_order_ids=()) -> Path:
     """Merge `rows` (flatten_unwound) into `store`'s unwound_orders file by
     order_id — never a wholesale overwrite, since `rows` only covers this
     run's `--days` window. An order in `rows` replaces that order's existing
     lines; every other order is left as it was. A money field this run
     doesn't know (None) keeps what the file already had for that line.
-    Returns the path written."""
+
+    `sold_order_ids` are this run's sales (flatten_orders' rows). Their
+    existing rows are dropped, the mirror of write_sales_ledger's
+    `unwound_order_ids`: eBay can reverse a refund, and the refund test can
+    flip, so an order must never sit in both files. Returns the path written."""
     path = stores.paths(store).unwound_orders
     existing: dict = {}
     if path.exists():
         with path.open(encoding="utf-8-sig", newline="") as f:
             existing = {_sale_key(r): r for r in csv.DictReader(f)}
-    fresh = {r["order_id"] for r in rows}
-    merged = {k: v for k, v in existing.items() if k[0] not in fresh}
+    gone = {r["order_id"] for r in rows} | set(sold_order_ids)
+    merged = {k: v for k, v in existing.items() if k[0] not in gone}
     for r in rows:
         key = _sale_key(r)
         old = existing.get(key) or {}
@@ -1105,7 +1110,8 @@ def sync_store(store: str, args) -> int:
     written = write_sales_ledger(
         rows, store,
         unwound_order_ids=excluded["cancelled_order_ids"] + excluded["refunded_order_ids"])
-    unwound_path = write_unwound_orders(unwound, store)
+    unwound_path = write_unwound_orders(
+        unwound, store, sold_order_ids={r["order_id"] for r in rows})
     stamped = declined = 0
     for r in rows:
         if r["shoot_dir"]:
