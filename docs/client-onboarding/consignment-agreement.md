@@ -62,8 +62,8 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 5.1. An item is **Cleared** once every cost for it is known and:
 (a) for an eBay sale, at the later of 40 days after it sells or 30 days after the buyer receives it. eBay's 30-day return window runs from delivery, so this gives returns time to come in;
-(b) for any other sale, ____ days after we receive the funds (recommended: 30 days after we receive the funds), so a bounced payment, chargeback or dealer return has time to show up.
-We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- TODO(Russell): set the non-eBay clearing period. Internal: the Set B code clears a `channel` sale at sale + 40 days (no delivery date), so 40 days after the sale matches the code; any other number needs a code change too. 30 days matches the eBay return window and gives a bounced check, a card chargeback notice or a dealer's return time to arrive before we pay out. -->
+(b) for any other sale, at the end of the month it sells, once we have received the funds for it. It is then paid on the 15th of the next month (section 5.2). If the funds haven't reached us by then, it is paid in the first payout run after they do.
+We owe you your share once an item is Cleared, not when it sells. <!-- Internal: 40 must match RETURN_WINDOW_DAYS and 30 must match DELIVERY_WINDOW_DAYS in tools/consign.py (#285); change the agreement and the code together. --> <!-- Internal: Russell, 2026-10-23. The Set B code (#300) clears a `channel` row on the last day of its sale month once `funds_received` is typed, and never before; change the agreement and the code together. Not client wording. -->
 
 5.2. We pay monthly. Items Cleared by the last day of a month are paid by the 15th of the next month.
 
@@ -81,7 +81,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 7.1. We may offer to buy an item from you outright at a stated buyout price. A buyout only happens if you agree in writing (a signed note or an email reply is enough), naming the item and the price.
 
-7.2. We pay the buyout price in full, with no split, __________ (recommended: in the next payout run after you agree). The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- TODO(Russell): set when buyouts are paid. TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
+7.2. We pay the buyout price in full, with no split, in the next payout run after you agree. The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- Internal: a buyout exists only when Russell has noted in writing that he is buying that specific item; never infer one from an item's category or use, and never set a row EXCLUDED without that note. Not client wording. --> <!-- TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
 
 ## 8. Returns and claims after payout
 
@@ -99,7 +99,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 10.1. We charge no storage fee during this agreement or the pickup period.
 
-10.2. We take reasonable care of your items. We do not insure them unless we agree in writing. You should keep your own insurance on them. Our liability for loss or damage while items are in our care is limited to __________. <!-- TODO(Russell/attorney): set the liability limit and confirm the insurance wording. -->
+10.2. We take reasonable care of your items. We do not insure them unless we agree in writing. You should keep your own insurance on them. Our liability for loss or damage while items are in our care is limited to $5,000. That limit doesn't apply once a sold item has shipped to the buyer: loss or damage in transit is claimed through the carrier, eBay or the channel the item sold on, and your share of that sale is based on what we recover. <!-- TODO(attorney): review the $5,000 limit, the transit carve-out and the insurance wording. -->
 
 ## 11. Shipping
 
@@ -118,13 +118,17 @@ If any of these turns out to be untrue, we may return the items, and you cover a
 
 ## 13. Items we don't accept
 
-We don't take anything the channel we sell through doesn't allow. On eBay that includes firearms or firearm parts, and ivory or other animal parts. <!-- Internal: precious metals/jewelry dealer registration is still open (GH #281); don't decide here. -->
+13.1. We generally don't accept firearms.
+
+13.2. We may decline any item, at intake or later.
+
+13.3. If one channel doesn't allow an item (for example, an item on eBay's restricted list), we may sell it through another channel that allows it, but only where the sale is lawful. We don't sell anything that federal or Georgia law doesn't allow us to sell. <!-- Internal: which restricted categories (and any license or registration they need) we can lawfully sell off eBay is open in GH #281, as is precious metals/jewelry dealer registration; don't name a category as allowed here. Not client wording. -->
 
 ## 14. Term and ending
 
-14.1. This agreement runs for __________ from the date signed. <!-- TODO(Russell): set the term. -->
+14.1. This agreement runs for 12 months from the date signed.
 
-14.2. Either of us may end it with ____ days' written notice. <!-- TODO(Russell): set the notice period. -->
+14.2. Either of us may end it with 30 days' written notice. During those 30 days we keep selling your items or return them to you, and section 14.3 applies when it ends.
 
 14.3. Items listed when it ends may finish their current listing. We pay every Cleared balance, and any buyout price owed, in the next payout run, whatever the amount (the minimum in section 5.3 doesn't apply). Items that clear after that are paid in the payout run after they clear, also with no minimum. Unsold items come back to you under section 9.
 
