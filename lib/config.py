@@ -292,46 +292,13 @@ def get_vision_backend() -> str:
     return DEFAULT_VISION_BACKEND
 
 
-def get_easypost_key() -> str:
-    """EasyPost API key. Precedence: env var > config file > error.
-
-    Same precedence contract as get_apify_token().
-    EasyPost issues test and production keys from the same dashboard; which
-    one is configured decides whether a confirmed buy_label() call hits real
-    carriers or EasyPost's no-charge test mode — that is an account-setup
-    choice made by a human, not something this loader infers (GH #80).
-
-    Raises:
-        ConfigError if no key is available anywhere.
-    """
-    env = os.environ.get("EASYPOST_API_KEY")
-    if env:
-        return env
-
-    config = load_config()
-    key = _nested(config, "easypost", "api_key")
-    if key:
-        return str(key)
-
-    raise ConfigError(
-        f"EasyPost API key not found.\n"
-        f"  Set the EASYPOST_API_KEY environment variable, OR\n"
-        f"  add this to {config_path()}:\n"
-        f"      easypost:\n"
-        f"        api_key: \"<your-key>\"\n"
-        f"  Get a key (test or production) at https://www.easypost.com/account/api-keys\n"
-        f"  A human still has to create the account and fund its balance before\n"
-        f"  any real purchase can succeed — that step is deliberately not automated."
-    )
-
-
 SHIP_FROM_FIELDS = ("name", "company", "street1", "street2", "city", "state", "zip",
                     "country", "phone", "email")
 
 
 def get_ship_from(store: Optional[str] = None) -> dict:
     """The store's configured ship-from mapping (storefront `ship_from`), or
-    {} when unset. Shared by ship-quote (parcel) and lib/freight (LTL).
+    {} when unset. Used by lib/freight (LTL).
 
     `ship_from` is a policy-ish storefront key, so a named store that omits
     it inherits the default store's (same shelf, same return address) — a
@@ -652,12 +619,6 @@ def _cli() -> None:
 
         print(f"vision.backend: {get_vision_backend()}")
         print(f"vision.gemini.model: {get_gemini_model()}")
-
-        try:
-            ep_key = get_easypost_key()
-            print(f"easypost.api_key: {_redact(ep_key)}")
-        except ConfigError:
-            print("easypost.api_key: (not set)")
 
         ebay_creds = get_ebay_credentials()
         print()
