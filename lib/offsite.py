@@ -110,6 +110,10 @@ DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # (`ebz serve` -> /review/<shoot>), not from the bucket.
     "inventory/**/draft.md",
     "inventory/**/identify.txt",
+    # a bucket's spend and source (lib/source_report.py), and the recovery
+    # map left by the 2026-10 wipe: which sold SKUs belong to which folder
+    "inventory/**/context.txt",
+    "inventory/**/RECOVERED.md",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",

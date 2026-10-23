@@ -177,6 +177,10 @@ Capture Device (V4L2) > "Nikon D5100".
 status` says `running`. `running, no frames for Ns` means the feed loop is up
 but the camera sends nothing (off, asleep, unplugged, dial not on M/A).
 
+**Frame rate:** previews can be capped for a lighter load: `FPS=10` in the
+environment caps the D5100 feed (`tools/d5100_webcam.sh`; unset = the
+camera's ~24 fps), and `tg7cam stream --fps N` caps the TG-7 live view.
+
 **Clock:** live view dies when the D5100's date resets, so every feed
 (re)start sets the camera clock to the computer's time first (`gphoto2
 --set-config datetime=now`, best effort). A reset date (before 2020) is

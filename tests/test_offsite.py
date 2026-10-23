@@ -144,6 +144,8 @@ def test_selects_listing_data_only():
         "inventory/shoot1/IMG_2.JPG": b"d", "inventory/shoot1/clip.mov": b"v",
         "inventory/_ebay_photos/206566144144.jpg": b"p",
         "inventory/shoot1/draft.md": b"e", "inventory/shoot1/review_card.html": b"r",
+        "inventory/ESTATES/SCJ/context.txt": b"spend",
+        "inventory/ESTATES/SCJ/sold-leaf/RECOVERED.md": b"- sku: 56606948",
         "inventory/shoot1/.prep/notes.json": b"n", "inventory/shoot1/.picasa.ini": b"i",
         "reports/x.json": b"f", "reports/chart.png": b"img",
         "pick_lists/pick_06-1.html": b"pk", "pick_lists/picks_2026-10-05.pdf": b"pdf",
@@ -154,6 +156,8 @@ def test_selects_listing_data_only():
     })
     got = offsite.local_files(root, offsite.DEFAULT_INCLUDE)
     assert got == [".inventory_live.json",
+                   "inventory/ESTATES/SCJ/context.txt",
+                   "inventory/ESTATES/SCJ/sold-leaf/RECOVERED.md",
                    "inventory/shoot1/draft.md", "inventory_sheet-junk.csv",
                    "ledger_reconcile_report-junk.json",
                    "listings_ledger-junk.csv", "listings_ledger.csv",
@@ -162,11 +166,13 @@ def test_selects_listing_data_only():
                    "reports/x.json", "sales_ledger.csv"]
 
 
-def test_inventory_keeps_only_draft_identify_and_pick_sheets():
+def test_inventory_keeps_only_draft_identify_recovery_and_pick_sheets():
     inc = offsite.DEFAULT_INCLUDE
     for rel in ("inventory/a/draft.md", "inventory/a/b/c/draft.md",
                 "inventory/a/identify.txt", "inventory/fr/arquilt/identify.txt",
-                "inventory/_pick_lists/pick_06-1.html"):
+                "inventory/_pick_lists/pick_06-1.html",
+                "inventory/ESTATES/SCJ/context.txt", "inventory/MINE/context.txt",
+                "inventory/ESTATES/SCJ/ej-08-04/leaf/RECOVERED.md"):
         assert offsite.selected(rel, inc), rel
     for rel in ("inventory/a/review_card.html", "inventory/a/.prep/review.html",
                 "inventory/a/review_card.md", "inventory/a/price.txt",
