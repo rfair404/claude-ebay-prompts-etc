@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
 # Copy new TG-7 photos (JPG + ORF) off the card: over the camera's Wi-Fi if
 # it answers, else over USB (Storage mode mounts as a drive, MTP goes through
-# gphoto2). Files already in DEST with the same name and size are skipped.
-# Photos land in ~/Pictures/TG-7 ($TG7_PHOTOS).
+# gphoto2), else by hopping the laptop's Wi-Fi onto the camera's network
+# (tg7_wifi_hop.sh, detached). Files already in DEST with the same name and
+# size are skipped. Photos land in ~/Pictures/TG-7 ($TG7_PHOTOS).
+#
+#   tg7_pull.sh          pull (prints "HOP started; status at <path>" for a hop)
+#   tg7_pull.sh --wait   wait for a hop's status file and print it
 set -uo pipefail
 
-MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')
+MAIN=${TG7_MAIN:-$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')}
 DEST=${TG7_PHOTOS:-$HOME/Pictures/TG-7}
+HOP=$(dirname "$0")/tg7_wifi_hop.sh
+STATUS=${XDG_RUNTIME_DIR:-/tmp}/tg7_hop.status
+
+# After a hop: the status file is written once the laptop is back on its own
+# network. A hop is capped at 10 min plus its reconnect, so give up at 15.
+if [ "${1:-}" = --wait ]; then
+  for _ in $(seq 180); do
+    [ -f "$STATUS" ] && exec cat "$STATUS"
+    sleep 5
+  done
+  echo "NO STATUS after 15 min: see ${STATUS%.status}.log"
+  exit 1
+fi
+
 mkdir -p "$DEST"
 
 # Wi-Fi: the camera is at 192.168.0.10 when the laptop is on its network.
@@ -50,6 +68,17 @@ if [ -n "$PORT" ]; then
   [ -z "$NUMS" ] && { echo "0 new photo(s) -> $DEST"; exit 0; }
   cd "$DEST" && gphoto2 --port "$PORT" --get-file "$NUMS" --skip-existing --filename "%f.%C"
   exit $?
+fi
+
+# Wi-Fi hop: no USB either, but a saved TG-7 Wi-Fi profile is in range. The
+# laptop has one Wi-Fi adapter, so joining the camera drops the network it is
+# on, Claude included. The hop runs detached, needs nothing from Claude, and
+# always reconnects; its result lands in $STATUS.
+if [ ! -e "$MAIN/inventory/_live/ON_AIR" ] && bash "$HOP" --check >/dev/null 2>&1; then
+  rm -f "$STATUS"
+  TG7_MAIN=$MAIN TG7_PHOTOS=$DEST setsid nohup bash "$HOP" >/dev/null 2>&1 </dev/null &
+  echo "HOP started; status at $STATUS"
+  exit 0
 fi
 
 echo "NOT FOUND: TG-7 not on its Wi-Fi (192.168.0.10) and not on USB"
