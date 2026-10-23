@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-23
 ---
 
@@ -450,6 +450,10 @@ actually got, and feeds the gap back. Its two commands:
 the listings ledger only knows the ASK (an accepted Best Offer never writes
 back), and the Inventory API is blind to anything listed by hand on eBay.com.
 Orders are the only source that sees every sale and the price actually paid.
+Refunded and cancelled orders are left out of `sales_ledger*.csv` and written
+to `unwound_orders*.csv` instead (`reason` refunded or cancelled). For 1099-K
+reconciliation, add the sales_ledger `gross` sum to the `original_gross` of the
+`refunded` rows; leave the cancelled rows out.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 

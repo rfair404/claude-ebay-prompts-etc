@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-23
 ---
 
@@ -17,7 +17,7 @@ command runs from a worktree.
 
 | Path | Why |
 |---|---|
-| `listings_ledger*.csv*`, `sales_ledger*.csv*`, `listings_log.txt` | ledgers, per-store variants and `.backup-*` copies included |
+| `listings_ledger*.csv*`, `sales_ledger*.csv*`, `unwound_orders*.csv*`, `listings_log.txt` | ledgers (`unwound_orders` holds refunded and cancelled orders), per-store variants and `.backup-*` copies included |
 | `hand_listed_locations*.csv`, `ledger_reconcile_report*.json` | small state files that can't be rebuilt from eBay |
 | `inventory_sheet*.csv`, `inventory_sheet*.json`, `.inventory_live*.json` | eBay exports (live-listing sheets built from the eBay APIs) |
 | `pick_lists/**`, `.pick_list_state*.json` | pick lists and their state |
