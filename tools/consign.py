@@ -23,7 +23,8 @@ States. Hand-entered: INTAKE (the default), PREP (in hand, being prepped,
 not listed), RETURNED, DISPOSED (needs a state_note) and EXCLUDED (Russell
 buys it; needs a buyout_price, which is the client's share, no split).
 Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
-DRAFTED (draft.md exists), LISTED (SKU or listing id in a listings ledger),
+DRAFTED (draft.md exists), LISTED (live on eBay: the SKU or listing id has
+a listings-ledger row PUBLISHED or later; DRAFTED and SYNCED are not live),
 SOLD (a sales_ledger row), CLEARED (sold, ad fee and postage known, return
 window passed), SETTLED (paid_to_client_date set). RETURNED, DISPOSED and
 EXCLUDED win over anything derived; PREP stands in for SHOT and DRAFTED but
@@ -78,6 +79,10 @@ SALE_FIELDS = ("order_id", "sold_at", "item_price", "buyer_shipping", "refunded"
 SALE_OPTIONAL = ("ad_fee", "actual_postage")
 
 TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
+# Listings-ledger statuses (lib/list_edit.upsert_listing, lib/sync_actuals)
+# that mean the item has been live on eBay. DRAFTED and SYNCED never were;
+# DELETED can't tell, so it doesn't count either.
+LIVE_LISTING = ("PUBLISHED", "SOLD", "SHIPPED", "ENDED")
 STATES = ("INTAKE", "PREP", "SHOT", "DRAFTED", "LISTED", "SOLD", "CLEARED",
           "SETTLED") + TERMINAL
 SOLD_STATES = ("SOLD", "CLEARED", "SETTLED")
@@ -305,11 +310,14 @@ class Books:
                            SA._load_sales_ledger(stores.paths(s).sales_ledger).values()]
 
     def listing_for(self, sku: str, listing_id: str) -> Optional[tuple[str, dict]]:
-        """The listings-ledger row for this item; a live or sold row beats an
-        ENDED one (an item ended on one store and relisted on another)."""
+        """The listings-ledger row for this item, if it has been live on eBay
+        (LIVE_LISTING); a live or sold row beats an ENDED one (an item ended on
+        one store and relisted on another). A DRAFTED or SYNCED row is not a
+        listing yet and is ignored."""
         hits = [(s, r) for s, r in self.listings
-                if (listing_id and r.get("listing_id") == listing_id)
-                or (sku and r.get("sku") == sku)]
+                if (r.get("status") or "").strip().upper() in LIVE_LISTING
+                and ((listing_id and r.get("listing_id") == listing_id)
+                     or (sku and r.get("sku") == sku))]
         if not hits:
             return None
         return sorted(hits, key=lambda h: (h[1].get("status") != "ENDED",

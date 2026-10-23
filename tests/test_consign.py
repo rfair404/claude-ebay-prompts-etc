@@ -101,11 +101,22 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C014", {"state": "PREP", "inventory_folder": f("b/prep", sku="")}, "PREP", ""),
         ("C015", {"state": "PREP", "inventory_folder": f("b/prepped", sku="aaaa0015")},
          "LISTED", ""),
+        # LISTED means live on eBay: DRAFTED and SYNCED ledger rows are not
+        ("C016", {"inventory_folder": f("b/ledger-drafted", sku="aaaa0016")}, "DRAFTED", ""),
+        ("C017", {"inventory_folder": f("b/ledger-synced", sku="aaaa0017")}, "DRAFTED", ""),
+        ("C018", {"state": "PREP", "inventory_folder": f("b/prep-synced", sku="aaaa0018")},
+         "PREP", ""),
+        ("C019", {"sku": "aaaa0019"}, "INTAKE", ""),
+        ("C020", {"inventory_folder": f("b/shipped", sku="aaaa0020")}, "LISTED", ""),
     ]
     _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id"],
          [{"sku": f"aaaa{n:04d}", "status": "PUBLISHED", "price": "24.00"}
           for n in (4, 5, 6, 7, 8, 9, 15)]
-         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"}])
+         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"},
+            {"sku": "aaaa0016", "status": "DRAFTED", "price": "30.00"},
+            {"sku": "aaaa0017", "status": "SYNCED", "price": "30.00"},
+            {"sku": "aaaa0018", "status": "SYNCED"}, {"sku": "aaaa0019", "status": "DRAFTED"},
+            {"sku": "aaaa0020", "status": "SHIPPED"}])
     _csv(shop / "sales_ledger.csv", SALES_HEADER,
          [_sale("1-1-5", "aaaa0005", NEW), _sale("1-1-7", "aaaa0007", OLD, actual_postage=""),
           _sale("1-1-8", "aaaa0008", OLD)])
@@ -126,6 +137,7 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
     assert got["C012"]["client_share"] == "5.00"
     assert got["C007"]["actuals_complete"] == "no" and got["C007"]["net"] == ""
     assert got["C004"]["ask"] == "24.00"
+    assert got["C017"]["ask"] == "20.00"           # the draft's price, not the ledger's
     assert got["C009"]["state_note"] == "broken in transit, binned"
     assert list((d).glob("client_ledger.backup-*.csv")), "no backup written"
 
