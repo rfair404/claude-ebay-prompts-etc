@@ -8,6 +8,9 @@ set -uo pipefail
 PRINTER=CannonBW
 
 MAIN=$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')
+# A worktree's copy can be stale (an old one used the default printer), so
+# always run main's.
+[ "$0" -ef "$MAIN/.claude/skills/pl/print.sh" ] || exec "$MAIN/.claude/skills/pl/print.sh" "$@"
 cd "$MAIN" || exit 1
 
 OUT=$(.venv/bin/python tools/pick_list.py --poll --all-stores) || { echo "$OUT"; exit 1; }

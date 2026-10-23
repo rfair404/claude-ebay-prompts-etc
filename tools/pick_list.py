@@ -308,38 +308,6 @@ def _safe_filename(order_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", order_id) or "order"
 
 
-def _send_to_printer(path: Path) -> bool:
-    """Best-effort send to the OS default printer. Never raises — a failed
-    print still leaves the file on disk for the human to print by hand.
-
-    Returns True only when the OS *confirmed* the print command succeeded —
-    on POSIX that's `lp` exiting 0. On Windows there is no such confirmation:
-    os.startfile("print") hands the job to the shell asynchronously and
-    returns immediately whether or not a default printer exists or the
-    spooler accepts it, so this always returns False there (the job was
-    fired, not confirmed) rather than claiming a success it can't verify.
-    Unverified on real hardware either way (this was built/tested headless);
-    the rendered file in pick_lists/ is always the fallback regardless of
-    what this returns.
-    """
-    import platform
-    import subprocess
-
-    try:
-        if platform.system() == "Windows":
-            import os
-            os.startfile(str(path), "print")  # type: ignore[attr-defined]
-            print(f"  ~ sent {path.name} to the default printer (Windows does not "
-                  f"confirm the job reached it — file is in {path.parent.name}/ either way)")
-            return False
-        subprocess.run(["lp", str(path)], check=True, capture_output=True, timeout=15)
-        return True
-    except Exception as e:                                          # noqa: BLE001
-        print(f"  ! could not print {path.name} automatically ({e}); "
-              f"file is ready to print by hand")
-        return False
-
-
 def item_folders(order: dict, drafts: list[dict], ledger: list[dict]) -> list[str]:
     """The inventory folders this order's items are picked from, repo-relative
     and de-duplicated, in line-item order.
@@ -477,25 +445,19 @@ def _live_sheet(order_ids: list[str]):
 
 
 def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
-                   do_print: bool = False, reprint: str | None = None,
+                   reprint: str | None = None,
                    fetch=None, publish: bool = True,
                    ttl_hours: float | None = None,
                    store: str | None = None,
                    live_windows: list[dict] | None = None,
-                   ) -> tuple[list[str], list[str], dict, list[str]]:
+                   ) -> tuple[list[str], list[str], dict]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
     Idempotent: an orderId already recorded in `state["printed"]` is skipped
-    unless it is `reprint`. Returns (new_order_ids, skipped_order_ids, state,
-    unconfirmed_print_ids) so a caller (tests, or --poll) can inspect what
-    happened without re-parsing stdout. `state` may be passed in (tests); when
-    None it is loaded from disk and NOT saved here — the caller decides when
-    to persist.
-
-    `unconfirmed_print_ids` holds orders where `do_print` was requested but
-    `_send_to_printer` could not confirm the job reached a printer (on
-    Windows this is *every* order, since os.startfile fires the job async and
-    never reports back) — the pick list still rendered to out_dir either way.
+    unless it is `reprint`. Returns (new_order_ids, skipped_order_ids, state)
+    so a caller (tests, or --poll) can inspect what happened without
+    re-parsing stdout. `state` may be passed in (tests); when None it is
+    loaded from disk and NOT saved here — the caller decides when to persist.
 
     With `publish` (the default) each order also gets a published HTML sheet
     and its link is recorded in the state entry as `url`/`token`/`expires_at`
@@ -544,7 +506,6 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
 
     new_ids: list[str] = []
     skipped_ids: list[str] = []
-    unconfirmed_print_ids: list[str] = []
     for group in group_shipments(orders):
         group_ids = [o["orderId"] for o in group]
         fresh = False
@@ -564,20 +525,6 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
             st["printed"][oid] = {"printed_at": _now_iso(),
                                   "file": recorded_path.replace("\\", "/")}
             new_ids.append(oid)
-            if do_print:
-                # _send_to_printer already catches everything it knows about and
-                # is contracted to never raise — this guard is for the case that
-                # contract is ever violated (e.g. by a test double, or a future
-                # bug): a poll loop must never die over a printer, the file in
-                # out_dir is always the fallback.
-                try:
-                    confirmed = _send_to_printer(path)
-                except Exception as e:                              # noqa: BLE001
-                    print(f"  ! printing {path.name} raised unexpectedly ({e}); "
-                          f"file is still ready to print by hand")
-                    confirmed = False
-                if not confirmed:
-                    unconfirmed_print_ids.append(oid)
         if publish:
             # One sheet, one link per box. A group with a new order in it is
             # re-rendered even if some of its orders were printed alone on an
@@ -588,7 +535,7 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                 sheet = publish_sheet(group, drafts, ledger, ttl_hours=ttl_hours)
             for oid in group_ids:
                 _record_link(st["printed"][oid], sheet)
-    return new_ids, skipped_ids, st, unconfirmed_print_ids
+    return new_ids, skipped_ids, st
 
 
 # --------------------------------------------------------------------------- #
@@ -735,8 +682,8 @@ def _poll_one_store(args, store: str) -> int:
     tag = f"{label} " if label else ""
     # OUT_DIR read at call time (not poll_and_print's import-time default) so
     # a repointed OUT_DIR is honoured here too.
-    new_ids, skipped_ids, state, unconfirmed = poll_and_print(
-        out_dir=OUT_DIR, do_print=args.do_print, reprint=args.reprint,
+    new_ids, skipped_ids, state = poll_and_print(
+        out_dir=OUT_DIR, reprint=args.reprint,
         publish=not args.no_links, ttl_hours=args.ttl, store=store)
     _save_state(state, store)
     held = state.get("held") or {}
@@ -753,7 +700,6 @@ def _poll_one_store(args, store: str) -> int:
     if not new_ids and not skipped_ids:
         print(f"[OK] {tag}nothing {'else ' if held else ''}awaiting shipment")
         return 0
-    rel = OUT_DIR.name
     print(f"[OK] {tag}{len(new_ids)} new pick list(s)"
           + (f"  ({', '.join(new_ids)})" if new_ids else "")
           + (f"; {len(skipped_ids)} already printed" if skipped_ids else ""))
@@ -769,9 +715,6 @@ def _poll_one_store(args, store: str) -> int:
             print(f"  {' + '.join(oids)}  {url}")
         if (new_ids or skipped_ids) and not pick_store.server_is_up():
             print(f"  ! {pick_store.SERVE_HINT}")
-    if unconfirmed:
-        print(f"  ~ {len(unconfirmed)} sent to the printer but NOT confirmed printed "
-              f"({', '.join(unconfirmed)}) — check the printer, the file in {rel}/ is the fallback")
     return 0
 
 
@@ -839,9 +782,6 @@ def main() -> int:
     ap.add_argument("--poll", action="store_true",
                     help="poll for orders awaiting shipment; render NEW ones to pick_lists/ "
                          "(idempotent — an order already rendered is skipped)")
-    ap.add_argument("--print", dest="do_print", action="store_true",
-                    help="with --poll: also best-effort send each new pick list to the "
-                         "default printer (falls back to the file on any failure)")
     ap.add_argument("--reprint", metavar="ORDER_ID",
                     help="with --poll: force this one order to render again even though "
                          "it was already printed")
