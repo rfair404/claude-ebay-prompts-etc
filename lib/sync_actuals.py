@@ -436,6 +436,39 @@ def scan_drafts(store: Optional[str] = None,
     return out
 
 
+def scan_recovered(store: Optional[str] = None,
+                   ledger: Optional[list[dict]] = None) -> list[dict]:
+    """Folders rebuilt after the 2026-10 wipe that hold only a RECOVERED.md:
+    one {dir, sku, store} per `- sku:` line, so a folder standing in for
+    several sold SKUs answers for each of them.
+
+    These are sold or unknown items with no draft, so scan_drafts() can't see
+    them, and without this their sales landed on no folder (no bucket). Store
+    filtering is scan_drafts()'s: the same draft_belongs_to_store() and ledger
+    keys. RECOVERED.md writes `store: default` where a draft leaves `store:`
+    blank, so that value maps to ""."""
+    keys: set[str] = set()
+    if store is not None:
+        store = stores.resolve_store_name(store)
+        keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
+    out = []
+    for rm in sorted(INVENTORY.rglob("RECOVERED.md")):
+        try:
+            t = rm.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        m = re.search(r'^(?:-\s*)?store:\s*"?([^"\n]*?)"?\s*$', t, re.M)
+        raw = m.group(1).strip() if m else ""
+        rstore = "" if stores.is_default(raw) else raw
+        rel = str(rm.parent.relative_to(REPO)).replace("\\", "/")
+        for sku in re.findall(r'^-\s*sku:\s*"?([0-9a-zA-Z\-]{6,})"?\s*$', t, re.M):
+            d = {"dir": rel, "sku": sku, "store": rstore}
+            if store is not None and not draft_belongs_to_store(d, store, keys):
+                continue
+            out.append(d)
+    return out
+
+
 def load_hand_locations(store: Optional[str] = None) -> dict[str, str]:
     """listing id (or SKU) -> where the thing physically sits.
 
@@ -465,11 +498,16 @@ def load_hand_locations(store: Optional[str] = None) -> dict[str, str]:
     return out
 
 
-def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, str, str]:
+def match_sale(row: dict, drafts: list[dict], ledger: list[dict], *,
+               recovered=()) -> tuple[str, str, str]:
     """(shoot_dir, listed_price, matched_by) for a sold line item.
 
     SKU and listing id are exact; the title fallback exists because items listed
     by hand on eBay never carried our SKU.
+
+    `recovered` is scan_recovered(store): RECOVERED.md folders, matched on SKU
+    only, after both draft matches (a real draft always wins) and before the
+    title fallback. They carry no ask, so the price comes from the ledger row.
 
     The title fallback REFUSES an ambiguous match. Several items on this account
     are listed twice under byte-identical titles (two Anson tie bars, two copies
@@ -489,6 +527,12 @@ def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, 
         for d in drafts:
             if d["listing_id"] and d["listing_id"] == row["listing_id"]:
                 return d["dir"], d["price"], "listing_id"
+    if row["sku"]:
+        for rc in recovered:
+            if rc["sku"] == row["sku"]:
+                ask = next((lr.get("price", "") for lr in ledger
+                            if lr.get("sku") == row["sku"]), "")
+                return rc["dir"], ask, "recovered"
     scored = sorted(
         ((difflib.SequenceMatcher(None, _norm(row["title"]), _norm(d["title"])).ratio(), d)
          for d in drafts), key=lambda x: x[0], reverse=True)
@@ -861,11 +905,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     return worst
 
 
-def match_rows(rows: list[dict], drafts: list[dict], ledger: list[dict]) -> None:
+def match_rows(rows: list[dict], drafts: list[dict], ledger: list[dict], *,
+               recovered=()) -> None:
     """Fill shoot_dir / listed_price / matched_by / pct_* on each order row,
-    against ONE store's drafts and ledger (see `scan_drafts(store)`)."""
+    against ONE store's drafts, RECOVERED.md folders and ledger (see
+    `scan_drafts(store)` / `scan_recovered(store)`)."""
     for r in rows:
-        d, ask, how = match_sale(r, drafts, ledger)
+        d, ask, how = match_sale(r, drafts, ledger, recovered=recovered)
         r["shoot_dir"], r["listed_price"], r["matched_by"] = d, ask, how
         try:
             pct = float(r["item_price"]) / float(ask) * 100 if ask else None
@@ -887,7 +933,7 @@ def sync_store(store: str, args) -> int:
     rows, excluded = flatten_orders(fetch_orders(args.days, store=store))
     ledger = load_listings_ledger(store)
     drafts = scan_drafts(store, ledger)
-    match_rows(rows, drafts, ledger)
+    match_rows(rows, drafts, ledger, recovered=scan_recovered(store, ledger))
 
     # #119 (route B): real ad fee + actual postage, per order — degrades to
     # "unavailable" rather than failing the whole sync (see sync_finances).
