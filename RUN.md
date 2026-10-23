@@ -1,5 +1,5 @@
 ---
-version: 1.1.0
+version: 1.2.0
 updated: 2026-10-23
 ---
 
@@ -391,7 +391,10 @@ on that settlements row, and the next `sync --apply` copies the date and
 There is no `set` command: edit the CSV, and `sync` refuses an unknown state,
 a DISPOSED row without a note, an EXCLUDED row without a buyout price, a bad
 amount or date, or two active rows on one `inventory_folder` unless they share
-a `lot_id` (each sellable unit needs its own folder). Across ledgers it also
+a `lot_id` (each sellable unit needs its own folder). It also refuses a
+lot-mate that already has an order, a share, a settlement or a paid date
+(make the sold row the lot's lowest id, or take it out of the lot), and one
+`order_id` on two active rows. Across ledgers it also
 refuses a folder claimed from two ledgers (unless it is one client's lot), a
 lot on two folders, and one id in two of a client's ledgers. A listing that
 ended unsold, a sale that left the sales ledger (the finance sync drops
