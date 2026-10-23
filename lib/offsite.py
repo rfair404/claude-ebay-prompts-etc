@@ -114,6 +114,10 @@ DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # map left by the 2026-10 wipe: which sold SKUs belong to which folder
     "inventory/**/context.txt",
     "inventory/**/RECOVERED.md",
+    # consignment: each intake's item ledger and the client registry
+    # (tools/consign.py). The registry is the one file with client names.
+    "inventory/**/client_ledger.csv",
+    "inventory/_consign/**",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",

@@ -61,6 +61,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - **Sourcing strategy.** Track which sources, categories and price bands actually turn a profit. `tools/price_vs_actual.py` and the sales report show what sold for what; compare it with what was paid. Recommend where to buy more and what to stop buying.
 - **Scouting.** Find upcoming estate sales, auctions and collections in reach, with date, location, terms (buyer's premium, payment, pickup) and a one-line reason each is worth the trip. Use the sale's own page as the source.
 
+## Consignment items
+
+A client's goods are an intake, not a purchase (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Record the roster with `python -m lib.cli consign import CONSIGN-YYYYMMDD roster.csv --client K01`, one row per item. The cost is zero (except EXCLUDED, below): no `context --spend`, and no purchase handoff to the accountant. An EXCLUDED item is a purchase from the client and becomes our inventory at its `buyout_price`: record it with `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item`, or when its folder is created if there isn't one yet. The client's name and contact go only in `inventory/_consign/clients.csv`, never in a buy list, brief, commit or PR.
+
 ## Rules
 
 - **Never bid, buy, register, message a seller or make an offer.** Draft it; Russell does it.

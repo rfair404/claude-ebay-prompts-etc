@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-23
+---
+
 # Offsite storage for listing data
 
 Added after the 2026-10 Windows wipe, which lost every ledger, shoot photo and
@@ -18,6 +23,7 @@ command runs from a worktree.
 | `pick_lists/**`, `.pick_list_state*.json` | pick lists and their state |
 | `inventory/**/draft.md`, `inventory/**/identify.txt` | each item's draft and identification, at any depth (`fr/arquilt/draft.md`) |
 | `inventory/**/context.txt`, `inventory/**/RECOVERED.md` | a bucket's spend and source (`ESTATES/SCJ/context.txt`), and the post-wipe recovery map that ties sold SKUs to their folders |
+| `inventory/**/client_ledger.csv`, `inventory/_consign/**` | consignment: each intake's item ledger and the client registry (`clients.csv`, the only file with client names), from `ebz consign` |
 | `inventory/_pick_lists/**` | pick sheets staged for `offsite share` (`prompts/pick_list.md`) |
 | `reports/**`, `share-inventory/**` | reports and files staged for sharing |
 
