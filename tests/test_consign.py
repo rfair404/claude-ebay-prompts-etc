@@ -130,6 +130,20 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
     assert list((d).glob("client_ledger.backup-*.csv")), "no backup written"
 
 
+@pytest.mark.parametrize("apply", [[], ["--apply"]])
+def test_sync_refuses_to_run_outside_the_main_checkout(shop, tmp_path_factory,
+                                                        monkeypatch, apply):
+    d = _intake(shop, [{"item_id": "C001", "state": "SETTLED", "client_share": "8.10",
+                        "paid_to_client_date": "2026-11-02"}])
+    before = (d / "client_ledger.csv").read_bytes()
+    main_checkout = tmp_path_factory.mktemp("main")
+    monkeypatch.setattr(consign.offsite, "data_root", lambda start=None: main_checkout)
+    with pytest.raises(SystemExit, match="from the main checkout"):
+        consign.main(["sync", *apply])
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert consign.main(["report"]) == 0        # report still works there
+
+
 def test_hand_edit_errors_block_the_sync(shop, capsys):
     shared = _folder(shop, "b/shared")
     d = _intake(shop, [{"item_id": "C001", "state": "LOST"},

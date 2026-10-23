@@ -49,6 +49,7 @@ from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "lib"))
+import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
 
@@ -725,6 +726,15 @@ def main(argv: Optional[list[str]] = None) -> int:
                   f"(split defaults to 0.5 until then)")
         return 0
 
+    # Only sync is refused in a worktree: inventory/ links to main's real
+    # ledgers but the listings/sales ledgers don't, so sync would regress every
+    # sold row. import and report are safe there, and agents run there.
+    if args.cmd == "sync":
+        main_root = offsite.data_root(REPO).resolve()
+        if REPO.resolve() != main_root:
+            raise SystemExit(f"[X] run consign sync from the main checkout ({main_root}): "
+                             f"a worktree has no ledgers, and sync would regress "
+                             f"every sold row")
     intakes = [intake_dir(args.intake)] if args.intake else all_intakes()
     missing = [d for d in intakes if not (d / LEDGER_NAME).exists()]
     if missing:

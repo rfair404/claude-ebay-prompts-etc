@@ -337,7 +337,8 @@ Names and contacts live only in `inventory/_consign/clients.csv`
     python -m lib.cli consign report --client K01 --csv    # -> reports/consign/K01-<date>.csv
 
 `import` needs a `description` (or `item`) column, gives each new row the
-next `C###` id and skips a row with the same bin and description. `sync`
+next `C###` id and skips a row with the same bin and description. Run
+`consign sync` from the main checkout; from a worktree it refuses. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED (sold, ad fee and postage known,
 40 days since the sale: eBay's 30-day return window runs from delivery) and
