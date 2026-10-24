@@ -139,6 +139,30 @@ Mitigations now in code: `_protect_objects` tests chroma as well as luma
 `crisp` is the default for new items, `asshot` exists for a shoot whose mask
 cannot be trusted at all.
 
+## The black velvet bust (2026-10-24)
+
+Black velvet shows every light speck. On a stand where the chain is the only
+bright thing in the frame, lint competes with the item for attention, and at
+thumbnail size a bright fibre near the chain can read as a break or a loose
+end. Russell made the lint pass and the 100% detail check standing rules on
+2026-10-24.
+
+The first shoot under the rule was a 10K reversible omega necklace. Its bust
+frames came out of the automatic `crisp` pass with the velvet lint intact: at
+1:1, `TG7_ZZ230278_crop` shows dozens of light specks over the stand and a
+long fibre on the right shoulder near the chain. The backdrop blur (`_bg_diffuse`) is built for exactly this kind of
+lint, so the likely cause is that the blur never reached the stand. Either
+segmentation counts the bust as part of the subject, or `_protect_objects`
+treats a large black shape on light felt as an object to protect, the way it
+protects a ruler. That is a hypothesis for the developer and has not been
+measured.
+
+Until the tool handles it, the touch-up is done by hand. The boundary is the
+same one "What it will not do" draws: the stand is studio, so cleaning it is
+fair game, and the chain is the goods, so its pixels are left alone. The 100%
+check exists because a lint pass on a thin chain is where an over-wide mask
+would soften an edge or swallow a kink, and the thumbnail cannot show that.
+
 ## Printed media: the measurements
 
 **Crop.** Before the rule, of 56 cropped media frames the median kept 75% of

@@ -309,6 +309,55 @@ python -m lib.photo_prep.prep <shoot> --category printed --check
   trace to something observed on a real shoot. A category invented from taste
   is a policy change wearing a config file.
 
+## Necklaces on the black velvet bust — lint pass, then a 100% detail check
+
+Standing direction from Russell, 2026-10-24: a necklace on the black velvet
+neck stand always gets a close look for detail, and the stand always gets a
+lint cleanup. Any frame showing the stand is a **bust frame**. These rules
+apply to all of them, on top of everything else in this file.
+
+**1. Every bust frame gets a lint pass before it ships.**
+
+- Remove the small light specks and fibres on the black velvet: dust, lint,
+  loose threads, light hairs.
+- The velvet keeps its natural texture. At 100% the nap still reads as fine,
+  soft grain. No flat plastic black, no area filled to one value, no smeared
+  blotch or halo where a speck used to be.
+- The chain, clasp, pendant and stamp are **the goods**, and the lint pass
+  does not touch their pixels. The rule in "What it will not do" applies
+  unchanged. A fibre lying across the chain is on the goods, so it stays. If
+  it hides detail a buyer needs, the frame goes back to Russell as a reshoot
+  on the shot list.
+- The light felt or sweep behind the stand gets the normal backdrop pass.
+  The lint rule is about the black stand.
+
+**2. The art director checks each bust frame at 100% before sign-off.**
+Pan the whole length of the chain at 1:1 in the rendered `listing/` file,
+not on the review sheet thumbnail. Pass only when:
+
+- the chain edges are crisp, with no sharpening halo against the velvet;
+- every kink, twist or flat spot in the original is still visible (condition
+  wins over pretty);
+- the clasp and any stamp (`10K`, `14K`, `925`, maker) are as legible as in
+  the original, or more;
+- no speck or fibre is left on the velvet at 1:1.
+
+Record the call per frame in the sign-off. A frame that fails goes back to
+the photo editor with what to fix and where ("fibre at the right shoulder,
+level with the clasp").
+
+**3. "Lint left as shot" is not an acceptable call on a bust frame.** This
+replaces the old fallback. When the automatic pass cannot clean the stand
+(the mask drops a thin chain, the stand is read as part of the subject, or a
+mask failure switches every backdrop move off), the photo editor hand-masks
+the chain and cleans the velvet around it, then re-runs check 2. A frame
+that cannot be cleaned without touching the chain is a reshoot, not a ship.
+Write which frames were hand-masked in the shoot's `shoot_log.md`, so the
+next session sees what was done by hand.
+
+Why, and what the auto pass did on the first shoot under this rule:
+[reference/prep-notes.md](reference/prep-notes.md#the-black-velvet-bust-2026-10-24).
+
 ## What it will not do
 
 The line is between **the studio** and **the goods**. Re-toning, neutralising
