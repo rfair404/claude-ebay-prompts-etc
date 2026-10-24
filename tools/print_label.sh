@@ -24,4 +24,16 @@ fi
 [ -s "$file" ] || { echo "no label at $file" >&2; exit 1; }
 
 lpstat -p "$PRINTER" | grep -q disabled && { echo "$PRINTER is paused: cupsenable $PRINTER" >&2; exit 1; }
+# On the laptop the queue may forward to green's (RUN.md, "Green: the
+# shipping station"). Check the far queue too; if green is down the job waits
+# here and prints when green is back.
+uri=$(lpstat -v "$PRINTER" 2>/dev/null | awk '{print $NF}')
+if [[ $uri == ipp://* ]]; then
+  server=${uri#ipp://}; server=${server%%/*}
+  if ! state=$(lpstat -h "$server" -p "$PRINTER" 2>/dev/null); then
+    echo "${server%%:*} isn't answering; the label waits here and prints when it is back" >&2
+  elif grep -q disabled <<<"$state"; then
+    echo "$PRINTER on ${server%%:*} is paused: ssh ${server%%.*} cupsenable $PRINTER" >&2; exit 1
+  fi
+fi
 lp -d "$PRINTER" -o PageSize=103x164 -o fit-to-page "$file"
