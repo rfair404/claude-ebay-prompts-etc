@@ -17,8 +17,8 @@
 *.txt   text eol=lf
 *.html  text eol=lf
 
-# Deliberate: tools/marble_index_next.cmd is run by the Windows scheduled task
-# (MarbleIndexNext), and cmd.exe is happier with CRLF.
+# Deliberate: tools/promote_seasoned.cmd is run by the Windows scheduled task
+# (PromoteSeasoned), and cmd.exe is happier with CRLF.
 *.cmd   text eol=crlf
 
 # Git's heuristics get these right nearly always, which is not the same as

@@ -25,8 +25,8 @@ Three rules that hold in every phase, because they're what the session-log
 audit (#61) found costing the most tokens and wall-clock:
 
 1. **Never `Read` a raw photo frame into the main thread.** Read the
-   contact sheet (`tools/prep_card.py`, `tools/prep_sheet_html.py`,
-   `tools/marble_triage.py`) or delegate frame-level looking to a worker
+   contact sheet (`tools/prep_card.py`, `tools/prep_sheet_html.py`) or
+   delegate frame-level looking to a worker
    subagent that returns text. Measured: 99.4% of all `Read` payload
    across 114 sessions was photos, at ~0.68 MB a frame, sitting in context
    for every later turn of that session.
@@ -88,7 +88,7 @@ context being raw photos. Both are avoidable, in every phase:
   pass, any renderer) and keep working on the next item or phase while it
   runs. Foreground only what the very next step actually depends on.
 - **Read the contact sheet, never the raw frames.** `prep_card.py` /
-  `prep_sheet_html.py` / `marble_triage` already build one sheet — read
+  `prep_sheet_html.py` already build one sheet — read
   that. Pulling individual `.jpg`/`.png` frames into the main thread is the
   single largest source of wasted context in this pipeline; when a frame
   truly needs full-resolution inspection, delegate that one look to a
@@ -262,10 +262,10 @@ stop-and-ask. Full contract in [RUN.md](../RUN.md); summary:
   user to ask) → degrades to SOFT (`needs_followup_photo` + a `NEEDS_REVIEW.md`
   line, then proceed).
 - **HARD (interactive only) — stop and show:** the marble CROP gate — for a
-  bulk/group marble shoot, after generating the per-marble crops + numbered
-  contact sheet (`marble_triage --crops-only --expect N`), present the contact
-  sheet to the user and STOP; begin IDENTIFY only on their go-ahead. Headless
-  (no user) → SOFT: self-verify crop count == expected, log any mismatch to
+  bulk/group marble shoot, build the numbered contact card
+  (`tools/prep_card.py`), present it with the marble count vs the expected N
+  and STOP; begin IDENTIFY only on their go-ahead. Headless
+  (no user) → SOFT: self-verify the count == expected, log any mismatch to
   `NEEDS_REVIEW.md`, then proceed. See
   [marbles.md](../specializations/marbles.md) (⛔ CROP GATE).
 - **SOFT — proceed with default, log to `NEEDS_REVIEW.md`:** grouping
