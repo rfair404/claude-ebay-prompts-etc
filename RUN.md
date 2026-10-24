@@ -1,5 +1,5 @@
 ---
-version: 1.9.0
+version: 1.10.0
 updated: 2026-10-24
 ---
 
@@ -268,6 +268,31 @@ The dry run prints a RAM budget for desktop, Firefox and a
 `green_test.sh` run at once. The test run's 900 MB peak was measured. The
 other figures are estimates, so read the verdict as a guide. Nothing is
 applied while `inventory/_live/ON_AIR` exists.
+
+**The ship page and its queue** run through `tools/ship_station.sh`, from the
+laptop and over IPv4 like everything else:
+
+    tools/ship_station.sh setup     # deploy origin/main to green and (re)start serve; re-run after a merge
+    tools/ship_station.sh push      # ship_queue.json -> green (the pick-list poll calls this)
+    tools/ship_station.sh pull      # green's boxes.csv -> reports/shipping/boxes-green.csv
+    tools/ship_station.sh status    # serve up, code current, queue age, QL-1100 state
+    tools/ship_station.sh --dry-run <command>
+
+- **Code.** `setup` sends green `origin/main` as a `git archive`, tracked
+  files only, so `config.yaml`, the ledgers and every key stay behind. It
+  goes to `~/pops-ship`. Its `reports/` links to `~/pops-ship-data/reports`,
+  so a redeploy never touches green's `boxes.csv`. The venv
+  (`~/pops-ship-venv`) holds only what `serve` imports: fastapi, uvicorn,
+  pyyaml and pillow.
+- **Serve.** The `pops-serve` systemd **user** unit runs `python -m lib.cli
+  serve` on green's `127.0.0.1:8770` (still localhost-only, #311). It
+  restarts on failure and starts at login, and auto-login makes that boot.
+  Logs: `journalctl --user -u pops-serve`.
+- **Queue in, boxes out.** `push` puts `reports/shipping/ship_queue.json`
+  at the same path on green, by temp file and rename. `pull` brings green's
+  `boxes.csv` back byte for byte (CRLF) as `boxes-green.csv`. It never
+  writes the laptop's own `boxes.csv`, and it never replaces the copy with
+  nothing. Both give up after 5 s if green is down. The laptop carries on.
 
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
