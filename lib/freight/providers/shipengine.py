@@ -81,6 +81,22 @@ def _party(a: FreightAddress) -> dict:
             "address": addr}
 
 
+def _charges(raw) -> list[dict]:
+    """ShipEngine charge lines in the same flat shape Warp's use
+    ({code, description, amount: float}), minus the total itself."""
+    out = []
+    for ch in raw or []:
+        if ch.get("type") == "total":
+            continue
+        try:
+            amount = float((ch.get("amount") or {}).get("value"))
+        except (TypeError, ValueError):
+            continue
+        out.append({"code": ch.get("type"), "description": ch.get("description"),
+                    "amount": amount})
+    return out
+
+
 class ShipEngine(Provider):
     name = "shipengine"
 
@@ -163,21 +179,23 @@ class ShipEngine(Provider):
                 continue
             total = next((ch for ch in (r or {}).get("charges") or []
                           if ch.get("type") == "total"), None)
-            if not total:
-                errors.append(f"{c.get('name')}: no total in quote")
+            amt = (total or {}).get("amount") or {}
+            try:
+                price = float(amt.get("value"))
+            except (TypeError, ValueError):
+                errors.append(f"{c.get('name')}: no usable total in quote")
                 continue
-            amt = total.get("amount") or {}
             msg = (r or {}).get("carrier_message")
             out.append(FreightQuote(
                 provider=self.name, carrier=str(c.get("name") or c.get("scac") or "?"),
                 service=str(((r or {}).get("service") or {}).get("carrier_description") or ""),
-                price=float(amt.get("value")), currency=str(amt.get("currency") or "USD"),
+                price=price, currency=str(amt.get("currency") or "USD"),
                 quote_id=str(r.get("quote_id") or ""),
                 transit_days=r.get("estimated_delivery_days"),
                 expires_at=r.get("expiration_date"), bookable=bool(r.get("quote_id")),
                 tier="firm", warnings=warnings + ([str(msg)] if msg else []),
                 extra={"carrier_id": c.get("carrier_id"), "scac": c.get("scac"),
-                       "charges": r.get("charges")}))
+                       "charges": _charges(r.get("charges"))}))
         if not out and errors:
             raise http.FreightAPIError(self.name, 0, "; ".join(errors))
         for q in out:
@@ -206,6 +224,9 @@ class ShipEngine(Provider):
         r = http.send(self.name, "POST", f"{BASE}/quotes/{quote.quote_id}/pickup",
                       body=body, headers=headers, retry_network_errors=False)
         r = r if isinstance(r, dict) else {}
+        if not (r.get("pickup_id") or r.get("pro_number")):
+            raise http.FreightAPIError(self.name, 0, f"pickup answered 2xx with no "
+                                       f"pickup_id/pro_number: {str(r)[:300]}")
         warnings += [str(w.get("message")) for w in r.get("warnings") or [] if w.get("message")]
         return BookResult(dry_run=False, provider=self.name, quote_id=quote.quote_id,
                           price=quote.price, carrier=quote.carrier,

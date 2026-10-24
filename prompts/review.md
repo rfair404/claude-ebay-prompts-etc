@@ -101,19 +101,26 @@ run `--record` first, then assemble the same fields by hand from `draft.md`
 present its card, take the decision, then the next. Only batch-publish if
 the user says "approve all".
 
-**Copy check — in-hand voice.** Before presenting the card, scan the
-draft's buyer-visible fields (title, description, condition_description,
-item specifics) for camera-frame language: "visible in the photos",
-"shown/pictured", "as-shown", "not identifiable/verifiable from the
-photos", tests-not-run narration ("not shake-tested", "odor not
+**Copy check — in-hand voice and positive framing.** Before presenting the
+card, scan the draft's buyer-visible fields (title, description,
+condition_description, item specifics) for camera-frame language: "visible
+in the photos", "shown/pictured", "as-shown", "not identifiable/verifiable
+from the photos", tests-not-run narration ("not shake-tested", "odor not
 verified"), or a fact deferred to the buyer ("message me for exact
-dimensions", "Not measured.", GH #170). A deferral is resolved HERE, not
-left to the buyer: ask the in-hand question (measure / weigh it) with the
-card, write the answer into the draft, and never approve copy that still
-invites a buyer to ask for a fact. Any hit is a copy defect, not a judgment call: fix it via
-DRAFT (rephrase to the finding, per draft.md's in-hand-voice rule), then
-re-run `--review`. The standing "Please see the photos…" close line is
-exempt. Grade-setting "Untested; sold as-is." is exempt.
+dimensions", "Not measured.", GH #170). Scan the same fields for negative
+framing (draft.md's "Positive framing" rule): "not included", "no
+box/manual", "no chips or cracks", "nothing missing/else", "it isn't X, it's
+Y", "what you see is what you get". A positive clear must still pass the
+truth bar: it names only what INVESTIGATE examined. A deferral is resolved
+HERE, not left to the buyer: ask the in-hand question (measure / weigh it)
+with the card, write the answer into the draft, and never approve copy that
+still invites a buyer to ask for a fact. Any hit is a copy defect, not a
+judgment call: fix it via DRAFT (rephrase to the finding, per draft.md's
+in-hand-voice and positive-framing rules), then re-run `--review`. Exempt:
+the standing "Please see the photos…" close line; grade-setting "Function
+untested; sold as-is for parts or repair."; eBay's own condition names; and
+a plain disclosure where a positive form would blur the fact ("Missing the
+lid.", "Does not power on.", "not solid gold").
 
 ## The gate (HARD — this is where the run stops)
 

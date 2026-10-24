@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """lib/freight — LTL quote/book/track, tested offline.
 
-Booking freight spends real money, so as with tests/test_easypost_client.py
-the first job here is proving the gate: no provider's book endpoint is ever
-called without confirm=True, a confirmed book is never retried on a network
-error, and the web app's book route needs an explicit confirm too.
+Booking freight spends real money, so the first job here is proving the
+gate: no provider's book endpoint is ever called without confirm=True, a
+confirmed book is never retried on a network error, and the web app's book
+route needs an explicit confirm too.
 
 All HTTP is faked (urlopen patched); no network, no keys.
 """
@@ -13,6 +13,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -31,13 +32,17 @@ from freight.providers.shipengine import ShipEngine, _option_code      # noqa: E
 from freight.providers.warp import Warp                                 # noqa: E402
 from freight.store import FreightStore                                  # noqa: E402
 
+# Booking refuses a pickup date in the past, so a fixed date rots the suite.
+_PICKUP_DAY = date.today() + timedelta(days=7)
+PICKUP = _PICKUP_DAY.isoformat()
+
 
 def _req(**kw) -> FreightRequest:
     d = dict(origin=FreightAddress(zip="60120", name="Me", street1="9 Ship St",
                                    city="Elgin", state="IL", phone="8475550100"),
              destination=FreightAddress(zip="30301", name="Jane", street1="1 Main St",
                                         city="Atlanta", state="GA", phone="4045550100"),
-             pickup_date="2026-10-14",
+             pickup_date=PICKUP,
              units=[HandlingUnit(length_in=48, width_in=40, height_in=50, weight_lbs=320)],
              accessorials=["liftgate_delivery", "residential_delivery"],
              commodity="antique sewing machine")
@@ -221,7 +226,9 @@ def test_warp_confirmed_book_sends_stops_window_insurance_and_flags_unpaid(fake)
     assert body["insuranceQuoteId"] == "INS1"
     assert body["deliveryInfo"]["address"]["zipcode"] == "30301"
     assert body["deliveryInfo"]["contactName"] == "Jane"
-    assert body["pickupInfo"]["windowTime"]["from"].startswith("2026-10-1")
+    # 09:00 local, sent as UTC: same day give or take one, depending on the zone
+    assert body["pickupInfo"]["windowTime"]["from"][:10] in {
+        (_PICKUP_DAY + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
     assert body["listItems"][0]["totalWeight"] == 320
     assert (r.booking_id, r.tracking_number, r.dry_run) == ("O1", "2E2E", False)
     assert r.payment_link.endswith("/pay") and r.raw["mode"] == "sandbox"
@@ -301,6 +308,8 @@ class _FakeProvider(Provider):
         super().__init__({})
         self.name, self._quotes, self._error = name, quotes or [], error
         self.booked = []
+        self.book_error = None
+        self.raw = {}
 
     def quote(self, req):
         if self._error:
@@ -309,9 +318,11 @@ class _FakeProvider(Provider):
 
     def book(self, quote, req, confirm=False):
         self.booked.append(confirm)
+        if confirm and self.book_error:
+            raise self.book_error
         return BookResult(dry_run=not confirm, provider=self.name, quote_id=quote.quote_id,
                           price=quote.price, carrier=quote.carrier,
-                          tracking_number="PRO1" if confirm else "")
+                          tracking_number="PRO1" if confirm else "", raw=dict(self.raw))
 
 
 @pytest.fixture
@@ -347,17 +358,20 @@ def test_shipment_lifecycle_and_manual_quotes_survive_requote(world):
     assert s.quotes[0].tier == "manual" and not s.quotes[0].bookable
 
     with pytest.raises(ProviderNotReady, match="mark-booked"):
-        svc.book(fs, sid, 1, confirm=True)                        # by hand only
+        svc.book(fs, sid, s.quotes[0].ref, confirm=True)         # by hand only
 
-    r = svc.book(fs, sid, 2, confirm=False)                        # B Freight, dry run
+    r = svc.book(fs, sid, 2, confirm=False)                        # B Freight, dry run by row
     assert r.dry_run and fs.require(sid).status == "quoted" and provs["beta"].booked == [False]
 
-    svc.book(fs, sid, 2, confirm=True)
+    with pytest.raises(ValueError, match="by ref"):
+        svc.book(fs, sid, 2, confirm=True)                         # a row number can't spend
+    assert provs["beta"].booked == [False]
+    svc.book(fs, sid, s.quotes[1].ref, confirm=True)
     s = fs.require(sid)
     assert s.status == "booked" and s.booking["tracking_number"] == "PRO1"
     assert s.cost == 250.0 and s.margin == 150.0
     with pytest.raises(ValueError):
-        svc.book(fs, sid, 2, confirm=True)                         # never twice
+        svc.book(fs, sid, s.quotes[1].ref, confirm=True)           # never twice
     with pytest.raises(ValueError):
         fs.update_request(sid, _req())                             # frozen once booked
 
@@ -441,7 +455,7 @@ def client(world, monkeypatch):
     monkeypatch.setattr(svc, "provider_status", lambda: [
         {"provider": "alpha", "ready": True, "note": ""}])
     monkeypatch.setattr(wf, "get_freight_config", lambda: {})
-    with TestClient(server.app) as c:
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as c:
         yield c, fs, wf, monkeypatch
     wf.set_store(None)
 
@@ -449,7 +463,7 @@ def client(world, monkeypatch):
 PAYLOAD = {"destination": {"zip": "30301", "name": "Jane", "street1": "1 Main St",
                            "city": "Atlanta", "state": "GA", "phone": "4045550100"},
            "units": [{"length_in": 48, "width_in": 40, "height_in": 50, "weight_lbs": 320}],
-           "accessorials": ["liftgate_delivery"], "pickup_date": "2026-10-14",
+           "accessorials": ["liftgate_delivery"], "pickup_date": PICKUP,
            "title": "Pfaff 463", "order_id": "12-345"}
 
 
@@ -476,10 +490,13 @@ def test_web_adhoc_quote_and_bad_input(client):
 def test_web_book_needs_explicit_confirm(client):
     c, fs, _, _ = client
     sid = c.post("/api/freight/shipments", json=PAYLOAD).json()["id"]
-    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": 1})
+    ref = fs.require(sid).quotes[0].ref
+    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": ref})
     assert r.status_code == 200 and r.json()["dry_run"] is True
     assert fs.require(sid).status == "quoted"
-    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": 1, "confirm": True})
+    assert c.post(f"/api/freight/shipments/{sid}/book",
+                  json={"quote": "1", "confirm": True}).status_code == 400
+    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": ref, "confirm": True})
     assert r.status_code == 200 and r.json()["dry_run"] is False
     assert fs.require(sid).status == "booked"
 
@@ -488,8 +505,9 @@ def test_web_booking_switch_off_refuses_confirm_only(client):
     c, fs, wf, mp = client
     mp.setattr(wf, "get_freight_config", lambda: {"web_booking": False})
     sid = c.post("/api/freight/shipments", json=PAYLOAD).json()["id"]
-    assert c.post(f"/api/freight/shipments/{sid}/book", json={"quote": 1}).status_code == 200
-    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": 1, "confirm": True})
+    ref = fs.require(sid).quotes[0].ref
+    assert c.post(f"/api/freight/shipments/{sid}/book", json={"quote": ref}).status_code == 200
+    r = c.post(f"/api/freight/shipments/{sid}/book", json={"quote": ref, "confirm": True})
     assert r.status_code == 403 and "--confirm" in r.json()["detail"]
     assert fs.require(sid).status == "quoted"
 
@@ -507,3 +525,252 @@ def test_web_manual_quote_patch_and_status(client):
     assert r.json()["quotes"] == []
     assert c.post(f"/api/freight/shipments/{sid}/status",
                   json={"status": "cancelled"}).json()["status"] == "cancelled"
+
+
+# --------------------------------------------------------------------- review fixes
+
+class _Raises:
+    """urlopen stand-in that raises what a real socket raises mid-response."""
+    def __init__(self, exc):
+        self.exc, self.calls = exc, 0
+
+    def __call__(self, req, timeout=None):
+        self.calls += 1
+        raise self.exc
+
+
+def test_read_timeout_and_dropped_connection_become_no_response_errors(monkeypatch):
+    import http.client
+    monkeypatch.setattr(FH.time, "sleep", lambda s: None)
+    for exc in (TimeoutError("timed out"), http.client.RemoteDisconnected("gone")):
+        fake = _Raises(exc)
+        monkeypatch.setattr(urllib.request, "urlopen", fake)
+        with pytest.raises(FH.FreightAPIError) as e:
+            FH.send("p", "POST", "https://x/book", body={}, retry_network_errors=False)
+        assert e.value.no_response and fake.calls == 1
+
+
+def test_unreadable_2xx_is_a_no_response_error(monkeypatch):
+    class _Bad(_Resp):
+        def __init__(self):
+            self._raw = b"<html>ok</html>"
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: _Bad())
+    with pytest.raises(FH.FreightAPIError) as e:
+        FH.send("p", "POST", "https://x/book", body={})
+    assert e.value.no_response
+
+
+def test_quote_all_survives_a_provider_crashing(world):
+    _, provs = world
+    provs["gamma"]._error = TypeError("float() argument must be ... not 'NoneType'")
+    quotes, errors = svc.quote_all(_req())
+    assert len(quotes) == 2 and "TypeError" in errors["gamma"]
+
+
+def test_shipengine_null_total_is_an_error_entry_not_a_crash(fake):
+    fake({("GET", "/ltl/carriers"): {"carriers": [CARRIER]},
+          ("POST", "/ltl/quotes/c1"): {"quote_id": "q1", "charges": [
+              {"type": "total", "amount": {"currency": "USD", "value": None}}]}})
+    with pytest.raises(FH.FreightAPIError, match="no usable total"):
+        ShipEngine({"api_key": "k"}).quote(_req())
+
+
+def _quoted(fs):
+    sid = fs.create(_req())
+    s = svc.quote_shipment(fs, sid)
+    return sid, s.quotes[0]          # B Freight, beta
+
+
+def test_definite_refusal_releases_the_booking_lock(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].book_error = FH.FreightAPIError("beta", 400, "bad request")
+    with pytest.raises(FH.FreightAPIError):
+        svc.book(fs, sid, q.ref, confirm=True)
+    s = fs.require(sid)
+    assert s.status == "quoted" and s.events[-1]["status"] == "book_failed"
+
+
+def test_no_response_keeps_the_lock_and_blocks_a_retry(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].book_error = FH.FreightAPIError("beta", 0, "timed out")
+    with pytest.raises(FH.FreightAPIError, match="OUTCOME UNKNOWN"):
+        svc.book(fs, sid, q.ref, confirm=True)
+    s = fs.require(sid)
+    assert s.status == "booking" and s.events[-1]["status"] == "book_unknown"
+    provs["beta"].book_error = None
+    with pytest.raises(ValueError, match="unknown outcome"):
+        svc.book(fs, sid, q.ref, confirm=True)                 # the retry never reaches beta
+    assert provs["beta"].booked == [True]
+    with pytest.raises(ValueError, match="unknown outcome"):
+        fs.set_status(sid, "in_transit")
+    fs.set_status(sid, "quoted", note="checked with beta: nothing booked")
+    assert fs.require(sid).status == "quoted"
+
+
+def test_unknown_outcome_resolved_by_mark_booked(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].book_error = FH.FreightAPIError("beta", 504, "gateway timeout")
+    with pytest.raises(FH.FreightAPIError):
+        svc.book(fs, sid, q.ref, confirm=True)
+    s = svc.mark_booked(fs, sid, q.ref, tracking="PRO9")
+    assert s.status == "booked" and s.booking["tracking_number"] == "PRO9"
+
+
+def test_a_second_booker_is_refused_while_one_holds_the_lock(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    fs.claim_booking(sid)                                     # another process got there first
+    with pytest.raises(ValueError, match="in progress"):
+        svc.book(fs, sid, q.ref, confirm=True)
+    assert provs["beta"].booked == []
+
+
+def test_booking_is_recorded_even_when_saving_the_bol_fails(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].raw = {"documents": [{"type": "bill_of_lading", "format": "pdf",
+                                        "image": "%%% not base64 %%%"}]}
+    r = svc.book(fs, sid, q.ref, confirm=True)
+    s = fs.require(sid)
+    assert s.status == "booked" and s.booking["tracking_number"] == "PRO1"
+    assert any("saving the BOL failed" in w for w in r.warnings)
+    assert "documents" not in s.booking["raw"]
+
+
+def test_expired_quote_is_refused(world):
+    fs, provs = world
+    sid = fs.create(_req())
+    fs.add_manual_quote(sid, FreightQuote("uship", "X", 1.0))
+    s = svc.quote_shipment(fs, sid)
+    q = next(x for x in s.quotes if x.provider == "beta")
+    stale = [x.to_dict() for x in s.quotes]
+    for d in stale:
+        if d["provider"] == "beta":
+            d["expires_at"] = "2020-01-01T00:00:00Z"
+    fs._update(sid, quotes=json.dumps(stale))
+    q = next(x for x in fs.require(sid).quotes if x.provider == "beta")
+    with pytest.raises(ValueError, match="expired"):
+        svc.book(fs, sid, q.ref, confirm=False)
+    assert provs["beta"].booked == []
+
+
+def test_quote_refs_are_stable_across_reloads(world):
+    fs, _ = world
+    sid, q = _quoted(fs)
+    again = fs.require(sid).quotes[0]
+    assert q.ref == again.ref and len(q.ref) == 8
+
+
+def test_db_path_lives_in_the_main_checkout(monkeypatch, tmp_path):
+    import offsite
+    monkeypatch.setattr(offsite, "data_root", lambda start: tmp_path / "main")
+    monkeypatch.setattr(svc, "get_freight_config", lambda: {})
+    assert svc.db_path() == tmp_path / "main" / "reports" / "freight.db"
+    monkeypatch.setattr(svc, "get_freight_config", lambda: {"db_path": "data/f.db"})
+    assert svc.db_path() == tmp_path / "main" / "data" / "f.db"
+
+
+def test_store_origin_uses_shared_ship_from_and_rejects_a_bad_one(monkeypatch):
+    import config as CFG
+    monkeypatch.setattr(CFG, "get_storefront", lambda s=None: {"ship_from": {
+        "zip": "30650", "name": "Me", "city": "Madison", "state": "GA", "bogus": "x"}})
+    o = svc.store_origin(None)
+    assert (o.zip, o.name, o.city, o.country) == ("30650", "Me", "Madison", "US")
+    monkeypatch.setattr(CFG, "get_storefront", lambda s=None: {"ship_from": "Madison GA"})
+    with pytest.raises(CFG.ConfigError):
+        svc.store_origin(None)
+
+
+def test_detail_page_escapes_script_breakouts_and_bad_links(client):
+    c, fs, _, _ = client
+    evil = "</script><script>alert(1)</script>"
+    sid = c.post("/api/freight/shipments", json=dict(
+        PAYLOAD, destination=dict(PAYLOAD["destination"], name=evil))).json()["id"]
+    page = c.get(f"/freight/{sid}").text
+    assert evil not in page and "<script>alert(1)" not in page
+    s = fs.require(sid)
+    svc.mark_booked(fs, sid, s.quotes[0].ref, tracking="P1")
+    b = fs.require(sid).booking
+    b["payment_link"] = "javascript:alert(1)"
+    b["tracking_url"] = "javascript:alert(2)"
+    fs.update_booking(sid, b)
+    page = c.get(f"/freight/{sid}").text
+    assert "javascript:alert" not in page
+
+
+# --------------------------------------------------------------------- production pass
+
+def test_status_mapping_only_advances_on_a_clear_match():
+    assert svc._status_from("inRouteToPickup") is None
+    assert svc._status_from("pickupFailed") is None
+    assert svc._status_from("deliveryFailed") is None
+    assert svc._status_from("needCarrier") is None
+    assert svc._status_from("pickupSuccessful") == "picked_up"
+    assert svc._status_from("picked up") == "picked_up"
+    assert svc._status_from("In Transit") == "in_transit"
+    assert svc._status_from("complete") == "delivered"
+
+
+def test_warp_2xx_without_booking_ids_is_unknown_not_booked(fake, world):
+    fake({("POST", "/freights/booking"): {"message": "accepted"}})
+    with pytest.raises(FH.FreightAPIError) as e:
+        Warp(SANDBOX).book(_dev_q(), _req(), confirm=True)
+    assert e.value.no_response
+
+
+def test_409_booking_in_progress_keeps_the_lock(world):
+    fs, provs = world
+    sid, q = _quoted(fs)
+    provs["beta"].book_error = FH.FreightAPIError("beta", 409, "BOOKING_IN_PROGRESS")
+    with pytest.raises(FH.FreightAPIError, match="OUTCOME UNKNOWN"):
+        svc.book(fs, sid, q.ref, confirm=True)
+    assert fs.require(sid).status == "booking"
+
+
+def test_past_pickup_date_is_refused_and_can_be_moved(world, capsys, monkeypatch):
+    import tools.freight as cli
+    fs, provs = world
+    monkeypatch.setattr(svc, "open_store", lambda path=None: fs)
+    sid = fs.create(_req(pickup_date="2020-01-02"))
+    q = svc.quote_shipment(fs, sid).quotes[0]
+    with pytest.raises(ValueError, match="has passed"):
+        svc.book(fs, sid, q.ref, confirm=False)
+    assert cli.main(["set", str(sid), "--pickup-date", "2099-01-05"]) == 0
+    s = fs.require(sid)
+    assert s.request.pickup_date == "2099-01-05" and s.quotes == []   # re-quote required
+
+
+def test_malformed_ship_from_stops_the_cli(world, monkeypatch, capsys):
+    import config as CFG
+    import tools.freight as cli
+    monkeypatch.setattr(CFG, "get_storefront", lambda s=None: {"ship_from": "Madison GA"})
+    rc = cli.main(["quote", "--to-zip", "30301", "--length", "48", "--width", "40",
+                   "--height", "50", "--weight", "320"])
+    assert rc == 1 and "ship_from" in capsys.readouterr().err
+
+
+def test_freight_routes_refuse_foreign_hosts_and_origins(client):
+    c, fs, _, _ = client
+    assert c.get("/freight", headers={"host": "evil.example"}).status_code == 403
+    r = c.post("/api/freight/quote", json=PAYLOAD, headers={"origin": "https://evil.example"})
+    assert r.status_code == 403
+    r = c.post("/api/freight/quote", json=PAYLOAD, headers={"origin": "http://127.0.0.1:8770"})
+    assert r.status_code == 200 and "no-store" in r.headers["cache-control"]
+    assert c.get("/freight", headers={"host": "[::1]:8770"}).status_code == 200
+
+
+def test_web_marks_expired_quotes_and_unknown_outcomes(client):
+    c, fs, _, _ = client
+    sid = c.post("/api/freight/shipments", json=PAYLOAD).json()["id"]
+    stale = [q.to_dict() for q in fs.require(sid).quotes]
+    stale[0]["expires_at"] = "2020-01-01T00:00:00Z"
+    fs._update(sid, quotes=json.dumps(stale))
+    page = c.get(f"/freight/{sid}").text
+    assert "EXPIRED" in page
+    fs.claim_booking(sid)
+    fs.mark_book_unknown(sid, "beta: timed out")
+    assert "OUTCOME UNKNOWN" in c.get(f"/freight/{sid}").text
+    assert "outcome unknown" in c.get("/freight").text

@@ -1,4 +1,4 @@
-"""Link a worktree's inventory/ to the main checkout's inventory/.
+"""Link a worktree's inventory/ and reports/ to the main checkout's.
 
 Pipeline data (identify.txt, price.txt, draft.md, review_card.*, .prep/, ...)
 lives only in the main checkout's gitignored inventory/. A worktree has none,
@@ -11,6 +11,12 @@ pointing at <main>/inventory. Every tool that resolves REPO / "inventory" then
 sees the real store, and Write/Edit to <worktree>/inventory/... land in main.
 The guard compares paths lexically, so the carve-out is exactly inventory/:
 <main>/lib/... and every other base-checkout path stay blocked.
+
+reports/ gets the same link. It is the one place for sensitive report output
+(sales dashboards, ad reports, freight.db, marketing reviews), and both offsite
+copies (lib/offsite.py, lib/gdrive_mirror.py) take reports/**. Unlinked, a
+report written from a worktree stayed in the worktree, never reached the
+backups, and was deleted with it.
 
 Runs as a SessionStart / CwdChanged hook (.claude/settings.json). Idempotent,
 silent outside a worktree, and never blocks: problems go to stderr, exit 0.
@@ -26,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-LINKED = ("inventory",)
+LINKED = ("inventory", "reports")
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -97,7 +103,7 @@ def main() -> int:
     notes = link_worktree(cwd, check="--check" in sys.argv)
     if notes:
         print("Worktree: " + "; ".join(notes) + ". Pipeline data read/written under "
-              "this worktree's inventory/ is the main checkout's store.")
+              "this worktree's inventory/ and reports/ is the main checkout's store.")
     return 0
 
 

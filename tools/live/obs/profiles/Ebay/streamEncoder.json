@@ -1,0 +1,1 @@
+{"rate_control": "CBR", "bitrate": 3000, "keyint_sec": 1, "bf": 0, "preset": "superfast", "x264opts": "bframes=0"}

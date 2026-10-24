@@ -1,11 +1,19 @@
-"""The freight shipments themselves — one SQLite file, reports/freight.db.
+"""The freight shipments themselves — one SQLite file, reports/freight.db
+in the MAIN checkout (service.db_path() resolves it from a worktree too).
 
 reports/ is gitignored (it holds buyer addresses once a shipment is booked)
-and is already in `ebz offsite`'s backup set. Like every ledger, the copy
-that counts is the MAIN checkout's: a worktree has its own reports/.
+and is already in `ebz offsite`'s backup set.
 
-A shipment walks:  draft -> quoted -> booked -> picked_up -> in_transit
-                   -> delivered        (cancelled from anywhere before delivered)
+A shipment walks:  draft -> quoted -> booking -> booked -> picked_up
+                   -> in_transit -> delivered
+                   (cancelled from anywhere before delivered)
+
+`booking` is a lock, taken atomically before a provider's book endpoint is
+called (claim_booking). It stops two processes — the CLI and the web app, or
+two tabs — from booking one shipment twice. If the provider call ends in a
+definite error the lock is released; if the outcome is unknown (the request
+may have reached the provider and the answer was lost) the shipment STAYS in
+`booking` until a person checks the provider and resolves it.
 
 Quotes live on the shipment as a JSON list. A re-quote replaces the API
 quotes and keeps the manual ones (a phone quote doesn't go stale because
@@ -22,10 +30,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-from freight.models import FreightQuote, FreightRequest
+from freight.models import FreightQuote, FreightRequest, quote_ref
 
-STATUSES = ("draft", "quoted", "booked", "picked_up", "in_transit",
+STATUSES = ("draft", "quoted", "booking", "booked", "picked_up", "in_transit",
             "delivered", "cancelled")
+BOOKABLE = ("draft", "quoted")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS shipments (
@@ -111,6 +120,8 @@ def _quote_basis(req: FreightRequest) -> tuple:
 
 def _sort(quotes: list[FreightQuote]) -> list[FreightQuote]:
     # Cheapest first; among equal prices, bookable before indicative.
+    for q in quotes:
+        q.ref = q.ref or quote_ref(q)
     return sorted(quotes, key=lambda q: (q.price, not q.bookable, q.provider, q.carrier))
 
 
@@ -223,9 +234,46 @@ class FreightStore:
         self._update(sid, quotes=json.dumps([q.to_dict() for q in merged]), status="quoted")
         return self.require(sid)
 
+    def claim_booking(self, sid: int) -> str:
+        """Atomically move draft/quoted -> booking. Returns the status it held,
+        for release_booking(). Raises ValueError if someone else holds it —
+        the conditional UPDATE is what makes two concurrent bookers safe,
+        across processes, not just threads."""
+        with self._lock, self._conn() as c:
+            row = c.execute("SELECT status FROM shipments WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                raise KeyError(f"no freight shipment #{sid}")
+            prev = row["status"]
+            if prev == "booking":
+                raise ValueError(f"#{sid} already has a booking attempt in progress or of "
+                                 "unknown outcome — check the provider before trying again")
+            if prev not in BOOKABLE:
+                raise ValueError(f"#{sid} is {prev}; nothing to book")
+            n = c.execute("UPDATE shipments SET status='booking', updated_at=? "
+                          "WHERE id=? AND status=?", (_now(), sid, prev)).rowcount
+        if not n:
+            raise ValueError(f"#{sid} changed while booking started — look at it again")
+        return prev
+
+    def release_booking(self, sid: int, prev: str, note: str) -> None:
+        """A definite failure: nothing was booked. Back to `prev`."""
+        s = self.require(sid)
+        if s.status == "booking":
+            events = s.events + [{"when": _now(), "status": "book_failed", "note": note}]
+            self._update(sid, status=prev, events=json.dumps(events))
+
+    def mark_book_unknown(self, sid: int, note: str) -> None:
+        """The request may have reached the provider. Keep the lock; say why."""
+        s = self.require(sid)
+        events = s.events + [{"when": _now(), "status": "book_unknown", "note": note}]
+        self._update(sid, events=json.dumps(events))
+
+    def update_booking(self, sid: int, booking: dict) -> None:
+        self._update(sid, booking=json.dumps(booking))
+
     def record_booking(self, sid: int, booking: dict) -> Shipment:
         s = self.require(sid)
-        if s.status not in ("draft", "quoted"):
+        if s.status not in BOOKABLE + ("booking",):
             raise ValueError(f"#{sid} is already {s.status}")
         events = s.events + [{"when": _now(), "status": "booked",
                               "note": f"{booking.get('provider')} / {booking.get('carrier')}"}]
@@ -239,6 +287,13 @@ class FreightStore:
         s = self.require(sid)
         if s.status in ("delivered", "cancelled") and status != s.status:
             raise ValueError(f"#{sid} is {s.status}; that's final")
+        if status == "booking":
+            raise ValueError("`booking` is set only by a booking in progress")
+        if status == "booked" and not s.booking:
+            raise ValueError(f"#{sid} has no booking — use `mark-booked` to record one")
+        if s.status == "booking" and status not in ("quoted", "cancelled"):
+            raise ValueError(f"#{sid} has a booking attempt of unknown outcome — check the "
+                             "provider, then `mark-booked` it or set it back to `quoted`")
         if status in ("picked_up", "in_transit", "delivered") and not s.booking:
             raise ValueError(f"#{sid} has no booking — book it or `mark-booked` first")
         events = s.events + [{"when": _now(), "status": status, "note": note}]

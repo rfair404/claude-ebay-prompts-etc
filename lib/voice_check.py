@@ -30,9 +30,9 @@ import sys
 from pathlib import Path
 
 try:
-    from draft_io import Draft, parse_draft
+    from draft_io import Draft, iter_drafts, parse_draft
 except ImportError:                       # imported as lib.voice_check
-    from lib.draft_io import Draft, parse_draft  # type: ignore
+    from lib.draft_io import Draft, iter_drafts, parse_draft  # type: ignore
 
 # Everything after this marker in a body is internal, never buyer-visible.
 END_MARKER = "END BUYER DESCRIPTION"
@@ -100,7 +100,16 @@ BLOCK = [re.compile(p, re.IGNORECASE) for p in _B]
 
 _W = [  # softer normalizations — WARN, never block
     (r"\bno\s+[\w\s,/-]{0,40}?\bvisible\b",
-     "prefer 'no X noted' over 'no X visible'"),
+     "describe what is there ('rim intact'), not what isn't ('no chips visible')"),
+    # Positive framing (house rule 2026-10-23, prompts/draft.md "Positive
+    # framing"): say what IS there. Absences and defects are still disclosed,
+    # phrased positively ("Missing the lid.", "Rim intact.").
+    (r"\bnot\s+included\b",
+     "describe what is there: say what's included, not what's not included"),
+    (r"\bnothing\s+(missing|else)\b",
+     "describe what is there: list what's included, not 'nothing missing'"),
+    (r"\bno\s+(box|manual|chips?|cracks?)\b",
+     "describe what is there: 'rim intact' / 'missing the box', not 'no chips' / 'no box'"),
     (r"\bodou?r\b",
      "odor: fine as a defect disclosure, never as a test not run"),
     # A pointer is fine in the close line ("Please see the photos…") and as a
@@ -189,7 +198,7 @@ def _iter_drafts(target: Path):
     if target.is_file():
         yield target
     else:
-        yield from sorted(target.rglob("draft.md"))
+        yield from iter_drafts(target)
 
 
 def main(argv=None) -> int:

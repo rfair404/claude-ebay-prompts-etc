@@ -280,6 +280,11 @@ class Warp(Provider):
         r = http.send(self.name, "POST", f"{HOSTS[qmode]}/freights/booking", body=body,
                       headers=headers, timeout=90, retry_network_errors=False)
         r = r if isinstance(r, dict) else {}
+        if not (r.get("orderId") or r.get("trackingNumber")):
+            # 2xx but nothing to identify a booking by: don't record a
+            # booking we can't name, and don't call it a refusal either.
+            raise http.FreightAPIError(self.name, 0, f"booking answered 2xx with no "
+                                       f"orderId/trackingNumber: {str(r)[:300]}")
         if r.get("insuranceStatus") == "failed":
             warnings.append("insurance FAILED to bind — the shipment is uninsured")
         return BookResult(

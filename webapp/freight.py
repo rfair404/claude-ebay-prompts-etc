@@ -24,7 +24,9 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from urllib.parse import urlparse
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -38,13 +40,35 @@ from freight.providers import ProviderNotReady
 from freight.store import STATUSES, FreightStore, Shipment
 from tools.sales_report import STYLE, _e, _stat
 
-router = APIRouter()
-
 PII_HEADERS = {
     "Cache-Control": "no-store, no-cache, must-revalidate, private",
     "X-Robots-Tag": "noindex, nofollow, noarchive",
     "Referrer-Policy": "no-referrer",
 }
+
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _local_only(request: Request, response: Response) -> None:
+    """Every /freight route: the browser must be talking to this machine by
+    a loopback name, and a write must come from a loopback page.
+
+    Binding 127.0.0.1 stops other machines, not other web pages: a site the
+    operator visits can point its own hostname at 127.0.0.1 (DNS rebinding)
+    and then call these routes as same-origin — including the one that
+    books freight. Checking Host (and Origin on writes) closes that. JSON
+    answers carry buyer addresses, so they get the no-store headers too."""
+    host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
+    if host not in LOCAL_HOSTS:
+        raise HTTPException(403, f"served to localhost only, not {host!r}")
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        origin = request.headers.get("origin")
+        if origin and (urlparse(origin).hostname or "") not in LOCAL_HOSTS:
+            raise HTTPException(403, "cross-origin write refused")
+    response.headers.update(PII_HEADERS)
+
+
+router = APIRouter(dependencies=[Depends(_local_only)])
 
 _store: Optional[FreightStore] = None
 
@@ -125,12 +149,12 @@ class ManualQuoteIn(BaseModel):
 
 
 class BookIn(BaseModel):
-    quote: int
+    quote: str          # the quote's ref; a row number is accepted for a dry run only
     confirm: bool = False
 
 
 class MarkBookedIn(BaseModel):
-    quote: int
+    quote: str
     tracking: str = ""
     price: Optional[float] = None
     bol: str = ""
@@ -148,6 +172,7 @@ class PatchIn(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
     buyer_paid: Optional[float] = None
+    pickup_date: Optional[str] = None
     destination: Optional[Address] = None
 
 
@@ -167,8 +192,8 @@ def _request(body: QuoteIn) -> tuple[str, FreightRequest]:
     store = _store_name(body.store)
     try:
         origin = _svc.store_origin(store)
-    except ConfigError:
-        origin = FreightAddress(zip="")
+    except ConfigError as exc:      # a malformed ship_from is the operator's to fix
+        raise HTTPException(400, str(exc)) from exc
     for k, v in body.origin.model_dump().items():
         if v:
             setattr(origin, k, v)
@@ -191,13 +216,30 @@ def _fail(exc: Exception) -> HTTPException:
         return HTTPException(404, str(exc.args[0]))
     if isinstance(exc, ProviderNotReady):
         return HTTPException(409, str(exc))
-    if isinstance(exc, _http.FreightAPIError):
+    if isinstance(exc, (_http.FreightAPIError, RuntimeError)):
         return HTTPException(502, str(exc))
     return HTTPException(400, str(exc))
 
 
 def _money(v) -> str:
     return "—" if v is None else f"${v:,.2f}"
+
+
+def _js(value) -> str:
+    """JSON safe to inline in a <script> block. json.dumps alone leaves
+    `</script>` intact — a buyer address containing `</script><script>…`
+    would run as code on the page that can book. In an HTML attribute
+    (onclick), wrap it in _e() as well."""
+    return (json.dumps(value).replace("&", "\\u0026").replace("<", "\\u003c")
+            .replace(">", "\\u003e"))
+
+
+def _safe_url(u) -> str:
+    """Only http(s) links from provider data become hrefs — never
+    javascript: or data: — so a provider response can't inject script."""
+    from urllib.parse import urlparse
+    u = str(u or "")
+    return u if urlparse(u).scheme in ("http", "https") else ""
 
 
 # ------------------------------------------------------------------ JSON API
@@ -249,11 +291,13 @@ def api_patch(sid: int, body: PatchIn) -> dict:
     fs = get_store()
     try:
         fields = {k: v for k, v in body.model_dump().items()
-                  if v is not None and k != "destination"}
+                  if v is not None and k not in ("destination", "pickup_date")}
         s = fs.set_fields(sid, **fields)
-        if body.destination is not None:
+        if body.destination is not None or body.pickup_date:
             req = s.request
-            req.destination = FreightAddress(**body.destination.model_dump())
+            if body.destination is not None:
+                req.destination = FreightAddress(**body.destination.model_dump())
+            req.pickup_date = body.pickup_date or req.pickup_date
             fs.update_request(sid, req)
         return fs.require(sid).to_dict()
     except (ValueError, KeyError) as exc:
@@ -289,7 +333,8 @@ def api_book(sid: int, body: BookIn) -> dict:
                                  f"--quote {body.quote} --confirm")
     try:
         r = _svc.book(get_store(), sid, body.quote, confirm=body.confirm)
-    except (ValueError, KeyError, ProviderNotReady, _http.FreightAPIError) as exc:
+    except (ValueError, KeyError, ProviderNotReady, _http.FreightAPIError,
+            RuntimeError) as exc:
         raise _fail(exc) from exc
     from dataclasses import asdict
     out = asdict(r)
@@ -418,16 +463,16 @@ async function act(btn, method, url, body, reload){
   try{ const j=await api(method,url,body); if(reload!==false) location.reload(); return j; }
   catch(e){ say(m,e.message,true); btn.disabled=false; }
 }
-async function book(btn, sid, n){
+async function book(btn, sid, ref){
   const m=document.getElementById('msg'); btn.disabled=true; say(m,'Checking (dry run)…');
   let dry;
-  try{ dry=await api('POST',`/api/freight/shipments/${sid}/book`,{quote:n,confirm:false}); }
+  try{ dry=await api('POST',`/api/freight/shipments/${sid}/book`,{quote:ref,confirm:false}); }
   catch(e){ say(m,e.message,true); btn.disabled=false; return; }
   const warn = (dry.warnings||[]).length? '\\n\\n'+dry.warnings.join('\\n') : '';
   if(!confirm(`Book ${dry.carrier} via ${dry.provider} for $${dry.price.toFixed(2)}?\\n\\nThis dispatches a pickup and charges the account on file.`+warn)){
     say(m,'Not booked.'); btn.disabled=false; return; }
   say(m,'Booking…');
-  try{ await api('POST',`/api/freight/shipments/${sid}/book`,{quote:n,confirm:true}); location.reload(); }
+  try{ await api('POST',`/api/freight/shipments/${sid}/book`,{quote:ref,confirm:true}); location.reload(); }
   catch(e){ say(m,e.message,true); btn.disabled=false; }
 }
 async function showDocs(btn, sid){
@@ -478,12 +523,18 @@ def _quotes_table(quotes: list[FreightQuote], errors: dict, sid: Optional[int],
         if charges:
             notes += '<span class="inc">' + _e(" · ".join(
                 f"{c.get('description')} {_money(c.get('amount'))}" for c in charges)) + '</span>'
+        expired = q.expired()
+        if expired:
+            notes += f'<span class="w">EXPIRED {_e(q.expires_at)} — re-quote</span>'
         if sid is None or booked:
             action = ""
+        elif expired and q.tier != "manual":
+            action = '<span class="dim">expired</span>'
         elif q.bookable:
-            action = (f'<button class="small" onclick="book(this,{sid},{n})">Book…</button>')
+            action = (f'<button class="small" onclick="book(this,{sid},{_e(_js(q.ref))})">'
+                      'Book…</button>')
         elif q.tier == "manual":
-            action = (f'<button class="small ghost" onclick="markBooked(this,{sid},{n})">'
+            action = (f'<button class="small ghost" onclick="markBooked(this,{sid},{_e(_js(q.ref))})">'
                       'Mark booked…</button>')
         else:
             action = '<span class="dim">compare only</span>'
@@ -573,12 +624,17 @@ def _list_table(rows: list[Shipment]) -> str:
         price = s.cost if s.booking else (best.price if best else None)
         carrier = (s.booking or {}).get("carrier") or (best.carrier if best else "")
         st = s.status
-        cls = "on" if st == "delivered" else ("off" if st in ("draft", "quoted") else "")
+        cls = "on" if st == "delivered" else ("off" if st in ("draft", "quoted", "booking") else "")
+        flag = ""
+        if st == "booking":
+            flag = '<span class="w">outcome unknown — check the provider</span>'
+        elif (s.booking or {}).get("payment_link") and st == "booked":
+            flag = '<span class="w">UNPAID — on hold</span>'
         out.append(
             f'<tr><td class="num"><a href="/freight/{s.id}">#{s.id}</a></td>'
             f'<td><span class="pill {cls}">{_e(st)}</span></td>'
             f'<td><a href="/freight/{s.id}">{_e(s.title or "(untitled)")}</a>'
-            f'<span class="inc">{_e(s.order_id or "")}</span></td>'
+            f'<span class="inc">{_e(s.order_id or "")}</span>{flag}</td>'
             f'<td class="num">{_e(s.request.origin.zip)} → {_e(s.request.destination.zip)}</td>'
             f'<td>{_e(carrier)}</td><td class="num">{_money(price)}</td>'
             f'<td class="num">{_money(s.margin)}</td></tr>')
@@ -633,18 +689,26 @@ def _detail(s: Shipment) -> str:
           ("Notes", _e(s.notes or "—"))]
     if booked:
         b = s.booking
-        links = " ".join(f'<a href="{_e(b[k])}" target=_blank rel=noreferrer>{lbl}</a>'
+        links = " ".join(f'<a href="{_e(_safe_url(b[k]))}" target=_blank rel=noreferrer>{lbl}</a>'
                          for k, lbl in (("tracking_url", "tracking"), ("bol_url", "BOL"))
-                         if b.get(k) and str(b[k]).startswith("http"))
+                         if _safe_url(b.get(k)))
+        pay = _safe_url(b.get("payment_link"))
         kv.insert(0, ("Booked", f'{_e(b.get("provider"))} / {_e(b.get("carrier"))} · '
                                 f'{_money(b.get("price"))} · tracking '
                                 f'{_e(b.get("tracking_number") or "—")} {links}'
                                 + (f'<span class="w">UNPAID — on hold until paid: '
-                                   f'<a href="{_e(b["payment_link"])}" target=_blank '
+                                   f'<a href="{_e(pay)}" target=_blank '
                                    f'rel=noreferrer>pay</a></span>'
-                                   if b.get("payment_link") else "")
+                                   if pay else "")
                                 + "".join(f'<span class="w">! {_e(w)}</span>'
                                           for w in b.get("warnings") or [])))
+    if s.status == "booking":
+        last = next((e for e in reversed(s.events) if e.get("status") == "book_unknown"), {})
+        kv.insert(0, ("Booking", '<span class="warn">OUTCOME UNKNOWN — the booking may have '
+                                 'gone through. Check the provider, then mark it booked or set '
+                                 'the status back to quoted.</span>'
+                                 + (f'<span class="w">{_e(last.get("note"))}</span>'
+                                    if last.get("note") else "")))
     info = '<dl class="kv">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in kv) + "</dl>"
 
     status_opts = "".join(f'<option{" selected" if x == s.status else ""}>{x}</option>'
@@ -685,22 +749,26 @@ def _detail(s: Shipment) -> str:
         '<fieldset><legend>Destination (changing it clears quotes)</legend>'
         + _addr_fields("to_", d) + '</fieldset>')
     dest_js = "" if booked else (
-        "const dest={}; for(const k of " + json.dumps(list(addr_keys)) + "){dest[k]=o['to_'+k]||'';}"
-        " if(JSON.stringify(dest)!==" + json.dumps(json.dumps({k: getattr(d, k) for k in addr_keys},
-                                                              separators=(",", ":")))
-        + ") body.destination=dest;")
+        "const dest={}; for(const k of " + _js(list(addr_keys)) + "){dest[k]=o['to_'+k]||'';}"
+        " if(JSON.stringify(dest)!==JSON.stringify(" + _js({k: getattr(d, k) for k in addr_keys})
+        + ")) body.destination=dest;")
     paid = "" if s.buyer_paid is None else s.buyer_paid
     edit = (
-        f'<details><summary>Edit order, notes, buyer-paid{"" if booked else ", destination"}'
+        f'<details><summary>Edit order, notes, buyer-paid{"" if booked else ", pickup date, destination"}'
         '</summary><form class="grid" style="margin-top:10px" onsubmit="saveEdit(this);return false">'
         f'<label>eBay order id<input name=order_id value="{_e(s.order_id)}"></label>'
         f'<label>Title<input name=title value="{_e(s.title)}"></label>'
         f'<label>Buyer paid $<input name=buyer_paid type=number step=any value="{paid}"></label>'
         f'<label style="grid-column:1/-1">Notes<input name=notes value="{_e(s.notes)}"></label>'
-        f'{dest_fields}<div class="actions"><button class="small">Save</button></div></form></details>'
+        + ("" if booked else f'<label>Pickup date (changing it clears quotes)<input '
+                             f'name=pickup_date type=date value="{_e(s.request.pickup_date)}"></label>')
+        + f'{dest_fields}<div class="actions"><button class="small">Save</button></div></form></details>'
         '<script>\nasync function saveEdit(f){\n'
         '  const o=formJSON(f), body={order_id:o.order_id,title:o.title,notes:o.notes,'
-        'buyer_paid:o.buyer_paid};\n  ' + dest_js + '\n'
+        'buyer_paid:o.buyer_paid};\n'
+        + ("" if booked else "  if(o.pickup_date && o.pickup_date!==" + _js(s.request.pickup_date)
+           + ") body.pickup_date=o.pickup_date;\n")
+        + '  ' + dest_js + '\n'
         "  await act(f.querySelector('button'),'PATCH','" + base + "',body);\n}\n"
         'async function markBooked(btn,sid,n){\n'
         "  const pro=prompt('PRO / tracking number for quote '+n+' (blank if not yet known):');\n"

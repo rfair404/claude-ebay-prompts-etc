@@ -1,0 +1,586 @@
+#!/usr/bin/env python3
+"""tg7cam - use an OM SYSTEM Tough TG-7 as a remote-controlled close-up camera.
+
+The TG-7 has no USB webcam mode (its USB modes are Storage / MTP / Charge),
+so this talks to the camera over its own Wi-Fi, using the same HTTP protocol
+the OM Image Share app uses (camera at 192.168.0.10).
+
+  tg7cam probe                     save + summarize what this camera supports
+  tg7cam connect SSID              join the camera's Wi-Fi (asks for its password)
+  tg7cam stream [--out DEV|URL]    live view -> /dev/video11 (or udp://...) for OBS
+  tg7cam focus X Y                 tap-to-focus at X%,Y% of the frame (50 50 = center)
+  tg7cam focus-release             clear the focus point
+  tg7cam af [X Y]                  half-press: autofocus (at X%,Y%, default center)
+  tg7cam shoot [X Y] [--to DIR]    focus, take a still, copy it to DIR
+  tg7cam sync [--to DIR]           copy every photo on the card that DIR lacks
+  tg7cam light on|off              the lens LED (close-ups)
+  tg7cam zoom in|out|stop          drive the zoom lens
+  tg7cam props                     list settable properties and allowed values
+  tg7cam get PROP | set PROP VALUE read / change one property
+
+Run `stream` in one terminal and leave it running (or let show_flow.py run it:
+`show_flow.py tg7 start`); the other commands work while it streams. Measured
+on the TG-7 (firmware 1.1) 2026-10-21: live view keeps running through
+af, shoot, light and the photo download, and sync reads the card without
+leaving shooting mode.
+
+The TG-7 has no `exec_shutter` (the OM-D release command); it shoots with
+`exec_takemotion com=starttake`, which autofocuses at a point and fires.
+
+Protocol references (written for Olympus OM-D / TG-5; `probe` reports what
+this body accepts):
+  https://github.com/ccrome/olympus-omd-remote-control
+  https://olympus-wifi.readthedocs.io
+"""
+
+import argparse
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from pathlib import Path
+
+CAM = "192.168.0.10"
+HEADERS = {"Host": CAM, "User-Agent": "OI.Share v2", "Connection": "Keep-Alive"}
+STATE_DIR = Path.home() / ".config" / "tg7cam"
+STATE = STATE_DIR / "state.json"          # remembers the live view size for focus()
+CMDLIST = STATE_DIR / "commandlist.xml"
+DEFAULT_LVQTY = "0640x0480"
+DEFAULT_PORT = 40000
+DEFAULT_DEV = "/dev/video11"
+DEFAULT_UDP = "udp://127.0.0.1:5011"
+DCIM = "/DCIM/100OMSYS"
+PHOTOS = Path(os.environ.get("TG7_PHOTOS") or Path.home() / "Pictures" / "TG-7")
+RETRY = 3  # stream: seconds between tries while the camera isn't reachable
+CARD_WAIT = 15  # shoot: seconds to wait for the new photo to show up on the card
+
+
+class CamError(RuntimeError):
+    """The camera refused a command, or isn't reachable."""
+
+
+class Unreachable(CamError):
+    pass
+
+
+def default_out():
+    """The loopback device when it exists, else UDP for an OBS Media Source."""
+    return DEFAULT_DEV if os.path.exists(DEFAULT_DEV) else DEFAULT_UDP
+
+
+# ---------------------------------------------------------------- HTTP ----
+
+def cgi(name, body=None, timeout=5, raw=False, **params):
+    """GET (or POST with body) http://192.168.0.10/<name>.cgi?<params>."""
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    url = f"http://{CAM}/{name}.cgi" + (f"?{qs}" if qs else "")
+    data = body.encode() if body is not None else None
+    headers = dict(HEADERS)
+    if data is not None:
+        headers["Content-Type"] = "text/plain; charset=ISO-8859-1"
+    req = urllib.request.Request(url, data=data, headers=headers,
+                                 method="POST" if data is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            out = r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace").strip()
+        raise CamError(f"camera refused {name}{' ' + qs if qs else ''}: HTTP {e.code} {detail}") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise Unreachable(f"can't reach the camera at {CAM} ({e}). Is the laptop on the "
+                          f"TG-7's Wi-Fi? Run: tg7cam connect <SSID>") from e
+    return out if raw else out.decode("utf-8", "replace")
+
+
+def get_file(path, timeout=60):
+    """A file off the card, e.g. /DCIM/100OMSYS/ZZ210005.JPG."""
+    req = urllib.request.Request(f"http://{CAM}{path}", headers=HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read()
+    except (urllib.error.URLError, OSError) as e:
+        raise CamError(f"couldn't download {path}: {e}") from e
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(**kv):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    s = load_state()
+    s.update(kv)
+    STATE.write_text(json.dumps(s))
+
+
+def xml_text(doc, tag):
+    try:
+        el = ET.fromstring(doc).find(f".//{tag}")
+        return el.text if el is not None else None
+    except ET.ParseError:
+        return None
+
+
+def point(x, y):
+    """X%,Y% of the frame -> the camera's "XXXXxYYYY" in live view pixels."""
+    w, h = (int(n) for n in load_state().get("lvqty", DEFAULT_LVQTY).split("x"))
+    px = round(max(0, min(100, x)) / 100 * (w - 1))
+    py = round(max(0, min(100, y)) / 100 * (h - 1))
+    return f"{px:04d}x{py:04d}"
+
+
+# ------------------------------------------------- camera actions (API) ---
+# show_flow.py imports this file and calls these; they raise CamError.
+
+def rec_mode(size=None):
+    """Shooting mode. The camera ignores lvqty while it's already in shooting
+    mode (it kept 640x480 when asked for 1280x960), so a size goes through
+    playback first."""
+    if size:
+        cgi("switch_cammode", mode="play")
+        time.sleep(1)
+    cgi("switch_cammode", mode="rec", **({"lvqty": size} if size else {}))
+    if size:
+        save_state(lvqty=size)
+
+
+def autofocus(x=50, y=50):
+    """Half-press at X%,Y%; live view keeps running. Returns the camera's
+    affocus answer ("ok", "ng") or None if it gave none."""
+    r = cgi("exec_takemotion", com="takeready", point=point(x, y))
+    return xml_text(r, "affocus")
+
+
+def take(x=50, y=50):
+    """Autofocus at X%,Y% and take a still (on the card). Returns
+    (took, focus): the camera's <take> and <affocus> answers."""
+    try:
+        r = cgi("exec_takemotion", com="starttake", point=point(x, y), timeout=15)
+    except CamError:
+        try:  # don't leave the shutter held down
+            cgi("exec_takemotion", com="stoptake", timeout=2)
+        except CamError:
+            pass
+        raise
+    cgi("exec_takemotion", com="stoptake")
+    return xml_text(r, "take"), xml_text(r, "affocus")
+
+
+def new_jpeg(before, wait=None):
+    """(name, size) of the newest JPG on the card that isn't in `before`.
+    The card's list is polled for up to `wait` (default CARD_WAIT) seconds:
+    right after a shot the file isn't on the card yet (getlastjpg answered
+    1005 for a few seconds, 2026-10-21). None if no new JPG turns up, which
+    is how a take the camera answered "ok" without firing looks (2026-10-22:
+    getlastjpg then handed back the previous photo, twice)."""
+    deadline = time.monotonic() + (CARD_WAIT if wait is None else wait)
+    while True:
+        new = [(n, sz) for n, sz in card_photos()
+               if n not in before and Path(n).suffix.upper() == ".JPG"]
+        if new:
+            return max(new)
+        if time.monotonic() > deadline:
+            return None
+        time.sleep(0.5)
+
+
+def shoot(x=50, y=50, to=None):
+    """take() and copy the new photo to `to` (PHOTOS by default). Returns
+    (path, focus). The card is listed before and after, and the new JPG is
+    downloaded by name, so a shot that didn't land is an error, never a copy
+    of the previous photo."""
+    before = {n for n, _ in card_photos()}
+    took, focus = take(x, y)
+    if took != "ok":
+        raise CamError(f"the camera didn't take the shot (take={took!r})")
+    got = new_jpeg(before)
+    if got is None:
+        raise CamError("the TG-7 didn't take a new photo; the last one on the card is unchanged")
+    name, size = got
+    data = get_file(f"{DCIM}/{name}")
+    if not data.startswith(b"\xff\xd8") or (size is not None and len(data) != size):
+        raise CamError(f"the download of {name} was cut short ({len(data)} of {size} bytes)")
+    to = Path(to or PHOTOS)
+    to.mkdir(parents=True, exist_ok=True)
+    out = to / f"TG7_{datetime.now():%Y%m%d_%H%M%S}.jpg"
+    out.write_bytes(data)
+    return out, focus
+
+
+def light(on):
+    cgi("exec_takemisc", com="OneTouchLight", switch="on" if on else "off")
+
+
+def card_photos():
+    """[(name, size)] of the photos on the card. The list is
+    "VER_100" then "<dir>,<name>,<size>,<attr>,<date>,<time>" per file."""
+    out = []
+    for line in cgi("get_imglist", DIR=DCIM, timeout=15).splitlines():
+        parts = line.strip().split(",")
+        if len(parts) >= 3 and parts[1]:
+            out.append((parts[1], int(parts[2]) if parts[2].isdigit() else None))
+    return out
+
+
+def sync(to=None, kinds=(".JPG", ".ORF")):
+    """Copy every photo on the card that `to` lacks (by name and size).
+    Returns the paths written."""
+    to = Path(to or PHOTOS)
+    to.mkdir(parents=True, exist_ok=True)
+    got = []
+    for name, size in card_photos():
+        if Path(name).suffix.upper() not in kinds:
+            continue
+        dest = to / name
+        if dest.exists() and (size is None or dest.stat().st_size == size):
+            continue
+        part = dest.with_suffix(dest.suffix + ".part")
+        part.write_bytes(get_file(f"{DCIM}/{name}"))
+        part.replace(dest)
+        got.append(dest)
+    return got
+
+
+# ------------------------------------------------------------- commands ---
+
+def cmd_probe(_):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    info = cgi("get_caminfo")
+    model = xml_text(info, "model") or info.strip()
+    print(f"camera: {model}")
+    cl = cgi("get_commandlist")
+    CMDLIST.write_text(cl)
+    root = ET.fromstring(cl)
+    names = sorted({c.get("name") for c in root.iter("cgi") if c.get("name")})
+    print(f"{len(names)} commands: {', '.join(names)}")
+    sizes = sorted({e.get("name") for e in root.iter()
+                    if e.get("name") and re.fullmatch(r"\d{4}x\d{4}", e.get("name"))})
+    print("live view sizes:", ", ".join(sizes) or "(none listed)")
+    for want in ("exec_takemotion", "exec_takemisc", "get_imglist", "set_camprop"):
+        print(f"  {want:16} {'yes' if want in names else 'NOT SUPPORTED'}")
+    print(f"full list saved to {CMDLIST}")
+
+
+def wifi_connection(ifname):
+    """The NetworkManager connection active on ifname (its name can differ
+    from the SSID, e.g. a profile saved from the desktop's Wi-Fi menu)."""
+    r = subprocess.run(["nmcli", "-g", "GENERAL.CONNECTION", "device", "show", ifname],
+                       capture_output=True, text=True)
+    return r.stdout.strip() or None
+
+
+def cmd_connect(a):
+    if not shutil.which("nmcli"):
+        sys.exit("nmcli not found")
+    # Joining the camera's Wi-Fi drops internet on that adapter. Make sure the
+    # eBay stream has another way out (wired Ethernet or a second Wi-Fi adapter).
+    routes = subprocess.run(["ip", "-o", "route", "show", "default"],
+                            capture_output=True, text=True).stdout
+    devs = set(re.findall(r"\bdev (\S+)", routes))
+    wifi = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"],
+                          capture_output=True, text=True).stdout
+    wifi_devs = [l.split(":")[0] for l in wifi.splitlines() if l.endswith(":wifi")]
+    ifname = a.ifname or (wifi_devs[-1] if wifi_devs else None)
+    if not ifname:
+        sys.exit("no Wi-Fi adapter found")
+    if devs <= {ifname} and not a.force:
+        sys.exit(f"Your only internet route is {ifname}. Joining the camera on it would "
+                 f"cut off the live stream.\nPlug in Ethernet (or add a USB Wi-Fi adapter "
+                 f"and pass --ifname), or rerun with --force if you're not streaming.")
+    # --ask makes nmcli prompt for the camera's Wi-Fi password (shown on the
+    # camera under Wi-Fi/Bluetooth Settings > Device Connection).
+    subprocess.run(["nmcli", "--ask", "device", "wifi", "connect", a.ssid,
+                    "ifname", ifname], check=True)
+    # keep the camera network from becoming a default route (it has no internet)
+    conn = wifi_connection(ifname) or a.ssid
+    subprocess.run(["nmcli", "connection", "modify", conn,
+                    "ipv4.never-default", "yes", "ipv6.method", "ignore"], check=False)
+    subprocess.run(["nmcli", "connection", "up", conn, "ifname", ifname], check=False)
+    print(f"connected to {a.ssid} on {ifname} ({conn!r}); test with: tg7cam probe")
+
+
+def rtp_payload(pkt):
+    """Strip the RTP header (+CSRCs, +extension). Returns (marker, ts, seq, payload)."""
+    if len(pkt) < 12 or pkt[0] >> 6 != 2:
+        return None
+    cc, ext = pkt[0] & 0x0F, pkt[0] & 0x10
+    marker = bool(pkt[1] & 0x80)
+    seq = int.from_bytes(pkt[2:4], "big")
+    ts = int.from_bytes(pkt[4:8], "big")
+    off = 12 + 4 * cc
+    if ext:
+        if len(pkt) < off + 4:
+            return None
+        off += 4 + 4 * int.from_bytes(pkt[off + 2:off + 4], "big")
+    return marker, ts, seq, pkt[off:]
+
+
+class FrameAssembler:
+    """Collects RTP packets into whole JPEG frames; drops frames with gaps."""
+
+    def __init__(self):
+        self.buf, self.ts, self.next_seq, self.bad = bytearray(), None, None, False
+
+    def feed(self, pkt):
+        p = rtp_payload(pkt)
+        if p is None:
+            return None
+        marker, ts, seq, data = p
+        if ts != self.ts:
+            self.buf, self.ts, self.bad = bytearray(), ts, False
+        elif self.next_seq is not None and seq != self.next_seq:
+            self.bad = True
+        self.next_seq = (seq + 1) & 0xFFFF
+        if not self.buf:
+            i = data.find(b"\xff\xd8")          # JPEG starts after any metadata
+            if i < 0:
+                self.bad = True
+                return None
+            data = data[i:]
+        self.buf += data
+        if not marker:
+            return None
+        frame, ok = bytes(self.buf), not self.bad
+        self.buf, self.ts = bytearray(), None
+        j = frame.rfind(b"\xff\xd9")
+        return frame[:j + 2] if ok and j > 0 else None
+
+
+def ffmpeg_cmd(out):
+    base = ["ffmpeg", "-hide_banner", "-loglevel", "warning",
+            "-f", "mjpeg", "-use_wallclock_as_timestamps", "1", "-i", "-"]
+    if out.startswith("/dev/video"):
+        return base + ["-vf", "format=yuv420p", "-f", "v4l2", out]
+    # OBS: Media Source, uncheck "Local File", Input = this URL, Input Format = mpegts
+    return base + ["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                   "-g", "30", "-pix_fmt", "yuv420p", "-f", "mpegts", out]
+
+
+def start_liveview(size, port):
+    """Shooting mode at `size`, live view to our UDP port; waits while the
+    camera is unreachable (off, or Wi-Fi still joining), so a detached feed
+    comes up by itself when the camera does."""
+    said = False
+    while True:
+        try:
+            rec_mode(size)
+            time.sleep(1)
+            cgi("exec_takemisc", com="startliveview", port=port)
+            return
+        except Unreachable as e:
+            if not said:
+                print(f"{e}\nwaiting for the camera...", file=sys.stderr, flush=True)
+                said = True
+            time.sleep(RETRY)
+
+
+def cmd_stream(a):
+    out = a.out or default_out()
+    if out.startswith("/dev/video") and not os.path.exists(out):
+        sys.exit(f"{out} doesn't exist. Add a second loopback device (see "
+                 f"`tg7cam --help-setup`), or stream to OBS over UDP instead:\n"
+                 f"  tg7cam stream --out {DEFAULT_UDP}")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    sock.bind(("0.0.0.0", a.port))
+    sock.settimeout(5)
+    ff = None
+    try:
+        start_liveview(a.size, a.port)
+        ff = subprocess.Popen(ffmpeg_cmd(out), stdin=subprocess.PIPE)
+        asm, frames, t0 = FrameAssembler(), 0, time.time()
+        next_at = t0
+        print(f"live view {a.size} -> {out}  (Ctrl+C to stop)", flush=True)
+        while True:
+            try:
+                pkt, _ = sock.recvfrom(65535)
+            except socket.timeout:
+                print("no video from the camera for 5s; restarting live view", file=sys.stderr, flush=True)
+                start_liveview(a.size, a.port)
+                continue
+            frame = asm.feed(pkt)
+            if frame and a.fps:  # cap the rate: drop frames that come too soon
+                now = time.time()
+                if now < next_at:
+                    continue
+                next_at = max(next_at + 1 / a.fps, now)
+            if frame:
+                ff.stdin.write(frame)
+                frames += 1
+                if frames % 150 == 0:
+                    print(f"\r{frames / (time.time() - t0):5.1f} fps", end="", flush=True)
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
+    finally:
+        try:
+            cgi("exec_takemisc", com="stopliveview", timeout=2)
+        except (CamError, KeyboardInterrupt):
+            pass
+        if ff:
+            try:
+                ff.stdin.close()
+                ff.wait(timeout=5)
+            except (OSError, KeyboardInterrupt, subprocess.TimeoutExpired):
+                ff.kill()
+        print("\nstopped")
+
+
+def cmd_focus(a):
+    r = cgi("exec_takemotion", com="assignafframe", point=point(a.x, a.y))
+    result = xml_text(r, "affocus")
+    print(f"focus at {a.x:g}%,{a.y:g}% -> {result or r.strip() or 'sent'}")
+
+
+def cmd_focus_release(_):
+    cgi("exec_takemotion", com="releaseafframe")
+    print("focus point cleared")
+
+
+def cmd_af(a):
+    print(f"autofocus at {a.x:g}%,{a.y:g}%: {autofocus(a.x, a.y) or 'sent'}")
+
+
+def cmd_shoot(a):
+    out, focus = shoot(a.x, a.y, a.to)
+    print(f"{out}  (focus {focus or '?'}; also on the camera's card)")
+
+
+def cmd_sync(a):
+    got = sync(a.to)
+    print(f"{len(got)} new photo(s) -> {Path(a.to or PHOTOS)}")
+    for p in got:
+        print(f"  {p.name}")
+
+
+def cmd_light(a):
+    light(a.state == "on")
+    print(f"light {a.state}")
+
+
+def cmd_zoom(a):
+    move = {"in": "telemove", "out": "widemove", "stop": "off"}[a.dir]
+    cgi("exec_takemisc", com="ctrlzoom", move=move)
+    if a.dir != "stop" and a.secs:
+        time.sleep(a.secs)
+        cgi("exec_takemisc", com="ctrlzoom", move="off")
+    print(f"zoom {a.dir}")
+
+
+def cmd_props(_):
+    root = ET.fromstring(cgi("get_camprop", com="desc", propname="desclist"))
+    for d in root.iter("desc"):
+        name, val = d.findtext("propname"), d.findtext("value")
+        attr, enum = d.findtext("attribute"), (d.findtext("enum") or "").split()
+        if attr and "set" in attr:
+            print(f"{name:22} = {val:12} options: {' '.join(enum)}")
+
+
+def cmd_get(a):
+    r = cgi("get_camprop", com="get", propname=a.prop)
+    print(f"{a.prop} = {xml_text(r, 'value') or r.strip()}")
+
+
+def cmd_set(a):
+    cgi("set_camprop", com="set", propname=a.prop,
+        body=f"<set><value>{a.value}</value></set>")
+    print(f"{a.prop} -> {a.value}")
+
+
+SETUP_HELP = f"""\
+One-time setup for `tg7cam stream` into a virtual camera (needs sudo once):
+
+  The Nikon D5100 already uses /dev/video10. Give v4l2loopback a second device:
+
+    sudo tee /etc/modprobe.d/v4l2loopback.conf <<'EOF'
+    options v4l2loopback devices=2 exclusive_caps=1,1 video_nr=10,11 card_label="Nikon D5100","OM TG-7"
+    EOF
+    sudo modprobe -r v4l2loopback && sudo modprobe v4l2loopback
+
+  (Stop the D5100 feed first, or the module can't be reloaded.)
+
+Without /dev/video11, `stream` sends to OBS over UDP ({DEFAULT_UDP}), and
+`show_flow.py setup` builds the TG-7 source as a Media Source on that URL.
+"""
+
+
+def xy(p, default=50.0):
+    p.add_argument("x", type=float, nargs="?", default=default, help="percent across (default 50)")
+    p.add_argument("y", type=float, nargs="?", default=default, help="percent down (default 50)")
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if "--help-setup" in argv:
+        print(SETUP_HELP)
+        return 0
+    ap = argparse.ArgumentParser(prog="tg7cam", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("probe").set_defaults(fn=cmd_probe)
+    p = sub.add_parser("connect")
+    p.add_argument("ssid")
+    p.add_argument("--ifname", help="Wi-Fi adapter to use for the camera")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(fn=cmd_connect)
+    p = sub.add_parser("stream")
+    p.add_argument("--out", help=f"/dev/videoN or udp://host:port (default {DEFAULT_DEV} "
+                                 f"if it exists, else {DEFAULT_UDP})")
+    p.add_argument("--size", default=DEFAULT_LVQTY, help="live view size, see `probe`")
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--fps", type=float, default=0,
+                   help="cap the frame rate (default 0: whatever the camera sends, ~8 fps)")
+    p.set_defaults(fn=cmd_stream)
+    p = sub.add_parser("focus")
+    p.add_argument("x", type=float)
+    p.add_argument("y", type=float)
+    p.set_defaults(fn=cmd_focus)
+    sub.add_parser("focus-release").set_defaults(fn=cmd_focus_release)
+    p = sub.add_parser("af")
+    xy(p)
+    p.set_defaults(fn=cmd_af)
+    p = sub.add_parser("shoot")
+    xy(p)
+    p.add_argument("--to", help=f"folder for the photo (default {PHOTOS}, or $TG7_PHOTOS)")
+    p.set_defaults(fn=cmd_shoot)
+    p = sub.add_parser("sync")
+    p.add_argument("--to", help=f"folder (default {PHOTOS}, or $TG7_PHOTOS)")
+    p.set_defaults(fn=cmd_sync)
+    p = sub.add_parser("light")
+    p.add_argument("state", choices=["on", "off"])
+    p.set_defaults(fn=cmd_light)
+    p = sub.add_parser("zoom")
+    p.add_argument("dir", choices=["in", "out", "stop"])
+    p.add_argument("--secs", type=float, default=0.5, help="move this long, then stop (0 = keep moving)")
+    p.set_defaults(fn=cmd_zoom)
+    sub.add_parser("props").set_defaults(fn=cmd_props)
+    p = sub.add_parser("get")
+    p.add_argument("prop")
+    p.set_defaults(fn=cmd_get)
+    p = sub.add_parser("set")
+    p.add_argument("prop")
+    p.add_argument("value")
+    p.set_defaults(fn=cmd_set)
+    a = ap.parse_args(argv)
+    try:
+        a.fn(a)
+    except CamError as e:
+        print(f"tg7cam: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

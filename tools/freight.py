@@ -14,16 +14,16 @@ and runs freely. Booking spends money: DRY RUN unless --confirm.
         --to-name "Jane Buyer" --to-street1 "1 Main St" --to-city Atlanta \\
         --to-state GA --to-zip 30301 --to-phone 4045550100 \\
         --length 48 --width 40 --height 50 --weight 320 --quote
-    python -m lib.cli freight book 3 --quote 1             # DRY RUN
-    python -m lib.cli freight book 3 --quote 1 --confirm   # books + charges
+    python -m lib.cli freight book 3 --quote 1                    # DRY RUN, prints the ref
+    python -m lib.cli freight book 3 --quote 9f3a2c1e --confirm   # books + charges
 
     python -m lib.cli freight list | show 3 | track 3 | track --open | docs 3
     python -m lib.cli freight add-quote 3 --provider uship --carrier "Estes via uShip" --price 412
-    python -m lib.cli freight mark-booked 3 --quote 2 --tracking PRO123
+    python -m lib.cli freight mark-booked 3 --quote 9f3a2c1e --tracking PRO123
     python -m lib.cli freight status 3 delivered
     python -m lib.cli freight providers
 
-Origin defaults to the store's storefront `ship_from` (same as ship-quote);
+Origin defaults to the store's storefront `ship_from`;
 any --from-* flag overrides it. The web app shows the same shipments at
 http://127.0.0.1:8770/freight.
 """
@@ -100,11 +100,9 @@ def _addr(args, prefix: str, base: FreightAddress | None = None) -> FreightAddre
 
 def _request(args, unit_from_draft: HandlingUnit | None = None) -> FreightRequest:
     store = stores.resolve_store_name(args.store)
-    try:
-        origin = svc.store_origin(store)
-    except ConfigError:
-        origin = FreightAddress(zip="")
-    origin = _addr(args, "from", origin)
+    # A malformed ship_from is a ConfigError and stops here — silently
+    # quoting from a blank origin is how a bad config goes unnoticed.
+    origin = _addr(args, "from", svc.store_origin(store))
     if not origin.zip:
         raise SystemExit("[X] no origin zip — pass --from-zip or set storefront ship_from "
                          "in config.yaml")
@@ -154,8 +152,8 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
     shown = 0
     hidden = 0
     if quotes:
-        print(f"  {'#':>2}  {'provider':<10} {'carrier':<26} {'price':>10}  {'days':>4}  "
-              f"{'tier':<10} book")
+        print(f"  {'#':>2}  {'ref':<8}  {'provider':<10} {'carrier':<26} {'price':>10}  "
+              f"{'days':>4}  {'tier':<10} book")
         for i, q in enumerate(quotes, 1):
             if q.tier == "indicative" and not q.bookable:
                 if market_rows and shown >= market_rows:
@@ -163,8 +161,9 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
                     continue
                 shown += 1
             days = "?" if q.transit_days is None else str(q.transit_days)
-            print(f"  {i:>2}  {q.provider:<10} {q.carrier[:26]:<26} {_money(q.price):>10}  "
-                  f"{days:>4}  {q.tier[:10]:<10} {_book_label(q)}")
+            print(f"  {i:>2}  {q.ref:<8}  {q.provider:<10} {q.carrier[:26]:<26} "
+                  f"{_money(q.price):>10}  {days:>4}  {q.tier[:10]:<10} {_book_label(q)}"
+                  + ("  EXPIRED" if q.expired() else ""))
             included = (q.extra or {}).get("included")
             if included:
                 print(f"        includes: {', '.join(map(str, included))}")
@@ -185,7 +184,7 @@ def print_quotes(quotes: list[FreightQuote], errors: dict, market_rows: int = 8)
 
 def print_shipment(s: Shipment) -> None:
     r = s.request
-    print(f"#{s.id}  [{s.status}]  {s.title or '(untitled)'}")
+    print(f"#{s.id}  [{s.status}]  {s.title or '(untitled)'}{_flag(s)}")
     print(f"  store {s.store or 'default'}   order {s.order_id or '—'}   sku {s.sku or '—'}")
     print(f"  {r.origin.zip} {r.origin.city} -> {r.destination.zip} {r.destination.city} "
           f"{r.destination.name}   pickup {r.pickup_date}")
@@ -195,8 +194,15 @@ def print_shipment(s: Shipment) -> None:
               f"{x.effective_class()}{'' if x.freight_class else ' (est.)'}")
     if r.accessorials:
         print("  accessorials: " + ", ".join(ACCESSORIALS[a] for a in r.accessorials))
+    if s.status == "booking":
+        last = next((e for e in reversed(s.events) if e.get("status") == "book_unknown"), {})
+        print(f"  ! booking outcome unknown: {last.get('note') or '?'}")
+        print(f"    check the provider, then `freight mark-booked {s.id} --quote REF "
+              f"--tracking …` or `freight status {s.id} quoted`")
     if s.booking:
         b = s.booking
+        if b.get("payment_link"):
+            print(f"  UNPAID — on hold until paid: {b['payment_link']}")
         print(f"  BOOKED {b.get('provider')} / {b.get('carrier')}  {_money(b.get('price'))}  "
               f"tracking {b.get('tracking_number') or '—'}")
         for k in ("tracking_url", "bol_url"):
@@ -261,6 +267,14 @@ def cmd_new(args) -> int:
     return 0
 
 
+def _flag(s: Shipment) -> str:
+    if s.status == "booking":
+        return "  [OUTCOME UNKNOWN — check the provider]"
+    if s.status == "booked" and (s.booking or {}).get("payment_link"):
+        return "  [UNPAID — on hold]"
+    return ""
+
+
 def cmd_list(args) -> int:
     rows = svc.open_store().list(status=args.status, open_only=not args.all)
     if not rows:
@@ -271,7 +285,7 @@ def cmd_list(args) -> int:
                        (best.price if best else None))
         print(f"  #{s.id:<4} {s.status:<10} {s.request.origin.zip}->{s.request.destination.zip}  "
               f"{price:>10}  {(s.booking or {}).get('carrier') or (best.carrier if best else ''):<20} "
-              f"{s.title[:40]}")
+              f"{s.title[:40]}{_flag(s)}")
     return 0
 
 
@@ -306,14 +320,16 @@ def cmd_book(args) -> int:
     s = fs.require(args.id)
     r = svc.book(fs, args.id, args.quote, confirm=args.confirm)
     if r.dry_run:
-        q = s.quotes[args.quote - 1]
+        _, q = svc.pick_quote(s, args.quote)
         print("[DRY RUN] Nothing booked, nothing charged. This WOULD book:")
         print(f"  #{s.id} {s.request.origin.zip} -> {s.request.destination.zip}  "
               f"pickup {s.request.pickup_date}")
-        print(f"  {q.provider} / {q.carrier} {q.service}  {_money(q.price)}  quote {q.quote_id}")
+        print(f"  {q.provider} / {q.carrier} {q.service}  {_money(q.price)}  ref {q.ref}  "
+              f"(provider quote {q.quote_id})")
         for w in r.warnings + q.warnings:
             print(f"  ! {w}")
-        print(f"\n  To book it: python -m lib.cli freight book {s.id} --quote {args.quote} --confirm")
+        print(f"\n  To book exactly this quote: python -m lib.cli freight book {s.id} "
+              f"--quote {q.ref} --confirm")
         return 0
     sandbox = (r.raw or {}).get("mode") == "sandbox"
     print("[OK] Booked in the SANDBOX — no truck, no charge:" if sandbox else
@@ -387,10 +403,11 @@ def cmd_set(args) -> int:
     s = fs.set_fields(args.id, **fields)
     to_given = any(getattr(args, f"to_{f}") for f in ADDR)
     from_given = any(getattr(args, f"from_{f}") for f in ADDR)
-    if to_given or from_given:
+    if to_given or from_given or args.pickup_date:
         req = s.request
         req.destination = _addr(args, "to", req.destination)
         req.origin = _addr(args, "from", req.origin)
+        req.pickup_date = args.pickup_date or req.pickup_date
         had = len(s.quotes)
         fs.update_request(args.id, req)
         if had and not fs.require(args.id).quotes:
@@ -453,13 +470,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     b = sub.add_parser("book", help="book a quote — DRY RUN unless --confirm")
     b.add_argument("id", type=int)
-    b.add_argument("--quote", type=int, required=True, help="number from the quote table")
+    b.add_argument("--quote", required=True,
+                   help="the quote's ref (or, for a dry run, its row number)")
     b.add_argument("--confirm", action="store_true",
                    help="actually book. Without it nothing is dispatched or charged.")
 
     mb = sub.add_parser("mark-booked", help="record a booking made outside the API")
     mb.add_argument("id", type=int)
-    mb.add_argument("--quote", type=int, required=True)
+    mb.add_argument("--quote", required=True, help="the quote's ref or row number")
     mb.add_argument("--tracking", help="PRO / shipment number")
     mb.add_argument("--price", type=float, help="final price if it differs from the quote")
     mb.add_argument("--bol", help="BOL link or path")
@@ -477,11 +495,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("status", choices=STATUSES)
     st.add_argument("--note")
 
-    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid or either stop")
+    se = sub.add_parser("set", help="edit order/sku/title/notes/buyer-paid, pickup date or either stop")
     se.add_argument("id", type=int)
     for f in ("order_id", "sku", "title", "notes"):
         se.add_argument(f"--{f.replace('_', '-')}", dest=f)
     se.add_argument("--buyer-paid", type=float, dest="buyer_paid")
+    se.add_argument("--pickup-date", help="YYYY-MM-DD; changing it clears the quotes")
     _add_addr(se, "from")
     _add_addr(se, "to")
     return ap
@@ -507,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
     except (KeyError, ValueError, ProviderNotReady, ConfigError) as e:
         print(f"[X] {e.args[0] if isinstance(e, KeyError) else e}", file=sys.stderr)
         return 1
-    except http.FreightAPIError as e:
+    except (http.FreightAPIError, RuntimeError) as e:
         print(f"[X] {e}", file=sys.stderr)
         return 1
 

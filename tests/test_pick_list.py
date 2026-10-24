@@ -172,12 +172,11 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
     try:
         with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
                           (pick_list, "load_listings_ledger"): lambda *_a: []}):
-            new_ids, skipped_ids, state, unconfirmed = pick_list.poll_and_print(
+            new_ids, skipped_ids, state = pick_list.poll_and_print(
                 out_dir=out_dir, state={"printed": {}, "shipped": {}},
                 fetch=lambda: orders, publish=False)
         assert sorted(new_ids) == ["new-1", "new-2"]
         assert skipped_ids == []
-        assert unconfirmed == []
         assert set(state["printed"]) == {"new-1", "new-2"}
         files = sorted(p.name for p in out_dir.glob("*.txt"))
         assert files == ["pick_new-1.txt", "pick_new-2.txt"]
@@ -189,12 +188,152 @@ def test_poll_and_print_writes_new_orders_and_skips_reprints():
         # it) — nothing new should render.
         with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
                           (pick_list, "load_listings_ledger"): lambda *_a: []}):
-            new_ids2, skipped_ids2, state2, _ = pick_list.poll_and_print(
+            new_ids2, skipped_ids2, state2 = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders, publish=False)
         assert new_ids2 == []
         assert sorted(skipped_ids2) == ["new-1", "new-2"]
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_poll_and_print_holds_orders_in_an_open_live_window():
+    """eBay Live: an order inside a show's 8-hour shopping window is not
+    rendered and not marked printed, so the next poll after the window
+    closes picks it up (with anything else the buyer bought)."""
+    from datetime import datetime, timezone
+    out_dir, _ = _scratch_dirs()
+    win = {"show": "oct-20", "item_ids": {"206000000001"}, "skus": set(),
+           "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    live = _order(oid="live-1")                       # created 2026-08-20T12:00
+    other = _order(oid="store-1", item_id="206000000009")
+    other["creationDate"] = "2026-08-19T12:00:00.000Z"   # before the show
+    patches = {(pick_list, "scan_drafts"): lambda *_a: [],
+               (pick_list, "load_listings_ledger"): lambda *_a: []}
+    try:
+        with _Patched(patches):
+            new_ids, _, state = pick_list.poll_and_print(
+                out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                fetch=lambda: [live, other], publish=False, live_windows=[win])
+        assert new_ids == ["store-1"]
+        assert "live-1" not in state["printed"]
+        assert state["held"] == {"live-1": {"show": "oct-20",
+                                            "until": "2026-08-20T13:00:00Z"}}
+        # window closed: the held order comes through
+        with _Patched(patches):
+            new_ids, _, state = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [live, other],
+                publish=False, live_windows=[])
+        assert new_ids == ["live-1"] and state["held"] == {}
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_lineup_saved_after_an_order_was_printed_does_not_hide_it():
+    """2026-10-19: order printed at 1 PM, lineup with an 8 PM start saved at
+    2 PM, poll at 3 PM. The order is neither held nor dropped from the poll:
+    it is still reported as already printed, with its link."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import live_show
+    et = ZoneInfo("America/New_York")
+    out_dir, _ = _scratch_dirs()
+    base = out_dir.parent / "_live"
+    live_show.save_lineup("tonight", "default", live_show.build_lineup([(
+        {"sku": "abc123def4", "format": "FIXED_PRICE",
+         "listing": {"listingId": "206000000001", "listingStatus": "ACTIVE"}}, "A", None)]),
+        base=base, scheduled_start=datetime(2026, 10, 19, 20, 0, tzinfo=et))
+    wins = live_show.open_windows("default", base=base,
+                                  now=datetime(2026, 10, 19, 15, 0, tzinfo=et))
+    assert [w["show"] for w in wins] == ["tonight"]
+    sold = _order(oid="early-1")                         # a lineup item, sold 12:55 PM
+    sold["creationDate"] = "2026-10-19T16:55:00.000Z"
+    state = {"printed": {"early-1": {"printed_at": "2026-10-19T17:00:00Z",
+                                     "file": "x", "url": "http://127.0.0.1/p/t"}},
+             "shipped": {}}
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
+            new_ids, skipped, state = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [sold],
+                publish=False, live_windows=wins)
+            assert (new_ids, skipped, state["held"]) == ([], ["early-1"], {})
+            # same order unprinted: still not held (sold before start - margin)
+            new_ids, _, state = pick_list.poll_and_print(
+                out_dir=out_dir, state={"printed": {}, "shipped": {}},
+                fetch=lambda: [sold], publish=False, live_windows=wins)
+            assert new_ids == ["early-1"] and state["held"] == {}
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_an_already_printed_order_is_never_held():
+    """Even inside the window (placed after the start), an order already
+    printed keeps its "already printed" line instead of being held."""
+    from datetime import datetime, timezone
+    out_dir, _ = _scratch_dirs()
+    win = {"show": "oct-20", "store": "default", "item_ids": {"206000000001"},
+           "skus": set(), "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    state = {"printed": {"live-1": {"printed_at": "x", "file": "y"}}, "shipped": {}}
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: []}):
+            new_ids, skipped, state = pick_list.poll_and_print(
+                out_dir=out_dir, state=state, fetch=lambda: [_order(oid="live-1")],
+                publish=False, live_windows=[win])
+        assert (new_ids, skipped, state["held"]) == ([], ["live-1"], {})
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_poll_prints_each_held_order_with_buyer_and_release_time():
+    import contextlib
+    import io
+    from datetime import datetime, timezone
+    win = {"show": "oct-20", "store": "default", "item_ids": {"206000000001"},
+           "skus": set(), "start": datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+           "closes": datetime(2026, 8, 20, 13, 0, tzinfo=timezone.utc)}
+    a, b = _order(oid="live-1"), _order(oid="live-2")
+    a["buyer"] = {"username": "jamie_b"}
+    out_dir, state_file = _scratch_dirs()
+    real_poll = pick_list.poll_and_print
+    import types
+    args = types.SimpleNamespace(store=None, all_stores=False, reprint=None,
+                                 no_links=True, ttl=None)
+    buf = io.StringIO()
+    try:
+        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
+                       (pick_list, "load_listings_ledger"): lambda *_a: [],
+                       (pick_list, "STATE_FILE"): state_file,
+                       (pick_list, "OUT_DIR"): out_dir,
+                       (pick_list, "poll_and_print"): lambda **k: real_poll(
+                           **k, fetch=lambda: [a, b], live_windows=[win])}), \
+                contextlib.redirect_stdout(buf):
+            assert pick_list._poll_one_store(args, "default") == 0
+    finally:
+        shutil.rmtree(out_dir.parent, ignore_errors=True)
+    out = buf.getvalue()
+    assert "2 order(s) from eBay Live show 'oct-20' held until Thu Aug 20 09:00 AM ET" in out
+    assert "  held live-1  jamie_b  until Thu Aug 20 09:00 AM ET\n" in out
+    assert "  held live-2  until Thu Aug 20 09:00 AM ET\n" in out
+
+
+def test_overlapping_shows_on_two_stores_get_a_warning():
+    from datetime import datetime, timezone
+    w = lambda show, store, h: {                                      # noqa: E731
+        "show": show, "store": store, "item_ids": set(), "skus": set(),
+        "start": datetime(2026, 10, 20, h, 0, tzinfo=timezone.utc),
+        "closes": datetime(2026, 10, 20, h + 8, 0, tzinfo=timezone.utc)}
+    lines = pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("main-show", "default", 4)])
+    assert len(lines) == 1
+    assert "show 'oct-19' on store 'junk'" in lines[0]
+    assert "show 'main-show' on store 'default'" in lines[0]
+    assert pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("late", "default", 8)]) == []
+    assert pick_list.live_overlap_warnings(
+        [w("oct-19", "junk", 0), w("also", "junk", 1)]) == []
 
 
 def test_poll_and_print_reprint_forces_one_order_through():
@@ -204,31 +343,10 @@ def test_poll_and_print_reprint_forces_one_order_through():
     try:
         with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
                           (pick_list, "load_listings_ledger"): lambda *_a: []}):
-            new_ids, skipped_ids, _, unconfirmed = pick_list.poll_and_print(
+            new_ids, skipped_ids, _ = pick_list.poll_and_print(
                 out_dir=out_dir, state=state, fetch=lambda: orders, publish=False, reprint="dup-1")
         assert new_ids == ["dup-1"]
         assert skipped_ids == []
-        assert unconfirmed == []
-    finally:
-        shutil.rmtree(out_dir.parent, ignore_errors=True)
-
-
-def test_poll_and_print_do_print_failure_never_raises():
-    out_dir, _ = _scratch_dirs()
-    orders = [_order(oid="print-1")]
-
-    def boom(_path):
-        raise OSError("no printer configured")
-
-    try:
-        with _Patched({(pick_list, "scan_drafts"): lambda *_a: [],
-                          (pick_list, "load_listings_ledger"): lambda *_a: [],
-                          (pick_list, "_send_to_printer"): boom}):
-            new_ids, _, _, unconfirmed = pick_list.poll_and_print(
-                out_dir=out_dir, state={"printed": {}, "shipped": {}},
-                fetch=lambda: orders, publish=False, do_print=True)
-        assert new_ids == ["print-1"]  # the file still got written
-        assert unconfirmed == ["print-1"]  # printing failed, but poll didn't raise
     finally:
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
@@ -475,6 +593,47 @@ def test_main_rejects_poll_and_record_tracking_together():
         sys.argv = old_argv
 
 
+def test_main_refuses_print_flag():
+    """--print sent sheets to the default printer, which is the QL-1100 label
+    printer now. /pl prints on CannonBW; the poll itself never prints."""
+    old_argv = sys.argv
+    sys.argv = ["pick_list.py", "--poll", "--all-stores", "--print"]
+    try:
+        with pytest.raises(SystemExit) as e:
+            pick_list.main()
+        assert e.value.code == 2
+    finally:
+        sys.argv = old_argv
+
+
+def test_main_poll_all_stores_writes_sheets_and_never_prints():
+    """The exact command /pl and the pick-list skill run. It renders every
+    store's sheet and starts no process, so nothing reaches any printer."""
+    import contextlib
+    import io
+    import subprocess
+    ran = []
+
+    def no_process(*a, **k):
+        ran.append(a)
+        raise AssertionError(f"poll started a process: {a}")
+
+    old_argv = sys.argv
+    sys.argv = ["pick_list.py", "--poll", "--all-stores", "--no-links"]
+    try:
+        with _multi() as tmp, _Patched({
+                (pick_list, "fetch_open"): lambda store=None: [_order(oid=f"{store}-1")],
+                (subprocess, "run"): no_process,
+                (subprocess, "Popen"): no_process}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            assert pick_list.main() == 0
+            sheets = sorted(p.name for p in (tmp / "pick_lists").glob("*.txt"))
+    finally:
+        sys.argv = old_argv
+    assert ran == []
+    assert sheets == ["pick_default-1.txt", "pick_junk-1.txt", "pick_outlet-1.txt"]
+
+
 # --------------------------------------------------------------------------- #
 # A sold order's sheet lands in the sold item's own folder under inventory/,
 # and that file is what the link serves.
@@ -633,58 +792,133 @@ def test_item_folders_dedupes_and_skips_unplaceable_items():
     assert pick_list.item_folders(order, drafts, []) == ["inventory/A/one"]
 
 
-def test_publish_sheet_serves_the_file_it_dropped_in_the_item_folder():
+def _temp_repo(*, linked: bool) -> tuple[Path, Path]:
+    """A throwaway repo root with an inventory/ in it, returned as (root, base),
+    where `base` is the directory to rmtree.
+
+    With `linked`, root/inventory is a symlink to a sibling directory. That is
+    the shape tools/worktree_link.py gives every worktree, so an item folder
+    resolves to a path OUTSIDE root. These tests used to write into
+    ROOT/inventory, which in a worktree IS the main checkout's real inventory,
+    and the containment guards then refused the folder they had just made."""
+    base = Path(tempfile.mkdtemp(prefix="pickinv-repo-"))
+    root = base / "checkout"
+    root.mkdir()
+    if not linked:
+        (root / "inventory").mkdir()
+        return root, base
+    real = base / "main-inventory"
+    real.mkdir()
+    try:
+        (root / "inventory").symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"symlinks not available here: {e}")
+    return root, base
+
+
+def _rooted_at(root: Path) -> "_Patched":
+    """Point both halves at `root`. drop_in_item_folders() writes against
+    pick_list.ROOT, and pick_store's source guard reads against
+    pick_store.ROOT."""
+    import pick_store
+    return _Patched({(pick_list, "ROOT"): root, (pick_store, "ROOT"): root})
+
+
+def _check_publish_sheet_serves_the_dropped_file(*, linked: bool):
     """End to end through publish_sheet(): the sheet is written into the item's
     folder, and the published link reads back from THAT file."""
+    root, base = _temp_repo(linked=linked)
     out_dir, _ = _scratch_dirs()
     store = _pick_store_at(out_dir.parent)
-    folder = ROOT / "inventory" / "_pickinv_test_folder"
-    folder.mkdir(parents=True, exist_ok=True)
     rel = "inventory/_pickinv_test_folder"
+    folder = root / rel
+    folder.mkdir()
     try:
         order = _order(oid="inv-1")
         order["lineItems"] = [_item(sku="S1", title="Jamie's thing")]
         drafts = [_draft(rel, sku="S1")]
-        with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+        with _rooted_at(root), _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
             sheet = pick_list.publish_sheet(order, drafts, [])
+            html, status = store.fetch(sheet.token)
         dropped = folder / "pick_inv-1.html"
         assert dropped.exists(), "no sheet landed in the item's folder"
-        html, status = store.fetch(sheet.token)
         assert status == "ok"
         assert html == dropped.read_text(encoding="utf-8")
         # served from the item folder, not from a copy in the store
         assert not (store.store_dir / f"{sheet.token}.html").exists()
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(base, ignore_errors=True)
         shutil.rmtree(out_dir.parent, ignore_errors=True)
 
 
-def test_a_poll_drops_sheets_and_still_records_a_working_link():
+def test_publish_sheet_serves_the_file_it_dropped_in_the_item_folder():
+    _check_publish_sheet_serves_the_dropped_file(linked=False)
+
+
+def test_publish_sheet_serves_the_dropped_file_through_a_linked_inventory():
+    """The worktree case: inventory/ is a link to the main checkout's."""
+    _check_publish_sheet_serves_the_dropped_file(linked=True)
+
+
+def _check_poll_drops_sheets_and_records_a_link(*, linked: bool):
+    root, base = _temp_repo(linked=linked)
     out_dir, _ = _scratch_dirs()
     store = _pick_store_at(out_dir.parent)
-    folder = ROOT / "inventory" / "_pickinv_poll_folder"
-    folder.mkdir(parents=True, exist_ok=True)
     rel = "inventory/_pickinv_poll_folder"
+    folder = root / rel
+    folder.mkdir()
     try:
         order = _order(oid="inv-2")
         order["lineItems"] = [_item(sku="S9", title="Jamie's other thing")]
         orders = [order]
         with _Patched({(pick_list, "scan_drafts"): lambda *_a: [_draft(rel, sku="S9")],
                        (pick_list, "load_listings_ledger"): lambda *_a: []}):
-            with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                new_ids, _, state, _ = pick_list.poll_and_print(
+            with _rooted_at(root), _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
+                new_ids, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
+                entry = state["printed"]["inv-2"]
+                assert store.fetch(entry["token"])[1] == "ok"
         assert new_ids == ["inv-2"]
         assert (folder / "pick_inv-2.html").exists()
-        entry = state["printed"]["inv-2"]
-        assert store.fetch(entry["token"])[1] == "ok"
         # the seller-only .txt still goes to pick_lists/, not into inventory/
         assert (out_dir / "pick_inv-2.txt").exists()
         assert list(folder.glob("*.txt")) == []
     finally:
-        shutil.rmtree(folder, ignore_errors=True)
+        shutil.rmtree(base, ignore_errors=True)
         shutil.rmtree(out_dir.parent, ignore_errors=True)
+
+
+def test_a_poll_drops_sheets_and_still_records_a_working_link():
+    _check_poll_drops_sheets_and_records_a_link(linked=False)
+
+
+def test_a_poll_drops_sheets_through_a_linked_inventory():
+    """The worktree case: inventory/ is a link to the main checkout's."""
+    _check_poll_drops_sheets_and_records_a_link(linked=True)
+
+
+def test_a_symlink_inside_a_linked_inventory_still_cannot_escape():
+    """The linked-inventory exemption covers inventory/ itself, not whatever a
+    folder inside it happens to point at."""
+    root, base = _temp_repo(linked=True)
+    outside = base / "elsewhere"
+    outside.mkdir()
+    try:
+        (root / "inventory" / "evil").symlink_to(outside, target_is_directory=True)
+    except (OSError, NotImplementedError) as e:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"symlinks not available here: {e}")
+    try:
+        order = {"orderId": "44-10-3", "lineItems": [_item(sku="ESC")]}
+        written = pick_list.drop_in_item_folders(
+            order, "<html>x</html>", [_draft("inventory/evil", sku="ESC")], [],
+            root=root)
+        assert written == []
+        assert list(outside.iterdir()) == []
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 # render_html()'s BUYER block, rendered for real.
@@ -867,7 +1101,7 @@ def test_poll_publishes_a_link_per_new_order():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                new_ids, _, state, _ = pick_list.poll_and_print(
+                new_ids, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
         entry = state["printed"]["link-1"]
@@ -890,11 +1124,11 @@ def test_second_poll_hands_back_the_same_link_without_republishing():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                _, _, state, _ = pick_list.poll_and_print(
+                _, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
                 first = dict(state["printed"]["link-2"])
-                new_ids2, skipped2, state2, _ = pick_list.poll_and_print(
+                new_ids2, skipped2, state2 = pick_list.poll_and_print(
                     out_dir=out_dir, state=state, fetch=lambda: orders)
         assert new_ids2 == [] and skipped2 == ["link-2"]
         assert state2["printed"]["link-2"]["token"] == first["token"]
@@ -913,11 +1147,11 @@ def test_an_expired_link_is_republished_even_though_the_order_was_printed():
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
                 # first poll publishes something already past its TTL
-                _, _, state, _ = pick_list.poll_and_print(
+                _, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders, ttl_hours=-1)
                 dead_token = state["printed"]["link-3"]["token"]
-                _, skipped, state2, _ = pick_list.poll_and_print(
+                _, skipped, state2 = pick_list.poll_and_print(
                     out_dir=out_dir, state=state, fetch=lambda: orders)
         assert skipped == ["link-3"]                   # not re-printed
         fresh = state2["printed"]["link-3"]["token"]
@@ -935,7 +1169,7 @@ def test_no_links_mode_publishes_nothing():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                _, _, state, _ = pick_list.poll_and_print(
+                _, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders, publish=False)
         assert "url" not in state["printed"]["link-4"]
@@ -963,7 +1197,7 @@ def test_a_publish_failure_never_breaks_the_poll():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=_Boom, pick_list_html=_FakeHtml):
-                new_ids, _, state, _ = pick_list.poll_and_print(
+                new_ids, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
         assert new_ids == ["link-5"]
@@ -982,7 +1216,7 @@ def test_the_published_sheet_is_the_buyer_safe_one_not_the_seller_txt():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                _, _, state, _ = pick_list.poll_and_print(
+                _, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
         served = store.fetch(state["printed"]["link-6"]["token"])[0]
@@ -1020,7 +1254,7 @@ def test_poll_combines_same_buyer_orders_onto_one_link():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                new_ids, _, state, _ = pick_list.poll_and_print(
+                new_ids, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: orders)
         assert new_ids == ["combo-1", "combo-2"]
@@ -1042,11 +1276,11 @@ def test_a_later_order_from_the_same_buyer_folds_into_the_earlier_sheet():
     try:
         with _no_inventory():
             with _FakeModules(pick_store=store, pick_list_html=_FakeHtml):
-                _, _, state, _ = pick_list.poll_and_print(
+                _, _, state = pick_list.poll_and_print(
                     out_dir=out_dir, state={"printed": {}, "shipped": {}},
                     fetch=lambda: first)
                 solo = state["printed"]["late-1"]["token"]
-                new_ids, skipped, state2, _ = pick_list.poll_and_print(
+                new_ids, skipped, state2 = pick_list.poll_and_print(
                     out_dir=out_dir, state=state, fetch=lambda: both)
         assert new_ids == ["late-2"] and skipped == ["late-1"]
         assert _FakeHtml.rendered == [["late-1"], ["late-1", "late-2"]]
@@ -1127,7 +1361,7 @@ def test_all_stores_poll_runs_once_per_store_with_three_stores():
         return [_order(oid=f"{store}-1")]
 
     with _multi() as tmp, _Patched({(pick_list, "fetch_open"): fake_fetch_open}):
-        args = argparse.Namespace(store=None, all_stores=True, do_print=False,
+        args = argparse.Namespace(store=None, all_stores=True,
                                   reprint=None, no_links=True, ttl=None)
         assert pick_list.cmd_poll(args) == 0
         assert fetched == ["default", "junk", "outlet"]
@@ -1139,9 +1373,9 @@ def test_all_stores_poll_runs_once_per_store_with_three_stores():
 
         # a second poll of one store skips only that store's own orders
         fetched.clear()
-        args = argparse.Namespace(store="junk", all_stores=False, do_print=False,
+        args = argparse.Namespace(store="junk", all_stores=False,
                                   reprint=None, no_links=True, ttl=None)
-        new, skipped, _, _ = pick_list.poll_and_print(
+        new, skipped, _ = pick_list.poll_and_print(
             out_dir=tmp / "pick_lists", fetch=lambda: [_order(oid="junk-1")],
             store="junk", publish=False)
         assert (new, skipped) == ([], ["junk-1"])

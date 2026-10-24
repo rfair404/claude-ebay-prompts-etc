@@ -1,5 +1,26 @@
 # Repo-wide instructions
 
+## Russell is the operator — ask the TD first, then ask Russell for as little typing as possible
+
+Russell's hands move the cameras and operate the computer. That's the only
+work he wants, and he types as little as he can. Every session and agent:
+
+- Takes decisions about code, reviews, merge order, process and tooling to the
+  `technical-director` agent, not to Russell.
+- Takes art questions (every PREP call, photo looks, overlays, cards,
+  thumbnails) to the `art-director` agent with the
+  [`/ad` skill](.claude/skills/ad/SKILL.md), not to Russell.
+- Brings Russell only money, prices, going live, anything a customer sees,
+  permission and hook changes (`.claude/settings*.json`), merges and
+  hands-on steps, as one short card: numbered steps, one
+  ready-to-run `bash` block with every value filled in, and yes/no questions
+  with the recommendation first.
+- Never asks him to type an explanation, paste a value back or fill in a
+  placeholder.
+
+The card format and the full rules are in
+[`.claude/agents/operator.md`](.claude/agents/operator.md).
+
 ## Shared working directory — use a worktree for git state changes
 
 This directory is opened by many concurrent Claude Code sessions at once
@@ -22,29 +43,40 @@ This rule exists because a session once ran `git checkout main` →
 `git checkout -b <feature>` directly in the shared directory, silently
 switching the working tree under every other concurrent session.
 
-### Pipeline data always goes to the main checkout's `inventory/`
+### Pipeline data always goes to the main checkout's `inventory/` and `reports/`
 
 `inventory/` (photos plus per-item phase output: identify.txt, price.txt,
 draft.md, NEEDS_REVIEW.md, review_card.*, listing/, .prep/) is gitignored and
 exists only in the main checkout. That is where pipeline output always goes,
 including from worktree sessions (user decision, 2026-09-29).
 
-To make that work, `.claude/settings.json` runs `tools/worktree_link.py` on
-SessionStart and CwdChanged. It makes the worktree's `inventory` a directory
-junction (a symlink off Windows) to `<main>/inventory/`. Then:
+`reports/` is the one place for sensitive report output: sales dashboards, ad
+reports, finance sync status, freight.db and the marketing reviews. Both
+offsite copies (R2 and Google Drive, `docs/offsite-storage.md`) take
+`reports/**`, so a file there is backed up twice. It gets the same link as
+`inventory/` (user decision, 2026-10-21), so a worktree session's report
+lands in main and survives the worktree being removed.
 
-- Write/Edit to `<worktree>/inventory/...` lands in main. Tools that resolve
-  `REPO / "inventory"` read the real store from a worktree.
+To make that work, `.claude/settings.json` runs `tools/worktree_link.py` on
+SessionStart and CwdChanged. It makes the worktree's `inventory` and `reports`
+directory junctions (symlinks off Windows) to `<main>/inventory/` and
+`<main>/reports/`. Then:
+
+- Write/Edit to `<worktree>/inventory/...` or `<worktree>/reports/...` lands
+  in main. Tools that resolve `REPO / "inventory"` or `REPO / "reports"` read
+  and write the real store from a worktree.
 - Write/Edit to `<main>/...` is still refused by the desktop app's built-in
   worktree write guard, `<main>/inventory/...` included. The guard compares
   paths lexically and has no exemption setting. That is why the carve-out is
-  a link, and why it covers exactly `inventory/` and nothing else. Code and
-  tracked files in the base checkout stay protected.
-- Only `inventory/` is linked. `config.yaml` and the ledgers are not, so the
-  "run ledger/sync tools from the main checkout" rule (GH #103) still holds.
-- If a worktree already has a real `inventory/` directory, the script leaves
-  it alone and warns. Move its contents into main and delete it to get the
-  link. `python tools/worktree_link.py --check` reports the state.
+  a link, and why it covers exactly `inventory/` and `reports/` (both
+  gitignored data) and nothing else. Code and tracked files in the base
+  checkout stay protected.
+- Only `inventory/` and `reports/` are linked. `config.yaml` and the ledgers
+  are not, so the "run ledger/sync tools from the main checkout" rule
+  (GH #103) still holds.
+- If a worktree already has a real `inventory/` or `reports/` directory, the
+  script leaves it alone and warns. Move its contents into main and delete it
+  to get the link. `python tools/worktree_link.py --check` reports the state.
 - Removing a worktree (`git worktree remove`, `rmtree`, `Remove-Item
   -Recurse`) unlinks the junction and does not touch main's data. This was
   tested. `git worktree remove` can leave the emptied folder behind.
@@ -101,11 +133,33 @@ functions with one name, two APIs for creating a no-returns policy, two
 `Store:` lines on one card, and the ignore-pattern gap above. Only one of the
 five collisions that day was a conflict git would show you.
 
+## Releases are SemVer — mark breaking PRs
+
+Releases are tagged `vMAJOR.MINOR.PATCH` on `main` by the technical director
+(rules in [`.claude/agents/technical-director.md`](.claude/agents/technical-director.md),
+"Versioning"). PR titles keep their `feat:` / `fix:` / `refactor:` / `docs:`
+prefix. If a PR stops something working until Russell acts (a config key renamed or
+newly required, a command or flag removed or changed that something still uses,
+a ledger column or locked format changed), add `!` to the prefix (`feat!:`) and a **Breaking** line to the
+description saying exactly what to do.
+
+Docs are versioned the same way. Each tracked doc carries a `MAJOR.MINOR.PATCH`
+`version:` (the docs-writer is adding them), and whoever edits a versioned doc
+bumps it in the same PR. The rules, and
+which files are exempt, are in
+[`.claude/agents/docs-writer.md`](.claude/agents/docs-writer.md) ("Every doc is
+versioned"). Before adding a doc, extend the one that already covers the topic.
+
 ## Pick list requests → R2 links
 
-When asked for the pick list (to print, for today, what to ship), follow
-[`prompts/pick_list.md`](prompts/pick_list.md). In short: from the main
-checkout, run `tools/pick_list.py --poll --all-stores`. Copy each sheet into
-`inventory/_pick_lists/`, upload them with `lib.cli offsite share`, and reply
-with one presigned R2 link per order. Don't reply with `127.0.0.1` links, the
-terminal report, or a file path.
+When asked for the pick list (for today, what to ship), use the `pick-list`
+skill: `.claude/skills/pick-list/links.sh` polls every store, uploads one
+sheet per box to R2 and prints the links to reply with. To print on paper,
+use `/pl`. [`prompts/pick_list.md`](prompts/pick_list.md) has the details.
+Don't reply with `127.0.0.1` links, the terminal report, or a file path.
+
+## Streaming setup on a new machine
+
+When asked to set a computer up for eBay Live / OBS streaming, work through
+[`docs/live-streaming-setup.md`](docs/live-streaming-setup.md) in order. Steps
+marked **user** need a password, the eBay stream URL, or hands on a camera.

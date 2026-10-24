@@ -20,6 +20,9 @@ Three sources, in order of authority:
 
 Outputs
   sales_ledger.csv        one row per sold line item — the actuals record
+  unwound_orders.csv      one row per line item of a refunded or cancelled
+                          order — kept out of sales_ledger, whose gross every
+                          report sums as revenue
   listings_ledger.csv     status advanced to SOLD (list price left intact)
   <shoot-dir>/SOLD.md     per-item stamp: what it listed at vs what it made
   stdout                  reconciliation report + ask-vs-actual analysis
@@ -67,6 +70,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ebay_client import api_send, load_credentials, EbayAPIError, EbayAuthError  # noqa: E402
 import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
 import stores  # noqa: E402  the one store model (#156)
+from draft_io import iter_drafts  # noqa: E402
+from gdrive_mirror import ledger_changed  # noqa: E402  Drive copy after each write
 from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
 from stores import draft_belongs_to_store, draft_store_from_text, ledger_keys  # noqa: E402
 
@@ -94,6 +99,15 @@ _MONEY_FIELDS = ("item_price", "buyer_shipping", "refunded", "gross",
 # every field above, these two are legitimately ABSENT (None) rather than
 # always present at 0.00 — see the SALES_FIELDS comment.
 _OPTIONAL_MONEY_FIELDS = ("ad_fee", "actual_postage")
+
+# unwound_orders.csv: what a refunded or cancelled order WAS (original_gross)
+# and what went back (refunded). Separate from sales_ledger on purpose: every
+# reader sums sales_ledger's gross as revenue, so an unwound row there would
+# be counted. No buyer fields, ever. Blank = unknown, as in SALES_FIELDS.
+UNWOUND_FIELDS = [
+    "order_id", "sold_at", "store", "sku", "listing_id", "original_gross",
+    "refunded", "reason", "ad_fee", "actual_postage",
+]
 
 STORE_JS = r"""
 /* Paste into claude-in-chrome javascript_tool on the seller's store page.
@@ -386,6 +400,51 @@ def flatten_orders(orders: list[dict]) -> tuple[list[dict], dict]:
     return rows, excluded
 
 
+def flatten_unwound(orders: list[dict], excluded: dict, store: str) -> list[dict]:
+    """One row per line item of each order flatten_orders dropped as
+    cancelled or fully refunded (`excluded`'s id lists), for
+    unwound_orders.csv.
+
+    original_gross is the line's lineItemCost + shippingCost, the basis
+    flatten_orders builds a sale's gross from before any refund. refunded is
+    paymentSummary.refunds split by the same line share. item_price and
+    buyer_shipping ride along (not written) so allocate_order_totals can
+    split the order's ad fee and postage the same way it does for sales.
+    An order with no line items still gets one row, sku and money blank."""
+    reason = {oid: "cancelled" for oid in excluded.get("cancelled_order_ids", [])}
+    reason.update({oid: "refunded" for oid in excluded.get("refunded_order_ids", [])})
+    rows: list[dict] = []
+    for o in orders:
+        oid = o.get("orderId", "")
+        if not oid or oid not in reason:
+            continue
+        creation = o.get("creationDate") or ""
+        sold_date = to_report_date(creation)
+        base = {"order_id": oid,
+                "sold_at": sold_date.isoformat() if sold_date else creation[:10],
+                "store": store, "reason": reason[oid]}
+        items = o.get("lineItems") or []
+        if not items:
+            rows.append({**base, "sku": "", "listing_id": "", "original_gross": None,
+                         "refunded": None, "item_price": Decimal(0),
+                         "buyer_shipping": Decimal(0)})
+            continue
+        line_values = [_dec(li, "lineItemCost") + _dec(li, "deliveryCost", "shippingCost")
+                       for li in items]
+        basis = sum(line_values, Decimal(0)) or Decimal(1)
+        refunds = (o.get("paymentSummary") or {}).get("refunds") or []
+        refunded = sum((_dec(r, "amount") for r in refunds), Decimal(0))
+        for li, gross in zip(items, line_values):
+            rows.append({**base,
+                         "sku": li.get("sku") or "",
+                         "listing_id": li.get("legacyItemId", ""),
+                         "original_gross": gross,
+                         "refunded": (refunded * gross / basis).quantize(Decimal("0.01")),
+                         "item_price": _dec(li, "lineItemCost"),
+                         "buyer_shipping": _dec(li, "deliveryCost", "shippingCost")})
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # local state — ledger + draft folders
 # --------------------------------------------------------------------------- #
@@ -413,7 +472,7 @@ def scan_drafts(store: Optional[str] = None,
         store = stores.resolve_store_name(store)
         keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
     out = []
-    for dr in sorted(INVENTORY.rglob("draft.md")):
+    for dr in iter_drafts(INVENTORY):
         try:
             t = dr.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -432,6 +491,39 @@ def scan_drafts(store: Optional[str] = None,
         if store is not None and not draft_belongs_to_store(d, store, keys):
             continue
         out.append(d)
+    return out
+
+
+def scan_recovered(store: Optional[str] = None,
+                   ledger: Optional[list[dict]] = None) -> list[dict]:
+    """Folders rebuilt after the 2026-10 wipe that hold only a RECOVERED.md:
+    one {dir, sku, store} per `- sku:` line, so a folder standing in for
+    several sold SKUs answers for each of them.
+
+    These are sold or unknown items with no draft, so scan_drafts() can't see
+    them, and without this their sales landed on no folder (no bucket). Store
+    filtering is scan_drafts()'s: the same draft_belongs_to_store() and ledger
+    keys. RECOVERED.md writes `store: default` where a draft leaves `store:`
+    blank, so that value maps to ""."""
+    keys: set[str] = set()
+    if store is not None:
+        store = stores.resolve_store_name(store)
+        keys = ledger_keys(load_listings_ledger(store) if ledger is None else ledger)
+    out = []
+    for rm in iter_drafts(INVENTORY, "RECOVERED.md"):
+        try:
+            t = rm.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        m = re.search(r'^(?:-\s*)?store:\s*"?([^"\n]*?)"?\s*$', t, re.M)
+        raw = m.group(1).strip() if m else ""
+        rstore = "" if stores.is_default(raw) else raw
+        rel = str(rm.parent.relative_to(REPO)).replace("\\", "/")
+        for sku in re.findall(r'^-\s*sku:\s*"?([0-9a-zA-Z\-]{6,})"?\s*$', t, re.M):
+            d = {"dir": rel, "sku": sku, "store": rstore}
+            if store is not None and not draft_belongs_to_store(d, store, keys):
+                continue
+            out.append(d)
     return out
 
 
@@ -464,11 +556,16 @@ def load_hand_locations(store: Optional[str] = None) -> dict[str, str]:
     return out
 
 
-def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, str, str]:
+def match_sale(row: dict, drafts: list[dict], ledger: list[dict], *,
+               recovered=()) -> tuple[str, str, str]:
     """(shoot_dir, listed_price, matched_by) for a sold line item.
 
     SKU and listing id are exact; the title fallback exists because items listed
     by hand on eBay never carried our SKU.
+
+    `recovered` is scan_recovered(store): RECOVERED.md folders, matched on SKU
+    only, after both draft matches (a real draft always wins) and before the
+    title fallback. They carry no ask, so the price comes from the ledger row.
 
     The title fallback REFUSES an ambiguous match. Several items on this account
     are listed twice under byte-identical titles (two Anson tie bars, two copies
@@ -488,6 +585,12 @@ def match_sale(row: dict, drafts: list[dict], ledger: list[dict]) -> tuple[str, 
         for d in drafts:
             if d["listing_id"] and d["listing_id"] == row["listing_id"]:
                 return d["dir"], d["price"], "listing_id"
+    if row["sku"]:
+        for rc in recovered:
+            if rc["sku"] == row["sku"]:
+                ask = next((lr.get("price", "") for lr in ledger
+                            if lr.get("sku") == row["sku"]), "")
+                return rc["dir"], ask, "recovered"
     scored = sorted(
         ((difflib.SequenceMatcher(None, _norm(row["title"]), _norm(d["title"])).ratio(), d)
          for d in drafts), key=lambda x: x[0], reverse=True)
@@ -523,8 +626,15 @@ def _load_sales_ledger(path: Path) -> dict:
         return {_sale_key(r): r for r in csv.DictReader(f)}
 
 
-def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
+def write_sales_ledger(rows: list[dict], store: Optional[str] = None, *,
+                       unwound_order_ids=()) -> Path:
     """Merge `rows` into `store`'s sales ledger — never a wholesale overwrite.
+
+    `unwound_order_ids` are this run's cancelled and fully refunded orders
+    (flatten_orders' `excluded` lists). Their existing rows are dropped: a
+    sale refunded after an earlier --apply wrote it is no longer a sale, and
+    leaving the stale row would keep it counted as revenue (and, in
+    tools/consign.py, cleared and owed to the client).
 
     `rows` only covers the current `--days` window; a plain rewrite would
     drop every sale outside it. Existing rows survive untouched unless a
@@ -538,6 +648,8 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
     another store's sale. Returns the path written."""
     path = stores.paths(store).sales_ledger
     merged = _load_sales_ledger(path)
+    gone = set(unwound_order_ids)
+    merged = {k: v for k, v in merged.items() if k[0] not in gone}
     for r in rows:
         out = dict(r)
         for k in _MONEY_FIELDS:
@@ -559,6 +671,44 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None) -> Path:
         w.writeheader()
         for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True):
             w.writerow(r)
+    ledger_changed(path)
+    return path
+
+
+def write_unwound_orders(rows: list[dict], store: Optional[str] = None, *,
+                         sold_order_ids=()) -> Path:
+    """Merge `rows` (flatten_unwound) into `store`'s unwound_orders file by
+    order_id — never a wholesale overwrite, since `rows` only covers this
+    run's `--days` window. An order in `rows` replaces that order's existing
+    lines; every other order is left as it was. A money field this run
+    doesn't know (None) keeps what the file already had for that line.
+
+    `sold_order_ids` are this run's sales (flatten_orders' rows). Their
+    existing rows are dropped, the mirror of write_sales_ledger's
+    `unwound_order_ids`: eBay can reverse a refund, and the refund test can
+    flip, so an order must never sit in both files. Returns the path written."""
+    path = stores.paths(store).unwound_orders
+    existing: dict = {}
+    if path.exists():
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            existing = {_sale_key(r): r for r in csv.DictReader(f)}
+    gone = {r["order_id"] for r in rows} | set(sold_order_ids)
+    merged = {k: v for k, v in existing.items() if k[0] not in gone}
+    for r in rows:
+        key = _sale_key(r)
+        old = existing.get(key) or {}
+        out = {k: r.get(k, "") for k in UNWOUND_FIELDS}
+        for k in ("original_gross", "refunded", "ad_fee", "actual_postage"):
+            v = r.get(k)
+            out[k] = _money(v) if v is not None else old.get(k, "")
+        merged[key] = out
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=UNWOUND_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        for r in sorted(merged.values(), key=lambda x: (x["sold_at"], x["order_id"]),
+                        reverse=True):
+            w.writerow(r)
+    ledger_changed(path)
     return path
 
 
@@ -828,7 +978,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--days", type=int, default=90,
                     help="order window in days (default 90; eBay serves ~2 years)")
     ap.add_argument("--apply", action="store_true",
-                    help="write sales_ledger.csv, stamp SOLD.md, advance the ledger")
+                    help="write sales_ledger.csv and unwound_orders.csv, stamp SOLD.md, "
+                         "advance the ledger")
     ap.add_argument("--store-json", nargs="+", metavar="FILE",
                     help="browser dumps of the store's active/sold pages (see --print-js)")
     ap.add_argument("--print-js", action="store_true",
@@ -859,11 +1010,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     return worst
 
 
-def match_rows(rows: list[dict], drafts: list[dict], ledger: list[dict]) -> None:
+def match_rows(rows: list[dict], drafts: list[dict], ledger: list[dict], *,
+               recovered=()) -> None:
     """Fill shoot_dir / listed_price / matched_by / pct_* on each order row,
-    against ONE store's drafts and ledger (see `scan_drafts(store)`)."""
+    against ONE store's drafts, RECOVERED.md folders and ledger (see
+    `scan_drafts(store)` / `scan_recovered(store)`)."""
     for r in rows:
-        d, ask, how = match_sale(r, drafts, ledger)
+        d, ask, how = match_sale(r, drafts, ledger, recovered=recovered)
         r["shoot_dir"], r["listed_price"], r["matched_by"] = d, ask, how
         try:
             pct = float(r["item_price"]) / float(ask) * 100 if ask else None
@@ -882,10 +1035,12 @@ def sync_store(store: str, args) -> int:
     print(f"Fetching orders{'' if stores.is_default(store) else ' ' + stores.store_label(store)} "
           f"(last {args.days} days, UTC fetch window; "
           f"sold_at is bucketed in {REPORTING_TZ_LABEL})…")
-    rows, excluded = flatten_orders(fetch_orders(args.days, store=store))
+    orders = fetch_orders(args.days, store=store)
+    rows, excluded = flatten_orders(orders)
+    unwound = flatten_unwound(orders, excluded, store)
     ledger = load_listings_ledger(store)
     drafts = scan_drafts(store, ledger)
-    match_rows(rows, drafts, ledger)
+    match_rows(rows, drafts, ledger, recovered=scan_recovered(store, ledger))
 
     # #119 (route B): real ad fee + actual postage, per order — degrades to
     # "unavailable" rather than failing the whole sync (see sync_finances).
@@ -913,6 +1068,12 @@ def sync_store(store: str, args) -> int:
     allocate_order_totals(order_lines, ad_fee_by_order, "ad_fee",
                           absence_is_zero=bool(fin_status.get("ok")))
     allocate_order_totals(order_lines, postage_by_order, "actual_postage")
+    unwound_lines: dict[str, list[dict]] = {}
+    for r in unwound:
+        unwound_lines.setdefault(r["order_id"], []).append(r)
+    allocate_order_totals(unwound_lines, ad_fee_by_order, "ad_fee",
+                          absence_is_zero=bool(fin_status.get("ok")))
+    allocate_order_totals(unwound_lines, postage_by_order, "actual_postage")
 
     unwound_losses = ebay_finances.unwound_order_losses(
         excluded["cancelled_order_ids"] + excluded["refunded_order_ids"],
@@ -942,11 +1103,16 @@ def sync_store(store: str, args) -> int:
     if not args.apply:
         print("\n[DRY RUN] Nothing written. Re-run with --apply to record:")
         print(f"  • {p.sales_ledger.name} — {len(rows)} actuals row(s)")
+        print(f"  • {p.unwound_orders.name} — {len(unwound)} refunded/cancelled row(s)")
         print(f"  • SOLD.md in {len({r['shoot_dir'] for r in rows if r['shoot_dir']})} folder(s)")
         print(f"  • {p.listings_ledger.name} — advance matched SKUs to SOLD")
         return 0
 
-    written = write_sales_ledger(rows, store)
+    written = write_sales_ledger(
+        rows, store,
+        unwound_order_ids=excluded["cancelled_order_ids"] + excluded["refunded_order_ids"])
+    unwound_path = write_unwound_orders(
+        unwound, store, sold_order_ids={r["order_id"] for r in rows})
     stamped = declined = 0
     for r in rows:
         if r["shoot_dir"]:
@@ -956,6 +1122,7 @@ def sync_store(store: str, args) -> int:
                 declined += 1
     marked = mark_sold_in_ledger(rows, store)
     print(f"\n[OK] wrote {written}  ({len(rows)} rows)")
+    print(f"[OK] wrote {unwound_path}  ({len(unwound)} refunded/cancelled rows)")
     print(f"[OK] stamped SOLD.md in {stamped} folder(s)"
           + (f"; {declined} left alone (already record a different order)" if declined else ""))
     print(f"[OK] advanced {marked} ledger row(s) to SOLD (ask price left intact)")

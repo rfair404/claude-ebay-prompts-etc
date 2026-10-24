@@ -15,6 +15,7 @@ prompt, not the archive.
 |---|---|
 | [V4_PLAN.md](V4_PLAN.md) | The refactor being worked: skinny prompts, terse tools, one CLI, fewer round-trips, a session observer. Phase checkboxes are the live status. |
 | [STORE-CONNECTION-README.md](STORE-CONNECTION-README.md) | IMPLEMENTED (#147/#150) — the runbook for connecting an ADDITIONAL eBay seller account (e.g. a junk store) so both stay connected at once. The procedure, in order, with the silent-failure steps called out. |
+| [live-streaming-setup.md](live-streaming-setup.md) | The new-machine checklist for eBay Live streaming: OBS (Flatpak) + the eBay WHIP profile, v4l2loopback, the Nikon D5100 feed, and what the OM System TG-7 can and can't do (`tools/live/`). |
 | [local-pickup-fragile.md](local-pickup-fragile.md) | IMPLEMENTED — how ship-risky items route to the local-pickup fulfillment policy, and the freight fallback for distant buyers. |
 | [price-strategy-v2.md](price-strategy-v2.md) | IMPLEMENTED — the distribution-based PRICE strategy (`lib/price_stats.py`) and the policy defaults it ships with. |
 | [ebay-live.md](ebay-live.md) | MVP — eBay Live show lineup (`tools/live_lineup.py`), the host page + OBS overlay (`/live/<show>`), and the show's promo image (`tools/live_marquee.py`). What eBay documents for Live, what's built, and the open questions in the eBay UI that gate the next step. |
@@ -22,6 +23,10 @@ prompt, not the archive.
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
 | [prep-white-backgrounds.md](prep-white-backgrounds.md) | PROPOSAL, not built. Why the punch preset does not transfer from dark cloth to white-background shoots. |
 | [prep-resume-plan.md](prep-resume-plan.md) | PLAN ONLY, no code. `--resume` / `--jobs N` for PREP (#74 item 3). |
+| [client-onboarding/checklist.md](client-onboarding/checklist.md) | DRAFT — attorney review pending. Start here for a new consignment or purchase client: what to collect by deal and client type, red flags, and where each record goes. |
+| [client-onboarding/consignment-agreement.md](client-onboarding/consignment-agreement.md) | DRAFT — attorney review pending. The client-facing consignment agreement template. |
+| [client-onboarding/purchase-agreement.md](client-onboarding/purchase-agreement.md) | DRAFT — attorney review pending. The purchase agreement and bill of sale template for buying a client's items outright. |
+| [client-onboarding/exhibits.md](client-onboarding/exhibits.md) | DRAFT — attorney review pending. Exhibit A (item schedule) and Exhibit B (certification of authority), shared by both agreements. |
 | `prep_batch.md` | Generated, untracked (#106). The batch-review table written by the PREP batch tooling; re-run the scan to refresh it. |
 | `ask*/` | Generated, untracked (#106). Default output path of `tools/prep_asksheet.py` — the frame index `tools/prep_answer.py` reads back. The tool creates the directory itself, so a fresh clone needs nothing here. |
 

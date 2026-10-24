@@ -195,32 +195,13 @@ ebay:
       return_policy_id: null
 
 # ---------------------------------------------------------------------------
-# EasyPost — self-serve carrier-rate API for buying shipping labels (GH #80)
-# ---------------------------------------------------------------------------
-# Bypasses eBay's own Logistics API (confirmed a dead end for a small
-# seller — Limited Release, invitation-only, USPS-only; see #32/#80).
-# Rate quoting (lib/easypost_client.get_rates) runs freely and costs
-# nothing. Buying a label (lib/easypost_client.buy_label /
-# `ebz ship-buy`) spends real money and is DRY RUN unless --confirm is
-# passed explicitly — same gate as `list_edit.py --publish/--end`.
-#
-# Setup is a human, one-time step, not something to provision unattended:
-#   1. Create an account at https://www.easypost.com and fund its balance.
-#   2. Get a key (test or production) at
-#      https://www.easypost.com/account/api-keys — a test key never
-#      charges a real carrier, useful for exercising ship-quote/ship-buy
-#      before trusting it with real postage money.
-easypost:
-  api_key: "EZAK_REPLACE_ME"
-
-# ---------------------------------------------------------------------------
 # Freight (LTL) — lib/freight, `ebz freight`, http://127.0.0.1:8770/freight
 # ---------------------------------------------------------------------------
 # For what a parcel carrier won't take. Quoting is free and runs freely;
 # booking spends money and is DRY RUN unless --confirm (CLI) or an explicit
 # second confirm (web app). Every key is optional and env vars win:
 #   WARP_SANDBOX_KEY / WARP_LIVE_KEY / SHIPENGINE_API_KEY / USHIP_API_KEY
-# Origin is the store's storefront ship_from (above), like ship-quote.
+# Origin is the store's storefront ship_from.
 freight:
   # db_path: "reports/freight.db"   # relative to the repo root
   # web_booking: true               # false = the app quotes/tracks but won't book
@@ -267,6 +248,19 @@ offsite:
   # prefix: ""              # optional key prefix inside the bucket
   # include: []             # extra globs, e.g. ["letters/**"]; photos/video
   #                         # are never synced (MEDIA_SUFFIXES in lib/offsite.py)
+
+# ---------------------------------------------------------------------------
+# Second offsite copy: Google Drive — lib/gdrive_mirror.py (`ebz gdrive`)
+# ---------------------------------------------------------------------------
+# Same file set as offsite: above, copied with rclone. Pushes the ledgers in
+# the background after every ledger write, plus a daily full push from the
+# systemd user timer (`ebz gdrive install-timer --apply`). rclone keeps the
+# Google token in ~/.config/rclone/rclone.conf — nothing secret goes here.
+# Setup steps: docs/offsite-storage.md ("Second copy: Google Drive").
+gdrive:
+  remote: "gdrive"          # the rclone remote name from `rclone config`
+  folder: "EBAYBIZ-backup"  # top-level folder in My Drive
+  auto: true                # false: only the daily timer / manual pushes
 
 # ---------------------------------------------------------------------------
 # CURATE strategy profiles
@@ -347,7 +341,7 @@ store:
   # Unset -> active_profile. A named storefront sets its own (#156).
   # profile: "default"
 
-  # Default ship-from for ship-quote / ship-buy. Explicit --from-* flags win.
+  # Default ship-from for freight. Explicit --from-* flags win.
   # Same fields as those flags. POLICY, so a named storefront inherits it
   # unless it ships from somewhere else.
   # ship_from:

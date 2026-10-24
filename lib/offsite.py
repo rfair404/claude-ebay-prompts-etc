@@ -87,13 +87,17 @@ REPO = Path(__file__).resolve().parent.parent
 # below (so images never go up). "dir/**/name" takes files called `name`
 # at any depth under dir/. Other entries match one path level each, "*"
 # never crossing a "/". The regenerable class-3 caches are left out.
-DEFAULT_INCLUDE = (
-    # ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies
+# The ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies.
+# Also what lib/gdrive_mirror.py pushes after each ledger write.
+LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
+    "unwound_orders*.csv*",
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",
+)
+DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # eBay exports: the live-listing sheets built from the eBay APIs
     "inventory_sheet*.csv",
     "inventory_sheet*.json",
@@ -107,6 +111,14 @@ DEFAULT_INCLUDE = (
     # (`ebz serve` -> /review/<shoot>), not from the bucket.
     "inventory/**/draft.md",
     "inventory/**/identify.txt",
+    # a bucket's spend and source (lib/source_report.py), and the recovery
+    # map left by the 2026-10 wipe: which sold SKUs belong to which folder
+    "inventory/**/context.txt",
+    "inventory/**/RECOVERED.md",
+    # consignment: each intake's item ledger and the client registry
+    # (tools/consign.py). The registry is the one file with client names.
+    "inventory/**/client_ledger.csv",
+    "inventory/_consign/**",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",

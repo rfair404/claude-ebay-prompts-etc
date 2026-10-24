@@ -685,6 +685,7 @@ def _patch_sync_collaborators():
         L,
         _resolve_policies_and_location=lambda creds: (dict(_POLICIES), "LOC-1"),
         get_allowed_condition_ids=lambda *a, **kw: (set(), False),
+        category_uses_conditions=lambda *a, **kw: None,
         _resolve_shipping_policy=lambda draft, policies, creds, strict=False: (policies["fulfillment"], []),
         _assert_photos_cleared=lambda paths: None,
         upload_site_hosted_picture=lambda data, picture_name=None, creds=None: f"https://eps/{picture_name}.jpg",

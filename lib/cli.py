@@ -81,16 +81,16 @@ COMMANDS = {
                      "gate-check IDENTIFY->PREP->PRICE->INVESTIGATE->DRAFT; one card when clean"),
     "status":       ("lib.status",
                      "one-shot shoot state: phase files, PREP gate, frames, ledger, next action (#61)"),
-    "ship-quote":   ("tools.ship_quote",
-                     "EasyPost shipping-rate quotes (#80) — free, no confirm needed"),
-    "ship-buy":     ("tools.ship_buy",
-                     "buy a label via EasyPost (#80) — DRY RUN unless --confirm"),
     "freight":      ("tools.freight",
                      "LTL freight: compare broker quotes (Warp, ShipEngine, uShip, by "
                      "hand), book (DRY RUN unless --confirm), track"),
     "offsite":      ("lib.offsite",
                      "back up / restore ledgers + inventory/ to an S3-compatible "
                      "bucket (R2) — dry run unless --apply, never deletes remotely"),
+    "gdrive":       ("lib.gdrive_mirror",
+                     "second offsite copy to Google Drive via rclone — auto after each "
+                     "ledger write + daily timer; never deletes remotely"),
+    "consign":      ("tools.consign", "consignment ledger: bulk import, sync, client report"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }
@@ -101,12 +101,11 @@ COMMANDS = {
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
     "sales-report", "ad-report", "dashboard", "report", "promote", "listing", "status",
-    "ship-quote", "ship-buy", "freight",
+    "freight",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
 # spend money, so the store has to be typed, once, by name.
-SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "ship-buy", "ship-quote",
-                     "freight"}
+SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "freight"}
 
 
 def _pop_store_flags(args: list[str]) -> tuple[str | None, bool, list[str]]:

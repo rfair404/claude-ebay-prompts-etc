@@ -38,6 +38,11 @@ machine's browser and nowhere else.
 the eBay read; these routes only read that file and write which lot is on
 screen, so they stay eBay-free like the rest of the app.
 
+`/api/pager` (webapp/pager.py) switches the show's OBS page: intro, item
+(the camera view) or next. It is tools/live/show_flow.py's pager over
+HTTP, for a control page or another agent; it talks to OBS on this
+machine and to the camera over USB, never to eBay.
+
 Stores (#156 §5). `GET /` covers every configured store — one drift panel
 per store, each against its own ledger, never pooled — and `GET /?store=NAME`
 narrows it to one (a malformed name is a 400, an unconfigured one a 404).
@@ -76,6 +81,7 @@ import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
 import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
+import webapp.pager as _pager                          # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
 
@@ -84,6 +90,7 @@ DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
 app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
 app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
+app.include_router(_pager.router)     # /api/pager — which page of the live show is on air
 _queue: Optional[JobQueue] = None
 
 
@@ -142,6 +149,14 @@ class EnqueueRequest(BaseModel):
     # one does, it names its store in `params` — see webapp/jobs.py.
     type: str
     params: dict = {}
+
+
+# `ebz serve` runs this file through runpy as "__main__" without replacing
+# sys.modules["__main__"], so pydantic can't find this module to resolve the
+# postponed (string) annotations and every POST body 500s. Rebuilding here,
+# at module level, resolves them against this namespace instead.
+LiveStateRequest.model_rebuild()
+EnqueueRequest.model_rebuild()
 
 
 def _job_dict(job: Job) -> dict:
@@ -227,6 +242,12 @@ def live_host(show: str) -> str:
     eBay read) by tools/live_lineup.py, so this route makes no eBay call."""
     lineup = _live_lineup(show)
     return _live.render_host(show, lineup, _live.load_state(show, _live_base))
+
+
+@app.get("/live/{show}/lineup")
+def live_lineup(show: str) -> dict:
+    """The lineup as JSON, for the pager's lineup panel. No eBay call."""
+    return _live_lineup(show)
 
 
 @app.get("/live/{show}/overlay", response_class=HTMLResponse)

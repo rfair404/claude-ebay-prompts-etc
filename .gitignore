@@ -51,6 +51,19 @@ sales_ledger.*.csv
 # The per-store name lib/stores.store_file() actually writes (GH #156) —
 # sales_ledger-junk.csv. The dotted rule above did NOT match it.
 sales_ledger-*.csv
+# Refunded and cancelled orders (lib/sync_actuals.py), kept out of the sales
+# ledger so its gross stays revenue. Same revenue data, same per-store names.
+unwound_orders.csv
+unwound_orders-*.csv
+unwound_orders.*.csv
+
+# Consignment (tools/consign.py): each intake's client_ledger.csv (what a
+# client's items sold for and what we owe them, plus its .backup-* copies)
+# and the client registry, the one file with client names and contacts.
+# settlements.csv is each client's payout record (amounts paid, dates, method).
+client_ledger*.csv
+clients*.csv
+settlements*.csv
 
 # Pick lists — buyer name, street address, phone number from real orders.
 # Written by tools/pick_list.py (--poll / --out) and tools/pick_list_html.py.
@@ -105,7 +118,9 @@ ledger_reconcile_report-*.json
 # reports/price_vs_actual.csv carries every ask and what it realised. All class 2.
 # Regenerate the whole directory with:
 #   python tools/sales_report.py
-/reports/
+# No trailing slash, for the same reason as /inventory below: in a worktree,
+# reports is a symlink/junction to the main checkout's (tools/worktree_link.py).
+/reports
 
 # Inventory working files — private business data + images (photos, per-item
 # phase output, comps, SKUs). The default content store; never tracked.

@@ -292,37 +292,25 @@ def get_vision_backend() -> str:
     return DEFAULT_VISION_BACKEND
 
 
-def get_easypost_key() -> str:
-    """EasyPost API key. Precedence: env var > config file > error.
+SHIP_FROM_FIELDS = ("name", "company", "street1", "street2", "city", "state", "zip",
+                    "country", "phone", "email")
 
-    Same precedence contract as get_apify_token().
-    EasyPost issues test and production keys from the same dashboard; which
-    one is configured decides whether a confirmed buy_label() call hits real
-    carriers or EasyPost's no-charge test mode — that is an account-setup
-    choice made by a human, not something this loader infers (GH #80).
 
-    Raises:
-        ConfigError if no key is available anywhere.
-    """
-    env = os.environ.get("EASYPOST_API_KEY")
-    if env:
-        return env
+def get_ship_from(store: Optional[str] = None) -> dict:
+    """The store's configured ship-from mapping (storefront `ship_from`), or
+    {} when unset. Used by lib/freight (LTL).
 
-    config = load_config()
-    key = _nested(config, "easypost", "api_key")
-    if key:
-        return str(key)
-
-    raise ConfigError(
-        f"EasyPost API key not found.\n"
-        f"  Set the EASYPOST_API_KEY environment variable, OR\n"
-        f"  add this to {config_path()}:\n"
-        f"      easypost:\n"
-        f"        api_key: \"<your-key>\"\n"
-        f"  Get a key (test or production) at https://www.easypost.com/account/api-keys\n"
-        f"  A human still has to create the account and fund its balance before\n"
-        f"  any real purchase can succeed — that step is deliberately not automated."
-    )
+    `ship_from` is a policy-ish storefront key, so a named store that omits
+    it inherits the default store's (same shelf, same return address) — a
+    named store that ships from elsewhere states its own. Raises ConfigError
+    for a named store with no storefront entry, and for a ship_from that
+    isn't a mapping."""
+    sf = get_storefront(store).get("ship_from") or {}
+    if not isinstance(sf, dict):
+        raise ConfigError(f"storefront ship_from for store {store!r} must be a "
+                          f"mapping of {', '.join(SHIP_FROM_FIELDS)}")
+    return {k: (str(v) if v is not None else None) for k, v in sf.items()
+            if k in SHIP_FROM_FIELDS}
 
 
 FREIGHT_KEY_ENV = {
@@ -522,13 +510,15 @@ def get_storefront(name: Optional[str] = None) -> dict:
         through — an unset display_name is None, not the default store's name.
 
     Raises:
-        ConfigError if a non-default storefront name has no `storefronts:`
-        entry — silently falling back to the main storefront's terms is how a
-        junk listing would go out under the good store's identity.
+        ConfigError if a non-default name is not a configured store (neither
+        `ebay.stores.<name>` nor `storefronts.<name>`) — silently falling back
+        to the main storefront's terms is how a typo'd store would go out
+        under the good store's identity. A store under `ebay.stores` needs no
+        `storefronts:` entry: its identity keys are simply unset.
     """
     config = load_config()
 
-    from stores import resolve_store_name  # local: stores imports config
+    from stores import configured_stores, resolve_store_name  # local: stores imports config
     name = resolve_store_name(name)
 
     base = dict(_nested(config, "store") or {})
@@ -538,14 +528,15 @@ def get_storefront(name: Optional[str] = None) -> dict:
 
     override = _nested(config, "storefronts", name)
     if override is None:
-        known = ", ".join(list_storefronts()) or "(none configured)"
-        raise ConfigError(
-            f"Storefront '{name}' not found in {config_path()}.\n"
-            f"  Add it under 'storefronts:' — a named store needs its own "
-            f"identity and terms, and inheriting the default store's would "
-            f"ship its name on the wrong listings.\n"
-            f"  Configured storefronts: {known}"
-        )
+        known = [s for s in configured_stores() if s != "default"]
+        if name not in known:
+            raise ConfigError(
+                f"Store '{name}' not found in {config_path()}.\n"
+                f"  Add it under 'ebay.stores:' — inheriting the default "
+                f"store's identity would ship its name on the wrong listings.\n"
+                f"  Configured stores: {', '.join(known) or '(none configured)'}"
+            )
+        override = {}
     if not isinstance(override, dict):
         raise ConfigError(
             f"Storefront '{name}' in {config_path()} is not a YAML mapping "
@@ -628,12 +619,6 @@ def _cli() -> None:
 
         print(f"vision.backend: {get_vision_backend()}")
         print(f"vision.gemini.model: {get_gemini_model()}")
-
-        try:
-            ep_key = get_easypost_key()
-            print(f"easypost.api_key: {_redact(ep_key)}")
-        except ConfigError:
-            print("easypost.api_key: (not set)")
 
         ebay_creds = get_ebay_credentials()
         print()

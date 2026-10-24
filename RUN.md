@@ -1,3 +1,8 @@
+---
+version: 1.5.0
+updated: 2026-10-23
+---
+
 # RUN — v4 headless runbook
 
 The single entry point. To run the pipeline on a shoot, read THIS file
@@ -31,7 +36,9 @@ always goes there, even from a session in a worktree. A worktree's
 `tools/worktree_link.py` when the session starts. So write through the
 worktree path (`<worktree>/inventory/<name>/draft.md`). The desktop app's
 worktree write guard refuses the spelled-out `<main>/inventory/...` path and
-every other base-checkout path. See CLAUDE.md, "Pipeline data".
+every other base-checkout path. `reports/` is linked the same way, so a
+report written from a worktree lands in main's `reports/`, which both offsite
+backups copy. See CLAUDE.md, "Pipeline data".
 
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
     list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish
@@ -148,6 +155,14 @@ re-issue the same call with `run_in_background`. The prefix list lives in
 one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
+
+**While a live show is on air, batch jobs wait, backgrounded or not.**
+`show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
+it; while it is there the same hook denies pytest, `show_music.py build`,
+PREP, `prep_sheet_html.py`, `single-pass` and listing runs (the 2026-10-21
+show skipped 99.4% of its frames beside them). A flag over 8 h old is
+ignored. A leftover one clears when `show_flow.py status` reads eBay and
+Twitch both off; never stop the stream to get past it. The opt-out is `# on-air-ok: <reason>`.
 
 **Never poll a backgrounded job with `sleep`.** A `sleep N` loop burns a turn
 per poll for no signal a proper wait doesn't already give you — a
@@ -307,6 +322,140 @@ REVIEW would build; anything a stage's own interactive HARD stop caught
 gate) → the specific exception, by name, never guessed. Full protocol:
 [prompts/single_pass.md](prompts/single_pass.md).
 
+**Consignment (`consign`).** Each client has one folder,
+`inventory/CONSIGN-<client_code>/` (the code only, e.g. `CONSIGN-K01`), with
+one `client_ledger.csv` covering every intake: one row per sellable unit (one
+listing, return, disposal or buyout), with the date it came in in `intake`.
+The older layout, one `inventory/CONSIGN-YYYYMMDD/` folder per intake whose
+`context.txt` says `client: K01`, still works and can sit beside the new one
+until it is renamed by hand. A folder, and every lot in it, belongs to one
+client. Names and contacts live only in `inventory/_consign/clients.csv`
+(`client_code,name,contact,split,terms,opened`; `split` 0.5 = 50/50 of net).
+Its optional columns are `agreement_signed` (date), `w9_on_file` (yes/no, a
+flag only, never the TIN), `payee_type`, `payout_method` (last 4 digits at
+most), `payout_cadence`, `floor_main`, `floor_junk`, `loss_rule`,
+`abandon_election`, `handling_fee` (blank = no fee; set it, normally to 2.00,
+only when the client's signed agreement names the fee), `min_payout` (blank =
+none; 500 for K01), `listing_days` (blank = 180) and `pickup_days` (blank =
+30). `loss_rule` is `split` (the default: the client carries their split of a
+loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
+(the client carries the whole loss, not split; K01's agreement).
+
+    python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
+    python -m lib.cli consign import CONSIGN-K01 -          # paste a CSV/TSV on stdin
+    python lib/sync_actuals.py --all-stores --apply        # finance sync first
+    python -m lib.cli consign sync                         # dry run: what would change
+    python -m lib.cli consign sync --apply                 # write (backup first)
+    python -m lib.cli consign report --client K01 --csv    # -> reports/consign/K01/K01-<date>.csv
+    python -m lib.cli consign settle K01 --through 2026-11-30          # dry run
+    python -m lib.cli consign settle K01 --through 2026-11-30 --apply  # write it
+
+`import` needs a `description` (or `item`) column, gives each new row the
+client's next id (`K01-C048`, numbered across all of that client's ledgers),
+stamps `intake` (`--intake`, else `acquired:` in `context.txt`, the folder's
+date, or today) and skips a row with the same intake, bin and description.
+Run `consign sync` from the main checkout; from a worktree it refuses. `sync`
+reads the listings and sales ledgers only (no eBay calls) and moves each row
+through SHOT, DRAFTED, LISTED, SOLD, CLEARED and SETTLED. A row clears once
+it is sold, its ad fee and postage are known, and the later of 40 days after
+the sale and 30 days after `delivered_at` has passed (eBay's 30-day return
+window runs from delivery). Nothing supplies `delivered_at` yet, so type it
+by hand from the order; without it a row clears 40 days after the sale and
+is flagged "no delivery date". SETTLED means a paid settlement covers the
+row. Typed by hand:
+
+- PREP: in hand and being prepped. It stays PREP through SHOT and DRAFTED
+  and gives way to LISTED and later.
+- RETURNED, or DISPOSED with a `state_note`. Terminal: these win.
+- EXCLUDED: Russell buys the item from the client. Terminal, and it needs a
+  `buyout_price` (0.00 is allowed, blank is not). That price is the client
+  share, with no split, and is owed until paid. A 0.00 buyout is closed with
+  nothing owed and needs no payment.
+
+**Lots.** Rows sold as one listing share a `lot_id` and one
+`inventory_folder`. The lead row (the lowest id) carries the sale, the money
+and the client share. Its lot-mates follow its state with blank money fields
+and the note "in lot L1 with K01-C001", and the report counts the lot once.
+
+**Splits.** The client's `split` is copied into `split_locked` the first time
+a row sells, and that split is used from then on. A later change in
+`clients.csv` applies only to rows that sell after it.
+
+**Handling.** Each sale pays a flat handling fee for packing materials (box,
+fill, tape, label): `net = net_before_postage - ad_fee - actual_postage -
+handling - other_costs`, then the split. It comes off before the split, as
+postage does, so a $2.00 fee costs the client $1.00 at 50/50. The fee is the
+client's `handling_fee` (blank = no fee), stamped on the row's `handling`
+column when it sells; a later change in `clients.csv` doesn't move it. Type a
+larger figure into `handling` for an oversize box. A lot pays one fee, on its
+lead row. Rows paid before the fee existed are left alone. The report shows
+"handling kept", and settlements and statements carry a `handling` column.
+
+**Other channels and the mall.** A blank `channel` is eBay. Any other
+`channel` (one word: `dealer`, `etsy`) is a sale typed by hand into the row:
+`sold_at`, `item_price`, `ebay_fee` (that channel's fee, 0.00 if none),
+`actual_postage` (0.00 if none) and `order_id` if it has one. `sync` never
+overwrites those or calls the sale vanished, and flags an eBay sale that
+matches the same item. Type `funds_received` when the channel's money reaches
+us: the sale then clears at the end of the month it sold (agreement §5.1(b)),
+so it is paid on the 15th after, and it is flagged until that date is typed. `channel` `mall` is
+the antique-mall booth, where every consigned antique sells: type `sold_at`,
+`item_price` and `card_paid` (the part paid by card, 0.00 for cash), and sync
+works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
+(agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
+no postage. Handling applies on every channel.
+
+**Floors and time limits.** These only raise flags. A row's `floor` (from
+Exhibit A; a lot's floor is the total of its rows) is checked against the ask
+while listed and against the price once sold. A listing live longer than the
+client's `listing_days`, counted from its first `published_at`, is flagged to
+end and tell the client. Once `return_notice_sent` is typed, an item still
+unsold after `pickup_days` is flagged for the abandonment election.
+
+**Settlements.** `settle` gathers what is owed through `--through`: CLEARED
+rows not yet paid, unpaid buyouts above 0.00, and any adjustment to a row
+already paid. It adds one row to `inventory/_consign/K01/settlements.csv`
+(`settlement_id` like `K01-S001`) and writes the statement to
+`reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. If the
+total due is under the client's `min_payout`, the sales and adjustments
+carry forward; a buyout is still paid in that run (agreement §7.2), and with
+no buyout nothing is written. When the agreement ends, `settle K01 --through <date>
+--final` pays the full balance, a negative one included. A
+statement is written once and never overwritten. `settle` does not record a
+payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
+on that settlements row, and the next `sync --apply` copies the date and
+`settlement_id` onto the rows. The report's paid-this-year total comes from
+`settlements.csv`.
+
+Never copy a file over `client_ledger.csv`. Bring hand-built rows in with
+`python -m lib.cli consign import <intake> <file.csv> --client <code>`; import
+merges into the current format and keeps lots, splits and paid state.
+
+There is no `set` command: edit the CSV, and `sync` refuses an unknown state,
+a DISPOSED row without a note, an EXCLUDED row without a buyout price, a bad
+amount or date, or two active rows on one `inventory_folder` unless they share
+a `lot_id` (each sellable unit needs its own folder). It also refuses a
+lot-mate that already has an order, a share, a settlement or a paid date
+(make the sold row the lot's lowest id, or take it out of the lot), and one
+`order_id` on two active rows. Across ledgers it also
+refuses a folder claimed from two ledgers (unless it is one client's lot), a
+lot on two folders, and one id in two of a client's ledgers. A listing that
+ended unsold, a sale that left the sales ledger (the finance sync drops
+refunded and cancelled orders) and an auction-format listing (consigned items
+stay fixed-price for now) are flagged in `state_note`, not given a state. Net
+is eBay's net before postage minus ad fee, postage and other costs; a blank ad
+fee or postage is unknown, not zero, so the row can't clear. Once
+`paid_to_client_date` is set, the row's `client_share` is frozen at what was
+paid; a later change is flagged with the adjustment, and the next `settle`
+carries it.
+
+An older ledger loads as it is. The first `sync --apply` adds the new columns
+(`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`,
+`handling`) and
+rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
+
+Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
+
 ## Background dispatch (optional, #59)
 
 PRICE, IDENTIFY's non-photo research (maker/pattern lookups, forum
@@ -395,6 +544,12 @@ actually got, and feeds the gap back. Its two commands:
 the listings ledger only knows the ASK (an accepted Best Offer never writes
 back), and the Inventory API is blind to anything listed by hand on eBay.com.
 Orders are the only source that sees every sale and the price actually paid.
+Refunded and cancelled orders are left out of `sales_ledger*.csv` and written
+to `unwound_orders*.csv` instead (`reason` refunded or cancelled). An order is
+never in both. For 1099-K reconciliation, the 1099-K does not subtract
+refunds, and sales_ledger `gross` is already net of partial refunds, so add the
+refunds back: Σ sales_ledger (`gross` + `refunded`) + Σ unwound_orders
+`original_gross` where `reason` is refunded. Leave cancelled orders out.
 
 **The publish step (reached via the REVIEW gate, on explicit approval):**
 
