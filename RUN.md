@@ -1,5 +1,5 @@
 ---
-version: 1.4.1
+version: 1.5.0
 updated: 2026-10-23
 ---
 
@@ -453,6 +453,8 @@ An older ledger loads as it is. The first `sync --apply` adds the new columns
 (`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`,
 `handling`) and
 rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
+
+Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
 
 ## Background dispatch (optional, #59)
 

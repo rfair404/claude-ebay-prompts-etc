@@ -23,6 +23,10 @@ prompt, not the archive.
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
 | [prep-white-backgrounds.md](prep-white-backgrounds.md) | PROPOSAL, not built. Why the punch preset does not transfer from dark cloth to white-background shoots. |
 | [prep-resume-plan.md](prep-resume-plan.md) | PLAN ONLY, no code. `--resume` / `--jobs N` for PREP (#74 item 3). |
+| [client-onboarding/checklist.md](client-onboarding/checklist.md) | DRAFT — attorney review pending. Start here for a new consignment or purchase client: what to collect by deal and client type, red flags, and where each record goes. |
+| [client-onboarding/consignment-agreement.md](client-onboarding/consignment-agreement.md) | DRAFT — attorney review pending. The client-facing consignment agreement template. |
+| [client-onboarding/purchase-agreement.md](client-onboarding/purchase-agreement.md) | DRAFT — attorney review pending. The purchase agreement and bill of sale template for buying a client's items outright. |
+| [client-onboarding/exhibits.md](client-onboarding/exhibits.md) | DRAFT — attorney review pending. Exhibit A (item schedule) and Exhibit B (certification of authority), shared by both agreements. |
 | `prep_batch.md` | Generated, untracked (#106). The batch-review table written by the PREP batch tooling; re-run the scan to refresh it. |
 | `ask*/` | Generated, untracked (#106). Default output path of `tools/prep_asksheet.py` — the frame index `tools/prep_answer.py` reads back. The tool creates the directory itself, so a fresh clone needs nothing here. |
 
