@@ -14,8 +14,11 @@ the JSON report round-trip, on synthetic data, off the network.
 
 Run:  pytest tests/test_ledger_reconcile.py
 """
+import csv
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -314,3 +317,35 @@ def test_sold_on_reads_sku_and_listing_id_pairs(tmp_path, monkeypatch):
     sales.write_text("order_id,listing_id,sku\n1-000,111,sku-a\n2-000,,sku-b\n",
                      encoding="utf-8")
     assert LR._sold_on(sales) == {("sku-a", "111")}
+
+
+def test_voided_row_is_not_orphan_and_survives_prune_unknown(tmp_path, monkeypatch):
+    # A VOIDED row (list_edit.py --void) never reached eBay, so eBay has no
+    # inventory item for it. The row is kept on purpose: it is what makes
+    # --record and friends refuse a stray draft.md still carrying the SKU. So it
+    # is not an orphan, and --prune-unknown must not delete it. A real orphan
+    # beside it is still pruned, so the prune path does run.
+    import tools.ledger_reconcile as LR
+    ledger = tmp_path / "listings_ledger.csv"
+    with ledger.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        for sku, status in (("live0001", "PUBLISHED"), ("void0001", "VOIDED"),
+                            ("gone0001", "DRAFTED")):
+            w.writerow({**{k: "" for k in FIELDS}, "sku": sku, "status": status})
+    sp = SimpleNamespace(listings_ledger=ledger,
+                         sales_ledger=tmp_path / "sales_ledger.csv",
+                         reconcile_report_json=tmp_path / "report.json")
+    monkeypatch.setattr(LR.stores, "paths", lambda store=None: sp)
+    monkeypatch.setattr(LR.stores, "is_default", lambda store=None: True)
+    monkeypatch.setattr(LR, "ledger_changed", lambda path: None)
+    monkeypatch.setattr(LR, "ebay_truth", lambda store=None: {
+        "live0001": _dtruth(sku="live0001", status="PUBLISHED")})
+
+    assert LR.reconcile("default", apply=True, prune=True) == 0
+
+    report = json.loads(sp.reconcile_report_json.read_text(encoding="utf-8"))
+    assert [o["sku"] for o in report["orphan"]] == ["gone0001"]
+    with ledger.open(encoding="utf-8-sig", newline="") as f:
+        kept = {r["sku"]: r["status"] for r in csv.DictReader(f)}
+    assert kept == {"live0001": "PUBLISHED", "void0001": "VOIDED"}
