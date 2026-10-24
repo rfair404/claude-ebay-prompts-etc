@@ -24,6 +24,9 @@ if [[ ${1:-} == --setup ]]; then
 fi
 
 ssh "$HOST" "mkdir -p $dest"
-rsync -a --delete --exclude=.git --exclude=/inventory --exclude=/reports \
-  --filter=':- .gitignore' "$repo/" "$HOST:$dest/"
+# git's own list, not a .gitignore filter: some fixtures are tracked although
+# an ignore rule matches them (tests/fixtures/photos/*.jpg).
+git -C "$repo" ls-files --cached --others --exclude-standard | sed 's|^|/|' |
+  rsync -a --delete-excluded --include='*/' --include-from=- --exclude='*' -m \
+    "$repo/" "$HOST:$dest/"
 ssh "$HOST" "cd $dest && nice $VENV/bin/python -m pytest -q -p no:cacheprovider $(printf '%q ' "$@")"
