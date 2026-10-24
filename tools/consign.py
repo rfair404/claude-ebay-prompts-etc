@@ -9,6 +9,10 @@ the state of each item, what it is worth and what we owe.
     python -m lib.cli consign report --client K01 --csv
     python -m lib.cli consign settle K01 --through 2026-11-30  # dry run; --apply writes
     python -m lib.cli consign settle K01 --through 2026-11-30 --final  # agreement ended
+    python -m lib.cli consign scene CONSIGN-K01 ZZ220231 --bin 01 --item "Pan Am map book"
+    python -m lib.cli consign match CONSIGN-K01 inventory/CONSIGN-K01/bin-01/C038-x \
+        --describe "salt-glaze stoneware chamberstick"     # rank; --to ID --apply attaches
+    python -m lib.cli consign catalog CONSIGN-K01             # -> reports/consign/*.html
 
 Order of work: the finance sync first (`python lib/sync_actuals.py
 --all-stores --apply`), then `consign sync`. This tool reads the local
@@ -68,16 +72,32 @@ Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
 client share; its lot-mates follow its state with blank money fields.
 
+Intake in two passes. A scene shot (one frame of a whole bin) gives each item
+in it a placeholder row (`scene`; the frame's id goes in `photos`). Later each
+item is shot alone and `match` attaches those frames to its placeholder: their
+ids go in `photos` and `shots` (the row's individual frames) and the folder in
+inventory_folder. A frame is the individual shot of one row only, and `match`
+makes a new row only with --new when nothing matches.
+
+Every write takes client_ledger.csv.lock, refuses a ledger that changed since
+it was read, and keeps client_ledger.last_id, so a removed row's id is never
+handed out again.
+
 There is no `set` command: edit the CSV by hand, and `sync` validates it.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
+import math
+import os
 import re
 import sys
+import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
@@ -94,6 +114,12 @@ LEDGER_NAME = "client_ledger.csv"
 SETTLEMENTS_NAME = "settlements.csv"
 INTAKE_PREFIX = "CONSIGN-"
 INTAKE_GLOB = INTAKE_PREFIX + "*"
+# The highest item number ever issued in this ledger folder, so a removed
+# row's id is never reused. Written on every ledger write.
+LAST_ID_NAME = "client_ledger.last_id"
+# A lock older than this is from a session that died mid-write: a write takes
+# milliseconds.
+LOCK_STALE_SECONDS = 600
 
 COLUMNS = [
     "item_id", "bin", "description", "qty", "cut", "why", "photos",
@@ -114,6 +140,9 @@ COLUMNS = [
     # date the client was told to pick an unsold item up, typed by hand.
     # card_paid: on a mall sale, the part the buyer paid by card.
     "channel", "floor", "return_notice_sent", "card_paid",
+    # the row's individual frames (the item shot alone), a subset of photos;
+    # `match` fills it. A frame here is no other row's.
+    "shots",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
@@ -361,36 +390,137 @@ def reports_dir(code: str) -> Path:
 # --------------------------------------------------------------------------- #
 # files
 # --------------------------------------------------------------------------- #
-def read_ledger(path: Path) -> tuple[list[dict], list[str]]:
+def load_ledger(path: Path) -> tuple[list[dict], list[str], str]:
     """(rows with every COLUMN present, column names the file has that the
-    ledger doesn't know — an old-format file)."""
+    ledger doesn't know — an old-format file, a digest of the bytes read).
+    Pass the digest to save_ledger, which refuses a file that changed since."""
     if not path.exists():
-        return [], []
-    with path.open(newline="", encoding="utf-8-sig") as f:
-        r = csv.DictReader(f)
-        unknown = [c for c in (r.fieldnames or []) if c not in COLUMNS]
-        rows = [{c: (row.get(c) or "").strip() for c in COLUMNS} for row in r]
+        return [], [], ""
+    raw = path.read_bytes()
+    r = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+    unknown = [c for c in (r.fieldnames or []) if c not in COLUMNS]
+    rows = [{c: (row.get(c) or "").strip() for c in COLUMNS} for row in r]
+    return rows, unknown, hashlib.sha256(raw).hexdigest()
+
+
+def read_ledger(path: Path) -> tuple[list[dict], list[str]]:
+    rows, unknown, _ = load_ledger(path)
     return rows, unknown
+
+
+def ledger_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else ""
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> Optional[Path]:
     """Write `rows`, after copying the current file to a timestamped backup
-    beside it. Returns the backup path (None for a new file)."""
+    beside it. Returns the backup path (None for a new file). The new file is
+    written beside it and moved into place, so no reader sees half of it."""
     backup = None
     if path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}")
         backup.write_bytes(path.read_bytes())
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with tmp.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=columns, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+    os.replace(tmp, path)
     return backup
 
 
 def write_ledger(path: Path, rows: list[dict]) -> Optional[Path]:
     return _write_csv(path, COLUMNS, rows)
+
+
+@contextmanager
+def ledger_lock(path: Path):
+    """Hold `<ledger>.lock` while writing, so two sessions never write one
+    ledger at once. A second writer is refused, not queued."""
+    lock = path.with_name(path.name + ".lock")
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    for _ in range(2):
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - lock.stat().st_mtime
+            except FileNotFoundError:
+                continue                         # released meanwhile: try again
+            if age < LOCK_STALE_SECONDS:
+                raise SystemExit(f"[X] {path.parent.name}/{path.name} is being written by "
+                                 f"another session ({lock.name}, {age:.0f}s old): nothing "
+                                 f"written, run it again in a moment") from None
+            lock.unlink(missing_ok=True)         # left by a session that died
+    if fd is None:
+        raise SystemExit(f"[X] could not take {lock.name}: nothing written, run it again")
+    try:
+        os.write(fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}\n"
+                 .encode())
+        os.close(fd)
+        yield
+    finally:
+        lock.unlink(missing_ok=True)
+
+
+def _ids_in(path: Path) -> list[int]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        return [n for row in csv.DictReader(f)
+                if (n := id_num((row.get("item_id") or "").strip())) is not None]
+
+
+def last_id(d: Path) -> int:
+    """The highest item number ever issued in folder `d`: its last_id file,
+    its ledger and its backups (which still hold rows removed since)."""
+    p = d / LAST_ID_NAME
+    words = p.read_text(encoding="utf-8").split() if p.exists() else []
+    nums = [n for n in [id_num(words[0]) if words else None] if n is not None]
+    for f in [d / LEDGER_NAME, *d.glob(f"{Path(LEDGER_NAME).stem}.backup-*.csv")]:
+        nums += _ids_in(f)
+    return max(nums, default=0)
+
+
+def issued_max(code: str, d: Path, *, others_only: bool = False) -> int:
+    """The highest item number `code` has ever issued, across all its ledger
+    folders (or all but `d`)."""
+    dirs = {x.resolve(): x for x in client_dirs(code)} if code else {}
+    dirs.setdefault(d.resolve(), d)
+    return max((last_id(x) for k, x in dirs.items()
+                if not (others_only and k == d.resolve())), default=0)
+
+
+def save_ledger(path: Path, rows: list[dict], expect: str, *, code: str = "",
+                new_ids: tuple[str, ...] = ()) -> Optional[Path]:
+    """Write the ledger the safe way: under the lock, only if it is still the
+    file that was read (`expect`, from load_ledger), with a backup, and with
+    last_id moved up. `new_ids` (just issued) must be above anything another
+    of the client's ledgers has issued since."""
+    with ledger_lock(path):
+        if ledger_digest(path) != expect:
+            raise SystemExit(f"[X] {path.parent.name}/{path.name} changed since it was "
+                             f"read (another session wrote it): nothing written, run the "
+                             f"command again")
+        nums = [n for i in new_ids if (n := id_num(i)) is not None]
+        if nums and code:
+            other = issued_max(code, path.parent, others_only=True)
+            if min(nums) <= other:
+                raise SystemExit(f"[X] another of {code}'s ledgers has issued ids up to "
+                                 f"C{other:03d} since this one was read: nothing written, "
+                                 f"run the command again")
+        backup = write_ledger(path, rows)
+        high = max([last_id(path.parent)]
+                   + [n for r in rows if (n := id_num(r["item_id"])) is not None])
+        if high:
+            prefix = f"{code}-" if code else ""
+            (path.parent / LAST_ID_NAME).write_text(f"{prefix}C{high:03d}\n",
+                                                    encoding="utf-8")
+    return backup
 
 
 def _context(d: Path) -> str:
@@ -773,7 +903,27 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
         if len(ids) > 1:
             on = "" if channel == EBAY else f" on {channel}"
             errs.append(f"{', '.join(ids)} all carry order {order}{on}: one sale, one row")
+    errs += shot_clashes(rows)
     return errs
+
+
+def shot_clashes(rows: list[dict]) -> list[str]:
+    """A frame that is one active row's individual shot (`shots`) and is also
+    on another active row: the same item twice, or a shoot attached to the
+    wrong row. Rows in one lot may share frames."""
+    out = []
+    active = [r for r in rows if is_active(r)]
+    for pid in sorted({p for r in active for p in r["shots"].split()}):
+        on = [r for r in active if pid in r["photos"].split() + r["shots"].split()]
+        lots = {r["lot_id"] for r in on}
+        if len(on) < 2 or (len(lots) == 1 and "" not in lots):
+            continue
+        shot_by = [r["item_id"] for r in on if pid in r["shots"].split()]
+        also = [r["item_id"] for r in on if pid not in r["shots"].split()]
+        out.append(f"{pid} is an individual shot of {' and '.join(shot_by)}"
+                   + (f" and is also on {', '.join(also)}" if also else "")
+                   + ": one frame, one item; take it off the wrong row")
+    return out
 
 
 def validate_all(dirs: list[Path]) -> list[str]:
@@ -1187,7 +1337,7 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
                 today: Optional[date] = None) -> int:
     today = today or date.today()
     path = d / LEDGER_NAME
-    rows, unknown = read_ledger(path)
+    rows, unknown, digest = load_ledger(path)
     code = intake_client(d)
     print(f"\n{d.name}  client {code or '(none: add `client:` to context.txt)'}"
           f"  {len(rows)} item(s)")
@@ -1232,11 +1382,13 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
             print(f"  ! {new['item_id']:<10} {fl}")
     for s in settlement_notes(settlements):
         print(f"  ! {s}")
+    for s in duplicate_warnings(rows):
+        print(f"  ! possible duplicate: {s}")
     print(f"  {changed} row(s) change, {nflags} flag(s)")
     if not apply:
         return 0
     if changed:
-        backup = write_ledger(path, rows)
+        backup = save_ledger(path, rows, digest, code=code)
         print(f"  [OK] wrote {path.name}" + (f" (backup {backup.name})" if backup else ""))
     return 0
 
@@ -1270,14 +1422,146 @@ def parse_table(text: str) -> list[dict]:
     return out
 
 
-def next_id(rows: list[dict]) -> int:
-    """The next item number for a client: one past the highest in `rows`,
-    which should be every row in all of that client's ledgers."""
-    return max((n for r in rows if (n := id_num(r["item_id"])) is not None), default=0) + 1
+def next_id(rows: list[dict], issued: int = 0) -> int:
+    """The next item number for a client: one past the highest in `rows` (every
+    row in all of that client's ledgers) and past `issued` (issued_max: the
+    highest ever handed out, removed rows included)."""
+    return max([issued] + [n for r in rows if (n := id_num(r["item_id"])) is not None]) + 1
+
+
+# --------------------------------------------------------------------------- #
+# matching: which row is this item? (descriptions, bins, frames)
+# --------------------------------------------------------------------------- #
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_STOP = frozenset("the and with for from into its are has not was all any per each "
+                  "incl other one".split())
+# A candidate is a strong match at this share of its words (weighted by how
+# rare each word is in the ledger) and at least STRONG_WORDS words in common.
+STRONG = 0.5
+STRONG_WORDS = 2
+# Two active rows in one bin whose descriptions agree this much look like one
+# item entered twice (two different belts in CONSIGN-20261022 score 0.58).
+DUPLICATE = 0.7
+BIN_BONUS = 0.1
+
+
+def words(text: str) -> set[str]:
+    out = set()
+    for w in _WORD_RE.findall((text or "").lower()):
+        if len(w) < 3 or w in _STOP:
+            continue
+        if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+            w = w[:-1]                           # spoons ~ spoon
+        out.add(w)
+    return out
+
+
+class Similar:
+    """Word overlap between descriptions, each word weighted by how rare it is
+    among `texts` (the ledger's descriptions), so 'Towle' counts for more than
+    'silver'."""
+
+    def __init__(self, texts: list[str]) -> None:
+        self.n = len(texts)
+        self.df = Counter(w for t in texts for w in words(t))
+
+    def weight(self, ws: set[str]) -> float:
+        return sum(math.log((self.n + 1) / (self.df.get(w, 0) + 1)) + 1 for w in ws)
+
+    def match(self, query: str, text: str) -> tuple[float, set[str]]:
+        """How much of the shorter of the two the other covers, 0..1, and the
+        shared words. A long identify.txt is measured against the description,
+        a short --describe against itself."""
+        q, t = words(query), words(text)
+        shared = q & t
+        small = min(self.weight(q), self.weight(t))
+        return (self.weight(shared) / small if small else 0.0), shared
+
+    def same(self, a: str, b: str) -> float:
+        """Weighted Jaccard: 1.0 is the same words."""
+        x, y = words(a), words(b)
+        union = self.weight(x | y)
+        return self.weight(x & y) / union if union else 0.0
+
+
+def bins(r: dict) -> set[str]:
+    return set(r["bin"].split())
+
+
+def duplicate_warnings(rows: list[dict], only: Optional[set[str]] = None) -> list[str]:
+    """Active rows that look like one item entered twice: near-identical
+    descriptions in the same bin (rows in one lot are meant to be separate).
+    `only`: just the pairs that include one of these item ids."""
+    active = [r for r in rows if is_active(r) and r["description"]]
+    sim = Similar([r["description"] for r in rows])
+    out = []
+    for i, a in enumerate(active):
+        for b in active[i + 1:]:
+            if not bins(a) & bins(b) or (a["lot_id"] and a["lot_id"] == b["lot_id"]):
+                continue
+            if only is not None and not {a["item_id"], b["item_id"]} & only:
+                continue
+            s = sim.same(a["description"], b["description"])
+            if s >= DUPLICATE:
+                out.append(f"{a['item_id']} and {b['item_id']} (bin {' '.join(sorted(bins(a) & bins(b)))}, "
+                           f"descriptions {s:.0%} alike)")
+    return out
+
+
+def _skip_reason(rec: dict, rows: list[dict], sim: Similar) -> str:
+    """Why `rec` would duplicate a row already there, or ''. Same intake, bin
+    and description; or the same bin, a frame in common and a strong match on
+    the description (the same scene read twice)."""
+    for r in rows:
+        if (r["intake"], r["bin"], r["description"]) == (rec["intake"], rec["bin"],
+                                                         rec["description"]):
+            return f"same intake, bin and description as {r['item_id']}"
+    frames = set(rec["photos"].split())
+    for r in rows:
+        if is_active(r) and frames & set(r["photos"].split()) and bins(r) & bins(rec):
+            score, shared = sim.match(rec["description"], r["description"])
+            if strong((score, score, r, shared)):
+                return (f"looks like {r['item_id']} in the same frame ({score:.0%}): "
+                        f"{r['description'][:60]}")
+    return ""
+
+
+def append_rows(d: Path, rows: list[dict], incoming: list[dict], code: str,
+                received: str) -> tuple[list[dict], list[tuple[dict, str]]]:
+    """Give each new row the client's next id and append it to `rows`, in
+    memory. Returns (added, [(skipped row, why)])."""
+    sim = Similar([r["description"] for r in rows + incoming])
+    n = next_id(rows, issued_max(code, d))
+    added, skipped = [], []
+    for rec in incoming:
+        rec["intake"] = rec["intake"] or received
+        why = _skip_reason(rec, rows, sim)
+        if why:
+            skipped.append((rec, why))
+            continue
+        rec["item_id"] = f"{code}-C{n:03d}"
+        rec["client_code"] = code
+        rec["state"] = rec["state"] or "INTAKE"
+        rec["inventory_folder"] = norm_folder(rec["inventory_folder"])
+        rows.append(rec)
+        added.append(rec)
+        n += 1
+    return added, skipped
+
+
+def _open_for_write(d: Path) -> tuple[Path, list[dict], str, str]:
+    """(ledger path, rows migrated in memory, digest, client code)."""
+    code = intake_client(d)
+    path = d / LEDGER_NAME
+    rows, unknown, digest = load_ledger(path)
+    if unknown:
+        raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    migrate(rows, d, code)
+    return path, rows, digest, code
 
 
 def import_rows(d: Path, incoming: list[dict], client: Optional[str],
-                intake: Optional[str] = None) -> tuple[int, int]:
+                intake: Optional[str] = None, *, apply: bool = True) -> tuple[int, int]:
     """Append `incoming` to the folder's ledger. Returns (added, skipped)."""
     if client:
         if not CODE_RE.match(client):
@@ -1288,35 +1572,242 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
         raise SystemExit(f"[X] {d.name} has no `client:` yet; pass --client K01")
     if intake and not iso(intake):
         raise SystemExit(f"[X] --intake {intake!r} is not a YYYY-MM-DD date")
-    code = intake_client(d)
-    path = d / LEDGER_NAME
-    rows, unknown = read_ledger(path)
-    if unknown:
-        raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
-    migrate(rows, d, code)
+    path, rows, digest, code = _open_for_write(d)
     received = intake or default_intake(d) or date.today().isoformat()
-    seen = {(r["intake"], r["bin"], r["description"]) for r in rows}
-    others = [r for o in client_dirs(code) if o.resolve() != d.resolve()
-              for r in read_ledger(o / LEDGER_NAME)[0]]
-    n = next_id(rows + others)
-    added = skipped = 0
-    for rec in incoming:
-        rec["intake"] = rec["intake"] or received
-        key = (rec["intake"], rec["bin"], rec["description"])
-        if key in seen:
-            skipped += 1
+    added, skipped = append_rows(d, rows, incoming, code, received)
+    for rec in added:
+        print(f"  + {rec['item_id']:<10} bin {rec['bin'] or '-':<3} {rec['description'][:70]}")
+    for rec, why in skipped:
+        print(f"  = skipped {rec['description'][:50]!r}: {why}")
+    for s in duplicate_warnings(rows, only={r["item_id"] for r in added}):
+        print(f"  ! possible duplicate: {s}")
+    if added and apply:
+        save_ledger(path, rows, digest, code=code,
+                    new_ids=tuple(r["item_id"] for r in added))
+    return len(added), len(skipped)
+
+
+IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".orf", ".nef", ".dng"}
+PHOTO_ID_RE = re.compile(r"(?<![A-Z0-9])[A-Z]{2}\d{6}(?!\d)")
+_BIN_DIR_RE = re.compile(r"^bin-(\w+)$", re.I)
+
+
+def photo_ids(sources: list[str]) -> tuple[list[str], Optional[Path]]:
+    """Frame ids from the arguments: each is a photo id, an image file or a
+    folder of them (top level only). A photo id is the TG-7 `ZZ230288` in
+    `TG7_ZZ230288.jpg`, else the file's stem. Returns (ids, the folder if one
+    was given)."""
+    ids, folder = [], None
+    for s in sources:
+        p = Path(s)
+        files = []
+        if p.is_dir():
+            if folder is not None:
+                raise SystemExit("[X] give one item folder at a time")
+            folder = p
+            files = sorted(f for f in p.iterdir() if f.is_file())
+        elif p.suffix.lower() in IMAGE_EXT and p.is_file():
+            files = [p]
+        else:
+            ids.append(s)
+        for f in files:
+            if f.suffix.lower() in IMAGE_EXT:
+                m = PHOTO_ID_RE.search(f.name)
+                ids.append(m.group(0) if m else f.stem)
+    return list(dict.fromkeys(ids)), folder
+
+
+def inventory_rel(p: Path) -> str:
+    """`.../inventory/CONSIGN-K01/bin-01/C038-x` -> `inventory/CONSIGN-K01/...`,
+    from the main checkout or a worktree (whose inventory/ is a link)."""
+    parts = p.absolute().parts
+    if "inventory" not in parts:
+        raise SystemExit(f"[X] {p} is not under inventory/")
+    return "/".join(parts[parts.index("inventory"):])
+
+
+def rank(rows: list[dict], query: str, bin_: str) -> list[tuple[float, float, dict, set]]:
+    """On-hand placeholders for an item described by `query`, best first:
+    (score, text score, row, shared words). The bin adds BIN_BONUS."""
+    sim = Similar([r["description"] for r in rows])
+    out = []
+    for r in rows:
+        if not is_active(r) or r["state"].upper() not in ON_HAND + ("",):
             continue
-        seen.add(key)
-        rec["item_id"] = f"{code}-C{n:03d}"
-        rec["client_code"] = code
-        rec["state"] = rec["state"] or "INTAKE"
-        rec["inventory_folder"] = norm_folder(rec["inventory_folder"])
-        rows.append(rec)
-        n += 1
-        added += 1
-    if added:
-        write_ledger(path, rows)
-    return added, skipped
+        text, shared = sim.match(query, r["description"])
+        bonus = BIN_BONUS if bin_ and bin_ in bins(r) else 0.0
+        out.append((min(1.0, text + bonus), text, r, shared))
+    return sorted(out, key=lambda c: (-c[0], id_key(c[2]["item_id"])))
+
+
+def strong(c: tuple) -> bool:
+    return c[0] >= STRONG and len(c[3]) >= STRONG_WORDS
+
+
+def match(d: Path, sources: list[str], *, describe: str = "", identify: str = "",
+          bin_: str = "", to: str = "", new: bool = False, not_ids: tuple = (),
+          keep_folder: bool = False, state: str = "", apply: bool = False) -> int:
+    """Propose, then attach, an item's individual shots to its placeholder.
+    Dry run unless `apply`; attaching needs `to` (the row the agent confirmed
+    from the photos), and a new row needs `new` with no strong match left."""
+    if to and new:
+        raise SystemExit("[X] --to and --new: pick one")
+    ids, folder = photo_ids(sources)
+    if not ids:
+        raise SystemExit("[X] no photos: give photo ids, image files or the item's folder")
+    rel = inventory_rel(folder) if folder else ""
+    if not bin_ and folder is not None:
+        m = next((_BIN_DIR_RE.match(x) for x in reversed(folder.absolute().parts)
+                  if _BIN_DIR_RE.match(x)), None)
+        bin_ = m.group(1) if m else ""
+    ident = Path(identify) if identify else (folder / "identify.txt" if folder else None)
+    if identify and not ident.is_file():
+        raise SystemExit(f"[X] --identify {identify}: no such file")
+    query = " ".join([describe] + ([ident.read_text(encoding="utf-8", errors="ignore")]
+                                   if ident and ident.is_file() else []))
+    if not query.strip():
+        raise SystemExit("[X] say what the item is: --describe \"...\" or --identify "
+                         "identify.txt (or an identify.txt in the folder)")
+    path, rows, digest, code = _open_for_write(d)
+    if not code:
+        raise SystemExit(f"[X] {d.name} has no `client:` yet")
+    by_id = {r["item_id"]: r for r in rows}
+    for i in (to, *not_ids):
+        if i and canonical_id(i, code) not in by_id:
+            raise SystemExit(f"[X] no row {i} in {d.name}")
+    to = canonical_id(to, code) if to else ""
+    rejected = {canonical_id(i, code) for i in not_ids}
+
+    def taken(r):                                # already has other individual shots
+        return bool(set(r["shots"].split()) - set(ids))
+
+    cands = [c for c in rank(rows, query, bin_) if c[3]]   # a word in common at least
+    print(f"{d.name}  {len(ids)} frame(s) {ids[0]}..{ids[-1]}"
+          + (f"  folder {rel}" if rel else "") + (f"  bin {bin_}" if bin_ else ""))
+    for c in cands[:5]:
+        r = c[2]
+        tags = [t for t, on in (("strong", strong(c)), ("has shots", taken(r)),
+                                ("--not", r["item_id"] in rejected)) if on]
+        print(f"  {c[0]:.2f}  {r['item_id']:<10} bin {r['bin'] or '-':<3} {r['state'] or 'INTAKE':<7} "
+              f"{r['description'][:60]}" + (f"  [{', '.join(tags)}]" if tags else ""))
+    if not cands:
+        print("  no on-hand row shares a word with that description")
+    open_cands = [c for c in cands if c[2]["item_id"] not in rejected and not taken(c[2])]
+
+    # A frame is the individual shot of one row: refuse a frame already on
+    # another active row (its lot-mates excepted).
+    def claims(target: Optional[dict]) -> list[str]:
+        lot = target["lot_id"] if target else ""
+        out = []
+        for r in rows:
+            if r is target or not is_active(r) or (lot and r["lot_id"] == lot):
+                continue
+            on = [p for p in ids if p in r["photos"].split() + r["shots"].split()]
+            if on:
+                out.append(f"{' '.join(on[:3])}{' …' if len(on) > 3 else ''} ({len(on)} "
+                           f"frame(s)) already on {r['item_id']}")
+        return out
+
+    if not (to or new):
+        best = open_cands[0] if open_cands else None
+        second = open_cands[1] if len(open_cands) > 1 else None
+        if best and strong(best) and (not second or best[0] - second[0] >= 0.15):
+            print(f"\nbest match {best[2]['item_id']}: if the photos show that item, "
+                  f"re-run with --to {best[2]['item_id']} --apply")
+        elif best and strong(best):
+            print("\nmore than one strong match: look at the photos and re-run with "
+                  "--to <item id> --apply")
+        else:
+            print("\nno strong match: re-run with --to <item id> if one of these is it, "
+                  "or --new --describe \"...\" --apply")
+        if apply:
+            raise SystemExit("[X] --apply needs --to <item id> or --new")
+        return 0
+
+    before = set(validate(rows, []))
+    if to:
+        r = by_id[to]
+        if not is_active(r) or r["state"].upper() in SOLD_STATES:
+            raise SystemExit(f"[X] {to} is {r['state']}: it can't take new shots")
+        problems = claims(r)
+        if problems:
+            raise SystemExit("[X] " + "; ".join(problems[:5])
+                             + ": one frame, one item. Nothing written")
+        score = next((c for c in cands if c[2] is r), None)
+        if score and open_cands and open_cands[0][2] is not r and strong(open_cands[0]):
+            print(f"  ! {to} scores {score[0]:.2f}; {open_cands[0][2]['item_id']} scores "
+                  f"{open_cands[0][0]:.2f}. Attaching to {to} as told")
+        changes = []
+        old_folder = norm_folder(r["inventory_folder"])
+        if rel and rel != old_folder:
+            used = [x["item_id"] for x in rows if x is not r and is_active(x)
+                    and norm_folder(x["inventory_folder"]) == rel
+                    and not (r["lot_id"] and x["lot_id"] == r["lot_id"])]
+            if used:
+                raise SystemExit(f"[X] {rel} is already {', '.join(used)}'s folder: one "
+                                 f"folder, one item. Nothing written")
+            if keep_folder:
+                print(f"  folder stays {old_folder or '(none)'} (--keep-folder)")
+            elif old_folder and (REPO / old_folder / "draft.md").is_file():
+                raise SystemExit(f"[X] {to} already has folder {old_folder} with a draft.md: "
+                                 f"re-run with --keep-folder to attach the shots and leave "
+                                 f"the folder, or move the draft first. Nothing written")
+            else:
+                mates = [x for x in rows if r["lot_id"] and x["lot_id"] == r["lot_id"]
+                         and is_active(x)] or [r]
+                for x in mates:
+                    x["inventory_folder"] = rel
+                changes.append(f"folder {old_folder or '(none)'} -> {rel}"
+                               + (f" (lot {r['lot_id']}, {len(mates)} rows)"
+                                  if len(mates) > 1 else ""))
+        photos = r["photos"].split()
+        shots = r["shots"].split()
+        add_p = [p for p in ids if p not in photos]
+        add_s = [p for p in ids if p not in shots]
+        r["photos"] = " ".join(photos + add_p)
+        r["shots"] = " ".join(shots + add_s)
+        if add_s:
+            changes.append(f"{len(add_s)} individual shot(s) added")
+        if not changes:
+            print(f"\n{to} already has these shots: nothing to do")
+            return 0
+        after = [e for e in validate(rows, []) if e not in before]
+        if after:
+            raise SystemExit("[X] " + "; ".join(after) + ". Nothing written")
+        print(f"\n{'attach' if apply else 'would attach'} to {to}: " + "; ".join(changes))
+        new_ids: tuple[str, ...] = ()
+    else:
+        if not describe:
+            raise SystemExit("[X] --new needs --describe \"...\": the new row's description")
+        blocking = [c for c in open_cands if strong(c)]
+        if blocking:
+            ids_ = ", ".join(c[2]["item_id"] for c in blocking[:3])
+            raise SystemExit(f"[X] not a new row: {ids_} match strongly. Attach with --to "
+                             f"<item id>, or if the photos show a different item, say so "
+                             f"with --not {blocking[0][2]['item_id']}. Nothing written")
+        problems = claims(None)
+        if problems:
+            raise SystemExit("[X] " + "; ".join(problems[:5])
+                             + ": one frame, one item. Nothing written")
+        rec = {c: "" for c in COLUMNS}
+        rec.update(bin=bin_, description=describe, photos=" ".join(ids), shots=" ".join(ids),
+                   inventory_folder=rel, state=state)
+        received = default_intake(d) or date.today().isoformat()
+        added, skipped = append_rows(d, rows, [rec], code, received)
+        if skipped:
+            raise SystemExit(f"[X] not a new row: {skipped[0][1]}. Nothing written")
+        after = [e for e in validate(rows, []) if e not in before]
+        if after:
+            raise SystemExit("[X] " + "; ".join(after) + ". Nothing written")
+        print(f"\n{'new' if apply else 'would add'} row {added[0]['item_id']}: bin "
+              f"{bin_ or '-'}, {len(ids)} individual shot(s)" + (f", folder {rel}" if rel else ""))
+        new_ids = (added[0]["item_id"],)
+    if not apply:
+        print("[DRY RUN] Nothing written. Re-run with --apply (a backup is made first).")
+        return 0
+    backup = save_ledger(path, rows, digest, code=code, new_ids=new_ids)
+    print(f"  [OK] wrote {path.name}" + (f" (backup {backup.name})" if backup else ""))
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1422,6 +1913,8 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     flagged = [r["item_id"] for r in rows if FLAG in r["state_note"]]
     if flagged:
         out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  — see `consign sync`")
+    for s in duplicate_warnings(rows):
+        out.append(f"  possible duplicate: {s}")
     return out
 
 
@@ -1671,7 +2164,63 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--final", action="store_true",
                    help="the agreement has ended: pay the full balance, ignoring "
                         "min_payout, even if it is negative")
+    p = sub.add_parser("scene", help="placeholder rows for the items seen in a scene "
+                                     "(whole-bin) shot; dry run unless --apply")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
+    p.add_argument("frames", nargs="+", help="the scene shot's photo id(s), e.g. ZZ220231")
+    p.add_argument("--bin", required=True, help="the bin in the frame, e.g. 01")
+    p.add_argument("--item", action="append", required=True, metavar="TEXT",
+                   help="one item seen in the frame (repeat for each)")
+    p.add_argument("--state", choices=("INTAKE", "PREP"), default="INTAKE")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
+    p = sub.add_parser("match", help="rank placeholders for an item's individual shots; "
+                                     "--to ID or --new with --apply attaches")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
+    p.add_argument("shots", nargs="+",
+                   help="the item's folder, image files or photo ids (ZZ230288)")
+    p.add_argument("--describe", default="", metavar="TEXT",
+                   help="what the item is (from looking at the photos)")
+    p.add_argument("--identify", default="", metavar="FILE",
+                   help="an identify.txt (default: the one in the folder, if any)")
+    p.add_argument("--bin", default="", help="its bin (default: a bin-NN folder in the path)")
+    p.add_argument("--to", default="", metavar="ITEM_ID",
+                   help="the placeholder it is (confirmed from the photos)")
+    p.add_argument("--new", action="store_true",
+                   help="a new row: refused while a placeholder matches strongly")
+    p.add_argument("--not", dest="not_ids", action="append", default=[], metavar="ITEM_ID",
+                   help="a strong match that the photos show is a different item")
+    p.add_argument("--keep-folder", action="store_true",
+                   help="attach the shots but leave the row's inventory_folder as it is")
+    p.add_argument("--state", choices=("INTAKE", "PREP"), default="",
+                   help="state for a --new row (default INTAKE)")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
+    p = sub.add_parser("catalog", help="browsable HTML catalog of a ledger, in "
+                                       "reports/consign/")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
     args = ap.parse_args(argv)
+
+    if args.cmd == "scene":
+        d = intake_dir(args.intake)
+        if not (d / LEDGER_NAME).exists():
+            raise SystemExit(f"[X] no {LEDGER_NAME} in {d}: start it with `consign import`")
+        incoming = [{**{c: "" for c in COLUMNS}, "bin": args.bin, "description": t.strip(),
+                     "photos": " ".join(args.frames), "state": args.state}
+                    for t in args.item if t.strip()]
+        added, skipped = import_rows(d, incoming, None, apply=args.apply)
+        print(f"{d.name}: {'added' if args.apply else 'would add'} {added} placeholder(s), "
+              f"skipped {skipped}")
+        if not args.apply and added:
+            print("[DRY RUN] Nothing written. Re-run with --apply (ids are given out then).")
+        return 0
+    if args.cmd == "match":
+        return match(intake_dir(args.intake), args.shots, describe=args.describe,
+                     identify=args.identify, bin_=args.bin, to=args.to, new=args.new,
+                     not_ids=tuple(args.not_ids), keep_folder=args.keep_folder,
+                     state=args.state, apply=args.apply)
+    if args.cmd == "catalog":
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import consign_catalog                   # noqa: E402  Pillow, only when asked
+        return consign_catalog.build(intake_dir(args.intake))
 
     if args.cmd == "import":
         text = (sys.stdin.read() if args.source == "-"
