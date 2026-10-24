@@ -53,8 +53,9 @@ checked-and-absent only when it matters to the grade.
   replaced parts, structural integrity (flag if not verifiable).
 - **Electronics / mechanical** — physical wear; **functional status is
   NOT claimable from photos** unless a photo shows it powered/operating.
-  Default to "untested — sold as-is for parts or repair" unless visible
-  operating evidence exists. Missing cords/accessories, corrosion in
+  Default to function untested, sold as-is for parts or repair (buyer
+  copy: "Function untested; sold as-is for parts or repair.") unless
+  visible operating evidence exists. Missing cords/accessories, corrosion in
   battery compartments, cracked screens.
 - **Jewelry** — stone chips/looseness, clasp function (flag if
   unverifiable), plating wear, hallmark legibility, kinks, missing
@@ -100,22 +101,27 @@ Order, each part only if it applies:
 1. **Defects** — every flagged defect, as `<location>: <defect>`
    fragments. Severity word only when it changes buyer expectation
    (`hairline crack`, `light shelf wear`). This part never gets trimmed.
-2. **Grade-relevant clears** — one terse `No <defects> noted.` covering
-   the defects a buyer would reasonably fear for this material/grade
-   (e.g. `No chips, cracks, or repairs.`). Skip clears that don't bear on
-   the grade.
+2. **Grade-relevant clears, stated positively** — one terse clear that
+   names the parts examined and how they are, covering the defects a buyer
+   would reasonably fear for this material/grade (e.g. `Rim, base and
+   handle intact; finish sound.`). Truth bar: name only what INVESTIGATE
+   actually examined, and claim no more than the check showed (see
+   "Positive framing" in [draft.md](draft.md)). Skip clears that don't
+   bear on the grade.
 3. **Can't-assess — grade-relevant only, phrased in-hand.** Include ONLY
-   when it sets the grade (electronics/mechanical function): `Untested;
-   sold as-is.` Never the photo excuse ("not verifiable from photos"),
-   never an inventory of tests not run (shake/ring/odor checks). All
-   other can't-assess items stay in INVESTIGATE's "NOT defensible" list
-   and out of buyer copy — see the in-hand-voice rule in
-   [draft.md](draft.md).
+   when it sets the grade (electronics/mechanical function): `Function
+   untested; sold as-is for parts or repair.` Never the photo excuse
+   ("not verifiable from photos"), never an inventory of tests not run
+   (shake/ring/odor checks). All other can't-assess items stay in
+   INVESTIGATE's "NOT defensible" list and out of buyer copy — see the
+   in-hand-voice rule in [draft.md](draft.md).
 
 **Never** include: narrative ("removed from box only to photograph"),
 marketing adjectives, decorative description of the item itself (that's
 the title/specifics), what's-included (that's the body's What's
 Included), or camera-frame language ("visible in photos", "as-shown",
 "not verifiable from the photos") — the in-hand-voice rule in
-[draft.md](draft.md) bans it in every buyer-visible field. If a clause doesn't disclose a defect, a grade-relevant clear,
-or a limit of inspection, it does not belong in this field.
+[draft.md](draft.md) bans it in every buyer-visible field — or negative
+framing ("no box", "nothing missing"; "Positive framing" in draft.md). If
+a clause doesn't disclose a defect, a grade-relevant clear, or a limit of
+inspection, it does not belong in this field.

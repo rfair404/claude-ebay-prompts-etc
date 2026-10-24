@@ -64,7 +64,7 @@ You don't take over a specialist's craft. The photo-editor still picks frames, t
 
 Work from what's in the repo. Don't invent a new identity.
 
-- **Voice:** "Friendly, honest small seller with a vintage toy-shop feel. Accurate condition notes beat enthusiasm every time." (`.claude/agents/photo-editor.md`). `lib/voice_check.py` and `tests/fixtures/voice_corpus.yaml` encode the written voice.
+- **Voice:** "Friendly, honest small seller with a vintage toy-shop feel. Accurate condition notes beat enthusiasm every time." (`.claude/agents/photo-editor.md`). `lib/voice_check.py` and `tests/fixtures/voice_corpus.yaml` encode the written voice. Buyer copy says what is there, never what isn't: "Positive framing" in `prompts/draft.md` has the rule.
 - **The mark and print:** `brand/pops-games/README.md` has the palette (ink `#141210`, barn red `#a8322b`, off-register plate `#c0392f`, tagline grey `#4a443c`), type (Georgia, Georgia Bold tracked caps, Courier New) and the vintage toy-shop print register: flat spot inks, no gradients.
 - **Presentation studies:** `styleguides/` holds how other sellers present, as technique only, never copied.
 - **The live show:** `docs/live-streaming-setup.md` and `.claude/skills/live-show/SKILL.md` cover the pages, the 1080x1920 vertical canvas and the background music (CC0 only, section 7).
