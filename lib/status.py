@@ -32,6 +32,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from single_pass import STAGE_CHECK, STAGE_ORDER, STAGE_OUTPUT  # noqa: E402
+from draft_io import draft_channel, ebay_ineligible_reason, parse_draft  # noqa: E402
 import stores  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -63,6 +64,21 @@ def _store_from_draft(shoot: Path) -> str:
     (stores.draft_store_from_text — the one parser for it), "default" if absent.
     An invalid name is returned raw; it matches no ledger file."""
     return stores.draft_store_from_text(_draft_text(shoot))
+
+
+def _off_ebay(shoot: Path) -> dict:
+    """meta.ebay_eligible / ebay_ineligible_reason / channel from the draft
+    (draft_io owns their meaning). No draft, or one that won't parse: eBay."""
+    try:
+        fm = parse_draft(shoot / "draft.md").frontmatter
+    except Exception:  # noqa: BLE001 — a missing/bad draft shows as its stage
+        fm = {}
+    reason = ebay_ineligible_reason(fm)
+    return {"ebay_eligible": reason is None, "ebay_ineligible_reason": reason,
+            "channel": draft_channel(fm) or None}
+
+
+_CHANNEL_NAMES = {"mall": "mall booth"}
 
 
 def _ledger_row(sku: str, ledger_by_sku: Optional[dict] = None,
@@ -123,6 +139,11 @@ def gather(shoot: Path, ledger_by_sku: Optional[dict] = None,
     preload = ledger_by_sku if shoot_store == ledger_store else None
     ledger = _ledger_row(sku, preload, shoot_store)
 
+    off = _off_ebay(shoot)
+    if not off["ebay_eligible"] or off["channel"]:
+        ch = off["channel"]
+        next_action = f"off eBay ({_CHANNEL_NAMES.get(ch, ch) if ch else 'no channel set'})"
+
     return {
         "shoot": str(shoot),
         "frames": _frame_count(shoot),
@@ -131,6 +152,7 @@ def gather(shoot: Path, ledger_by_sku: Optional[dict] = None,
         "store": shoot_store,
         "ledger_status": ledger.get("status") if ledger else None,
         "listing_id": (ledger or {}).get("listing_id") or None,
+        **off,
         "next_action": next_action or "all stages clear — ready for REVIEW",
     }
 
@@ -151,6 +173,11 @@ def summary(state: dict) -> str:
     if state["sku"]:
         lines.append(f"  sku {state['sku']}  ledger={state['ledger_status'] or '(no row)'}"
                       + (f"  {state['listing_id']}" if state["listing_id"] else ""))
+    if not state.get("ebay_eligible", True):
+        lines.append(f"  INELIGIBLE for eBay: {state['ebay_ineligible_reason']}; "
+                     f"channel: {state.get('channel') or '(not set)'}")
+    elif state.get("channel"):
+        lines.append(f"  OFF eBay; channel: {state['channel']}")
     lines.append(f"→ {state['next_action']}")
     return "\n".join(lines)
 
