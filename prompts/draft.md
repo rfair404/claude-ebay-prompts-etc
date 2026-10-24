@@ -92,7 +92,8 @@ repeat a claim INVESTIGATE confirmed.
 - `condition` — map INVESTIGATE's grade (already from condition-rubric)
   to `CONDITION_ENUM`. · `condition_description` — telegraphic factual
   disclosure per condition-rubric's "write it telegraphic" spec: defect
-  fragments → one grade-relevant `No … noted.` → can't-assess. No
+  fragments → one grade-relevant positive clear (`Rim and base intact.`,
+  under the truth bar in "Positive framing" below) → can't-assess. No
   narrative, marketing, decorative description, or what's-included.
   ≤1000 but aim far shorter; **every flagged defect survives**.
 
@@ -322,10 +323,13 @@ thinner listing):
   week, so please take a look at my other listings." Include it **only when
   it is true**. One-off item → drop the line rather than invent a batch.
 - **What's Included** — bullets from observable components; unit-type
-  vocabulary.
+  vocabulary. The list is the whole lot: name what is there, never what
+  isn't (see "Positive framing"). A part a buyer would expect and the item
+  lacks goes under Condition as `Missing the <part>.`
 - **Size** — measured dimensions, plus weight where it matters to the
-  buyer. **Required whenever we have a measurement.** If nothing was
-  measured, say so plainly rather than dropping the section.
+  buyer. **Required whenever we have a measurement.** A missing
+  measurement is a NEEDS_REVIEW in-hand question answered at REVIEW
+  (GH #170, in-hand voice below): state the number, or leave the fact out.
 - **Condition** — factual, minimal. Bullets enumerating EVERY defect
   INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`. At
   most one short context line for expected vintage wear; no warm framing,
@@ -335,9 +339,9 @@ thinner listing):
   disclosure; it never substitutes for naming a defect in words.
 - **Markings** — maker's mark, signature, hallmark, stamp, or label: what
   it says and where it is, keyed to the photo that shows it. **Required.**
-  When there is none, `No maker's mark found.` is the correct content —
-  absence is information, and the honest alternative to implying
-  attribution we cannot defend.
+  When the piece was checked and carries none, `Unmarked.` is the correct
+  content — an unmarked piece is information, and the honest alternative
+  to implying attribution we cannot defend.
 - **About this item** — 1–2 sentence collector hook from INVESTIGATE's
   listing-approach.
 - **The close** — the standing block, same on every listing **for that
@@ -363,8 +367,7 @@ body under ~100 words is usually a section left empty — check which one
 before shipping it.
 
 **Voice: first person, ours.** Write as the seller — "I picked this up from
-a local estate", "I haven't tested it". Two things do not follow it into our
-copy:
+a local estate". Two things do not follow it into our copy:
 
 - **Sentence case, never an all-caps body.** Caps is shouting, harder to
   read on a phone, and flattens the emphasis we do want.
@@ -396,22 +399,66 @@ field (title, body, `condition_description`, item specifics):
 This is our internal evidence process leaking into the copy: it tells the
 buyer the seller never handled the item, and it manufactures doubt instead
 of preventing returns. **Rephrase rule: state the finding, never the
-method.** "No chips or cracks visible" → "No chips or cracks noted." "Knife
-handle seated tight in photos; not shake-tested" → "Knife handle sits
-tight." A photo-only observation ("UPC not shown in the photographed
-surfaces") is an internal note for `meta.notes` / NEEDS_REVIEW, never buyer
-copy.
+method.** "No chips or cracks visible" → "Rim and foot intact." (stated
+positively, and only for the parts that were examined; see the truth bar in
+"Positive framing" below). "Knife handle seated tight in photos; not
+shake-tested" → "Knife handle sits tight." A photo-only observation ("UPC
+not shown in the photographed surfaces") is an internal note for
+`meta.notes` / NEEDS_REVIEW, never buyer copy.
 
 Untested status survives ONLY where it sets the grade (electronics /
-mechanical function, per condition-rubric): phrased plainly — "Untested;
-sold as-is." — with no photo excuse attached. Two things the rule does NOT
-touch: the internal record (IDENTIFY/INVESTIGATE still log every
-can't-assess — this rule governs only what reaches the buyer), and the
-standing close line "Please see the photos and read the description for full
-details" (it points the buyer at the photos as disclosure; it doesn't
-confess the inspection was photo-only). Defects themselves all still
-survive — the rule strips the camera frame off a disclosure, never the
-disclosure.
+mechanical function, per condition-rubric): phrased plainly as a condition —
+"Function untested; sold as-is for parts or repair." — with no photo excuse
+attached. Two things the rule does NOT touch: the internal record
+(IDENTIFY/INVESTIGATE still log every can't-assess — this rule governs only
+what reaches the buyer), and the standing close line "Please see the photos
+and read the description for full details" (it points the buyer at the
+photos as disclosure; it doesn't confess the inspection was photo-only).
+Defects themselves all still survive — the rule strips the camera frame off
+a disclosure, never the disclosure.
+
+**Positive framing** (house rule, adopted 2026-10-23). Buyer copy (title,
+body, `condition_description`, item specifics) describes what IS there.
+Contents, condition and flaws are stated as positive facts: what the lot
+holds, which parts were examined and how they are, where a flaw sits and how
+big it is. Drop the patterns that describe the item by what it lacks: "not
+included", "no box", "no manual", "not pictured"; clears like "no chips or
+cracks"; "nothing missing" and "nothing else"; "doesn't"/"isn't"
+descriptions of the item; "it isn't X, it's Y" contrasts; and "what you see
+is what you get, nothing else". The What's Included list is the whole lot,
+so it never needs a second list of what is absent.
+
+- **Truth bar.** A positive phrasing says exactly as much as was checked.
+  "No chips or cracks noted" becomes "Clean edges, solid glaze." only when
+  INVESTIGATE's observable / listing-safe findings show the edges and the
+  glaze were examined. If the evidence covers less, the claim says less:
+  "Rim intact." only for a rim that was examined. A hairline the photos
+  can't rule out stays in INVESTIGATE's NOT-defensible list. Never upgrade
+  an observation to sound better than the check was; when in doubt, the
+  narrower statement wins.
+- **Required disclosures stay.** A defect, a missing part, untested
+  function or a for-parts item is always disclosed. The fact stays; only
+  the framing changes. "Missing the lid." states an absence as a positive
+  fact and is the right form. Untested is a plain condition statement:
+  "Function untested; sold as-is for parts or repair." eBay's own condition
+  names stay verbatim ("For parts or not working"). Where a positive form
+  would blur the fact, the fact wins and a short plain negative is allowed
+  ("Does not power on."). Material disclosures such as "Gold tone; not
+  solid gold." or "Not sterling." stay too, because they prevent
+  not-as-described returns.
+
+| Drop | Write | Note |
+|---|---|---|
+| "Box and manuals not included / not pictured." | "Includes the console and one controller." | The included list is the whole lot. |
+| "No chips or cracks." | "Clean edges, solid glaze." | Truth bar: only when the edges and glaze were examined. Less evidence, smaller claim ("Rim intact."). |
+| "Nothing missing." | "24 pieces: 8 forks, 8 knives, 8 spoons." | Count what is there. "Complete" only when the item data says so. |
+| "What you see is what you get, nothing else." | "The lot is everything listed above." | "As shown" and "pictured" are banned by the in-hand rule. |
+| "Lid not included." | "Missing the lid." | The absence is still disclosed, stated as a fact. |
+| "Not perfect, has a scratch." | "Light scratch on the lid, 1 inch." | Location and size; the size only when measured. |
+| "No maker's mark found." | "Unmarked." | Only after the piece was checked for marks. |
+| "Untested." | "Function untested; sold as-is for parts or repair." | Required disclosure, said as a condition (grade `FOR_PARTS_OR_NOT_WORKING`). |
+| "Doesn't power on." | "Does not power on. Sold as-is for parts or repair." | Stays negative: it is the defect itself, and "Powers on: no" only blurs it. |
+| "It isn't a reproduction, it's an original." | "1960s original; maker's mark and date on the base." | Drop the contrast. The claim still needs INVESTIGATE's evidence. |
 
 Hard rules: never include a claim absent from INVESTIGATE's listing-safe /
 observable lists; never anything INVESTIGATE marked NOT defensible; never
@@ -467,9 +514,10 @@ Walk every `_field_constraints` entry against the populated value:
 length ≤ max_len (rephrase if not) · required present (else flag) ·
 numeric parses positive (else flag, empty) · lookup canonical (else
 substitute + log). Also scan every buyer-visible field for camera-frame
-language (the in-hand-voice rule above) and estate-forbidden phrases (the
-rule above); rephrase or strip any hit. Only then write draft.md. Re-read
-after write and confirm every constrained field fits and
+language (the in-hand-voice rule above), negative framing (the
+positive-framing rule above, truth bar included) and estate-forbidden
+phrases (the rule above); rephrase or strip any hit. Only then write
+draft.md. Re-read after write and confirm every constrained field fits and
 `_field_constraints` was copied verbatim.
 
 ## meta.notes (DRAFT NOTES)

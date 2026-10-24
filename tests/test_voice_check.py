@@ -138,6 +138,25 @@ def test_no_x_visible_warns_but_does_not_block():
     assert any(f.startswith("voice (warn)") for f in fs)
 
 
+def test_positive_framing_warns_but_does_not_block():
+    # House rule 2026-10-23 (prompts/draft.md "Positive framing"): describe
+    # what IS there. One phrase per pattern; each warns, none blocks.
+    for phrase in [
+        "Power cord not included.",                          # not included
+        "Complete set, nothing missing.",                    # nothing missing
+        "The console only, nothing else.",                   # nothing else
+        "Loose cartridge, no box.",                          # no box
+        "Game disc and case, no manual.",                    # no manual
+        "Rim is clean with no chips.",                       # no chips
+        "Glaze sound, no cracks.",                           # no cracks
+    ]:
+        fs = check_voice(_draft(phrase))
+        assert not _blocks(fs), phrase
+        assert any(f.startswith("voice (warn)") for f in fs), phrase
+    # The positive phrasing of the same disclosure stays silent.
+    assert not check_voice(_draft("Missing the lid."))
+
+
 def test_honest_odor_disclosure_is_not_blocked():
     # The honesty ground rule outranks the regex: a real defect must survive.
     fs = check_voice(_draft("Slight musty odor from storage."))

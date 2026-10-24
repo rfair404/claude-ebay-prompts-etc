@@ -128,6 +128,13 @@ clean:            # correct copy — must NOT be flagged
   - phrase: "A genuine antique with honest age and use, described exactly as it is."
     why: the rewrite of the silver-teapot miss
     src: silver-teapot 206340759004
+  # --- positive framing: absences disclosed as what IS there ---
+  - phrase: "Missing the lid."
+    why: an absence phrased positively
+    src: house rule 2026-10-23 (prompts/draft.md "Positive framing")
+  - phrase: "Includes the console and one controller."
+    why: says what is included instead of what is not
+    src: house rule 2026-10-23 (prompts/draft.md "Positive framing")
 
 known_gaps:       # documented misses — asserted NOT caught, so closing one is deliberate
   - phrase: "Interior odor and lid seal untested."
