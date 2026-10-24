@@ -102,3 +102,16 @@ def test_sale_without_actuals_is_pending_not_kept(estate, monkeypatch):
     item = next(i for i in RL.estate_items(estate, keep, left_out)
                 if i["folder"] == "ES/BUY1/candlesticks")
     assert item["actuals_pending"] and item["net_kept"] is None
+
+
+def test_failed_lp_is_reported_and_exits_nonzero(estate, monkeypatch, capsys):
+    import subprocess
+    monkeypatch.setattr(RL, "OUT_DIR", estate.parent.parent.parent / "reports" / "lots")
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    monkeypatch.setattr(RL.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, 1, stdout="", stderr="lp: The printer or class does not exist."))
+    assert RL.main(["ES/BUY1", "--print"]) == 1
+    out = capsys.readouterr()
+    assert "PRINTED" not in out.out
+    assert "FAILED print on CannonBW: lp exited 1" in out.err

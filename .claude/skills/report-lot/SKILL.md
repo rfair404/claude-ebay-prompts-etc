@@ -14,10 +14,9 @@ A lot is a folder under `inventory/` with a `context.txt`. Map what Russell
 says to a folder yourself, without asking him:
 
 - an estate or buy: look under `inventory/ES/` and `inventory/ESTATES/`, and
-  match by the date in `acquired:` or the prose (`ES/MON1020-M` is the
-  $800 estate bought 2026-10-21);
-- a consignment: `inventory/CONSIGN-*` (`CONSIGN-20261022` is Top Shelf &
-  Co, K01, received 2026-10-22).
+  match by the date in `acquired:` or the prose in its `context.txt`;
+- a consignment: `inventory/CONSIGN-*`, matched by the intake date in the
+  folder name or the `client:` code in its `context.txt`.
 
 If two folders fit equally well, run both.
 
@@ -56,9 +55,9 @@ about where the item came from are the record.
 
 One short block per lot, then the file paths:
 
-    Printed on CannonBW (job 86): ES/MON1020-M, $800 estate, 2026-10-21
-    14 items: 10 live ($4,352.99 asking), 2 queued, 2 photos only. 0 sold, net kept $0.
-    reports/lots/ES_MON1020-M-2026-10-24.txt (+ .csv)
+    Printed on CannonBW (job <N>): ES/<LOT>, $<paid> estate, <acquired>
+    <n> items: <n> live ($<ask> asking), <n> queued, <n> photos only. <n> sold, net kept $<kept>.
+    reports/lots/ES_<LOT>-<date>.txt (+ .csv)
 
 For a consignment, give the line count by state, the estimate range and
 what the client is owed (share plus buyouts). Add any sync `[X]` line, any

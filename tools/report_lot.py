@@ -2,9 +2,9 @@
 """report_lot — the full account of one lot: every item it brought in, where
 each one stands, and a money summary.
 
-    python tools/report_lot.py ES/MON1020-M            # estate buy
-    python tools/report_lot.py CONSIGN-20261022        # consignment intake
-    python tools/report_lot.py ES/MON1020-M --print    # also print on CannonBW
+    python tools/report_lot.py ES/<LOT>                # estate buy
+    python tools/report_lot.py CONSIGN-YYYYMMDD        # consignment intake
+    python tools/report_lot.py ES/<LOT> --print        # also print on CannonBW
 
 Writes reports/lots/<lot>-<date>.txt (plain text, for printing) and .csv (one
 row per item) and prints the .txt. Reads local ledgers only, never eBay, so
@@ -381,16 +381,20 @@ def write(lot: Path, text: str, rows: list[dict], today: date) -> tuple[Path, Pa
 
 
 def print_txt(path: Path) -> str:
-    """Landscape at 12 cpi so the ~130-column ledger fits one line per item."""
+    """Landscape at 12 cpi so the ~130-column ledger fits one line per item.
+    Raises RuntimeError when lp fails, so a sheet that never printed can't be
+    reported as printed."""
     res = subprocess.run(["lp", "-d", PRINTER, "-o", "landscape", "-o", "cpi=12",
                           "-o", "lpi=7", "-o", "page-left=36", "-o", "page-top=36",
                           "-t", path.stem, str(path)], capture_output=True, text=True)
-    return (res.stdout or res.stderr).strip()
+    if res.returncode != 0:
+        raise RuntimeError(f"lp exited {res.returncode}: {(res.stderr or res.stdout).strip()}")
+    return res.stdout.strip()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Full account of one lot: item ledger + summary.")
-    ap.add_argument("lot", help="lot folder under inventory/, e.g. ES/MON1020-M or CONSIGN-20261022")
+    ap.add_argument("lot", help="lot folder under inventory/, e.g. ES/<LOT> or CONSIGN-YYYYMMDD")
     ap.add_argument("--print", action="store_true", help=f"also print the .txt on {PRINTER}")
     args = ap.parse_args(argv)
     today = date.today()
@@ -411,7 +415,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     sys.stdout.write(text)
     print(f"\nWROTE {txt.relative_to(REPO)}  {csv_path.relative_to(REPO)}")
     if args.print:
-        print("PRINTED " + print_txt(txt))
+        try:
+            print("PRINTED " + print_txt(txt))
+        except (RuntimeError, OSError) as e:
+            print(f"FAILED print on {PRINTER}: {e}", file=sys.stderr)
+            return 1
     return 0
 
 
