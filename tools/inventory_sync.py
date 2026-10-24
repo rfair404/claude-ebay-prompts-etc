@@ -30,6 +30,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 import stores                                                          # noqa: E402
+from draft_io import iter_drafts                                       # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,      # noqa: E402
                          get_offers_for_sku, EbayAPIError)
 
@@ -60,7 +61,7 @@ def local_index(store: str | None = None) -> dict:
             with led.open(encoding="utf-8-sig", newline="") as f:
                 keys = stores.ledger_keys(list(csv.DictReader(f)))
     idx = {}
-    for dm in (REPO / "inventory").rglob("draft.md"):
+    for dm in iter_drafts(REPO / "inventory"):
         try:
             t = dm.read_text(encoding="utf-8", errors="replace")
         except OSError:

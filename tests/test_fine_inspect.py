@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """lib/fine_inspect.py — pluggable high-resolution image inspector (GH #143).
 
-Tested offline: all HTTP is faked by patching urllib.request.urlopen, same
-pattern as tests/test_easypost_client.py. No network, no real API key
-needed to run these.
+Tested offline: all HTTP is faked by patching urllib.request.urlopen. No
+network, no real API key needed to run these.
 
 Run:  python tests/test_fine_inspect.py
   or: pytest tests/test_fine_inspect.py
@@ -39,7 +38,7 @@ from config import ConfigError                                        # noqa: E4
 
 
 # ---------------------------------------------------------------------------
-# Fakes — same shape as tests/test_easypost_client.py's _FakeResponse/_Fake
+# Fakes — a canned urlopen response and opener
 # ---------------------------------------------------------------------------
 
 class _FakeResponse:
@@ -399,9 +398,9 @@ def test_fine_inspect_never_raises_on_api_error():
     def go():
         result = fine_inspect(img)
         assert result.ok is False
-        # VisionAPIError's message carries the status, not the body (mirrors
-        # EasyPostAPIError) — the body is on the exception's .body attribute,
-        # not surfaced through str(e)/result.error.
+        # VisionAPIError's message carries the status, not the body — the
+        # body is on the exception's .body attribute, not surfaced through
+        # str(e)/result.error.
         assert "HTTP 500" in result.error
         assert result.backend == "gemini"
 

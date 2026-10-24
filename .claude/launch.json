@@ -4,7 +4,11 @@
     {
       "name": "ebz-serve",
       "runtimeExecutable": "/home/russ/EBAYBIZ/.venv/bin/python",
-      "runtimeArgs": ["-m", "lib.cli", "serve"],
+      "runtimeArgs": [
+        "-m",
+        "lib.cli",
+        "serve"
+      ],
       "port": 8770
     },
     {
@@ -22,7 +26,15 @@
     {
       "name": "consign-catalog",
       "runtimeExecutable": "/home/russ/EBAYBIZ/.venv/bin/python",
-      "runtimeArgs": ["-m", "http.server", "8792", "--bind", "127.0.0.1", "--directory", "/home/russ/EBAYBIZ/reports/consign"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8792",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "/home/russ/EBAYBIZ/reports/consign"
+      ],
       "port": 8792
     }
   ]

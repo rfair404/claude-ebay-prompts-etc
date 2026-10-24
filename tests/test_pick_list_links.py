@@ -4,9 +4,12 @@ The poll and the upload are subprocesses, so both are faked with a runner
 that returns canned stdout. Sheets are published into a scratch main
 checkout through pick_store itself. No network, no real pick_lists/.
 """
+import json
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
@@ -68,7 +71,6 @@ def test_one_link_per_box_with_title_and_earliest_ship_by(tmp_path):
         f"LINK {PAIR_A}+{PAIR_B} https://r2.example/b?sig=2 | Cable knit sweater + 1 more"
         " | ship by 2026-10-23",
         "DONE links=2 failed=0 held=0"]
-    assert "--print" not in run.calls[0]
     share = run.calls[1]
     assert share[-2:] == [f"inventory/_pick_lists/pick_{SOLO}.html",
                           f"inventory/_pick_lists/pick_{PAIR_A}+{PAIR_B}.html"]
@@ -170,3 +172,139 @@ def test_item_folder_sheet_is_staged_from_its_source(tmp_path, monkeypatch):
     assert lines[0].startswith(f"LINK {SOLO} https://r2.example/a?sig=1")
     staged = main / "inventory" / "_pick_lists" / f"pick_{SOLO}.html"
     assert staged.read_text(encoding="utf-8") == "<p>item folder sheet</p>"
+
+
+# --- --print (the /pl skill) -------------------------------------------------
+
+class PrintRunner:
+    """The poll answers with canned stdout; chromium writes a PDF holding the
+    HTML it was given; lp records what it was sent. `fail` maps a step
+    ("chromium" or "lp") to text in the sheet whose job it fails, or "hang"."""
+    def __init__(self, poll_out, fail=None, no_pdf=False, chromium_rc=0):
+        self.poll_out, self.fail, self.no_pdf = poll_out, fail or {}, no_pdf
+        self.chromium_rc = chromium_rc
+        self.calls, self.sent = [], []
+
+    def __call__(self, argv, cwd, capture_output, text, timeout=None):
+        self.calls.append(argv)
+        if "tools/pick_list.py" in argv:
+            return subprocess.CompletedProcess(argv, 0, self.poll_out, "")
+        step = argv[0]
+        src = argv[-1]
+        if src.startswith("file:"):                         # file:///C:/... on Windows
+            src = url2pathname(urlparse(src).path)
+        body = Path(src).read_text(encoding="utf-8")
+        if self.fail.get(step) == "hang":
+            raise subprocess.TimeoutExpired(argv, timeout)
+        if self.fail.get(step) and self.fail[step] in body:
+            return subprocess.CompletedProcess(argv, 1, "", f"{step} broke")
+        if step == "chromium":
+            pdf = Path(next(a for a in argv if a.startswith("--print-to-pdf="))
+                       .split("=", 1)[1])
+            if not self.no_pdf:
+                pdf.write_text("PDF:" + body, encoding="utf-8")
+            return subprocess.CompletedProcess(argv, self.chromium_rc, "", "crashpad noise")
+        elif step == "lp":
+            self.sent.append((argv[1:3], body))
+        return subprocess.CompletedProcess(argv, 0, "request id is CannonBW-1", "")
+
+
+def test_print_sends_each_box_to_cannonbw_as_a_pdf(tmp_path):
+    main, poll = _main(tmp_path)
+    run = PrintRunner(poll)
+    lines, failed = pick_list_links.run_print(main, runner=run)
+
+    assert failed == 0
+    assert lines == [f"PRINTED {SOLO} | Gold cross pendant | ship by 2026-10-25",
+                     f"PRINTED {PAIR_A}+{PAIR_B} | Cable knit sweater + 1 more"
+                     " | ship by 2026-10-23",
+                     "DONE printed=2 failed=0 held=0 printer=CannonBW"]
+    assert run.sent == [(["-d", "CannonBW"], "PDF:<p>solo sheet</p>"),
+                        (["-d", "CannonBW"], "PDF:<p>pair sheet</p>")]
+    chromium = next(c for c in run.calls if c[0] == "chromium")
+    assert "--no-pdf-header-footer" in chromium
+    profile = next(a for a in chromium if a.startswith("--user-data-dir="))
+    assert not Path(profile.split("=", 1)[1]).exists()      # throwaway, cleaned up
+    assert not any("127.0.0.1" in l or "Jane Buyer" in l for l in lines)
+
+
+def test_print_item_folder_sheet_prints_its_source(tmp_path, monkeypatch):
+    main, _ = _main(tmp_path)
+    monkeypatch.setattr(pick_store, "ROOT", main)
+    folder = main / "inventory" / "shoot" / "item-1"
+    folder.mkdir(parents=True)
+    (folder / f"pick_{SOLO}.html").write_text("<p>item folder sheet</p>", encoding="utf-8")
+    sheet = pick_store.publish("<p>not this</p>", order_ids=[SOLO],
+                               store_dir=main / "pick_lists" / ".served",
+                               source=folder / f"pick_{SOLO}.html")
+    meta = json.loads((main / "pick_lists" / ".served" / f"{sheet.token}.json").read_text())
+    assert meta["source"] == f"inventory/shoot/item-1/pick_{SOLO}.html"
+    run = PrintRunner(f"  {SOLO}  http://127.0.0.1:8770/pick/{sheet.token}\n")
+    lines, failed = pick_list_links.run_print(main, runner=run)
+
+    assert failed == 0
+    assert lines[0] == f"PRINTED {SOLO} | Gold cross pendant | ship by 2026-10-25"
+    assert run.sent == [(["-d", "CannonBW"], "PDF:<p>item folder sheet</p>")]
+
+
+def test_print_counts_a_box_with_no_published_sheet_as_failed(tmp_path):
+    main, poll = _main(tmp_path)
+    poll += (f"  ! could not publish a link for 03-33333-33333 (disk full); "
+             "the local sheet in pick_lists/ is the fallback\n")
+    run = PrintRunner(poll)
+    lines, failed = pick_list_links.run_print(main, runner=run)
+
+    assert failed == 1
+    assert "FAILED 03-33333-33333 (no sheet published: disk full)" in lines
+    assert lines[-1] == "DONE printed=2 failed=1 held=0 printer=CannonBW"
+    assert len(run.sent) == 2
+
+
+def test_print_failures_are_per_box_and_the_rest_still_print(tmp_path):
+    main, poll = _main(tmp_path)
+    for fail, why in (({"chromium": "solo sheet"}, "render: no PDF (chromium broke)"),
+                      ({"lp": "solo sheet"}, "lp: lp broke")):
+        run = PrintRunner(poll, fail=fail)
+        lines, failed = pick_list_links.run_print(main, runner=run)
+        assert failed == 1
+        assert lines[0] == f"FAILED {SOLO} ({why})"
+        assert lines[1].startswith(f"PRINTED {PAIR_A}+{PAIR_B} |")
+        assert lines[-1] == "DONE printed=1 failed=1 held=0 printer=CannonBW"
+        assert [body for _, body in run.sent] == ["PDF:<p>pair sheet</p>"]
+
+
+def test_print_trusts_the_pdf_over_a_noisy_chromium_exit(tmp_path):
+    main, poll = _main(tmp_path)
+    run = PrintRunner(poll, chromium_rc=1)
+    lines, failed = pick_list_links.run_print(main, runner=run)
+    assert failed == 0
+    assert len(run.sent) == 2
+
+
+def test_print_empty_pdf_or_hung_chromium_is_failed_and_not_sent(tmp_path):
+    main, _ = _main(tmp_path)
+    sheet = pick_store.publish("<p>solo sheet</p>", order_ids=[SOLO],
+                               store_dir=main / "pick_lists" / ".served")
+    poll = f"  {SOLO}  http://127.0.0.1:8770/pick/{sheet.token}\n"
+    for run, why in ((PrintRunner(poll, no_pdf=True), "render: no PDF (crashpad noise)"),
+                     (PrintRunner(poll, fail={"chromium": "hang"}), "render: ")):
+        lines, failed = pick_list_links.run_print(main, runner=run)
+        assert failed == 1
+        assert lines[0].startswith(f"FAILED {SOLO} ({why}")
+        assert run.sent == []
+
+
+def test_print_missing_sheet_nothing_to_ship_and_poll_error(tmp_path):
+    main, _ = _main(tmp_path)
+    lines, failed = pick_list_links.run_print(
+        main, runner=PrintRunner(f"  {SOLO}  http://127.0.0.1:8770/pick/{'x' * 43}\n"))
+    assert (lines, failed) == ([f"FAILED {SOLO} (no sheet: sheet missing)",
+                                "DONE printed=0 failed=1 held=0 printer=CannonBW"], 1)
+
+    lines, failed = pick_list_links.run_print(
+        main, runner=PrintRunner("[OK] nothing awaiting shipment\n"))
+    assert (lines, failed) == (["NONE", "DONE printed=0 failed=0 held=0 printer=CannonBW"], 0)
+
+    lines, failed = pick_list_links.run_print(main, runner=Runner("", poll_rc=1))
+    assert (lines, failed) == (["FAILED poll (exit 1: boom)",
+                                "DONE printed=0 failed=1 held=0 printer=CannonBW"], 1)

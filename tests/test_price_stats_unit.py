@@ -72,6 +72,57 @@ def test_the_necklace_set_is_the_comp_that_gets_dropped():
         assert "necklace" not in c["title"].lower()
 
 
+# --- `--unit single`: what reads as a lot (Playboy March 1990, 2026-10-22) --
+# The single cohort lost 13 sold single-copy comps: "complete" (nothing
+# missing) and "1990 Issue" (a year, not a count) both read as a lot.
+SINGLE_COPIES = [
+    "Playboy Magazine March 1990 Donald Trump Cover Complete With Centerfold",
+    "PLAYBOY March 1990 Issue Donald Trump Interview",
+    "Playboy March 1990 Trump Cover Complete Very Good",
+    "Vintage Playboy Magazine March 1990 Issue Trump Cover w/ Centerfold",
+    "Playboy 1990 Issue March Donald Trump Cover Complete",
+    "Playboy Vol. 37 No. 3 March 1990 Magazine Trump Cover",
+]
+# Real lot shapes, incl. the 2007 complete-year cohort's sold titles.
+LOTS = [
+    "Lot of 5 Playboy Magazines 1990",
+    "3 Playboy Magazines March April May 1990",
+    "Playboy Set of 12 1990 Full Run",
+    "Playboy Magazine Bundle 1990s Trump Cover",
+    "Playboy Magazines x 6 Vintage",
+    "Playboy Magazine 2007 full year complete with centerfolds Excellent Condition",
+    "2007 Playboy Magazine Complete Year Kim K, Pam Anderson",
+    "2007 Complete Calander Year, New - Unsold Playboys",
+    "2007 Playboy Complete Year 12 Issues Kim Kardashian Pamela Anderson",
+    "Playboy March 1990 and April 1991 Issues",
+]
+
+
+def _comp(title):
+    return price_stats.Comp(title=title, price=20.0, sold_price=20.0,
+                            total_price=None, url="")
+
+
+def test_complete_and_year_issue_titles_are_single_copies():
+    for t in SINGLE_COPIES:
+        assert not price_stats.looks_multi_item(t), t
+
+
+def test_lot_titles_still_read_as_lots():
+    for t in LOTS:
+        assert price_stats.looks_multi_item(t), t
+
+
+def test_single_cohort_keeps_the_copies_and_drops_only_the_lots():
+    comps = [_comp(t) for t in SINGLE_COPIES + LOTS]
+    log = price_stats.filter_unit(comps, "single")
+    assert sorted(r[0] for r in log.removed) == sorted(LOTS)
+    # ...and pricing a lot keeps exactly the lots.
+    comps = [_comp(t) for t in SINGLE_COPIES + LOTS]
+    log = price_stats.filter_unit(comps, "lot")
+    assert sorted(r[0] for r in log.removed) == sorted(SINGLE_COPIES)
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

@@ -51,6 +51,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import price_vs_actual as pva                                     # noqa: E402
 import stores                                                     # noqa: E402
+from draft_io import iter_drafts                                  # noqa: E402
 
 SKU_RE = re.compile(r'^\s*ebay_inventory_sku:\s*"?([^"\n]+)"?', re.M)
 
@@ -86,7 +87,7 @@ def shoot_by_sku(store: str | None = None, keys: set | None = None) -> dict:
     its ledger membership) — the same SKU can be live on two stores (#156).
     """
     out = {}
-    for d in (REPO / "inventory").rglob("draft.md"):
+    for d in iter_drafts(REPO / "inventory"):
         t = d.read_text(encoding="utf-8", errors="replace")
         m = SKU_RE.search(t)
         if not m:

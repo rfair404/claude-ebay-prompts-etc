@@ -56,7 +56,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import re
 import sys
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
@@ -65,6 +64,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stores  # noqa: E402  the one store model (#156)
+from draft_io import iter_drafts  # noqa: E402
+import yaml  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 # The DEFAULT store's listings ledger. Still a module attribute because
@@ -126,17 +127,37 @@ def _local(dt: Optional[datetime]) -> Optional[datetime]:
     return dt.astimezone(REPORTING_TZ) if dt else None
 
 
-def _yaml_scalar(text: str, key: str) -> str:
-    """Pull one top-level-ish scalar out of a draft's frontmatter.
+def _draft_header(text: str, path: Path) -> dict:
+    """A draft's frontmatter as a mapping of plain strings, or {} (with a
+    warning) when it isn't valid YAML.
 
-    Deliberately regex, not a YAML parser: drafts carry a `_field_constraints`
-    block with `{...}` flow mappings and free-text notes that trip strict
-    loaders, and we only ever need a handful of flat keys.
+    YAML, not a line regex: a regex for `price:` also matches the indented
+    `price:` line inside `meta.notes` or `_field_constraints`, and that
+    stray value overrode the ledger's ask (live asks showed $0). BaseLoader
+    keeps every scalar a string, exactly as the draft wrote it ("127.00"
+    stays "127.00", a timestamp stays its ISO text), and undoes either
+    quote style.
     """
-    m = re.search(rf'^\s*{re.escape(key)}:\s*"?([^"\n]*)"?\s*$', text, re.M)
-    if not m:
+    try:
+        fm = yaml.load(_frontmatter(text), Loader=yaml.BaseLoader)
+    except yaml.YAMLError as e:
+        print(f"report: {path}: frontmatter is not valid YAML, fields skipped "
+              f"({str(e).splitlines()[0]})", file=sys.stderr)
+        return {}
+    return fm if isinstance(fm, dict) else {}
+
+
+def _yaml_scalar(fm: dict, key: str) -> str:
+    """One scalar from a parsed draft header: the top-level `key`, else
+    `meta.<key>` (where the eBay ids and timestamps live). Never a key
+    nested anywhere else, such as under `_field_constraints`."""
+    meta = fm.get("meta")
+    val = fm.get(key)
+    if val is None and isinstance(meta, dict):
+        val = meta.get(key)
+    if not isinstance(val, str):
         return ""
-    val = m.group(1).strip()
+    val = val.strip()
     return "" if val in ("null", "~") else val
 
 
@@ -177,15 +198,16 @@ def _scan_drafts(store: Optional[str] = None, keys: Optional[set[str]] = None) -
     """Every draft on disk, or only `store`'s when one is given (see
     `draft_belongs_to_store`; `keys` is that store's ledger membership)."""
     rows = []
-    for path in sorted(INVENTORY.rglob("draft*.md")):
+    for path in iter_drafts(INVENTORY, "draft*.md"):
         if path.name not in ("draft.md", "draft_group.md"):
             continue
         try:
             t = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        listing_id = _yaml_scalar(t, "ebay_listing_id")
-        sku = _yaml_scalar(t, "ebay_inventory_sku")
+        fm = _draft_header(t, path)
+        listing_id = _yaml_scalar(fm, "ebay_listing_id")
+        sku = _yaml_scalar(fm, "ebay_inventory_sku")
         dstore = draft_store_field(t)
         if store is not None and not draft_belongs_to_store(
                 {"store": dstore, "sku": sku, "listing_id": listing_id},
@@ -193,13 +215,13 @@ def _scan_drafts(store: Optional[str] = None, keys: Optional[set[str]] = None) -
             continue
         rows.append({
             "sku": sku,
-            "title": _yaml_scalar(t, "title"),
-            "price": _yaml_scalar(t, "price"),
+            "title": _yaml_scalar(fm, "title"),
+            "price": _yaml_scalar(fm, "price"),
             "listing_id": listing_id,
-            "offer_id": _yaml_scalar(t, "ebay_offer_id"),
-            "published_at": _yaml_scalar(t, "published_at"),
-            "drafted_at": _yaml_scalar(t, "drafted_at"),
-            "synced_at": _yaml_scalar(t, "last_synced"),
+            "offer_id": _yaml_scalar(fm, "ebay_offer_id"),
+            "published_at": _yaml_scalar(fm, "published_at"),
+            "drafted_at": _yaml_scalar(fm, "drafted_at"),
+            "synced_at": _yaml_scalar(fm, "last_synced"),
             "path": path.relative_to(REPO).as_posix(),
             "group": path.name == "draft_group.md",
             "src": "disk",

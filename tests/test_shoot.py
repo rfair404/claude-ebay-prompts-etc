@@ -112,6 +112,26 @@ def test_tg7_unreachable_is_an_error_line(inv, capsys, monkeypatch):
     assert rc == 1 and "TG-7: camera not reachable" in err
 
 
+def test_a_tg7_take_that_didnt_fire_is_an_error_and_no_frame(inv, capsys, monkeypatch):
+    # 2026-10-22: the TG-7 answered take=ok, the card didn't change, and the
+    # previous photo was saved again as a new frame. The real tg7cam, its Wi-Fi faked.
+    T = SF.tg7cam()
+    card = "VER_100\r\n/DCIM/100OMSYS,ZZ220001.JPG,9,0,23893,40372\r\n"
+    took = "<response><take>ok</take><affocus>ok</affocus></response>"
+    monkeypatch.setattr(T, "cgi", lambda name, **kw: card if name == "get_imglist"
+                        else took if kw.get("com") == "starttake" else "")
+    monkeypatch.setattr(T, "get_file", lambda *a, **kw: pytest.fail("downloaded the old photo"))
+    monkeypatch.setattr(T, "CARD_WAIT", 0)
+    run(capsys, "start", "s1")
+    run(capsys, "item")
+    rc, out, err = run(capsys, "capture", "tg7")
+    assert rc == 1 and "TG-7: the TG-7 didn't take a new photo; the last one on the card is unchanged" in err
+    item = inv / "s1" / "01"
+    log = item / "shoot_log.md"
+    assert S.frames(item) == [] and "capture" not in (log.read_text(encoding="utf-8") if log.exists() else "")
+    assert "frames: 0/10" in run(capsys, "status")[1]
+
+
 @pytest.fixture
 def on_air_still(inv, tmp_path, monkeypatch):
     """show_flow.still() on item over the fakes, its OBS copies in tmp_path."""

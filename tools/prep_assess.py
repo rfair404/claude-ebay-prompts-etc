@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "lib"))
 import list_edit as L                                        # noqa: E402
 import stores                                                # noqa: E402
+from draft_io import iter_drafts                             # noqa: E402
 
 
 def _read_csv(path: Path) -> list[dict]:
@@ -56,7 +57,7 @@ def main() -> int:
     out_path = stores.store_file(".prep_assess.json", store)
 
     rows = []
-    for d in sorted(ROOT.joinpath("inventory").rglob("draft.md")):
+    for d in iter_drafts(ROOT / "inventory"):
         s = d.parent
         t = d.read_text(encoding="utf-8", errors="ignore")
         m = re.search(r'ebay_inventory_sku:\s*"?([0-9a-f]{8})"?', t)
