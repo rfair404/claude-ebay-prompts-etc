@@ -72,6 +72,9 @@
       "Bash(.claude/skills/r/tg7_pull.sh:*)",
       "Edit(//home/russ/EBAYBIZ/.pick_list_state.json)",
       "Edit(//home/russ/EBAYBIZ/.pick_list_state-junk.json)"
+    ],
+    "deny": [
+      "Read(~/.ebaybiz/**)"
     ]
   },
   "worktree": {
