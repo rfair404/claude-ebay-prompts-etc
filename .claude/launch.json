@@ -18,6 +18,12 @@
         "C:/Users/Reuseum/AppData/Local/Temp/claude/C--Users-Reuseum-Documents-Claude-Projects-ebaybiz/8aca3db0-59e5-4cc9-b7fe-3f0d7694ddc1/scratchpad"
       ],
       "port": 8791
+    },
+    {
+      "name": "consign-catalog",
+      "runtimeExecutable": "/home/russ/EBAYBIZ/.venv/bin/python",
+      "runtimeArgs": ["-m", "http.server", "8792", "--bind", "127.0.0.1", "--directory", "/home/russ/EBAYBIZ/reports/consign"],
+      "port": 8792
     }
   ]
 }
