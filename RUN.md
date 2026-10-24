@@ -1,5 +1,5 @@
 ---
-version: 1.4.0
+version: 1.5.0
 updated: 2026-10-23
 ---
 
@@ -387,9 +387,12 @@ client. Names and contacts live only in `inventory/_consign/clients.csv`
 Its optional columns are `agreement_signed` (date), `w9_on_file` (yes/no, a
 flag only, never the TIN), `payee_type`, `payout_method` (last 4 digits at
 most), `payout_cadence`, `floor_main`, `floor_junk`, `loss_rule`,
-`abandon_election` and `handling_fee` (blank = no fee; set it, normally to
-2.00, only when the client's signed agreement names the fee). `loss_rule` is `split` (the default: the client carries
-their split of a loss) or `client_never_owes` (a loss pays the client $0).
+`abandon_election`, `handling_fee` (blank = no fee; set it, normally to 2.00,
+only when the client's signed agreement names the fee), `min_payout` (blank =
+none; 500 for K01), `listing_days` (blank = 180) and `pickup_days` (blank =
+30). `loss_rule` is `split` (the default: the client carries their split of a
+loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
+(the client carries the whole loss, not split; K01's agreement).
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
     python -m lib.cli consign import CONSIGN-K01 -          # paste a CSV/TSV on stdin
@@ -441,11 +444,36 @@ larger figure into `handling` for an oversize box. A lot pays one fee, on its
 lead row. Rows paid before the fee existed are left alone. The report shows
 "handling kept", and settlements and statements carry a `handling` column.
 
+**Other channels and the mall.** A blank `channel` is eBay. Any other
+`channel` (one word: `dealer`, `etsy`) is a sale typed by hand into the row:
+`sold_at`, `item_price`, `ebay_fee` (that channel's fee, 0.00 if none),
+`actual_postage` (0.00 if none) and `order_id` if it has one. `sync` never
+overwrites those or calls the sale vanished, and flags an eBay sale that
+matches the same item. Type `funds_received` when the channel's money reaches
+us: the sale then clears at the end of the month it sold (agreement §5.1(b)),
+so it is paid on the 15th after, and it is flagged until that date is typed. `channel` `mall` is
+the antique-mall booth, where every consigned antique sells: type `sold_at`,
+`item_price` and `card_paid` (the part paid by card, 0.00 for cash), and sync
+works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
+(agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
+no postage. Handling applies on every channel.
+
+**Floors and time limits.** These only raise flags. A row's `floor` (from
+Exhibit A; a lot's floor is the total of its rows) is checked against the ask
+while listed and against the price once sold. A listing live longer than the
+client's `listing_days`, counted from its first `published_at`, is flagged to
+end and tell the client. Once `return_notice_sent` is typed, an item still
+unsold after `pickup_days` is flagged for the abandonment election.
+
 **Settlements.** `settle` gathers what is owed through `--through`: CLEARED
 rows not yet paid, unpaid buyouts above 0.00, and any adjustment to a row
 already paid. It adds one row to `inventory/_consign/K01/settlements.csv`
 (`settlement_id` like `K01-S001`) and writes the statement to
-`reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. A
+`reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. If the
+total due is under the client's `min_payout`, the sales and adjustments
+carry forward; a buyout is still paid in that run (agreement §7.2), and with
+no buyout nothing is written. When the agreement ends, `settle K01 --through <date>
+--final` pays the full balance, a negative one included. A
 statement is written once and never overwritten. `settle` does not record a
 payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
 on that settlements row, and the next `sync --apply` copies the date and
@@ -478,6 +506,8 @@ An older ledger loads as it is. The first `sync --apply` adds the new columns
 (`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`,
 `handling`) and
 rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
+
+Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
 
 ## Background dispatch (optional, #59)
 

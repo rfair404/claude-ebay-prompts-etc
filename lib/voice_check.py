@@ -100,7 +100,16 @@ BLOCK = [re.compile(p, re.IGNORECASE) for p in _B]
 
 _W = [  # softer normalizations — WARN, never block
     (r"\bno\s+[\w\s,/-]{0,40}?\bvisible\b",
-     "prefer 'no X noted' over 'no X visible'"),
+     "describe what is there ('rim intact'), not what isn't ('no chips visible')"),
+    # Positive framing (house rule 2026-10-23, prompts/draft.md "Positive
+    # framing"): say what IS there. Absences and defects are still disclosed,
+    # phrased positively ("Missing the lid.", "Rim intact.").
+    (r"\bnot\s+included\b",
+     "describe what is there: say what's included, not what's not included"),
+    (r"\bnothing\s+(missing|else)\b",
+     "describe what is there: list what's included, not 'nothing missing'"),
+    (r"\bno\s+(box|manual|chips?|cracks?)\b",
+     "describe what is there: 'rim intact' / 'missing the box', not 'no chips' / 'no box'"),
     (r"\bodou?r\b",
      "odor: fine as a defect disclosure, never as a test not run"),
     # A pointer is fine in the close line ("Please see the photos…") and as a
