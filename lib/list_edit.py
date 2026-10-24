@@ -416,13 +416,16 @@ def _refuse_voided(sku: str, store: Optional[str]) -> None:
             f"Skipped; nothing was sent to eBay. This draft.md is stale.")
 
 
-def void_listing(sku: str, *, store: Optional[str] = None,
-                 confirm: bool = False) -> tuple[dict, str, bool]:
+def void_listing(sku: str, *, store: Optional[str] = None, confirm: bool = False,
+                 creds: Optional[EbayCredentials] = None) -> tuple[dict, str, bool]:
     """Mark a superseded DRAFTED ledger row VOIDED, so a stray draft.md that
     still carries the SKU can never create an offer. Refuses (ValueError) a
     row that isn't DRAFTED or already has an eBay offer_id/listing_id — those
-    are real eBay objects; end or delete them instead.
-    DRY RUN unless confirm. Returns (row, ledger_path, written)."""
+    are real eBay objects; end or delete them instead. Also asks eBay (a
+    read-only GET) and refuses if any offer exists for the SKU, since the
+    ledger can be behind eBay; only eBay's 404 "no offer" lets it through.
+    Writes nothing to eBay. DRY RUN unless confirm.
+    Returns (row, ledger_path, written)."""
     path = _ledger_path(store)
     row = ledger_row(sku, store)
     if row is None:
@@ -434,6 +437,16 @@ def void_listing(sku: str, *, store: Optional[str] = None,
                          f"Use --end / --delete-offer for a real eBay offer.")
     if status != "DRAFTED":
         raise ValueError(f"sku {sku} is {status or 'blank'}, not DRAFTED; refusing to void.")
+    try:
+        offers = get_offers_for_sku(sku, creds=creds or load_credentials(store))
+    except EbayAPIError as e:
+        if e.status != 404:
+            raise
+        offers = []
+    if offers:
+        found = ", ".join(f"{o.get('offerId')} ({o.get('status')})" for o in offers)
+        raise ValueError(f"sku {sku} has eBay offer(s) {found}; refusing to void. "
+                         f"Use --end / --delete-offer for a real eBay offer.")
     if not confirm:
         return row, str(path), False
     upsert_listing(sku, "VOIDED", store=store, strict=True)
@@ -2827,7 +2840,7 @@ def _cli() -> None:
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
     ap.add_argument("--delete-offer", metavar="OFFER_ID", help="Delete an offer by ID (permanent; ends listing if live; keeps SKU). DRY RUN unless --confirm.")
     ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
-    ap.add_argument("--void", metavar="SKU", help="Mark a superseded DRAFTED ledger row (no eBay offer/listing id) VOIDED, so --record/--review/--sync/--list refuse any draft.md still carrying the SKU. DRY RUN unless --confirm.")
+    ap.add_argument("--void", metavar="SKU", help="Mark a superseded DRAFTED ledger row (no eBay offer/listing id in the ledger or on eBay) VOIDED, so --record/--review/--sync/--list refuse any draft.md still carrying the SKU. Writes nothing to eBay. DRY RUN unless --confirm.")
     ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item/--void to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--create-store-policies", action="store_true",

@@ -27,6 +27,18 @@ def ledger(tmp_path, monkeypatch):
     return path
 
 
+def _no_offer(sku, creds=None):
+    raise L.EbayAPIError(404, "This Offer is not available.")
+
+
+@pytest.fixture(autouse=True)
+def ebay_offers(monkeypatch):
+    """--void asks eBay for the SKU's offers. Default: eBay has none (404)."""
+    monkeypatch.setattr(L, "get_offers_for_sku", _no_offer)
+    monkeypatch.setattr(L, "load_credentials", lambda store=None: _Creds())
+    return lambda fn: monkeypatch.setattr(L, "get_offers_for_sku", fn)
+
+
 @pytest.fixture
 def api(monkeypatch):
     """Fake eBay that records every call; a new SKU has no offer yet."""
@@ -137,3 +149,47 @@ def test_sync_still_creates_an_offer_for_a_sku_that_is_not_voided(
     assert code == 0, err
     assert ("POST", "/sell/inventory/v1/offer") in api
     assert _row(ledger, sku)["status"] == "SYNCED"
+
+
+def _offers(*offers):
+    return lambda sku, creds=None: list(offers)
+
+
+def _raises(exc):
+    def get(sku, creds=None):
+        raise exc
+    return get
+
+
+@pytest.mark.parametrize("get_offers,confirm,voided,err_has", [
+    # The ledger row is clean, but eBay has an offer the ledger never saw.
+    (_offers({"offerId": "OFFER-7", "status": "UNPUBLISHED"}), True, False,
+     "OFFER-7 (UNPUBLISHED)"),
+    (_offers({"offerId": "OFFER-7", "status": "PUBLISHED"}), False, False,
+     "OFFER-7 (PUBLISHED)"),
+    # eBay's 404 means no offer exists: a true local-only draft.
+    (_no_offer, True, True, ""),
+    # Any other answer means we don't know, so nothing is written.
+    (_raises(L.EbayAPIError(500, "Internal error")), True, False, "Internal error"),
+    (_raises(L.EbayAPIError(401, "Invalid access token")), True, False, "Invalid access token"),
+    (_raises(L.EbayAuthError("no refresh token")), True, False, "no refresh token"),
+], ids=["offer-confirm", "offer-dry-run", "404-voids", "500", "401", "auth"])
+def test_void_checks_ebay_for_offers_before_writing(
+        ledger, ebay_offers, monkeypatch, capsys, get_offers, confirm, voided, err_has):
+    sku = "75af8857"
+    L.upsert_listing(sku, "DRAFTED", title="Salt Glaze Candlestick", store="junk")
+    before = _row(ledger, sku)
+    ebay_offers(get_offers)
+
+    argv = ["--void", sku, "--store", "junk"] + (["--confirm"] if confirm else [])
+    code, out, err = _cli(monkeypatch, capsys, *argv)
+
+    if voided:
+        assert code == 0, err
+        assert f"[OK] voided sku {sku}" in out
+        assert _row(ledger, sku)["status"] == "VOIDED"
+    else:
+        assert code != 0
+        assert "[OK]" not in out and "[DRY RUN]" not in out
+        assert err_has in err
+        assert _row(ledger, sku) == before
