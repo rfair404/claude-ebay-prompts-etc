@@ -1,12 +1,15 @@
 ---
 name: report-lot
-description: Full account of one lot - an estate buy or a consignment intake. Lists every item the lot brought in (status, store, ask, sold, net kept) and adds a summary (paid, live asking, sold, net kept, recovered vs paid; for a consignment, what the client is owed), writes it to reports/lots/ as plain text and CSV, and prints it on CannonBW. Use when Russell types /report-lot, or asks for the account, ledger, printout or "what came in" for an estate, a buy or a consignment lot.
+description: Full account of one lot - an estate buy or a consignment intake. Lists every item the lot brought in (status, store, ask, sold, net kept) and adds a summary (paid, live asking, sold, net kept, recovered vs paid; for a consignment, what the client is owed), writes it to reports/lots/ as plain text and CSV, and replies with an R2 link. Prints on CannonBW only when Russell asks for paper. Use when Russell types /report-lot, or asks for the account, ledger, printout or "what came in" for an estate, a buy or a consignment lot.
 ---
 
 # /report-lot: the full account of one lot
 
-Typing `/report-lot` is the ask to print, so print without asking. Plain
-text only, no PDF or HTML (Russell's rule for lot and client lists).
+Reply with an R2 link, not paper. Print only when Russell's own words ask
+for it ("print it", "printout", "on paper"); `/report-lot` alone is not a
+print request. Pick lists (`/pl`) are the only thing that prints on
+command. Plain text only, no PDF or HTML (Russell's rule for lot and
+client lists).
 
 ## 1. Pick the lot
 
@@ -31,14 +34,19 @@ anyway (its states are from the last good sync) and pass the `[X]` line on.
 
 Then, for each lot:
 
-    .claude/skills/report-lot/run.sh <lot-folder> --print
+    .claude/skills/report-lot/run.sh <lot-folder>
 
-The script runs `tools/report_lot.py` in the main checkout, where the
-ledgers and `config.yaml` live, so it works from a worktree. Run it with
-the Bash sandbox off, because the sandbox blocks writes to `reports/` and
-the CUPS socket. It writes `reports/lots/<lot>-<date>.txt` and `.csv`,
-prints the text, then ends with a `WROTE` line and a `PRINTED request id
-is CannonBW-NN` line.
+Add `--print` only when Russell asked for paper. The script runs
+`tools/report_lot.py` in the main checkout, where the ledgers and
+`config.yaml` live, so it works from a worktree. Run it with the Bash
+sandbox off, because the sandbox blocks writes to `reports/` (and the CUPS
+socket, with `--print`). It writes `reports/lots/<lot>-<date>.txt` and
+`.csv`, prints the text to the terminal, then ends with a `WROTE` line (and
+a `PRINTED request id is CannonBW-NN` line with `--print`).
+
+Then share the .txt from the main checkout:
+
+    .venv/bin/python -m lib.cli offsite share reports/lots/<lot>-<date>.txt
 
 ## 3. Which folders count (estates)
 
@@ -53,11 +61,13 @@ about where the item came from are the record.
 
 ## Reply
 
-One short block per lot, then the file paths:
+One short block per lot, with the R2 link:
 
-    Printed on CannonBW (job <N>): ES/<LOT>, $<paid> estate, <acquired>
+    ES/<LOT>, $<paid> estate, <acquired>: <R2 link>
     <n> items: <n> live ($<ask> asking), <n> queued, <n> photos only. <n> sold, net kept $<kept>.
-    reports/lots/ES_<LOT>-<date>.txt (+ .csv)
+
+When it was printed, say `Printed on CannonBW (job <N>)` on the first line.
+Don't offer to print.
 
 For a consignment, give the line count by state, the estimate range and
 what the client is owed (share plus buyouts). Add any sync `[X]` line, any

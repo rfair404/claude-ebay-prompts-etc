@@ -6,8 +6,9 @@ each one stands, and a money summary.
     python tools/report_lot.py CONSIGN-YYYYMMDD        # consignment intake
     python tools/report_lot.py ES/<LOT> --print        # also print on CannonBW
 
-Writes reports/lots/<lot>-<date>.txt (plain text, for printing) and .csv (one
-row per item) and prints the .txt. Reads local ledgers only, never eBay, so
+Writes reports/lots/<lot>-<date>.txt (plain text) and .csv (one row per item)
+and writes the .txt to stdout. Paper only with --print, which is only for
+when Russell asks for it. Reads local ledgers only, never eBay, so
 run the finance sync and `consign sync --apply` first for fresh sale figures.
 
 WHAT A LOT IS
