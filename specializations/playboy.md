@@ -2,10 +2,12 @@
 
 ```yaml
 triggers: [playboy, "playboy magazine", "playboy lot", "playboy playmate", "playboy playmate of the month", "playboy centerfold", "playboy special edition", "playboy's book of lingerie", "playboy's college girls"]
-version: 1.1.0
+version: 2.0.0
 last_reviewed: 2026-10-24
 sources:
-  - eBay Restricted adult items policy, help id 4278 (US page bot-checked; read via ebay.ca and ebay.co.uk editions and an eBay Community Mentor quote of the US text), 2026-10-22
+  - eBay Restricted adult items policy, help id 4278 (US page bot-checked; read via ebay.ca and ebay.co.uk editions and an eBay Community Mentor quote of the US text), 2026-10-22; age clause read on the US page, 2026-10-24
+  - Wikipedia — Playboy Playmate, "Underage nudity" (citing The New Yorker, Joan Acocella, "The Girls Next Door", 2006-03-20), read 2026-10-24
+  - Wikipedia — Brooke Shields, Garry Gross, Traci Lords, Penthouse (magazine), read 2026-10-24
   - eBay Live policy, help id 5478, 2026-10-22
   - eBay Taxonomy + Metadata APIs, category 280 aspects and condition policy, pulled 2026-10-22
   - CGC (Certified Guaranty Company) — Playboy grading announcement (2009) and newsstand-edition article
@@ -14,8 +16,10 @@ sources:
   - Our own sales ledger — printed-paper singles and small lots, Aug–Oct 2026
 ```
 
-> **Read the eBay policy section first.** It decides which frames can be
-> listed at all, and that is settled before identification or price matter.
+> **Read the eBay policy section and the never-list section first.** The
+> never-list decides whether an issue goes on eBay at all; the policy decides
+> which frames can be listed. Both are settled before identification or
+> price matter.
 
 > **Data honesty.** Exact-issue SOLD data exists for one issue only (March
 > 1990). Everything else here marked *asking* comes from active listings,
@@ -74,7 +78,8 @@ the US text, both read 2026-10-22.
   displaying nudity"* among items that need eBay's written approval, and
   bans nudity on stream. Every Playboy contains nudity, so **keep Playboys
   off eBay Live and Twitch** unless Russell gets written approval. Clips
-  and marquees follow the same rule.
+  and marquees follow the same rule. A never-list issue (next section)
+  stays off them even with approval.
 - **Not allowed at all:** magazines with sexual activity. Penthouse and
   Playgirl get the same image rules. For any other men's title, stop and
   check 4278 before shooting.
@@ -89,6 +94,65 @@ the US text, both read 2026-10-22.
   - **Junk store (lots):** leave `shipping.us_only` **unset**. The junk
     default policy `264925613013` already ships US only, and setting the
     flag there hard-stops sync.
+
+## Issues never listed on eBay (subject under 18)
+
+4278 adds an age rule: *"When listing films, magazines, books, or photos
+that contain images with nudity that are otherwise allowed under this
+policy, you must ensure that all nude persons were above the age of 18 at
+the time the images were produced."* (US page, read 2026-10-24.)
+
+**The check: before shooting, and again before PREP.** Look up the issue's
+Playmate and cover subject in the tables below. A documented under-18
+subject in a nude or partly nude pictorial makes the issue **ineligible for
+eBay on every store**, as a single or inside any lot, and it never goes on
+eBay Live, Twitch or clips. For a match:
+
+- Shoot the cover and spine only, for the record. The interior stays
+  unshot.
+- Mark the draft's `meta:` block with `ebay_eligible: false`,
+  `ebay_ineligible_reason:` (the table row and its source, e.g. "eBay adult
+  policy 4278: Linda Moon, 17") and `channel:` as Russell directs. October
+  1966 went to `mall`, the Greensboro antique-mall booth.
+- The art director's PREP sign-off repeats the check
+  (`.claude/agents/art-director.md`, "PREP sign-off: eligibility first").
+
+**The reference.** Wikipedia, "Playboy Playmate", section "Underage nudity"
+(https://en.wikipedia.org/wiki/Playboy_Playmate), read 2026-10-24. It cites
+The New Yorker: Joan Acocella, "The Girls Next Door", 2006-03-20, p. 144.
+It is a starting list, neither complete nor official, and eBay doesn't
+publish its own screen. A Wikipedia birth date with no citation settles
+nothing by itself: treat the issue as an open question and take it to the
+collection-curator for a cited source.
+
+**When eBay holds a Playboy listing,** the listing manager reads the hold
+reason in that account's eBay Messages, and a confirmed age hold adds the
+issue here. TODO (listing manager): confirm the October 1966 reason in the
+junk account's Messages; the art director's trace to 4278 is the likely
+cause.
+
+**US monthly issues, per the reference:**
+
+| Issue | Playmate (as the page names her) | Age when she posed |
+|---|---|---|
+| January 1958 | Elizabeth Ann Roberts ("Schoolmate Playmate") | 16 |
+| April 1959 | Nancy Crawford | 17 |
+| July 1960 | Teddi Smith | 17 |
+| December 1963 | Donna Michelle | 17 |
+| September 1965 | Patti Reynolds | 17 |
+| October 1966 | Linda Moon | 17. eBay held our junk-store listing 880046873226 on 2026-10-24; we ended it, and the copy goes to the mall booth. |
+
+**Other editions, same page:** German *Playboy*, 1977, Ursula Buchfellner
+(16); Dutch *Playboy*, June 1988, Karin and Mirjam van Breeschooten (17).
+Their later US issues (October 1979; September 1989) were posed at 18, per
+the page, and pass this check.
+
+**Never buy, never list (outside the Playboy monthlies, same rule):**
+
+| Title | Subject | Source (Wikipedia, read 2026-10-24) |
+|---|---|---|
+| *Sugar 'n' Spice* (Playboy Press) | Brooke Shields, photographed nude at 10 by Garry Gross in 1975 | "Brooke Shields"; "Garry Gross" |
+| Any magazine featuring Traci Lords dated 1984–86, e.g. *Penthouse* September 1984 (her centerfold, at 16), *Velvet*, *Juggs*, *Club* | Traci Lords, under 18 until May 1986 | "Traci Lords"; "Penthouse (magazine)" |
 
 ## When this applies
 
@@ -109,8 +173,10 @@ the US text, both read 2026-10-22.
 
 About 30 seconds an issue, done from the intake frames (see **Intake**):
 
-1. **Date it** from the spine or cover date line. Dec 1953 and every 1950s
-   issue go straight to **look closer**.
+1. **Date it** from the spine or cover date line, and check the date against
+   the never-list. A match comes out of the run here and goes off eBay (see
+   **Issues never listed on eBay**). Dec 1953 and every other 1950s issue go
+   straight to **look closer**.
 2. **Physical status:** is the centerfold attached? Any mailing label? Water
    damage, cut pages, a detached cover? Incomplete or damaged issues go to
    the incomplete pile and are never mixed into a clean lot.
@@ -120,7 +186,8 @@ About 30 seconds an issue, done from the intake frames (see **Intake**):
 4. **Cover and contents:** a famous non-Playmate on the cover (actor,
    musician, politician) or a landmark interview named on the cover:
    **look closer** (an exact-issue comp decides it).
-5. Everything else is **lot filler**. That's the large majority of any run.
+5. Everything else that passed step 1 is **lot filler**. That's the large
+   majority of any run.
    Active asks for single issues from 1965 to 2005 cluster at $10–$17
    median *asking* (Browse, 2026-10-22). That's under the single-out
    threshold (see **Format**).
@@ -150,7 +217,7 @@ price. Don't extend this list from memory.
 | Issue | Why it's watched | Evidence |
 |---|---|---|
 | Dec 1953 (No. 1, Marilyn Monroe) | First issue (Wikipedia) | Reprints are common (see Taxonomy). Hand it to the art director plus a Heritage/CGC reference check before any claim. |
-| Any 1950s issue | Era premium | 1958 single issues ask a $29.99 median (n=181) against $10–$17 for later years (Browse, asking). |
+| Any 1950s issue that passes the never-list | Era premium | 1958 single issues ask a $29.99 median (n=181) against $10–$17 for later years (Browse, asking). |
 | March 1990 (Donald Trump cover and interview) | Celebrity cover plus interview | **Sold**: n=30 raw, unsigned, median $48.89 delivered, IQR $41.68–$69.58 (our price.txt, 2026-10-22). |
 | Nov 1976 (Jimmy Carter interview) | Landmark interview with a presidential candidate (Wikipedia) | No comp pulled yet. |
 | Nov 1972 | Best-selling single issue ever, 7,161,561 copies (Wikipedia). Common by print run, so any premium is demand, not scarcity | No comp pulled yet. |
@@ -273,7 +340,8 @@ PRICE's tier.
 **Lots: one complete year where we have one; otherwise 10–12 issues by
 decade.**
 - Never mix centerfold-attached issues with incomplete ones. Never put a
-  Special Edition in a monthly lot.
+  Special Edition in a monthly lot. A never-list issue goes in no lot at
+  all, so a year holding one lists as a partial year.
 - Where a key would break a complete year, price it both ways (key single
   plus the partial lot, against the year lot) and take the higher total. On
   a tie, keep the year whole: one listing, one parcel. 1990 can't settle
@@ -440,7 +508,8 @@ Russell's hands sort and place stacks; he types nothing.
 - **B:** centerfold missing or loose, or the issue is water-damaged, has
   cut pages or a detached cover.
 - **C, set aside:** a 1950s date, signed in ink, in a slab, or sealed in a
-  polybag. These get a full single shoot later.
+  polybag. These get a full single shoot later, once each one passes the
+  never-list check.
 
 **Shot list (TG-7 primary; the agent drives `tools/live/shoot.py`, one
 "item" per batch):**
@@ -455,8 +524,8 @@ Russell's hands sort and place stacks; he types nothing.
 3. **Back-cover shingle.** One frame per batch: spots back-cover damage.
    Optional.
 4. **Pile B only:** one frame of the worst issue's damage.
-5. Repeat per batch. **Pile C:** no intake frames; each issue gets the
-   **Single** photo list above.
+5. Repeat per batch. **Pile C:** no intake frames; each issue that passes
+   the never-list gets the **Single** photo list above.
 
 Intake frames are internal evidence, not listing photos. Covers that fail
 the nudity definition are fine to have in the folder; they never go into
@@ -470,10 +539,13 @@ read_confidence, frames`.
 
 Unreadable dates are marked `unread` with the frame, never guessed. The
 agent then:
-1. Counts issues by year and finds complete years.
-2. Flags $$/$$$ candidates (fast-triage steps 3–4) for an exact-issue sold
+1. Checks every dated row against the never-list and pulls the matches out
+   of the plan, each with its reason. An `unread` row stays out of every
+   lot until its date is read.
+2. Counts issues by year and finds complete years.
+3. Flags $$/$$$ candidates (fast-triage steps 3–4) for an exact-issue sold
    comp.
-3. Writes the CURATE Mode B lot plan.
+4. Writes the CURATE Mode B lot plan.
 
 ## Output hooks (maps onto IDENTIFY fields)
 
@@ -498,6 +570,9 @@ agent then:
   - Lots: query `Playboy <year> complete year` / `Playboy magazine lot
     <decade>s`. Price on item-only when the lot ships buyer-pays.
 - **DRAFT** →
+  - A never-list issue: `meta.ebay_eligible: false`,
+    `meta.ebay_ineligible_reason` and `meta.channel` (see **Issues never
+    listed on eBay**). No eBay fields after that.
   - `category_id: "280"`.
   - US-only shipping, one rule per store:
     - Main-store singles: `shipping.us_only: true` (routes to `297194269014`).
@@ -531,6 +606,18 @@ lots and monthly singles), and drops any that have sold or ended.
   - US (bot-checked; quoted via the Mentor answer below): https://www.ebay.com/help/policies/prohibited-restricted-items/adult-items-policy?id=4278
   - Canada edition (magazine rule, nudity definition): https://www.ebay.ca/help/policies/prohibited-restricted-items/adult-items-policy?id=4278
   - UK edition (Playboy named; feedback images): https://www.ebay.co.uk/help/policies/prohibited-restricted-items/adult-items-policy?id=4278
+  - The age clause, read on the US page 2026-10-24 (the .ca edition has
+    the same words; the .co.uk edition says "vintage films"): *"When listing films, magazines, books, or
+    photos that contain images with nudity that are otherwise allowed under
+    this policy, you must ensure that all nude persons were above the age of
+    18 at the time the images were produced."*
+- Wikipedia, read 2026-10-24, for the never-list:
+  - Playboy Playmate, "Underage nudity" (cites The New Yorker, Joan
+    Acocella, "The Girls Next Door", 2006-03-20, p. 144): https://en.wikipedia.org/wiki/Playboy_Playmate
+  - Brooke Shields (*Sugar 'n' Spice*): https://en.wikipedia.org/wiki/Brooke_Shields
+  - Garry Gross (the 1975 photographs): https://en.wikipedia.org/wiki/Garry_Gross
+  - Traci Lords (1984–86 career, age): https://en.wikipedia.org/wiki/Traci_Lords
+  - Penthouse (September 1984 centerfold, at 16): https://en.wikipedia.org/wiki/Penthouse_(magazine)
 - eBay Community, Ask a Mentor, "Playboy Magazines" (category 280; the US
   policy quote; Adult Only gone): https://community.ebay.com/t5/Ask-a-Mentor/Playboy-Magazines/td-p/34459167
 - Fox Business, 2021-06-15, eBay ends the US Adult Only category; Playboy
