@@ -63,7 +63,8 @@ the channel.
 Set B flags (no state change): an ask or sale below the client's floor (a
 lot's floor is its rows' total), a listing live longer than listing_days
 (180), and an unsold item past return_notice_sent + pickup_days (30).
-settle holds a balance under clients.csv min_payout; --final pays it all.
+settle holds a balance under clients.csv min_payout, except buyouts, which
+are paid in the next run (§7.2); --final pays it all.
 
 Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
@@ -1557,6 +1558,21 @@ def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int
         print(f"{code}: nothing to settle through {through.isoformat()}"
               + (f" ({len(held)} item(s) on an unpaid settlement)" if held else ""))
         return 0
+    # Under the client's min_payout, sale shares and adjustments carry forward,
+    # but a buyout is still paid in this run (agreement §7.2).
+    owed = (_sum(dec(r["client_share"]) for r in cleared)
+            + _sum(dec(r["buyout_price"]) for r in buyouts)
+            + _sum(a for _, a in adjustments))
+    if not final and terms["min_payout"] and owed < terms["min_payout"]:
+        under = (f"${money(owed)} owed through {through.isoformat()} is under the "
+                 f"${money(terms['min_payout'])} minimum payout (clients.csv min_payout)")
+        if not buyouts:
+            print(f"{code}: {under}: carried forward, nothing written. `settle --final` "
+                  f"pays it when the agreement ends.")
+            return 0
+        print(f"{code}: {under}: sales and adjustments carry forward; the buyout(s) "
+              f"are paid now (agreement §7.2)")
+        cleared, adjustments = [], []
 
     nums = [int(m.group(1)) for s in settlements
             if (m := re.fullmatch(rf"{re.escape(code)}-S(\d+)", s["settlement_id"]))]
@@ -1578,12 +1594,6 @@ def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int
                 client_share=money(share),
                 adjustments=" ".join(f"{i}={money(a)}" for i, a in adjustments))
     due = settlement_due(srow)
-    if not final and terms["min_payout"] and due < terms["min_payout"]:
-        print(f"{code}: ${money(due)} owed through {through.isoformat()} is under the "
-              f"${money(terms['min_payout'])} minimum payout (clients.csv min_payout): "
-              f"carried forward, nothing written. `settle --final` pays it when the "
-              f"agreement ends.")
-        return 0
 
     by_id = {r["item_id"]: r for r in rows}
     lines = []

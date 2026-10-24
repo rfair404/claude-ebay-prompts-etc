@@ -817,3 +817,23 @@ def test_settle_holds_a_balance_under_min_payout_until_final(shop, capsys):
     assert "FINAL" in capsys.readouterr().out
     s = consign.read_settlements("K99")
     assert [(x["item_ids"], x["client_share"]) for x in s] == [("K99-C001", "7.10")]
+
+
+def test_a_buyout_is_paid_under_min_payout_and_the_sales_carry(shop, capsys):
+    folder = _sold_item(shop, "b/sold", "jjjj0001", OLD, "10-10-1")
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder},
+                       {"item_id": "C002", "state": "EXCLUDED", "buyout_price": "60.00"}])
+    reg = shop / "inventory" / "_consign"
+    reg.mkdir()
+    _csv(reg / "clients.csv", consign.REGISTRY_COLUMNS,
+         [{"client_code": "K99", "split": "0.5", "min_payout": "500"}])
+    assert consign.sync_intake(d, consign.Books(), consign.load_registry(), apply=True,
+                               today=TODAY) == 0
+    through = ["settle", "K99", "--through", TODAY.isoformat(), "--apply"]
+    assert consign.main(through) == 0                       # $68.10 owed, under $500
+    assert "buyout(s) are paid now" in capsys.readouterr().out
+    s = consign.read_settlements("K99")
+    assert [(x["item_ids"], x["client_share"]) for x in s] == [("K99-C002", "60.00")]
+    assert consign.main(through) == 0                       # the sale still waits
+    assert "carried forward, nothing written" in capsys.readouterr().out
+    assert len(consign.read_settlements("K99")) == 1
