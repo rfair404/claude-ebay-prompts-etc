@@ -81,7 +81,7 @@ We owe you your share once an item is Cleared, not when it sells. <!-- Internal:
 
 7.1. We may offer to buy an item from you outright at a stated buyout price. A buyout only happens if you agree in writing (a signed note or an email reply is enough), naming the item and the price.
 
-7.2. We pay the buyout price in full, with no split, in the next payout run after you agree. The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- Internal: a buyout exists only when Russell has noted in writing that he is buying that specific item; never infer one from an item's category or use, and never set a row EXCLUDED without that note. Not client wording. --> <!-- TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
+7.2. We pay the buyout price in full, with no split, in the next payout run after you agree (the minimum in section 5.3 doesn't apply to a buyout). The item is ours from the date you agree to the buyout, and we owe you the buyout price until we pay it. Post-sale costs and refunds on a bought-out item are ours, not yours. <!-- Internal: a buyout exists only when Russell has noted in writing that he is buying that specific item; never infer one from an item's category or use, and never set a row EXCLUDED without that note. Not client wording. --> <!-- TODO(attorney): confirm title passes on agreement for a buyout (the purchase agreement passes title on payment). -->
 
 ## 8. Returns and claims after payout
 
