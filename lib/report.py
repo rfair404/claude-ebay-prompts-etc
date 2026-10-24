@@ -64,6 +64,7 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stores  # noqa: E402  the one store model (#156)
+from draft_io import iter_drafts  # noqa: E402
 import yaml  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
@@ -197,7 +198,7 @@ def _scan_drafts(store: Optional[str] = None, keys: Optional[set[str]] = None) -
     """Every draft on disk, or only `store`'s when one is given (see
     `draft_belongs_to_store`; `keys` is that store's ledger membership)."""
     rows = []
-    for path in sorted(INVENTORY.rglob("draft*.md")):
+    for path in iter_drafts(INVENTORY, "draft*.md"):
         if path.name not in ("draft.md", "draft_group.md"):
             continue
         try:

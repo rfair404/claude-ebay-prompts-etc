@@ -270,12 +270,14 @@ actually going up. Drop the line for a one-off.)
 - (bullet each included component, with counts where relevant)
 - (distinguish original vs replacement parts)
 - (list any paperwork / extras by name + date when visible)
+- (this list is the whole lot: name what is there, never what isn't)
 
 ## Size
 
 - (measured dimensions — the ones a buyer decides on)
 - (weight, where it matters to the buyer)
-- (if nothing was measured, say so plainly — do not drop the section)
+- (state the number, or leave the fact out; a missing measurement is a
+  NEEDS_REVIEW in-hand question answered at REVIEW, GH #170)
 
 ## Condition
 
@@ -288,14 +290,15 @@ full details.")
 
 - (exterior wear / finish / hardware)
 - (interior / functional condition)
-- (specific defects, described not minimized)
+- (each defect stated as a fact with its location and size, e.g. "Light
+  scratch on the lid, 1 inch." or "Missing the lid.")
 - (paperwork or extras condition, if any)
 
 ## Markings
 
 (Maker's mark, signature, hallmark, stamp, or label: what it says and
-where it is, keyed to the photo that shows it. When there is none,
-"No maker's mark found." is the correct content.)
+where it is, keyed to the photo that shows it. When the piece was checked
+and carries none, "Unmarked." is the correct content.)
 
 ## About this item
 
