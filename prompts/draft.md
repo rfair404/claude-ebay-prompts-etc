@@ -429,11 +429,12 @@ is what you get, nothing else". The What's Included list is the whole lot,
 so it never needs a second list of what is absent.
 
 - **Truth bar.** A positive phrasing says exactly as much as was checked.
-  "No chips or cracks noted" becomes "Clean edges, solid glaze." only when
-  INVESTIGATE's observable / listing-safe findings show the edges and the
-  glaze were examined. If the evidence covers less, the claim says less:
-  "Rim intact." only for a rim that was examined. A hairline the photos
-  can't rule out stays in INVESTIGATE's NOT-defensible list. Never upgrade
+  "No chips or cracks noted" becomes "Rim and foot intact." only when
+  INVESTIGATE's observable / listing-safe findings show the rim and foot
+  were examined; "Clean edges, solid glaze." needs the edges and the glaze
+  examined too. If the evidence covers less, the claim says less. A
+  hairline the photos can't rule out stays in INVESTIGATE's NOT-defensible
+  list, and that part gets no "intact" / "sound" / "clean" claim at all. Never upgrade
   an observation to sound better than the check was; when in doubt, the
   narrower statement wins.
 - **Required disclosures stay.** A defect, a missing part, untested
@@ -450,10 +451,11 @@ so it never needs a second list of what is absent.
 | Drop | Write | Note |
 |---|---|---|
 | "Box and manuals not included / not pictured." | "Includes the console and one controller." | The included list is the whole lot. |
-| "No chips or cracks." | "Clean edges, solid glaze." | Truth bar: only when the edges and glaze were examined. Less evidence, smaller claim ("Rim intact."). |
+| "No chips or cracks." | "Rim and foot intact." | Truth bar: only the parts that were examined. Broader ("Clean edges, solid glaze.") only when the edges and glaze were examined too. |
 | "Nothing missing." | "24 pieces: 8 forks, 8 knives, 8 spoons." | Count what is there. "Complete" only when the item data says so. |
 | "What you see is what you get, nothing else." | "The lot is everything listed above." | "As shown" and "pictured" are banned by the in-hand rule. |
 | "Lid not included." | "Missing the lid." | The absence is still disclosed, stated as a fact. |
+| "The lighter is not included." | "Ships without the lighter (used lighters can't be mailed)." | Held back on purpose, not lost, so not "Missing". Say why. |
 | "Not perfect, has a scratch." | "Light scratch on the lid, 1 inch." | Location and size; the size only when measured. |
 | "No maker's mark found." | "Unmarked." | Only after the piece was checked for marks. |
 | "Untested." | "Function untested; sold as-is for parts or repair." | Required disclosure, said as a condition (grade `FOR_PARTS_OR_NOT_WORKING`). |

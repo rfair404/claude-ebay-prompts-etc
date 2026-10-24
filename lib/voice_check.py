@@ -16,9 +16,6 @@ never be blocked, per the honesty ground rules — and four adjective-order /
 "for these photographs" forms are added because the issue's own example
 listings require them.
 
-Positive-framing WARNs ("not included", "nothing missing", "no box/chips")
-were added 2026-10-23 per prompts/draft.md "Positive framing"; never blocks.
-
 API:  check_voice(draft) -> list[str]
       findings look like  "voice (block): body: 'no tears noted on the shown surfaces'"
       Blocks fail sync; warns are advisory.
