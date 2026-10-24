@@ -6,9 +6,10 @@
     python tools/green_setup.py --autologin yes    # also log green's desktop in at boot
     python tools/green_setup.py --laptop usb       # cable back on the laptop: print by USB again
 
-Green is a thin client plus a print server. The heavy work and every key
-(eBay, R2, config.yaml, the ledgers) stay on the laptop, and green gets
-none of them. Every connection opens from the laptop (`ssh green`, the key
+Green is a thin client plus a print server. The heavy work, the eBay API
+keys and refresh tokens, the R2 keys, config.yaml and the ledgers stay on
+the laptop. Green holds only a browser login (Seller Hub in Firefox). Every
+connection opens from the laptop (`ssh green`, the key
 tools/green_test.sh uses), so green holds no way back in.
 
 On green, as root (sudo asks for green's password once), printer first:
@@ -216,6 +217,7 @@ H=$(getent passwd "$U" | cut -d: -f6)
 B="$H/@REMOTE@/bundle"
 NOPRINTER=0; FIREWALL_OFF=0
 export DEBIAN_FRONTEND=noninteractive
+dpkg --configure -a   # finish any install an earlier, interrupted run left half done
 step() { printf '\n== %s\n' "$*"; }
 missing() { for p in "$@"; do dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null | grep -q '^ii' || printf '%s ' "$p"; done; }
 """
@@ -492,10 +494,20 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
+class GreenSsh(Ssh):
+    """provision.Ssh over IPv4 only. green.lan resolves to its IPv6 ULA first,
+    and ufw here opens SSH to the IPv4 /24 only, so a v6 connection would be
+    dropped; the LAN check also reads the laptop's address as IPv4."""
+
+    def __init__(self, target: str):
+        super().__init__(target)
+        self.base += ["-o", "AddressFamily=inet"]
+
+
 def main(argv=None) -> int:
     a = parser().parse_args(argv)
     try:
-        return setup(a, Ssh(a.host))
+        return setup(a, GreenSsh(a.host))
     except ProvisionError as e:
         print(f"green: {e}", file=sys.stderr)
         return 1

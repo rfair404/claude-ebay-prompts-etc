@@ -115,6 +115,7 @@ def test_autologin_only_when_asked_and_only_on_lightdm():
         gs.make_plan(facts(pkgs="gnome-shell 46 ii \n", dm="gdm3"), autologin="yes")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="green and the laptop are Linux")
 @pytest.mark.skipif(not shutil.which("bash"), reason="needs bash")
 def test_generated_scripts_are_valid_bash():
     plan, script = script_for(autologin="yes", tailscale="tailscale0")
@@ -232,3 +233,15 @@ def test_nothing_is_applied_on_air(tmp_path, monkeypatch):
         gs.setup(args(dry_run=False), ssh, say=lambda *_: None, run=FakeRun("", ""))
     assert ssh.calls == []
     assert gs.setup(args(), ssh, say=lambda *_: None, run=FakeRun("", "")) == 0  # dry run still works
+
+
+def test_ssh_to_green_is_ipv4_only():
+    # green.lan resolves to its IPv6 ULA first; ufw opens SSH to the IPv4 /24 only.
+    s = gs.GreenSsh("green")
+    assert s.base[-2:] == ["-o", "AddressFamily=inet"]
+    assert "AddressFamily=inet" in (ROOT / "tools" / "green_test.sh").read_text()
+
+
+def test_a_rerun_finishes_an_interrupted_apt_first():
+    _, script = script_for()
+    assert script.index("dpkg --configure -a") < script.index("apt-get install")

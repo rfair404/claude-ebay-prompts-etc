@@ -225,8 +225,9 @@ for one test file. `tools/green_test.sh --setup` builds green's venv once.
 Green is a thin client plus a print server. Its desk is a browser for the
 R2 pick-sheet links, Seller Hub and the `/ship/box` page on green's own
 `127.0.0.1:8770`. Its CUPS serves the Brother QL-1100 to the LAN. The heavy
-work and every key (eBay, R2, `config.yaml`, the ledgers) stay on the
-laptop. Every connection opens from the laptop over `ssh green` (host
+work, the eBay API keys and refresh tokens, the R2 keys, `config.yaml` and
+the ledgers stay on the laptop. Green holds only a browser login: Seller Hub
+signed in in its Firefox, which is an eBay session on green. Every connection opens from the laptop over `ssh green` (host
 `green.lan`, key `~/.ssh/green`, in `~/.ssh/config`), so green has no way
 back in. Green is optional: if it is down, label jobs wait in the laptop's
 queue, and `--laptop usb` puts the printer back on the laptop.
