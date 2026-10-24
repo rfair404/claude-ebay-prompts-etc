@@ -235,7 +235,7 @@ def compute_drift(by_sku: dict, truth: dict, sold: set,
     for sku, t in truth.items():
         row = by_sku.get(sku)
         if t is None:
-            if row and row.get("status") not in ("DRAFTED", ""):
+            if row and row.get("status") not in ("DRAFTED", "VOIDED", ""):
                 never_listed.append((sku, row.get("status")))
             continue
         if row is None:

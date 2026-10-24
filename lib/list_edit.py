@@ -75,6 +75,7 @@ verifies and lists that account's own policy IDs.
     python list_edit.py --withdraw-offer <id> --confirm    # end a live offer (keeps it, UNPUBLISHED)
     python list_edit.py --delete-offer <id> --confirm      # delete an offer (ends listing if live)
     python list_edit.py --delete-item <sku> --confirm      # delete inventory item + ALL its offers
+    python list_edit.py --void <sku> --confirm             # superseded DRAFTED row (no eBay ids) -> VOIDED
     python list_edit.py --check                             # legacy stub-status report
     python list_edit.py --store <name> ...                  # target a named ebay.stores.<name> account (GH #147)
 """
@@ -295,6 +296,8 @@ def _to_decimal_str(val: object) -> Optional[str]:
 #     lifecycle DRAFTED -> SYNCED -> PUBLISHED -> ENDED/DELETED. The SKU is a
 #     deterministic hash (see _sku_for), so the record can be created at DRAFT
 #     time and updated in place as the item is published/withdrawn/deleted.
+#     A DRAFTED row that was superseded before it reached eBay can be set to
+#     VOIDED (--void); --record/--review/--sync/--list then refuse that SKU.
 
 _LEDGER_FIELDS = ["sku", "status", "title", "price", "offer_id", "listing_id",
                   "url", "drafted_at", "synced_at", "published_at", "ended_at",
@@ -390,6 +393,53 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         return None
 
 
+def ledger_row(sku: str, store: Optional[str] = None) -> Optional[dict]:
+    """This SKU's row in `store`'s listings ledger, or None."""
+    import csv
+    path = _ledger_path(store)
+    if not sku or not path.exists():
+        return None
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        return next((r for r in csv.DictReader(f) if r.get("sku") == sku), None)
+
+
+class VoidedSkuError(ValueError):
+    """The SKU's ledger row is VOIDED: a superseded draft that must never
+    reach eBay. Raised before anything is written to eBay or the draft."""
+
+
+def _refuse_voided(sku: str, store: Optional[str]) -> None:
+    row = ledger_row(sku, store)
+    if row and (row.get("status") or "").upper() == "VOIDED":
+        raise VoidedSkuError(
+            f"sku {sku} is VOIDED in {_ledger_path(store)} (a superseded draft). "
+            f"Skipped; nothing was sent to eBay. This draft.md is stale.")
+
+
+def void_listing(sku: str, *, store: Optional[str] = None,
+                 confirm: bool = False) -> tuple[dict, str, bool]:
+    """Mark a superseded DRAFTED ledger row VOIDED, so a stray draft.md that
+    still carries the SKU can never create an offer. Refuses (ValueError) a
+    row that isn't DRAFTED or already has an eBay offer_id/listing_id — those
+    are real eBay objects; end or delete them instead.
+    DRY RUN unless confirm. Returns (row, ledger_path, written)."""
+    path = _ledger_path(store)
+    row = ledger_row(sku, store)
+    if row is None:
+        raise ValueError(f"no row for sku {sku} in {path}")
+    status = (row.get("status") or "").upper()
+    ids = [f"{k} {row[k]}" for k in ("offer_id", "listing_id") if (row.get(k) or "").strip()]
+    if ids:
+        raise ValueError(f"sku {sku} has {', '.join(ids)} on eBay; refusing to void. "
+                         f"Use --end / --delete-offer for a real eBay offer.")
+    if status != "DRAFTED":
+        raise ValueError(f"sku {sku} is {status or 'blank'}, not DRAFTED; refusing to void.")
+    if not confirm:
+        return row, str(path), False
+    upsert_listing(sku, "VOIDED", store=store, strict=True)
+    return row, str(path), True
+
+
 def set_hero_photo(draft_path: Path, name: str) -> list[str]:
     """Move one photo to the front of the draft's `photos:` list.
 
@@ -436,6 +486,7 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
         print(f"  [normalize] {norm['note']}")
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
+    _refuse_voided(sku, store)
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
         update_meta(draft_path, {"ebay_inventory_sku": sku})
     ledger = upsert_listing(sku, "DRAFTED", title=str(draft.get("title") or ""),
@@ -1841,6 +1892,7 @@ def create_or_update_listing(draft_path: Path,
 
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
+    _refuse_voided(sku, creds.store)
     policies, location_key = _resolve_policies_and_location(creds)
     category_id = _resolve_category_id(draft, creds)
 
@@ -2723,7 +2775,8 @@ def _cli() -> None:
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
     ap.add_argument("--delete-offer", metavar="OFFER_ID", help="Delete an offer by ID (permanent; ends listing if live; keeps SKU). DRY RUN unless --confirm.")
     ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
-    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item to actually act (otherwise dry runs).")
+    ap.add_argument("--void", metavar="SKU", help="Mark a superseded DRAFTED ledger row (no eBay offer/listing id) VOIDED, so --record/--review/--sync/--list refuse any draft.md still carrying the SKU. DRY RUN unless --confirm.")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item/--void to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--create-store-policies", action="store_true",
                     help="Create this store's three business policies FROM its storefront profile (storefronts.<name>.returns/.shipping) and print the IDs. Idempotent by name.")
@@ -2781,6 +2834,20 @@ def _cli() -> None:
             print(f"[OK] recorded DRAFTED — sku {sku}")
             if ledger:
                 print(f"  ledger: {ledger}")
+            return
+        if args.void:
+            row, ledger, written = void_listing(args.void, store=args.store,
+                                                confirm=args.confirm)
+            if not written:
+                print(f"[DRY RUN] Nothing written. This WOULD void sku {args.void}:")
+                print(f"  title:  {row.get('title') or '(none)'}")
+                print(f"  status: DRAFTED -> VOIDED (no eBay offer or listing)")
+                print(f"  ledger: {ledger}")
+                print(f"\n  To actually void: re-run with --confirm")
+            else:
+                print(f"[OK] voided sku {args.void} (DRAFTED -> VOIDED)")
+                print(f"  ledger: {ledger}")
+                print("  --record/--review/--sync/--list now refuse this SKU.")
             return
         if args.normalize:
             rep = normalize_draft_identity(Path(args.normalize))
