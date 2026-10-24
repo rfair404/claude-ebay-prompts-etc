@@ -1,5 +1,5 @@
 ---
-version: 1.6.0
+version: 1.7.0
 updated: 2026-10-24
 ---
 
@@ -83,15 +83,15 @@ shoot directory, so phases compose without re-deriving.
 
 Every item is in exactly one state, and every state has exactly one owner.
 The owner moves the item to the next state and hands it on. Everyone else
-who works on it (price researcher, copywriter, photo-editor, art director,
-presenter) is a helper: a helper returns its output to the owner and never
-moves the item itself. Most names are `client_ledger.csv` states; REVIEW
-and LIVE map onto ledger values as noted under the table. The table says who
-owns each state and what "done" means.
+who works on it (inventory-buyer, price researcher, copywriter,
+photo-editor, art director, presenter) is a helper: a helper returns its
+output to the owner and never moves the item itself. Most names are
+`client_ledger.csv` states; REVIEW and LIVE map onto ledger values as noted
+under the table. The table says who owns each state and what "done" means.
 
 | State | Owner | Done when (the evidence) | Hands to |
 |---|---|---|---|
-| **INTAKE** | inventory-buyer | It's ours or consigned to us, and it has a folder under `inventory/` with `context.txt`. Bought: `spend:` recorded. Consigned: a `client_ledger.csv` row. | Russell (shoot), via a shot list on his card |
+| **INTAKE** | inventory-manager, through `/intake` (`.claude/skills/intake/SKILL.md`); the inventory-buyer helps and keeps the cost | The item has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). For an owned bin, the inventory-buyer makes sure the bin's `context.txt` has `spend:` and `acquired:`; it never moves an item. | Russell (shoot), via a shot list on his card |
 | **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
 | **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. | listing-manager |
 | **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`grep <sku> listings_ledger*.csv` in the main checkout, since a failed write can still print `[OK]`), PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
