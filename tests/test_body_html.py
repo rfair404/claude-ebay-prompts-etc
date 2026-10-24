@@ -83,6 +83,62 @@ def test_the_defect_text_is_never_dropped():
     assert "half an inch across pulled away" in html
 
 
+MORE_PLAYBOY = (
+    "## More Playboy\n\n"
+    "| Year | Full-year lot | Monthly singles |\n"
+    "|---|---|---|\n"
+    "| 1978 | [1978 lot](https://www.ebay.com/itm/111) | [Singles](https://www.ebay.com/itm/112) |\n"
+    "| 1979 | [1979 lot](https://www.ebay.com/itm/121) | [Singles](https://www.ebay.com/itm/122) |\n"
+    "\n"
+    "Combined shipping on every order.\n"
+)
+
+
+def test_a_pipe_table_renders_as_a_table_with_links():
+    html = L._body_to_html(MORE_PLAYBOY)
+    assert html.count("<table>") == 1 and html.count("</table>") == 1, html
+    assert html.count("<th>") == 3, f"expected 3 header cells:\n{html}"
+    assert html.count("<tr>") == 3, f"expected header + 2 rows:\n{html}"
+    assert html.count("<td>") == 6, f"expected 2 rows x 3 cells:\n{html}"
+    assert "<th>Full-year lot</th>" in html
+    assert '<td><a href="https://www.ebay.com/itm/111">1978 lot</a></td>' in html
+    assert '<td><a href="https://www.ebay.com/itm/122">Singles</a></td>' in html
+    assert "|" not in html, f"pipe markers leaked into the HTML:\n{html}"
+    # The table closes before what follows it.
+    assert html.index("</table>") < html.index("<p>Combined shipping")
+
+
+def test_a_short_body_row_keeps_cells_under_their_headings():
+    md = "| Year | Lot | Singles |\n|---|---|---|\n| 1980 | [Lot](https://e.com/1) |\n"
+    html = L._body_to_html(md)
+    assert html.count("<td>") == 3, f"short row not padded to 3 cells:\n{html}"
+
+
+def test_a_header_without_a_separator_stays_escaped_text():
+    md = "| Year | Lot |\n| 1978 | lot |\n"
+    html = L._body_to_html(md)
+    assert "<table>" not in html, f"no separator, but a table was built:\n{html}"
+    assert "<p>| Year | Lot | | 1978 | lot |</p>" in html
+
+
+def test_a_separator_with_the_wrong_column_count_is_not_a_table():
+    md = "| Year | Lot | Singles |\n|---|---|\n| 1978 | a | b |\n"
+    html = L._body_to_html(md)
+    assert "<table>" not in html, f"mismatched separator built a table:\n{html}"
+    assert "| Year | Lot | Singles |" in html, "the text was dropped"
+
+
+def test_html_in_table_cells_stays_escaped():
+    md = ("| Year | Note |\n|---|---|\n"
+          "| <script>alert(1)</script> | <b onmouseover=x>hi</b> |\n"
+          '| 1978 | [x](https://e.com/a"onmouseover="alert(1)) |\n')
+    html = L._body_to_html(md)
+    assert "<script>" not in html and "<b " not in html, html
+    assert "<td>&lt;script&gt;alert(1)&lt;/script&gt;</td>" in html
+    assert '"onmouseover' not in html, f"a quote in a URL broke out of href:\n{html}"
+    assert 'href="https://e.com/a&quot;onmouseover=&quot;alert(1"' in html, html
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

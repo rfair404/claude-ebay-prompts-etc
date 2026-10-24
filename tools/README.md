@@ -68,6 +68,7 @@ assumed stale. These are how you check.
 | Script | What it does |
 |---|---|
 | `sales_report.py` | One command: syncs eBay's actuals, then draws the dashboard. |
+| `report_lot.py` | The full account of one lot (an estate buy or a consignment intake): every item with its status, ask and sale, plus paid, asking and net-kept totals. Writes `reports/lots/<lot>-<date>.txt` and `.csv`; `--print` sends the text to CannonBW. Behind `/report-lot`. |
 | `promote.py` | Plans a Promoted Listings campaign. Proposes; never writes. |
 | `session_observer.py` | Reads our own transcripts and finds the friction (V4_PLAN Phase 5). |
 

@@ -261,7 +261,8 @@ def compute_drift(by_sku: dict, truth: dict, sold: set,
     protected = sum(1 for s, r in by_sku.items()
                     if (r.get("status") or "") == "SOLD" and s in sold
                     and truth.get(s) and not _live(truth[s]))
-    orphan = [sku for sku in by_sku if sku not in truth]
+    orphan = [sku for sku, r in by_sku.items()
+              if sku not in truth and r.get("status") != "VOIDED"]
     unbacked = sorted(s for s, r in by_sku.items()
                       if (r.get("status") or "") == "SOLD" and s not in sold
                       and truth.get(s) and not _live(truth[s]))
