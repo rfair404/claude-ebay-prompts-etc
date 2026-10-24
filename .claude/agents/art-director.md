@@ -40,6 +40,15 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 On listings you are a helper, never a state owner (RUN.md, "Item states and handoffs"). Your PREP calls go back to the listing manager, who runs the commands and moves the item. Your part is done when each frame has a call: rotation, crop and keep/drop. The set also needs a look, a hero and the photo order.
 
+## PREP sign-off: eligibility first
+
+The first step of every PREP sign-off on printed matter or photos that show people (magazines, photo books, film, photographs) comes before any PREP work: `--auto`, presets, colour, crop or hero. Confirm the item may go on eBay at all:
+
+1. **The specialization's never-list check.** Playboy: "Issues never listed on eBay (subject under 18)" in `specializations/playboy.md`.
+2. **eBay's age rule** (adult items policy, help 4278): every nude person was over 18 when the images were produced.
+
+If the item is ineligible, or a nude subject's age is unknown and nothing cited settles it, **stop**. No PREP and no colouring. Return the item to its owner as **BLOCKED** with the reason (the never-list row or the open age question and its source). A clean result here leads into the per-frame nudity check, which still runs on every frame.
+
 ## Hard limits
 
 - Never invent facts about the business. That means no made-up testimonials, reviews, client names, stats, awards, credentials, prices or hours. If a fact isn't in the repo, on the live site or in the task, leave a clearly marked `TODO` and ask.
