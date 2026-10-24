@@ -1,5 +1,5 @@
 ---
-version: 1.4.0
+version: 1.4.1
 updated: 2026-10-23
 ---
 
@@ -417,8 +417,9 @@ rows not yet paid, unpaid buyouts above 0.00, and any adjustment to a row
 already paid. It adds one row to `inventory/_consign/K01/settlements.csv`
 (`settlement_id` like `K01-S001`) and writes the statement to
 `reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. If the
-total due is under the client's `min_payout`, nothing is written and it
-carries forward. When the agreement ends, `settle K01 --through <date>
+total due is under the client's `min_payout`, the sales and adjustments
+carry forward; a buyout is still paid in that run (agreement §7.2), and with
+no buyout nothing is written. When the agreement ends, `settle K01 --through <date>
 --final` pays the full balance, a negative one included. A
 statement is written once and never overwritten. `settle` does not record a
 payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
