@@ -237,19 +237,40 @@ def test_ledger_columns_and_their_order():
     assert header == LEDGER_COLUMNS, header
 
 
+LEDGER_STATUSES = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "SHIPPED", "ENDED",
+                   "DELETED", "OUT_OF_STOCK", "VOIDED", ""}
+
+
+def _unknown_ledger_statuses(p):
+    seen = set()
+    with p.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            seen.add((row.get("status") or "").strip())
+    return sorted(seen - LEDGER_STATUSES)
+
+
 def test_ledger_statuses_stay_in_the_known_set():
     """A status nobody recognises silently drops rows out of every report."""
     p = ROOT / "listings_ledger.csv"
     if not p.exists():
         return
-    known = {"DRAFTED", "SYNCED", "PUBLISHED", "SOLD", "SHIPPED", "ENDED", "DELETED",
-             "OUT_OF_STOCK", ""}
-    seen = set()
-    with p.open(encoding="utf-8", newline="") as fh:
-        for row in csv.DictReader(fh):
-            seen.add((row.get("status") or "").strip())
-    unknown = seen - known
-    assert not unknown, f"unknown ledger statuses: {sorted(unknown)}"
+    unknown = _unknown_ledger_statuses(p)
+    assert not unknown, f"unknown ledger statuses: {unknown}"
+
+
+def test_ledger_status_lock_runs_without_a_real_ledger():
+    """CI has no listings_ledger.csv, so the test above skips there. This one
+    pins the set on a fixture row, so a new status (VOIDED, from --void) can't
+    pass CI and then fail on Russell's machine."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "listings_ledger.csv"
+        with p.open("w", encoding="utf-8", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(LEDGER_COLUMNS)
+            w.writerow(["abc12345", "VOIDED"] + [""] * (len(LEDGER_COLUMNS) - 2))
+        unknown = _unknown_ledger_statuses(p)
+    assert not unknown, f"unknown ledger statuses: {unknown}"
 
 
 # ---------------------------------------------------------------------------

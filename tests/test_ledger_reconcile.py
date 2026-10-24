@@ -214,13 +214,14 @@ def test_ledger_row_ebay_does_not_know_is_orphan():
     assert r["orphan"] == ["a"]
 
 
-def test_drafted_never_synced_row_is_not_never_listed():
-    # An inventory item with no offer at all is a legitimate unsynced draft,
-    # not a "no offer" anomaly.
-    by_sku = {"a": _drow(sku="a", status="DRAFTED")}
-    truth = {"a": None}
-    r = lr.compute_drift(by_sku, truth, sold=set())
-    assert r["never_listed"] == []
+def test_drafted_or_voided_never_synced_row_is_not_never_listed():
+    # An inventory item with no offer at all is a legitimate unsynced draft
+    # (or a superseded one, list_edit.py --void), not a "no offer" anomaly.
+    for status in ("DRAFTED", "VOIDED"):
+        by_sku = {"a": _drow(sku="a", status=status)}
+        truth = {"a": None}
+        r = lr.compute_drift(by_sku, truth, sold=set())
+        assert r["never_listed"] == [], status
 
 
 def test_inventory_item_with_no_offer_and_nondraft_status_is_flagged():
