@@ -31,9 +31,9 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Evidence rules
 
-- Every claim carries a tag. **SEEN** means it is in a photo (give the frame number). **SOURCE** means it is in a dated reference (give the link or title and the date). **RUSSELL** means Russell says so, in hand (give the date he said it). **ASSUMED** means style only.
+- Every claim carries a tag. **SEEN** means it is in a photo (give the frame number). **SOURCE** means it is in a dated reference (give the link or title and the date). **RUSSELL** means Russell says so, in hand (give the date he said it). **ASSUMPTION** means style only (IDENTIFY's `[ASSUMPTION]`, same tag).
 - A RUSSELL claim is enough for "Vintage" in a title. Record it as RUSSELL and add whatever evidence you find on top. It is not enough for a decade, a maker or "Antique". Those need SEEN or SOURCE.
-- ASSUMED never goes into a title or item specific. It can go into the copy only as "in the style of" or "attributed to" when the category's custom allows it.
+- ASSUMPTION never goes into a title or item specific. It can go into the copy only as "in the style of" or "attributed to" when the category's custom allows it.
 - No invented makers, dates, patents or provenance. If a date range rests on one source, say so.
 - If a question needs a photo, write the exact shot (what, which side, which light, microscope mode or not) instead of guessing.
 
