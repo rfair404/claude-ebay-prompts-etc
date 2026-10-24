@@ -396,7 +396,9 @@ lead row. Rows paid before the fee existed are left alone. The report shows
 `sold_at`, `item_price`, `ebay_fee` (that channel's fee, 0.00 if none),
 `actual_postage` (0.00 if none) and `order_id` if it has one. `sync` never
 overwrites those or calls the sale vanished, and flags an eBay sale that
-matches the same item. It clears 40 days after `sold_at`. `channel` `mall` is
+matches the same item. Type `funds_received` when the channel's money reaches
+us: the sale then clears at the end of the month it sold (agreement §5.1(b)),
+so it is paid on the 15th after, and it is flagged until that date is typed. `channel` `mall` is
 the antique-mall booth, where every consigned antique sells: type `sold_at`,
 `item_price` and `card_paid` (the part paid by card, 0.00 for cash), and sync
 works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`

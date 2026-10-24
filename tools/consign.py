@@ -58,7 +58,8 @@ or client_bears_loss (the client carries all of it).
 Channels. A blank channel is eBay, read from the sales ledgers. Any other
 channel is a sale typed by hand (sold_at, item_price, ebay_fee for that
 channel's fee, actual_postage) that sync never overwrites or calls vanished;
-it clears 40 days after sold_at. channel `mall` is the antique-mall booth:
+it clears at the end of the month it sold, once funds_received (typed when
+the money reaches us) is set, and never before. channel `mall` is the antique-mall booth:
 type sold_at, item_price and card_paid, and sync works out the fee (10% plus
 3% of card_paid), with no postage. Every sold row pays handling, whatever
 the channel.
@@ -88,6 +89,7 @@ There is no `set` command: edit the CSV by hand, and `sync` validates it.
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import hashlib
 import io
@@ -139,7 +141,8 @@ COLUMNS = [
     # floor: the client's lowest price (Exhibit A). return_notice_sent: the
     # date the client was told to pick an unsold item up, typed by hand.
     # card_paid: on a mall sale, the part the buyer paid by card.
-    "channel", "floor", "return_notice_sent", "card_paid",
+    # funds_received: off eBay, the date the channel's money reached us.
+    "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
     # the row's individual frames (the item shot alone), a subset of photos;
     # `match` fills it. A frame here is no other row's.
     "shots",
@@ -153,7 +156,7 @@ MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded
 SALE_MONEY = tuple(k for k in MONEY
                    if k not in ("est_low", "est_high", "buyout_price", "floor"))
 DATES = ("sold_at", "cleared_on", "paid_to_client_date", "intake", "delivered_at",
-         "return_notice_sent")
+         "return_notice_sent", "funds_received")
 # Copied from the sales ledger row on every sync. ad_fee / actual_postage are
 # copied only when the sales ledger knows them: a blank there means "not read
 # yet", and a figure typed into the client ledger by hand is kept instead.
@@ -256,7 +259,7 @@ EXPORT_COLUMNS = [
     "net_before_postage", "ad_fee", "actual_postage", "handling", "other_costs",
     "other_costs_note", "buyout_price", "net", "split_locked", "client_share",
     "actuals_complete", "cleared_on", "settlement_id", "paid_to_client_date",
-    "channel", "floor", "return_notice_sent", "card_paid",
+    "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
 ]
 
 
@@ -326,6 +329,10 @@ def channel_of(r: dict) -> str:
 
 def off_ebay(r: dict) -> bool:
     return channel_of(r) != EBAY
+
+
+def month_end(d: date) -> date:
+    return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
 
 
 def iso(v: str) -> Optional[date]:
@@ -1291,11 +1298,21 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
     r["cleared_on"] = ""
     if sale and not r["paid_to_client_date"] and not r["delivered_at"]:
         flags.append(f"no delivery date: clears {RETURN_WINDOW_DAYS} days after the sale")
-    if sold and r["actuals_complete"] == "yes" and r["sold_at"]:
+    # Off eBay (agreement §5.1(b)): cleared at the end of the month it sold,
+    # once its money has reached us (funds_received, typed by hand), and paid
+    # on the 15th after; funds that come later roll to the next payout run.
+    if hand_sold and not r["funds_received"] and not r["paid_to_client_date"]:
+        flags.append(f"{channel} sale: type funds_received so it can clear (at the "
+                     f"end of the month it sold, once the money is in)")
+    window_end = None
+    if hand_sold and r["actuals_complete"] == "yes" and r["funds_received"]:
+        window_end = month_end(date.fromisoformat(r["sold_at"]))
+    elif sale and r["actuals_complete"] == "yes" and r["sold_at"]:
         window_end = date.fromisoformat(r["sold_at"]) + timedelta(days=RETURN_WINDOW_DAYS)
         if r["delivered_at"]:
             window_end = max(window_end, date.fromisoformat(r["delivered_at"])
                              + timedelta(days=DELIVERY_WINDOW_DAYS))
+    if window_end is not None:
         if window_end <= today:
             state = "CLEARED"
             r["cleared_on"] = window_end.isoformat()

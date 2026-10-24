@@ -675,20 +675,30 @@ def test_mall_fee_is_worked_out_with_no_postage(card, fee, net, share, complete)
     assert (r["actual_postage"], r["handling"], r["ad_fee"]) == ("0.00", "2.00", "0.00")
 
 
-def test_a_sale_typed_by_hand_is_kept_and_clears_40_days_on(shop):
+PAID_IN = (TODAY - timedelta(days=35)).isoformat()      # funds received 35 days ago
+
+
+def test_a_sale_typed_by_hand_is_kept_and_clears_at_month_end_once_paid(shop):
     d = _intake(shop, [
         {"item_id": "C001", "channel": "mall", "sold_at": OLD, "item_price": "100.00",
-         "card_paid": "0.00"},
+         "card_paid": "0.00", "funds_received": PAID_IN},
         {"item_id": "C002", "channel": "dealer", "sold_at": OLD, "item_price": "50.00",
-         "ebay_fee": "5.00", "actual_postage": "0.00", "order_id": "INV-7"},
+         "ebay_fee": "5.00", "actual_postage": "0.00", "order_id": "INV-7",
+         "funds_received": PAID_IN},
         {"item_id": "C003", "channel": "dealer", "sold_at": NEW, "item_price": "50.00"},
-        {"item_id": "C004", "channel": "mall", "sold_at": NEW, "item_price": "30.00"}])
+        {"item_id": "C004", "channel": "mall", "sold_at": NEW, "item_price": "30.00"},
+        # money all typed but not received yet: stays SOLD, however old the sale
+        {"item_id": "C005", "channel": "dealer", "sold_at": OLD, "item_price": "50.00",
+         "ebay_fee": "5.00", "actual_postage": "0.00"},
+        # sold and paid today: clears when this month ends, not before
+        {"item_id": "C006", "channel": "mall", "sold_at": TODAY.isoformat(),
+         "item_price": "20.00", "card_paid": "0.00", "funds_received": TODAY.isoformat()}])
     fee = {"K99": {"client_code": "K99", "handling_fee": "2.00"}}
     for _ in range(2):                           # nothing typed is overwritten or lost
         assert consign.sync_intake(d, consign.Books(), fee, apply=True, today=TODAY) == 0
         got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
         mall, dealer = got["K99-C001"], got["K99-C002"]
-        cleared = (date.fromisoformat(OLD) + timedelta(days=40)).isoformat()
+        cleared = consign.month_end(date.fromisoformat(OLD)).isoformat()  # month of sale
         assert (mall["state"], mall["cleared_on"], mall["ebay_fee"], mall["handling"],
                 mall["client_share"]) == ("CLEARED", cleared, "10.00", "2.00", "44.00")
         assert (dealer["state"], dealer["order_id"], dealer["net"], dealer["handling"]) == (
@@ -697,6 +707,10 @@ def test_a_sale_typed_by_hand_is_kept_and_clears_40_days_on(shop):
         assert got["K99-C003"]["state"] == "SOLD"
         assert "dealer sale: type item_price, ebay_fee" in got["K99-C003"]["state_note"]
         assert "mall sale: type item_price and card_paid" in got["K99-C004"]["state_note"]
+        assert got["K99-C005"]["state"] == "SOLD"
+        assert "dealer sale: type funds_received so it can clear" in got["K99-C005"]["state_note"]
+        assert (got["K99-C006"]["state"], got["K99-C006"]["cleared_on"]) == ("SOLD", "")
+        assert "funds_received" not in mall["state_note"]
 
 
 def test_an_ebay_sale_on_a_channel_row_is_flagged_not_taken(shop):
