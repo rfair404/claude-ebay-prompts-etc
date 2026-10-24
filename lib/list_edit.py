@@ -319,20 +319,35 @@ def _ledger_path(store: Optional[str] = None) -> Path:
     return store_paths(store).listings_ledger
 
 
+class LedgerWriteError(RuntimeError):
+    """The listings ledger could not be written. str() reads
+    "ledger write: <path>: <error>", the line the CLI prints after [FAIL]."""
+
+    def __init__(self, path, err: BaseException):
+        self.path, self.err = path, err
+        super().__init__(f"ledger write: {path}: {err}")
+
+
 def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
                    offer_id: str = "", listing_id: str = "", url: str = "",
-                   store: Optional[str] = None) -> Optional[str]:
+                   store: Optional[str] = None, strict: bool = False) -> Optional[str]:
     """Create or update this item's row in the listings ledger (keyed by SKU).
 
     Status only advances sensibly: a re-sync of an already-PUBLISHED item
     keeps PUBLISHED; DRAFTED never overwrites a later status; ENDED/DELETED
     are explicit and always apply. Only fields that are provided are written
     (so a later update never blanks an earlier value). Each write nudges the
-    Google Drive copy (lib/gdrive_mirror.py). Best-effort — never raises
-    (ledger bookkeeping must not break a sync/publish)."""
+    Google Drive copy (lib/gdrive_mirror.py).
+
+    A failed write is never silent. With strict=True it raises
+    LedgerWriteError (record_draft, and --list before it publishes); otherwise
+    it prints "[WARN] ledger write: <path>: <error>" to stderr and returns
+    None, so bookkeeping after a sync/publish/ship never breaks the step it
+    records."""
     if not sku:
         return None
     import csv
+    path = None
     try:
         path = _ledger_path(store)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -367,7 +382,11 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
                 w.writerow({k: r.get(k, "") for k in _LEDGER_FIELDS})
         ledger_changed(path)
         return str(path)
-    except (OSError, csv.Error):
+    except (OSError, csv.Error) as e:
+        err = LedgerWriteError(path, e)
+        if strict:
+            raise err from e
+        print(f"[WARN] {err}", file=sys.stderr)
         return None
 
 
@@ -409,7 +428,8 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
     item's ledger record (status DRAFTED). Lets the record exist from the
     moment a title is chosen; sync/publish later update the same row.
     `store` selects which store's ledger file the row lands in (GH #158).
-    Returns (sku, ledger_path)."""
+    Returns (sku, ledger_path). Creating that row is the point, so a failed
+    ledger write raises LedgerWriteError."""
     draft_path = _resolve_draft_path(draft_path)
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
     if norm["changed"]:
@@ -419,7 +439,8 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
         update_meta(draft_path, {"ebay_inventory_sku": sku})
     ledger = upsert_listing(sku, "DRAFTED", title=str(draft.get("title") or ""),
-                            price=_to_decimal_str(draft.get("price")) or "", store=store)
+                            price=_to_decimal_str(draft.get("price")) or "", store=store,
+                            strict=True)
     return sku, ledger
 
 
@@ -1796,12 +1817,15 @@ def build_review_card(draft_path: Path,
 # ---------------------------------------------------------------------------
 
 def create_or_update_listing(draft_path: Path,
-                             creds: Optional[EbayCredentials] = None) -> SyncResult:
+                             creds: Optional[EbayCredentials] = None,
+                             strict_ledger: bool = False) -> SyncResult:
     """Sync a draft.md into eBay as an UNPUBLISHED (draft) offer.
 
     CREATE flow when frontmatter has no ebay_offer_id; EDIT flow otherwise.
     The offer is never published — that is a manual user action in Seller Hub.
     The SYNCED ledger row is written to `creds.store`'s own file (GH #158).
+    strict_ledger=True raises LedgerWriteError when that row can't be written
+    (--sync, and --list so nothing goes live untracked); otherwise it only warns.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -1878,10 +1902,16 @@ def create_or_update_listing(draft_path: Path,
 
     # 5) ledger: upsert this item's lifecycle record (-> SYNCED; a re-sync of
     #    an already-published item keeps PUBLISHED).
-    if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
-                      offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or "",
-                      store=creds.store):
-        print(f"  [ledger] {sku} -> SYNCED")
+    try:
+        if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
+                          offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or "",
+                          store=creds.store, strict=strict_ledger):
+            print(f"  [ledger] {sku} -> SYNCED")
+    except LedgerWriteError:
+        # The offer already exists on eBay; say which one before the CLI fails.
+        print(f"  eBay offer {offer_id} (sku {sku}) was {operation}; "
+              f"its SYNCED ledger row was not written.", file=sys.stderr)
+        raise
 
     # 6) Ask eBay what we just wrote to. An update to a PUBLISHED offer
     #    revises the live listing; the caller must not call it a draft.
@@ -2272,6 +2302,7 @@ class PublishResult:
     listing_id: Optional[str] = None   # set only when actually published
     listing_url: Optional[str] = None
     promotion: Optional[str] = None    # lib/auto_promote outcome, set on a real publish
+    ledger_error: Optional[str] = None  # "ledger write: <path>: <error>" if the PUBLISHED row failed
 
 
 def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
@@ -2331,14 +2362,21 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
                 time.sleep(2.0 * (attempt + 1)); continue
             raise
     listing_id = str(resp.get("listingId") or "")
+    ledger_error = None
     if listing_id:
         update_meta(draft_path, {
             "ebay_listing_id": listing_id,
             "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
-        upsert_listing(sku, "PUBLISHED", title=title, offer_id=offer_id,
-                       listing_id=listing_id, price=price,
-                       url=f"https://www.ebay.com/itm/{listing_id}", store=creds.store)
+        # The listing is already live: record a failed ledger write on the
+        # result (the CLI fails on it) instead of raising and losing the URL.
+        try:
+            upsert_listing(sku, "PUBLISHED", title=title, offer_id=offer_id,
+                           listing_id=listing_id, price=price,
+                           url=f"https://www.ebay.com/itm/{listing_id}",
+                           store=creds.store, strict=True)
+        except LedgerWriteError as e:
+            ledger_error = str(e)
     # Promotion is part of LIST: a new listing goes into the cost-per-sale
     # campaign the moment it is live. Best-effort by construction: the listing
     # is already public, so this returns a message and never raises.
@@ -2350,7 +2388,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
                          listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None),
-                         promotion=promotion)
+                         promotion=promotion, ledger_error=ledger_error)
 
 
 # ---------------------------------------------------------------------------
@@ -2789,7 +2827,8 @@ def _cli() -> None:
             return
         if args.sync:
             sync_creds = load_credentials(store=_resolve_store(args.sync, args.store))
-            res = create_or_update_listing(Path(args.sync), creds=sync_creds)
+            res = create_or_update_listing(Path(args.sync), creds=sync_creds,
+                                           strict_ledger=True)
             print(_sync_headline(res))
             print(f"  offer_id:  {res.offer_id}")
             print(f"  sku:       {res.inventory_sku}")
@@ -2824,6 +2863,9 @@ def _cli() -> None:
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
                 if res.promotion: print(f"  Promoted Listings: {res.promotion}")
+            if res.ledger_error:
+                print(f"[FAIL] {res.ledger_error}", file=sys.stderr)
+                sys.exit(1)
             return
         if args.list_target:
             # One-step LIST = sync (create/update the offer) then publish it.
@@ -2831,7 +2873,8 @@ def _cli() -> None:
             # shows a DRY RUN of what would go live. This is the path the agent
             # runs ONLY after a human approves the REVIEW card.
             list_creds = load_credentials(store=_resolve_store(args.list_target, args.store))
-            sres = create_or_update_listing(Path(args.list_target), creds=list_creds)
+            sres = create_or_update_listing(Path(args.list_target), creds=list_creds,
+                                            strict_ledger=True)
             print(f"{_sync_headline(sres)} ({len(sres.photo_eps_urls)} photos)")
             res = publish_offer(Path(args.list_target), creds=list_creds, confirm=args.confirm)
             if res.status_before == "PUBLISHED":
@@ -2847,6 +2890,9 @@ def _cli() -> None:
                 if res.listing_url: print(f"  {res.listing_url}")
                 print("  This listing is now public and accepting buyers.")
                 if res.promotion: print(f"  Promoted Listings: {res.promotion}")
+            if res.ledger_error:
+                print(f"[FAIL] {res.ledger_error}", file=sys.stderr)
+                sys.exit(1)
             return
         if args.update:
             if not args.fields:
@@ -2937,6 +2983,9 @@ def _cli() -> None:
                 print(f"{k}: {v}")
             return
         ap.print_help()
+    except LedgerWriteError as e:
+        print(f"[FAIL] {e}", file=sys.stderr)
+        sys.exit(1)
     except (EbayAuthError, EbayAPIError, ConfigError, ValueError, FileNotFoundError) as e:
         print(f"[X] {type(e).__name__}: {e}", file=sys.stderr)
         body = getattr(e, "body", None)

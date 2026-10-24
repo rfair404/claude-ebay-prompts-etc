@@ -30,8 +30,8 @@ with the firm's name/address set beneath it. So:
 CLIP puts images and text in one space, so the result answers both "find marks
 that look like this crop" and "find marks described as an eagle in a lozenge".
 
-Retrieval is a CANDIDATE FINDER, not an identification — the same rule the
-marble index carries. And an attribution only pays if buyers search it: run the
+Retrieval is a CANDIDATE FINDER, not an identification — the same rule
+every vindex index carries. And an attribution only pays if buyers search it: run the
 market test in kb/articles/makers-marks.md before a name touches a title.
 
     python tools/marks_ingest.py --survey          # which leaves are register pages

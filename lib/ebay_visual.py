@@ -2,9 +2,9 @@
 """Visual library of eBay SOLD listings — a priced visual comp finder.
 
 Given a reference photo, return the most visually-similar *sold* eBay listings
-together with their realized prices. Complements lib/marble_index.py (forum
-photos, no prices) with priced comps. Embedding + http + storage come from the
-shared CLIP core (lib/vindex.py) — same space as the forum + MCSA indexes, so
+together with their realized prices. Complements lib/mcsa_index.py (labeled
+reference photos, no prices) with priced comps. Embedding + http + storage come
+from the shared CLIP core (lib/vindex.py) — same space as the MCSA index, so
 results are comparable (and unifiable). CLIP-only since the visual-index refactor.
 
 Why a separate ingester: eBay sold data comes from the Apify actor
@@ -26,7 +26,7 @@ Index: kb/index/ebay-sold/ (gitignored, regenerable).
   emb.npy     float32 [N,D] L2-normalised CLIP embeddings, row-aligned to meta
   state.json  dedup sets + last_sync_utc + {model, dim}
 
-Honesty contract (same as marble_index): similarity finds *candidates*, it does
+Honesty contract: similarity finds *candidates*, it does
 NOT identify maker/era or guarantee a comp is truly comparable. Treat the
 top-K as priced look-alikes to vet — condition, size, and authenticity still
 decide whether a sold listing is a valid comp (see prompts/price.md).
