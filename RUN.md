@@ -1,5 +1,5 @@
 ---
-version: 1.2.0
+version: 1.3.0
 updated: 2026-10-23
 ---
 
@@ -333,8 +333,9 @@ client. Names and contacts live only in `inventory/_consign/clients.csv`
 (`client_code,name,contact,split,terms,opened`; `split` 0.5 = 50/50 of net).
 Its optional columns are `agreement_signed` (date), `w9_on_file` (yes/no, a
 flag only, never the TIN), `payee_type`, `payout_method` (last 4 digits at
-most), `payout_cadence`, `floor_main`, `floor_junk`, `loss_rule` and
-`abandon_election`. `loss_rule` is `split` (the default: the client carries
+most), `payout_cadence`, `floor_main`, `floor_junk`, `loss_rule`,
+`abandon_election` and `handling_fee` (blank = no fee; set it, normally to
+2.00, only when the client's signed agreement names the fee). `loss_rule` is `split` (the default: the client carries
 their split of a loss) or `client_never_owes` (a loss pays the client $0).
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
@@ -377,6 +378,16 @@ and the note "in lot L1 with K01-C001", and the report counts the lot once.
 a row sells, and that split is used from then on. A later change in
 `clients.csv` applies only to rows that sell after it.
 
+**Handling.** Each sale pays a flat handling fee for packing materials (box,
+fill, tape, label): `net = net_before_postage - ad_fee - actual_postage -
+handling - other_costs`, then the split. It comes off before the split, as
+postage does, so a $2.00 fee costs the client $1.00 at 50/50. The fee is the
+client's `handling_fee` (blank = no fee), stamped on the row's `handling`
+column when it sells; a later change in `clients.csv` doesn't move it. Type a
+larger figure into `handling` for an oversize box. A lot pays one fee, on its
+lead row. Rows paid before the fee existed are left alone. The report shows
+"handling kept", and settlements and statements carry a `handling` column.
+
 **Settlements.** `settle` gathers what is owed through `--through`: CLEARED
 rows not yet paid, unpaid buyouts above 0.00, and any adjustment to a row
 already paid. It adds one row to `inventory/_consign/K01/settlements.csv`
@@ -387,6 +398,10 @@ payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
 on that settlements row, and the next `sync --apply` copies the date and
 `settlement_id` onto the rows. The report's paid-this-year total comes from
 `settlements.csv`.
+
+Never copy a file over `client_ledger.csv`. Bring hand-built rows in with
+`python -m lib.cli consign import <intake> <file.csv> --client <code>`; import
+merges into the current format and keeps lots, splits and paid state.
 
 There is no `set` command: edit the CSV, and `sync` refuses an unknown state,
 a DISPOSED row without a note, an EXCLUDED row without a buyout price, a bad
@@ -407,7 +422,8 @@ paid; a later change is flagged with the adjustment, and the next `settle`
 carries it.
 
 An older ledger loads as it is. The first `sync --apply` adds the new columns
-(`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`) and
+(`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`,
+`handling`) and
 rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
 
 ## Background dispatch (optional, #59)
