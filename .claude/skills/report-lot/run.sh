@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full account of one lot: item ledger + summary, written to reports/lots/
-# and (with --print) printed on CannonBW. Runs the main checkout's tool and
+# and (only with --print, when Russell asks) printed on CannonBW. Runs the main checkout's tool and
 # venv, where the ledgers and config.yaml live; the work is in
 # tools/report_lot.py.
 set -uo pipefail

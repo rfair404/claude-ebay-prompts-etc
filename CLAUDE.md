@@ -158,6 +158,15 @@ sheet per box to R2 and prints the links to reply with. To print on paper,
 use `/pl`. [`prompts/pick_list.md`](prompts/pick_list.md) has the details.
 Don't reply with `127.0.0.1` links, the terminal report, or a file path.
 
+## Nothing prints unless Russell asks
+
+`/pl` (pick sheets) and shipping labels are the only things that go to a
+printer on command. Every other report, list or inventory update (lot
+accounts, client inventories, catalogs, aging lists) goes to Russell as an
+R2 link from `python -m lib.cli offsite share <file>`. Print only when his
+own words ask for paper. Don't offer to print and don't put an `lp` step on
+his card. Tools keep printing behind an opt-in `--print` flag.
+
 ## Streaming setup on a new machine
 
 When asked to set a computer up for eBay Live / OBS streaming, work through
