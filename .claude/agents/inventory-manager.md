@@ -33,7 +33,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Item states
 
-You own three states (RUN.md, "Item states and handoffs"). **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist, `prep --auto` has run, and `--record` has stamped the SKU with the ledger row actually written (`grep <sku> listings_ledger*.csv`). Then hand it to the listing-manager with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you record or hand anything on. An item missing a piece is BLOCKED, not handed off.
+You own three states (RUN.md, "Item states and handoffs"). **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. Then hand it to the listing-manager, who numbers it, with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you hand anything on. An item missing a piece is BLOCKED, not handed off.
 
 ## The house pricing rules (binding)
 

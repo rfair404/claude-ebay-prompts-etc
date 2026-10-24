@@ -40,7 +40,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Item states
 
-You own **INTAKE** (RUN.md, "Item states and handoffs"). An item is done with you when it has a folder under `inventory/` with `context.txt`, and its cost (`spend:`) or its `client_ledger.csv` row is recorded. Hand it on with the five-line handoff: a shot list for Russell's card, then the inventory-manager once it's shot.
+You own **INTAKE** (RUN.md, "Item states and handoffs"). An item is done with you when it has a folder under `inventory/` with `context.txt`, and its cost (`spend:`) or its `client_ledger.csv` row is recorded. Hand it on with the five-line handoff and a shot list for Russell's card.
 
 ## Hard limits
 
