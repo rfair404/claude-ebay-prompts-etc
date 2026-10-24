@@ -32,7 +32,9 @@ ESTATE ITEM STATUS
 An item is the shallowest folder holding a draft or photos. Its listings come
 from both stores' ledgers merged with the drafts on disk (lib/report.collect).
 Status, best first: SOLD (a sales-ledger row), LIVE (published and not ended),
-ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY.
+ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY, NOT SHOT
+(an empty folder: the item is filed, typically with its cost share, but has
+no photos yet).
 Net kept per sale = net_before_postage - ad_fee - actual_postage, counted only
 once both actuals are in (the accountant's 2026-10-22 ruling); until then the
 sale shows as "actuals pending".
@@ -62,7 +64,7 @@ OUT_DIR = REPO / "reports" / "lots"
 PRINTER = "CannonBW"
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
-STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY"]
+STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
 
 
 # --------------------------------------------------------------------------- #
@@ -122,8 +124,9 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
 
 
 def item_dirs(bucket: Path, stop: set[Path]) -> list[Path]:
-    """Shallowest folders under `bucket` holding a draft or photos. Doesn't
-    descend into another member or left-out bucket (`stop`)."""
+    """Shallowest folders under `bucket` holding a draft or photos, plus empty
+    leaf folders (items filed but not shot). Doesn't descend into another
+    member or left-out bucket (`stop`)."""
     def has_item(d: Path) -> bool:
         try:
             return any(f.is_file() and (f.name in ("draft.md", "draft_group.md")
@@ -134,11 +137,13 @@ def item_dirs(bucket: Path, stop: set[Path]) -> list[Path]:
 
     if has_item(bucket):
         return [bucket]
+    subs = [p for p in sorted(bucket.iterdir()) if p.is_dir() and not _skip(p)]
+    if not subs:
+        return [bucket]                     # an empty folder is an item not shot yet
     out = []
-    for d in sorted(p for p in bucket.iterdir() if p.is_dir()):
-        if _skip(d) or d in stop:
-            continue
-        out.extend(item_dirs(d, stop))
+    for d in subs:
+        if d not in stop:
+            out.extend(item_dirs(d, stop))
     return out
 
 
@@ -229,7 +234,8 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
         if sales_here:
             status = "SOLD"
         elif not best:
-            status = "PHOTOS ONLY"
+            photos = any(f.suffix.lower() in PHOTO_EXT for f in d.iterdir())
+            status = "PHOTOS ONLY" if photos else "NOT SHOT"
         else:
             lvl = _rank(best)[0]
             status = {4: "LIVE", 3: "ENDED", 2: "QUEUED", 1: "DRAFT"}[lvl]

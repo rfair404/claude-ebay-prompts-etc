@@ -36,6 +36,8 @@ def estate(tmp_path, monkeypatch):
     _dir(inv, "ES/BUY1/buckle", files=["a.jpg"])
     _dir(inv, "ES/BUY1/magazines", "spend: 600\n")
     _dir(inv, "ES/BUY1/magazines/issue-01", files=["draft.md"])
+    _dir(inv, "ES/BUY1/tools", "spend: 75\n")
+    _dir(inv, "ES/BUY1/tools/chainsaw")
     _dir(inv, "ES/BUY1/walkthrough", "spend: 0\nclient: K01\n", files=[])
     _dir(inv, "ES/BUY1/walkthrough/01-lamp", files=["a.jpg"])
     _dir(inv, "ES/BUY1/_returned/pen-box", files=["a.jpg"])
@@ -46,7 +48,7 @@ def estate(tmp_path, monkeypatch):
 
 def test_members_take_nested_and_part_of_but_not_consignments(estate):
     keep, left_out = RL.members(estate)
-    assert [RL.label(d) for d in keep] == ["ES/BUY1", "ES/BUY1/magazines", "scrap"]
+    assert [RL.label(d) for d in keep] == ["ES/BUY1", "ES/BUY1/magazines", "ES/BUY1/tools", "scrap"]
     assert [(RL.label(d), why) for d, why in left_out] == [
         ("ES/BUY1/walkthrough", "consignment, client K01")]
 
@@ -73,18 +75,19 @@ def test_items_status_and_summary(estate, monkeypatch):
     items = {i["folder"]: i for i in RL.estate_items(estate, keep, left_out)}
 
     assert set(items) == {"ES/BUY1/candlesticks", "ES/BUY1/buckle",
-                          "ES/BUY1/magazines/issue-01", "scrap"}
+                          "ES/BUY1/magazines/issue-01", "ES/BUY1/tools/chainsaw", "scrap"}
     assert items["ES/BUY1/candlesticks"]["status"] == "SOLD"
     assert items["ES/BUY1/candlesticks"]["net_kept"] == 105
     assert items["ES/BUY1/magazines/issue-01"]["status"] == "LIVE"
     assert items["ES/BUY1/magazines/issue-01"]["ask"] == 35
     assert items["ES/BUY1/magazines/issue-01"]["store"] == "junk"
     assert items["ES/BUY1/buckle"]["status"] == "PHOTOS ONLY"
+    assert items["ES/BUY1/tools/chainsaw"]["status"] == "NOT SHOT"
 
     text = RL.estate_text(estate, keep, left_out, list(items.values()), date(2026, 10, 26))
-    assert "Paid: $800.00" in text
+    assert "Paid: $875.00" in text
     assert "Net kept (actuals in):  $105.00" in text
-    assert "Recovered vs paid:      $-695.00" in text
+    assert "Recovered vs paid:      $-770.00" in text
     assert "note: mixed-source" in text
 
 
