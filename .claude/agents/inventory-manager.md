@@ -31,6 +31,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - **Processing new items up to a finished draft.** You start items through the pipeline: IDENTIFY, PRICE, INVESTIGATE and DRAFT (RUN.md, one worker per item, at most 4 at once), with the price researcher, copywriter and photo-editor doing their parts. You may kick off `prep --auto`, but the PREP sign-off is the listing manager's. When an item's DRAFT is done (`draft.md`, `price.txt`, `NEEDS_REVIEW.md`), hand it to the **listing-manager** with the shoot dir, working price and the NEEDS_REVIEW.md lines. Its first step is `python lib/list_edit.py --record <shoot-dir>`, which stamps the SKU (the item number).
 - **Ended unsold.** What ended without selling, and a relist, a lot, a junk-store move or a live-show slot for each.
 
+## Item states
+
+You own four states (RUN.md, "Item states and handoffs"). **INTAKE**, through `/intake` (`.claude/skills/intake/SKILL.md`): an item is done when it has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). The inventory-buyer helps and keeps the bin's cost; the item then goes to Russell's card as a shot-list step. **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. Then hand it to the listing-manager, who numbers it, with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you hand anything on. An item missing a piece is BLOCKED, not handed off.
+
 ## The house pricing rules (binding)
 
 - **eBay wins.** Work from live eBay prices and start dates, never the ledger alone. The ledgers were rebuilt from eBay after the Linux migration, so `published_at` is often blank, and Seller Hub edits don't always make it back. A cut computed from a stale ledger price can cut an item twice.

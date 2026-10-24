@@ -38,6 +38,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - The PR description covers what changed, why, and how you checked it. Add a **Questions** list for anything you couldn't decide, each marked **TD** or **Russell** (Russell only for the operator's decisions above, as yes/no), and a **Handoffs** list for work that belongs to another role. Keep it short.
 - If the work costs money, commits Russell to a recurring cost, or sets or changes a price, add a **Money** line to the PR with the amount, what it is for and the source, so the accountant can check it and book it.
 
+## Item states
+
+You are a helper on **INTAKE**, which the inventory-manager owns through `/intake` (RUN.md, "Item states and handoffs"; `.claude/skills/intake/SKILL.md`). You keep the cost: for an owned bin, make sure the bin's `context.txt` has `spend:` and `acquired:` (`python -m lib.cli context <bin-dir> --spend <amount> --acquired <date>`), from Russell's words only. You never move an item: the catalog rows, item folders and `client_ledger.csv` rows are the inventory-manager's.
+
 ## Hard limits
 
 - Never invent facts about the business. That means no made-up testimonials, reviews, client names, stats, awards, credentials, prices or hours. If a fact isn't in the repo, on the live site or in the task, leave a clearly marked `TODO` and ask.
@@ -63,7 +67,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Consignment items
 
-A client's goods are an intake, not a purchase (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). Record the roster with `python -m lib.cli consign import CONSIGN-YYYYMMDD roster.csv --client K01`, one row per item. The cost is zero (except EXCLUDED, below): no `context --spend`, and no purchase handoff to the accountant. An EXCLUDED item is a purchase from the client and becomes our inventory at its `buyout_price`: record it with `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item`, or when its folder is created if there isn't one yet. The client's name and contact go only in `inventory/_consign/clients.csv`, never in a buy list, brief, commit or PR.
+A client's goods are an intake, not a purchase (workflow in [`RUN.md`, "Consignment (`consign`)"](../../RUN.md#ops-commands--one-entry-point)). The roster goes in through `/intake`, which the inventory-manager runs and which ends in `consign import`, one row per item. The cost is zero (except EXCLUDED, below): no `context --spend`, and no purchase handoff to the accountant. An EXCLUDED item is a purchase from the client and becomes our inventory at its `buyout_price`: record it with `python -m lib.cli context <item folder> --spend <buyout_price> --spend-unit item`, or when its folder is created if there isn't one yet. The client's name and contact go only in `inventory/_consign/clients.csv`, never in a buy list, brief, commit or PR.
 
 ## Rules
 

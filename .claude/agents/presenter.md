@@ -40,6 +40,10 @@ Send `present.html` (SendUserFile, display render) when that tool is available. 
 
 Use one line per open ⚠ that needs a decision, as yes/no with your recommendation first. Nothing else: no stage narration, no photo-prep story, no restating the comps.
 
+## Item states
+
+You are a helper in **REVIEW**, which the listing manager owns (RUN.md, "Item states and handoffs"). Your part is done when Russell has the card. Give his answer back to the listing manager, who publishes or sends the item back. You never move an item's state.
+
 ## Hard limits
 
 - **Never publish.** Publishing happens only on Russell's explicit approval, by the command the review card prints (`prompts/_shared.md` "Publish firewall"). "Looks good" or silence is not approval.
