@@ -817,3 +817,188 @@ def test_settle_holds_a_balance_under_min_payout_until_final(shop, capsys):
     assert "FINAL" in capsys.readouterr().out
     s = consign.read_settlements("K99")
     assert [(x["item_ids"], x["client_share"]) for x in s] == [("K99-C001", "7.10")]
+
+
+# --------------------------------------------------------------------------- #
+# intake in two passes: scene placeholders, individual shots, the catalog
+# --------------------------------------------------------------------------- #
+INTAKE_DIR = "CONSIGN-K99"
+
+
+def _placeholders(shop):
+    """Bin 01 seen in scene shot ZZ220231: three placeholders."""
+    return _ledger(shop, INTAKE_DIR, [
+        _row(item_id="K99-C001", bin="01", state="PREP", photos="ZZ220231",
+             description="Pan Am New Horizons world map book, cover corner bumped"),
+        _row(item_id="K99-C002", bin="01", state="PREP", photos="ZZ220231 ZZ230262",
+             description="Ornate serving spoons, beaded stems, heart-shaped ends"),
+        _row(item_id="K99-C003", bin="01", state="PREP", photos="ZZ220231",
+             description="Salt-glaze stoneware chamberstick, loop handle, cobalt rim")])
+
+
+def _shoot(shop, name, first, n=3):
+    """An item folder of individual frames TG7_ZZ<first>.. as they come off the card."""
+    f = shop / "inventory" / INTAKE_DIR / "bin-01" / name
+    f.mkdir(parents=True)
+    ids = [f"ZZ{first + i}" for i in range(n)]
+    for pid in ids:
+        (f / f"TG7_{pid}.jpg").write_bytes(b"")
+    return f, ids
+
+
+def _rows(d):
+    return consign.read_ledger(d / "client_ledger.csv")[0]
+
+
+def test_ids_are_never_reused_even_after_a_row_is_removed(shop):
+    d = _placeholders(shop)
+    argv = ["scene", INTAKE_DIR, "ZZ220237", "--bin", "02", "--item", "Brass desk bell",
+            "--apply"]
+    assert consign.main(argv) == 0
+    assert [r["item_id"] for r in _rows(d)][-1] == "K99-C004"
+    assert (d / "client_ledger.last_id").read_text().strip() == "K99-C004"
+    # C004 is deleted by hand and every backup is cleared away too
+    _csv(d / "client_ledger.csv", consign.COLUMNS,
+         [r for r in _rows(d) if r["item_id"] != "K99-C004"])
+    for b in d.glob("client_ledger.backup-*.csv"):
+        b.unlink()
+    assert consign.main(argv[:6] + ["Tin cup", "--apply"]) == 0
+    assert [r["item_id"] for r in _rows(d)][-1] == "K99-C005"
+
+
+def test_a_scene_adds_placeholders_once(shop, capsys):
+    d = _placeholders(shop)
+    argv = ["scene", INTAKE_DIR, "ZZ220231", "--bin", "01", "--state", "PREP",
+            "--item", "Walking cane, branch shaft", "--item", "Pan Am world map book"]
+    assert consign.main(argv) == 0                        # dry run: nothing written
+    assert len(_rows(d)) == 3
+    assert consign.main(argv + ["--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "skipped 'Pan Am world map book': looks like K99-C001 in the same frame" in out
+    new = _rows(d)[-1]
+    assert (new["item_id"], new["bin"], new["photos"], new["state"]) == (
+        "K99-C004", "01", "ZZ220231", "PREP")
+    assert consign.main(argv + ["--apply"]) == 0          # the same scene again
+    assert len(_rows(d)) == 4
+
+
+def test_a_write_is_refused_while_locked_or_after_another_session_wrote(shop):
+    d = _placeholders(shop)
+    path = d / "client_ledger.csv"
+    rows, _, digest = consign.load_ledger(path)
+    # another session writes first: our copy is stale
+    consign.save_ledger(path, rows + [_row(item_id="K99-C004", bin="02",
+                                           description="Tin cup")], digest, code="K99")
+    with pytest.raises(SystemExit, match="changed since it was read"):
+        consign.save_ledger(path, rows, digest, code="K99")
+    assert len(_rows(d)) == 4
+    # a session is mid-write: the lock refuses a second writer
+    (d / "client_ledger.csv.lock").write_text("123\n")
+    with pytest.raises(SystemExit, match="being written by another session"):
+        consign.main(["scene", INTAKE_DIR, "ZZ1", "--bin", "03", "--item", "Spool",
+                      "--apply"])
+    assert len(_rows(d)) == 4
+
+
+def test_match_attaches_the_shots_to_the_placeholder_with_no_new_row(shop, capsys):
+    d = _placeholders(shop)
+    folder, ids = _shoot(shop, "C003-chamberstick", 230308)
+    argv = ["match", INTAKE_DIR, str(folder), "--describe",
+            "Williamsburg salt glaze stoneware chamberstick, cobalt"]
+    assert consign.main(argv) == 0
+    assert "best match K99-C003" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="needs --to"):
+        consign.main(argv + ["--apply"])
+    assert consign.main(argv + ["--to", "C003", "--apply"]) == 0
+    rows = _rows(d)
+    assert len(rows) == 3
+    r = rows[2]
+    assert r["shots"].split() == ids
+    assert r["photos"].split() == ["ZZ220231"] + ids
+    assert r["inventory_folder"] == f"inventory/{INTAKE_DIR}/bin-01/C003-chamberstick"
+    capsys.readouterr()
+    assert consign.main(argv + ["--to", "C003", "--apply"]) == 0   # again: no change
+    assert "already has these shots" in capsys.readouterr().out
+    assert _rows(d) == rows
+
+
+def test_a_frame_is_one_rows_individual_shot(shop):
+    d = _placeholders(shop)
+    folder, ids = _shoot(shop, "towle-teaspoons", 230288)
+    describe = ["--describe", "Towle Old Master sterling teaspoons, a pair"]
+    assert consign.main(["match", INTAKE_DIR, str(folder), *describe, "--new",
+                         "--apply"]) == 0
+    rows = _rows(d)
+    assert (rows[-1]["item_id"], rows[-1]["shots"].split()) == ("K99-C004", ids)
+    # the same frames offered to the spoons placeholder: refused
+    with pytest.raises(SystemExit, match=r"already on K99-C004"):
+        consign.main(["match", INTAKE_DIR, *ids, *describe, "--to", "K99-C002",
+                      "--apply"])
+    # a scene frame on other rows is no row's individual shot
+    with pytest.raises(SystemExit, match=r"ZZ220231 .*already on K99-C001"):
+        consign.main(["match", INTAKE_DIR, "ZZ220231", *describe, "--to", "K99-C002"])
+    assert _rows(d) == rows
+
+
+def test_new_is_refused_while_a_placeholder_matches_strongly(shop):
+    d = _placeholders(shop)
+    folder, _ = _shoot(shop, "spoons", 230400)
+    argv = ["match", INTAKE_DIR, str(folder), "--describe",
+            "ornate serving spoons with beaded stems", "--new", "--apply"]
+    with pytest.raises(SystemExit, match="not a new row: K99-C002 match strongly"):
+        consign.main(argv)
+    assert len(_rows(d)) == 3
+    # the agent has looked: the photos show a different item from C002
+    assert consign.main(argv + ["--not", "K99-C002"]) == 0
+    assert [r["item_id"] for r in _rows(d)] == ["K99-C001", "K99-C002", "K99-C003",
+                                                "K99-C004"]
+
+
+def test_duplicates_are_flagged(shop, capsys):
+    belt = "Black leather western belt, engraved silver buckle"
+    rows = [_row(item_id="K99-C001", bin="01", photos="ZZ1", shots="ZZ1",
+                 description="Brass bell"),
+            _row(item_id="K99-C002", bin="01", photos="ZZ1", description="Tin cup"),
+            _row(item_id="K99-C003", bin="02", description=belt),
+            _row(item_id="K99-C004", bin="02", description=belt.replace(",", " with an")),
+            _row(item_id="K99-C005", bin="03", description=belt)]
+    assert consign.validate(rows, [], "K99") == [
+        "ZZ1 is an individual shot of K99-C001 and is also on K99-C002: one frame, one "
+        "item; take it off the wrong row"]
+    warn = consign.duplicate_warnings(rows)
+    assert len(warn) == 1 and warn[0].startswith("K99-C003 and K99-C004 (bin 02")
+    rows[1]["photos"] = ""
+    _ledger(shop, INTAKE_DIR, rows)
+    assert consign.main(["report", "--client", "K99"]) == 0
+    assert "possible duplicate: K99-C003 and K99-C004" in capsys.readouterr().out
+
+
+def test_catalog_splits_individual_and_bin_shots(shop):
+    Image = pytest.importorskip("PIL.Image")
+    import json
+    import re
+    import consign_catalog
+    d = _placeholders(shop)
+    for rel in ("bin-01/TG7_ZZ220231.jpg", "_review/crops/dn-ZZ230262.jpg"):
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (40, 30), "white").save(d / rel)
+    folder, ids = _shoot(shop, "C003-chamberstick", 230308, n=2)
+    for pid in ids:
+        Image.new("RGB", (40, 30), "black").save(folder / f"TG7_{pid}.jpg")
+    assert consign.main(["match", INTAKE_DIR, str(folder), "--describe", "chamberstick",
+                         "--to", "K99-C003", "--apply"]) == 0
+    reg = shop / "inventory" / "_consign"
+    reg.mkdir()
+    _csv(reg / "clients.csv", consign.REGISTRY_COLUMNS,
+         [{"client_code": "K99", "name": "Jane Client", "contact": "555-0100"}])
+    assert consign_catalog.build(d) == 0
+    out = shop / "reports" / "consign" / f"{INTAKE_DIR}-catalog.html"
+    page = out.read_text(encoding="utf-8")
+    assert "client K99" in page and "Jane Client" not in page and "555-0100" not in page
+    data = re.search(r"const items=(\[.*?\]);\n", page, re.S).group(1)
+    items = {i["num"]: i for i in json.loads(data.replace("<\\/", "</"))}
+    c3 = items["C003"]
+    assert (c3["nsingle"], c3["ngroup"]) == (2, 1)
+    assert c3["photos"][0]["kind"] == "single"                    # the hero
+    assert (items["C002"]["nsingle"], items["C002"]["ngroup"]) == (0, 2)
+    assert (out.parent / f"{INTAKE_DIR}-thumbs" / f"C003-{ids[0]}.jpg").is_file()

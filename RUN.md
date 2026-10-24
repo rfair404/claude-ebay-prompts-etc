@@ -1,5 +1,5 @@
 ---
-version: 1.4.0
+version: 1.5.0
 updated: 2026-10-23
 ---
 
@@ -425,6 +425,47 @@ payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
 on that settlements row, and the next `sync --apply` copies the date and
 `settlement_id` onto the rows. The report's paid-this-year total comes from
 `settlements.csv`.
+
+**Intake in two passes.** Scene shot, then placeholders, then individual
+shots, then match, then catalog:
+
+    python -m lib.cli consign scene CONSIGN-K01 ZZ220231 --bin 01 --state PREP \
+        --item "Pan Am world map book" --item "Walking cane"           # dry run; --apply
+    python -m lib.cli consign match CONSIGN-K01 inventory/CONSIGN-K01/bin-01/C038-x \
+        --describe "salt-glaze stoneware chamberstick"                 # ranks placeholders
+    python -m lib.cli consign match CONSIGN-K01 inventory/CONSIGN-K01/bin-01/C038-x \
+        --describe "salt-glaze stoneware chamberstick" --to K01-C038 --apply
+    python -m lib.cli consign catalog CONSIGN-K01   # -> reports/consign/CONSIGN-K01-catalog.html
+
+1. A scene shot is one frame of a whole bin. `scene` gives each item seen in it
+   a placeholder row with the bin and the frame's id in `photos`. It skips an
+   item already there: the same bin, a frame in common and a matching
+   description.
+2. Each item is then shot alone, into its own folder. The agent looks at the
+   frames and says what the item is (`--describe`, or an `identify.txt` in the
+   folder). `match` ranks the on-hand placeholders by description and bin.
+3. `--to <id> --apply` attaches the frames to that row: their ids go in
+   `photos` and `shots` (the row's individual frames), and the folder goes in
+   `inventory_folder`. A row whose folder already holds a draft.md keeps it
+   only with `--keep-folder`.
+4. A frame belongs to one row. `match` refuses a frame already on another row,
+   and `sync` refuses a ledger where one row's individual frame is on another
+   row.
+5. `--new --describe "..." --apply` makes a new row only while no placeholder
+   matches strongly. If the photos show a different item from a strong match,
+   say so with `--not <id>`.
+6. `catalog` writes a page to browse: a thumbnail per item, the estimate, the
+   draft title, chips, search, filters and a detail view. It splits individual
+   shots from bin shots and shows the client code only.
+
+`sync` and `report` also list possible duplicates: two active rows in one bin
+with near-identical descriptions.
+
+**Ids and writes.** Only the tool hands out ids. Every write takes
+`client_ledger.csv.lock` and refuses if another session holds it. It also
+refuses if the file changed since it was read; run the command again. Each
+write keeps a backup and moves `client_ledger.last_id` up, so a removed row's
+id is never given out again.
 
 Never copy a file over `client_ledger.csv`. Bring hand-built rows in with
 `python -m lib.cli consign import <intake> <file.csv> --client <code>`; import
