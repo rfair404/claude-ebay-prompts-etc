@@ -2,11 +2,17 @@
 # Runs when the TG-7's card mounts (tools/systemd/tg7-import.service). Pulls
 # new photos to ~/Pictures/TG-7 with tg7_pull.sh (USB only: nobody is
 # watching, so it never hops the laptop's Wi-Fi), copies just the new JPGs into
-# a new lot inventory/tg7-<date>-<time>/, and starts IDENTIFY on it headless.
-# A mount with nothing new does nothing. Log: inventory/<lot>/import.log.
+# a staging lot inventory/tg7-<date>-<time>/, and starts the inventory-manager
+# on it headless to triage it ("Camera import triage" in
+# .claude/agents/inventory-manager.md): sort each frame to its item, catalog
+# what's new, and IDENTIFY items that now have their own shots. Its only shell
+# command is tools/tg7_triage.py, which moves frames and logs them.
+# A mount with nothing new does nothing. Log: inventory/<lot>/import.log;
+# the outcome is in inventory/<lot>/TRIAGE.txt.
 set -uo pipefail
 
-MAIN=${TG7_MAIN:-$(git -C "$(dirname "$0")" worktree list --porcelain | awk 'NR==1{print $2}')}
+HERE=$(cd "$(dirname "$0")" && pwd)
+MAIN=${TG7_MAIN:-$(git -C "$HERE" worktree list --porcelain | awk 'NR==1{print $2}')}
 DEST=${TG7_PHOTOS:-$HOME/Pictures/TG-7}
 CLAUDE=${CLAUDE_BIN:-$(command -v claude || ls ~/.config/Claude/claude-code/*/claude 2>/dev/null | sort -V | tail -1)}
 
@@ -23,20 +29,24 @@ exec >>"$DIR/import.log" 2>&1
 echo "$(date -Is) imported ${#new[@]} photo(s) from $DEST"
 
 notify() { notify-send -a "TG-7" "$1" "$2" 2>/dev/null || true; }
-notify "TG-7: ${#new[@]} new photo(s)" "inventory/$LOT — identifying"
+notify "TG-7: ${#new[@]} new photo(s)" "inventory/$LOT — sorting"
 
 if [ -z "$CLAUDE" ]; then
-  echo "no claude CLI found; run: identify $LOT"
-  notify "TG-7: identify not started" "no claude CLI found"
+  echo "no claude CLI found; run: triage inventory/$LOT"
+  notify "TG-7: sorting not started" "no claude CLI found"
   exit 1
 fi
-cd "$MAIN" && "$CLAUDE" -p "identify $LOT" --permission-mode acceptEdits \
-  --allowedTools "Read Write Edit Glob Grep WebSearch WebFetch"
+cd "$MAIN" && "$CLAUDE" --agent inventory-manager -p \
+  "Camera import triage for inventory/$LOT, per your \"Camera import triage\" section. Unattended: ask nothing; no PRICE, PREP or DRAFT; nothing on eBay." \
+  --permission-mode acceptEdits \
+  --allowedTools Read Write Edit Glob Grep "Bash(python tools/tg7_triage.py:*)" \
+  "Bash(python3 tools/tg7_triage.py:*)"
 rc=$?
-echo "$(date -Is) identify exit $rc"
-if [ $rc -eq 0 ] && [ -f "$DIR/identify.txt" ]; then
-  notify "TG-7: identify done" "inventory/$LOT/identify.txt"
+summary=$(python3 "$HERE/tg7_triage.py" summary "$DIR" 2>&1)
+echo "$(date -Is) triage exit $rc: $summary"
+if [ $rc -eq 0 ] && [ -f "$DIR/TRIAGE.txt" ]; then
+  notify "TG-7: sorted" "$summary"
 else
-  notify "TG-7: identify failed" "see inventory/$LOT/import.log"
+  notify "TG-7: sorting failed" "$summary — see inventory/$LOT/import.log"
 fi
 exit $rc
