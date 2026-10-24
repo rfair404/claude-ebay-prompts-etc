@@ -41,10 +41,6 @@ def test_python3_and_py_are_the_same_runner():
     assert offending_prefix("py tools/ledger_reconcile.py") == "python tools/ledger_reconcile.py"
 
 
-def test_reindex_glob_prefix():
-    assert offending_prefix("python tools/reindex_full.py") == "python tools/reindex_"
-
-
 def test_fast_command_is_untouched():
     assert offending_prefix('cd "C:/repo" && git status') is None
     assert offending_prefix("ls -la") is None

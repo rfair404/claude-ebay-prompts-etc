@@ -3,7 +3,7 @@
 ```yaml
 topic: marble type taxonomy (top 100 collectable kinds)
 applies_to: [marbles]
-version: 1
+version: 1.0.1
 last_reviewed: 2026-06-22
 sources:
   - Marble Collectors Society of America — marblecollecting.com (type taxonomy)
@@ -196,7 +196,7 @@ It serves two jobs:
 ebay-sold-scraper PRICE uses) and tags each to one of these 100 types via the
 Keywords above (longest-match-first). A reference photo then returns the most
 visually-similar **sold** listings + their realized prices — a priced comp
-finder, bucketed by collectable type. The forum index
-([`marble_index.py`](../../lib/marble_index.py)) gives the ID/look-alike side;
-this gives the price side. Build/extend the library by scraping the types not
+finder, bucketed by collectable type. It gives the price side; the ID
+comes from the [marbles specialization](../../specializations/marbles.md)
+tells. Build/extend the library by scraping the types not
 yet covered and re-running the curation — no type needs re-scraping once held.

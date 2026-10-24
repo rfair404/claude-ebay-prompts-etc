@@ -1,6 +1,6 @@
 ---
-version: 1.5.0
-updated: 2026-10-23
+version: 1.5.1
+updated: 2026-10-24
 ---
 
 # RUN — v4 headless runbook
@@ -137,8 +137,7 @@ the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
 [`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)),
 `python lib/lens_id.py`, `python lib/list_edit.py` (the EPS photo upload
-alone runs a minute),
-`python tools/reindex_`\*`.py`. Each one routinely runs long enough that
+alone runs a minute). Each one routinely runs long enough that
 foregrounding it is a wasted turn waiting on nothing the next step needs
 yet.
 

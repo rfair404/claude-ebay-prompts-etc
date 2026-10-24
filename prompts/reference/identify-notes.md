@@ -11,10 +11,9 @@ forum-index tools returned colour look-alikes rather than maker matches,
 and the forum thread titles they surfaced are OP guesses (often wrong;
 only high-rep reply answers are trustworthy). Measured against an expert
 gold set, the classifier also floats toward generic machine-made calls
-(67% of expert handmade/transitional called machine). The tools are kept
-but dormant; the maker/type call comes from photos + the specialization's
-tells alone. They run only on an explicit user request, outside the
-identify record.
+(67% of expert handmade/transitional called machine). The forum tools and
+the classifier were removed on 2026-10-24; the maker/type call comes from
+photos + the specialization's tells alone.
 
 ## The Lens OCR caveat: how it was verified
 

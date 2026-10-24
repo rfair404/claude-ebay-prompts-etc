@@ -1,5 +1,10 @@
 # Visual-index refactor — staged plan & status
 
+> **2026-10-24:** the marble forum index (`marble_index.py`), the classifier,
+> crop and prior modules, and the tools built on them were removed. `vindex.py`,
+> `reembed.py`, `mcsa_index.py` and `ebay_visual.py` remain. The plan below is
+> kept as history.
+
 Consolidating the three phash-based visual indexes onto one **CLIP** core
 (`lib/vindex.py`). Goal: one embedding space, one model load, shared store, so a
 single marble photo can fan across all three corpora (labeled ID → peer threads →

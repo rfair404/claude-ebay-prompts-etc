@@ -14,7 +14,7 @@ both halves of the question:
     python tools/mark_lookup.py --maker "kipling"
 
 WHAT A HIT MEANS. Nothing on its own. Retrieval is a CANDIDATE FINDER — the
-same rule the marble index carries. Top-K means "look here", and two separate
+same rule every vindex index carries. Top-K means "look here", and two separate
 things still have to happen before a name goes anywhere near a listing:
 
   1. Confirm the reading against the source page (each row carries `page_img`,

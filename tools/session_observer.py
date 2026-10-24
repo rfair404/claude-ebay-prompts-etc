@@ -82,7 +82,7 @@ STAGES = {
     "PREP":     ("prep", "photo", "crop", "orient", "rotate", "unskew", "hero",
                  "contact sheet", "photo_prep", "prep_run", "prep_card"),
     "IDENTIFY": ("identify", "what is this", "maker", "marble", "hallmark",
-                 "identify.txt", "marble_triage", "marble_decide"),
+                 "identify.txt"),
     "PRICE":    ("price", "comp", "apify", "ceiling", "median", "sold for",
                  "price_stats", "comps_board", "price.txt"),
     "DRAFT":    ("draft", "title", "description", "voice", "write the copy",

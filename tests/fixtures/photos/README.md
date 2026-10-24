@@ -61,8 +61,8 @@ crop of this one:
 
 - **skewed printed matter** — a magazine or catalogue cover for `unskew` and
   `--category printed` / `subject=paper`;
-- **a multi-item overview frame** — 2–4 small objects for
-  `marble_triage --crops-only --expect N`.
+- **a multi-item overview frame** — 2–4 small objects for the marble
+  CROP gate's count check (`tools/prep_card.py`).
 
 Add them as `paper-*` and `lot-*` here when a suitable shoot exists; the naming
 and the size budget above should hold.

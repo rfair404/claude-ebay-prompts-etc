@@ -74,7 +74,6 @@ SLOW_PREFIXES = (
     "python lib/ebay_sold_browse.py",
     "python lib/lens_id.py",
     "python lib/list_edit.py",
-    "python tools/reindex_",
 )
 
 # `cd x && python …`, `a; b`, `a | b` — a prefix can sit in any segment.
