@@ -5,14 +5,14 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable tg7-import.service
 [Unit]
-Description=Import new TG-7 photos and start IDENTIFY
+Description=Import new TG-7 photos and triage them (inventory-manager)
 After=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
 Requisite=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
 
 [Service]
 Type=oneshot
 ExecStart=%h/EBAYBIZ/tools/tg7_import.sh
-TimeoutStartSec=30min
+TimeoutStartSec=2h
 
 [Install]
 WantedBy=dev-disk-by\x2dlabel-OM\x5cx20SYSTEM.device
