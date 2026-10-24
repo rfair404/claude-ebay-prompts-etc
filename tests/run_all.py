@@ -3,11 +3,9 @@
 
 No pytest dependency — this discovers the `test_*` functions in each module and
 runs them with a tiny PASS/FAIL harness (so both the pytest-style suites and the
-older gate test run uniformly). The CLIP-dependent gate test loads the model once
-(cached after first download); skip it with --fast.
+older suites run uniformly).
 
 Usage:  python tests/run_all.py            # all suites
-        python tests/run_all.py --fast     # skip the CLIP-loading suites
 """
 import importlib
 import sys
@@ -16,9 +14,6 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-
-FAST = "--fast" in sys.argv
-SLOW = {"test_marble_gate"}            # loads CLIP
 
 
 def _needs_fixtures(fn) -> bool:
@@ -64,9 +59,6 @@ def main():
     mods = sorted(p.stem for p in HERE.glob("test_*.py"))
     total_fail = total_skip = 0
     for name in mods:
-        if FAST and name in SLOW:
-            print(f"\n==== {name} (SKIPPED --fast) ====")
-            continue
         print(f"\n==== {name} ====")
         failed, skipped = _run_module(importlib.import_module(name))
         total_fail += failed

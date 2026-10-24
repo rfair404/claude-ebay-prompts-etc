@@ -2,10 +2,9 @@
 """Visual index over the MCSA "Online Marble ID Guide" reference photos.
 
 Builds a local CLIP image-similarity index from marblecollecting.com's
-authoritative ID-guide pages — like lib/marble_index.py (forum) but the photos
-here are **labeled by the maker/type page they live on** (a confirmed ID), so a
-query matches against KNOWN examples, not peer guesses. The strongest ID signal
-of the three indexes — and the reason CLIP matters: pHash only finds near-dupes,
+authoritative ID-guide pages. The photos here are **labeled by the maker/type
+page they live on** (a confirmed ID), so a query matches against KNOWN examples,
+not peer guesses — and the reason CLIP matters: pHash only finds near-dupes,
 CLIP matches the marble across different background/lighting/angle.
 
 robots.txt check (2026-06-24): /marble-reference/ is NOT disallowed (only

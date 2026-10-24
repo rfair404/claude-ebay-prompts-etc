@@ -1318,7 +1318,11 @@ async function frame() {
       $('#shot').src = url;
       const t = curPage && tileOf(curPage);  // the on-air tile shows the program feed, not a stale tile
       if (t) { t.querySelector('img').src = url; t.classList.remove('stale', 'missing'); }
-      if (pvw && pvw === curPage) $('#pvwshot').src = url;
+      if (pvw && pvw === curPage) {
+        const old = $('#pvwshot').src;  // a pvwFrame blob nobody else revokes
+        $('#pvwshot').src = url;
+        if (old.startsWith('blob:') && old !== shotUrl) URL.revokeObjectURL(old);
+      }
       if (shotUrl) URL.revokeObjectURL(shotUrl);
       shotUrl = url;
       $('#monitor').classList.remove('stale');

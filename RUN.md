@@ -1,5 +1,5 @@
 ---
-version: 1.7.0
+version: 1.8.0
 updated: 2026-10-24
 ---
 
@@ -83,18 +83,19 @@ shoot directory, so phases compose without re-deriving.
 
 Every item is in exactly one state, and every state has exactly one owner.
 The owner moves the item to the next state and hands it on. Everyone else
-who works on it (price researcher, copywriter, photo-editor, art director,
-historian, presenter) is a helper: a helper returns its output to the
-owner and never moves the item itself. Most names are `client_ledger.csv`
-states; REVIEW and LIVE map onto ledger values as noted under the table.
-The table says who owns each state and what "done" means.
+who works on it (inventory-buyer, price researcher, copywriter,
+photo-editor, art director, historian, presenter) is a helper: a helper
+returns its output to the owner and never moves the item itself. Most names
+are `client_ledger.csv` states; REVIEW and LIVE map onto ledger values as
+noted under the table. The table says who owns each state and what "done"
+means.
 
 | State | Owner | Done when (the evidence) | Hands to |
 |---|---|---|---|
-| **INTAKE** | inventory-buyer | It's ours or consigned to us, and it has a folder under `inventory/` with `context.txt`. Bought: `spend:` recorded. Consigned: a `client_ledger.csv` row. | Russell (shoot), via a shot list on his card |
+| **INTAKE** | inventory-manager, through `/intake` (`.claude/skills/intake/SKILL.md`); the inventory-buyer helps and keeps the cost | The item has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). For an owned bin, the inventory-buyer makes sure the bin's `context.txt` has `spend:` and `acquired:`; it never moves an item. | Russell (shoot), via a shot list on his card |
 | **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
 | **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. | listing-manager |
-| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`grep <sku> listings_ledger*.csv` in the main checkout, since a failed write can still print `[OK]`), PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
+| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`--record` exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row), PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
 | **LIVE** | listing-manager until the live read-back matches the approved card, then the inventory-manager | Ledger `PUBLISHED` (client ledger `LISTED`), listing URL reported, live price, Best Offer floors, shipping, photos and promotion match the card. | inventory-manager (aging), listing-manager for any approved revision |
 | **SOLD** | shipping-assistant | Label bought, item packed, tracking uploaded within handling time. | accountant |
 | **ENDED** (unsold) | inventory-manager | A next step chosen: relist, lot, junk store, live-show slot or return. A relist goes back through the listing manager. | listing-manager or Russell's card |
@@ -188,14 +189,13 @@ forms used throughout `prompts/`, not bare names):
 `python -m lib.photo_prep.prep`, `python -m lib.cli prep`,
 `python -m lib.cli single-pass`, `python -m lib.cli observe`,
 `python -m pytest`,
-`python tests/run_all.py`, `python tools/ledger_reconcile.py`,
+`python tests/run_all.py`, `tools/green_test.sh`, `python tools/ledger_reconcile.py`,
 `python tools/prep_sheet_html.py`, `python tools/review_card_html.py`,
 the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
 [`docs/archive/pricing-backend-issues.md`](docs/archive/pricing-backend-issues.md)),
 `python lib/lens_id.py`, `python lib/list_edit.py` (the EPS photo upload
-alone runs a minute),
-`python tools/reindex_`\*`.py`. Each one routinely runs long enough that
+alone runs a minute). Each one routinely runs long enough that
 foregrounding it is a wasted turn waiting on nothing the next step needs
 yet.
 
@@ -212,6 +212,13 @@ re-issue the same call with `run_in_background`. The prefix list lives in
 one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
+
+**Run the full suite on green, not here.** `tools/green_test.sh [pytest args]`
+copies the checkout to green (the second machine, `ssh green`) and runs pytest
+there. A full run peaks near 900 MB, and sessions running it side by side beside
+the app, Firefox and OBS got the desktop app OOM-killed (2026-10-24). It runs on
+green, so the on-air hold below does not stop it. Local `python -m pytest` stays
+for one test file. `tools/green_test.sh --setup` builds green's venv once.
 
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes

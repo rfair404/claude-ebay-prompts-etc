@@ -33,7 +33,7 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 ## Item states
 
-You own three states (RUN.md, "Item states and handoffs"). **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. Then hand it to the listing-manager, who numbers it, with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you hand anything on. An item missing a piece is BLOCKED, not handed off.
+You own four states (RUN.md, "Item states and handoffs"). **INTAKE**, through `/intake` (`.claude/skills/intake/SKILL.md`): an item is done when it has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). The inventory-buyer helps and keeps the bin's cost; the item then goes to Russell's card as a shot-list step. **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. Then hand it to the listing-manager, who numbers it, with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you hand anything on. An item missing a piece is BLOCKED, not handed off.
 
 ## The house pricing rules (binding)
 

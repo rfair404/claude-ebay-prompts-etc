@@ -97,24 +97,22 @@ maker-attribution discipline below. No trigger match → general pass as
 normal.
 
 > ⛔ **Crop gate (marbles, bulk/group).** Before identifying a multi-marble
-> shoot, generate per-marble crops + the numbered contact sheet
-> (`tools/marble_triage.py <dir> --crops-only --expect N`), **show the user
-> the contact sheet, and STOP** — begin IDENTIFY only on their go-ahead.
+> shoot, build the numbered contact card (`tools/prep_card.py <dir>`),
+> **show the user the card with the marble count vs the expected N, and
+> STOP** — begin IDENTIFY only on their go-ahead.
 > HARD interactive stop; headless degrades to self-verify-count + log to
 > `NEEDS_REVIEW.md`; single-pass keeps it HARD, via `.single_pass/ask.json`
 > ([single_pass.md](single_pass.md)). See the ⛔ CROP GATE block in
 > [`../specializations/marbles.md`](../specializations/marbles.md).
 
-> 🚫 **CLIP/forum-index DISABLED for IDENTIFY (marbles).** The forum CLIP
-> index and every tool that queries it are OFF for IDENTIFY —
-> `lib/marble_index.py`, `verify_batch` / `marble_triage` /
-> `marble_matches` / `marble_colormatch` / `marble_refset` — and the forum
-> expert-answer text is not used to set the maker. Not for the maker/type,
-> not as an escalation, not as a colour-match "lead," not for
+> 🚫 **No CLIP/forum-index step in IDENTIFY (marbles).** The old forum CLIP
+> tooling is removed, and the MCSA CLIP index (`lib/mcsa_index.py`) is OFF
+> for IDENTIFY; the forum expert-answer text is not used to set the maker.
+> Not for the maker/type, not as an escalation, not as a colour-match "lead," not for
 > corroboration. The maker/type comes from **photos + the module's tells
 > ALONE**, staying firmly-named or `Unknown`/`[BEST-CASE]`. Human
 > reference-panel triangulation and WebFetch of reference photos remain
-> allowed. Run the CLIP/forum tools ONLY when the user EXPLICITLY asks, as
+> allowed. Run the MCSA index ONLY when the user EXPLICITLY asks, as
 > a separate step outside the record. Full rule: the 🚫 block in
 > [`../specializations/marbles.md`](../specializations/marbles.md).
 > In-specialization marbles only; other categories unchanged.

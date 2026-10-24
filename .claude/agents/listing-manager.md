@@ -30,7 +30,7 @@ If you're handed an item whose DRAFT isn't done, send it back to the inventory m
 
 ## Item states
 
-You own **REVIEW**, and **LIVE** until the live read-back matches the approved card (RUN.md, "Item states and handoffs"). Check the DRAFTED evidence with `ebz status` before you take an item; if any is missing, send it back to the inventory manager. `--record` is done only when `grep <sku> listings_ledger*.csv` in the main checkout finds the row, because `[OK]` alone isn't proof. Run PREP inside the session sandbox (outside it, rembg re-downloads its model) and ledger writes (`--record`, `--list --confirm`) outside it. A backgrounded PREP render dies when its session ends, so collect it before you stop. REVIEW is done when the presenter has shown Russell the card. LIVE is done for you when the read-back matches, and then you hand the item to the inventory manager with the five-line handoff.
+You own **REVIEW**, and **LIVE** until the live read-back matches the approved card (RUN.md, "Item states and handoffs"). Check the DRAFTED evidence with `ebz status` before you take an item; if any is missing, send it back to the inventory manager. `--record` is done only when it exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row. Run PREP inside the session sandbox (outside it, rembg re-downloads its model) and ledger writes (`--record`, `--list --confirm`) outside it. A backgrounded PREP render dies when its session ends, so collect it before you stop. REVIEW is done when the presenter has shown Russell the card. LIVE is done for you when the read-back matches, and then you hand the item to the inventory manager with the five-line handoff.
 
 ## What you own
 
