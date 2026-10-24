@@ -1816,7 +1816,7 @@ def create_or_update_listing(draft_path: Path,
     The offer is never published — that is a manual user action in Seller Hub.
     The SYNCED ledger row is written to `creds.store`'s own file (GH #158).
     strict_ledger=True raises LedgerWriteError when that row can't be written
-    (--list, so nothing goes live untracked); otherwise it only warns.
+    (--sync, and --list so nothing goes live untracked); otherwise it only warns.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -1893,10 +1893,16 @@ def create_or_update_listing(draft_path: Path,
 
     # 5) ledger: upsert this item's lifecycle record (-> SYNCED; a re-sync of
     #    an already-published item keeps PUBLISHED).
-    if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
-                      offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or "",
-                      store=creds.store, strict=strict_ledger):
-        print(f"  [ledger] {sku} -> SYNCED")
+    try:
+        if upsert_listing(sku, "SYNCED", title=str(draft.get("title") or ""),
+                          offer_id=offer_id, price=_to_decimal_str(draft.get("price")) or "",
+                          store=creds.store, strict=strict_ledger):
+            print(f"  [ledger] {sku} -> SYNCED")
+    except LedgerWriteError:
+        # The offer already exists on eBay; say which one before the CLI fails.
+        print(f"  eBay draft offer {offer_id} (sku {sku}) was {operation}; "
+              f"its SYNCED ledger row was not written.", file=sys.stderr)
+        raise
 
     hub = "https://www.ebay.com/sh/lst/drafts"
     return SyncResult(offer_id=offer_id, inventory_sku=sku, operation=operation,
@@ -2788,7 +2794,8 @@ def _cli() -> None:
             return
         if args.sync:
             sync_creds = load_credentials(store=_resolve_store(args.sync, args.store))
-            res = create_or_update_listing(Path(args.sync), creds=sync_creds)
+            res = create_or_update_listing(Path(args.sync), creds=sync_creds,
+                                           strict_ledger=True)
             print(f"[OK] {res.operation} eBay DRAFT (not published).")
             print(f"  offer_id:  {res.offer_id}")
             print(f"  sku:       {res.inventory_sku}")
