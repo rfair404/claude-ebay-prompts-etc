@@ -2,8 +2,8 @@
 
 ```yaml
 triggers: [playboy, "playboy magazine", "playboy lot", "playboy playmate", "playboy playmate of the month", "playboy centerfold", "playboy special edition", "playboy's book of lingerie", "playboy's college girls"]
-version: 1
-last_reviewed: 2026-10-22
+version: 1.1.0
+last_reviewed: 2026-10-24
 sources:
   - eBay Restricted adult items policy, help id 4278 (US page bot-checked; read via ebay.ca and ebay.co.uk editions and an eBay Community Mentor quote of the US text), 2026-10-22
   - eBay Live policy, help id 5478, 2026-10-22
@@ -403,8 +403,19 @@ folder as condition evidence and never go into `photos:`.
 - **Look-at-this line:** the interview or feature named on the contents
   page, or a period detail on the covers (the back-cover ad). Describe the
   centerfold only as present and attached. **Never describe the nudity.**
-- **Cross-sell line:** "This is one of several Playboy issues from the same
-  estate I'm listing this week…" Only when true.
+- **More-coming line (every Playboy listing):** "More Playboy years are
+  coming soon, so stay tuned and check back often." (Russell, 2026-10-24.)
+- **More Playboy table:** every other live Playboy listing, as one HTML
+  table with one row per year, newest first. It has three columns:
+  - **Year.**
+  - **Full-year lot:** the volume or year lot, linked to its listing; blank
+    when there isn't one.
+  - **Monthly singles:** the month names (Jan, Mar, Dec), each linked to its
+    single listing.
+
+  A 3-column table keeps it readable on the phone. Only live listings get a
+  row. The listing the buyer is reading is left out. The cross-promotion
+  refresh below keeps the table current.
 - **What's Included:**
   - Single: one magazine, plus "Centerfold, attached: Playmate `<name>`".
   - Lot: **every issue by month and year**, with its centerfold status and
@@ -496,6 +507,23 @@ agent then:
   - Best Offer per the #140 gate (off on auctions and under $100).
   - **Never promote a junk-store listing.**
   - `meta.notes` records the nudity check of every frame in `photos:`.
+
+### Cross-promotion refresh (every Playboy publish)
+
+Russell's standing rule (2026-10-24). Each time a Playboy listing goes live,
+the listing manager revises **all** existing live Playboy listings so that
+each one's More Playboy table lists every other live Playboy listing (year
+lots and monthly singles), and drops any that have sold or ended.
+
+- Russell's rule covers this refresh, so it needs no per-listing yes. It
+  covers the More Playboy table only. Any other change still needs his yes.
+- Run `--update ... --dry-run` first, then the write. Read each listing back
+  afterwards.
+- An auction that has bids allows only an addition to its description. Append
+  the new rows there, and never rewrite the table.
+- Links across stores (main and junk): check eBay's links policy before the
+  first cross-store link. Until that check is done, link within the same
+  store only.
 
 ## Sources
 
