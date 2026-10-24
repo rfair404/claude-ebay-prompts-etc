@@ -800,8 +800,40 @@ def _md_inline(text: str) -> str:
     # [label](http(s)://url) -> anchor. Runs after HTML-escape so the generated
     # tag survives; only http(s) targets allowed (eBay permits links to other
     # eBay listings/pages within a description).
-    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
+    # A `"` in the URL would close the attribute, so it is escaped too.
+    def _anchor(m: re.Match) -> str:
+        href = m.group(2).replace('"', "&quot;")
+        return f'<a href="{href}">{m.group(1)}</a>'
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\s)]+)\)", _anchor, text)
     return text
+
+
+_TABLE_SEP = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$")
+
+
+def _table_cells(line: str) -> list[str]:
+    """Split one `| a | b |` row into its stripped cells."""
+    line = line.strip()
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return [c.strip() for c in line.split("|")]
+
+
+def _table_to_html(rows: list[str]) -> str:
+    """Render a pipe table (header, separator, body rows) as a plain <table>.
+
+    Body rows are padded or cut to the header's column count, as GFM does, so a
+    short row never shifts its cells under the wrong heading."""
+    head = _table_cells(rows[0])
+    n = len(head)
+    out = ["<table>", "<tr>" + "".join(f"<th>{_md_inline(c)}</th>" for c in head) + "</tr>"]
+    for row in rows[2:]:
+        cells = (_table_cells(row) + [""] * n)[:n]
+        out.append("<tr>" + "".join(f"<td>{_md_inline(c)}</td>" for c in cells) + "</tr>")
+    out.append("</table>")
+    return "\n".join(out)
 
 
 def _body_to_html(md: str) -> str:
@@ -823,6 +855,12 @@ def _body_to_html(md: str) -> str:
     So a non-blank line that starts no new construct is appended to whatever is
     currently open — the bullet, or the paragraph — which is also what standard
     markdown does with lazy continuation.
+
+    Pipe tables: a `|` header row directly followed by a `|---|---|` separator
+    with the same number of columns starts a <table>; it runs until a blank
+    line or a line with no `|`. Anything that is not exactly that shape is left
+    as ordinary (escaped) text. Cells get the same inline pass as everything
+    else, so links render and raw HTML stays escaped.
     """
     lines = (md or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
@@ -847,11 +885,25 @@ def _body_to_html(md: str) -> str:
             out.append("</ul>")
             in_ul = False
 
-    for raw in lines:
-        stripped = raw.strip()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        i += 1
         if not stripped:
             flush_para()
             close_ul()
+            continue
+        nxt = lines[i].strip() if i < len(lines) else ""
+        if ("|" in stripped and "|" in nxt and _TABLE_SEP.match(nxt)
+                and len(_table_cells(stripped)) == len(_table_cells(nxt))):
+            flush_para()
+            close_ul()
+            rows = [stripped, nxt]
+            i += 1
+            while i < len(lines) and "|" in lines[i]:
+                rows.append(lines[i].strip())
+                i += 1
+            out.append(_table_to_html(rows))
             continue
         m_h = re.match(r"^(#{1,6})\s+(.*)$", stripped)
         m_li = re.match(r"^[-*]\s+(.*)$", stripped)
