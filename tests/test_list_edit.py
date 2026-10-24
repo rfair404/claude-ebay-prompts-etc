@@ -53,6 +53,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
@@ -1241,6 +1243,133 @@ def test_edit_bestoffer_refuses_floor_at_or_above_the_live_price():
         "a refused bestoffer edit must never PUT the broken terms")
 
 
+# ---------------------------------------------------------------------------
+# --update writes the title/price eBay accepted to the ledger (#324)
+# ---------------------------------------------------------------------------
+
+_UPD_SKU = "0000a324"            # canonical shape, so _sku_for keeps it
+_OLD_ROW = {"sku": _UPD_SKU, "status": "PUBLISHED", "title": "Old Widget Title",
+            "price": "30.00", "offer_id": "9", "listing_id": "206",
+            "published_at": "2026-01-02T03:04:05Z", "updated_at": "2026-01-02T03:04:05Z"}
+# What _write_single_draft holds, i.e. what --update sends to eBay.
+_NEW = {"title": "Vintage Widget MPN-100", "price": "24.99"}
+
+
+def _seed_ledger(path, rows):
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=L._LEDGER_FIELDS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in L._LEDGER_FIELDS})
+
+
+def _live_listing_api(fail_put=None):
+    """Fake eBay holding one live listing for _UPD_SKU. A PUT whose path
+    contains `fail_put` raises EbayAPIError; GETs still answer."""
+    send, calls = _fake_api({
+        "/offer?sku=": {"offers": [{"offerId": "9", "status": "PUBLISHED",
+                                    "availableQuantity": 1,
+                                    "listing": {"listingId": "206", "listingStatus": "ACTIVE"}}]},
+        "/inventory/v1/offer/9": {"pricingSummary": {"price": {"value": "30.00", "currency": "USD"}}},
+        f"/inventory_item/{_UPD_SKU}": {
+            "product": {"title": "Old Widget Title"}, "condition": "USED_GOOD",
+            "availability": {"shipToLocationAvailability": {"quantity": 1}}},
+    })
+
+    def api(method, path, body=None, creds=None, **kw):
+        if method == "PUT" and fail_put and fail_put in path:
+            raise EbayAPIError(500, "eBay rejected the PUT", None)
+        return send(method, path, body, creds=creds, **kw)
+    return api
+
+
+def _update(tmp, fields, *, api=None, dry_run=False):
+    """Run update_listing_fields against fake eBay; return captured stderr."""
+    import io
+    err = io.StringIO()
+    draft_path = _write_single_draft(tmp, sku=_UPD_SKU, offer_id="9")
+    with _patched(L, api_send=api or _live_listing_api()), contextlib.redirect_stderr(err):
+        L.update_listing_fields(draft_path, fields, creds=_Creds(), dry_run=dry_run)
+    return err.getvalue()
+
+
+@pytest.mark.parametrize("field", ["title", "price"])
+def test_update_writes_the_new_value_to_the_ledger_row(field):
+    other = "price" if field == "title" else "title"
+    with tempfile.TemporaryDirectory() as td, _ledger_at(Path(td)) as ledger:
+        _seed_ledger(ledger, [_OLD_ROW])
+        _update(Path(td), [field])
+        rows = _ledger_rows(ledger)
+
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row[field] == _NEW[field]
+    assert row[other] == _OLD_ROW[other]
+    assert row["status"] == "PUBLISHED"
+    assert row["published_at"] == _OLD_ROW["published_at"]
+    assert row["updated_at"] != _OLD_ROW["updated_at"]
+
+
+def test_update_dry_run_leaves_the_ledger_byte_identical():
+    with tempfile.TemporaryDirectory() as td, _ledger_at(Path(td)) as ledger:
+        _seed_ledger(ledger, [_OLD_ROW])
+        before = ledger.read_bytes()
+        _update(Path(td), ["title", "price"], dry_run=True)
+        assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("field,put_path", [("title", "/inventory_item/"),
+                                            ("price", "/offer/9")])
+def test_update_failed_ebay_put_leaves_the_ledger_byte_identical(field, put_path):
+    with tempfile.TemporaryDirectory() as td, _ledger_at(Path(td)) as ledger:
+        _seed_ledger(ledger, [_OLD_ROW])
+        before = ledger.read_bytes()
+        try:
+            _update(Path(td), [field], api=_live_listing_api(fail_put=put_path))
+            raise AssertionError("a failed eBay PUT must raise")
+        except EbayAPIError:
+            pass
+        assert ledger.read_bytes() == before
+
+
+def test_update_cli_exits_1_when_the_ledger_write_fails():
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    real_argv = sys.argv
+    with tempfile.TemporaryDirectory() as td, _ledger_at(Path(td)) as ledger:
+        ledger.mkdir()              # a directory: every open() of it fails
+        draft_path = _write_single_draft(Path(td), sku=_UPD_SKU, offer_id="9")
+        sys.argv = ["list_edit.py", "--update", str(draft_path), "--fields", "price"]
+        try:
+            with _patched(L, api_send=_live_listing_api(),
+                          load_credentials=lambda store=None: _Creds()), \
+                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                L._cli()
+            raise AssertionError("_cli() must exit when the ledger write fails")
+        except SystemExit as e:
+            assert e.code == 1
+        finally:
+            sys.argv = real_argv
+
+    assert "[FAIL] ledger write" in err.getvalue()
+    assert "eBay offer 9" in err.getvalue() and "already updated" in err.getvalue()
+    assert "[OK] updated" not in out.getvalue()
+
+
+def test_update_of_a_sku_with_no_ledger_row_adds_no_row_and_warns():
+    other = dict(_OLD_ROW, sku="0000b324")
+    with tempfile.TemporaryDirectory() as td, _ledger_at(Path(td)) as ledger:
+        _seed_ledger(ledger, [other])
+        before = ledger.read_bytes()
+        stderr = _update(Path(td), ["title", "price"])
+        assert ledger.read_bytes() == before
+        assert not [r for r in _ledger_rows(ledger) if r["sku"] == _UPD_SKU]
+
+    warns = [ln for ln in stderr.splitlines() if ln.startswith("[WARN]")]
+    assert len(warns) == 1, stderr
+    assert "tools/ledger_reconcile.py --apply" in warns[0]
+
+
 def test_validate_flags_floor_at_or_above_price():
     with tempfile.TemporaryDirectory() as td:
         d = _write_bo_draft(Path(td), price="39.00", decline="39.00",
@@ -1465,6 +1594,9 @@ if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if getattr(fn, "pytestmark", None):
+                print(f"SKIP {name} (parametrized: run it under pytest)")
+                continue
             try:
                 fn()
                 print(f"PASS {name}")

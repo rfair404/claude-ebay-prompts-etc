@@ -342,6 +342,11 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
     (so a later update never blanks an earlier value). Each write nudges the
     Google Drive copy (lib/gdrive_mirror.py).
 
+    An empty `status` is a field edit (`--update`): the given fields go onto
+    the SKU's EXISTING row, its status and lifecycle timestamps stay as they
+    are, and updated_at moves. A SKU with no row gets no row: nothing is
+    written and it returns None.
+
     A failed write is never silent. With strict=True it raises
     LedgerWriteError (record_draft, and --list before it publishes); otherwise
     it prints "[WARN] ledger write: <path>: <error>" to stderr and returns
@@ -359,6 +364,8 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             with path.open(newline="", encoding="utf-8") as f:
                 rows = list(csv.DictReader(f))
         row = next((r for r in rows if r.get("sku") == sku), None)
+        if row is None and not status:
+            return None
         if row is None:
             row = {k: "" for k in _LEDGER_FIELDS}
             row["sku"] = sku
@@ -368,7 +375,9 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
             if v:
                 row[k] = str(v)
         cur = row.get("status") or ""
-        if status == "DRAFTED":
+        if not status:
+            pass                    # field edit: status stays as it is
+        elif status == "DRAFTED":
             row["status"] = cur or "DRAFTED"
         elif status == "SYNCED":
             row["status"] = "PUBLISHED" if cur == "PUBLISHED" else "SYNCED"
@@ -2247,6 +2256,8 @@ def update_listing_fields(draft_path: Path, fields,
 
     GET-merge-PUT: unrequested fields (incl. photos + their order) keep their
     current eBay value. Never publishes. Returns the list of fields changed.
+    A title or price eBay accepted is written to the SKU's existing ledger row
+    (status untouched); a ledger write failure raises LedgerWriteError.
 
     dry_run: do every read (sellable check, GETs, category condition lookup)
     and build the exact PUT bodies, but send nothing — no PUT, no photo upload,
@@ -2270,6 +2281,7 @@ def update_listing_fields(draft_path: Path, fields,
     item_fields = canon & _ITEM_SIDE
     offer_fields = canon & _OFFER_SIDE
     changed: list[str] = []
+    no_row = False                  # a ledger write found no row for the SKU
 
     state = offer_sellable_state(sku, creds)
     if not state["sellable"] and not allow_not_sellable:
@@ -2349,6 +2361,15 @@ def update_listing_fields(draft_path: Path, fields,
             plan.append(dict(method="PUT", path=path, before=cur, after=item))
         if not dry_run:
             api_send("PUT", path, item, creds=creds)
+            # Ledger: record only what eBay just accepted (#324).
+            if "title" in item_fields:
+                try:
+                    no_row |= upsert_listing(sku, "", title=str(draft.get("title")),
+                                             store=creds.store, strict=True) is None
+                except LedgerWriteError:
+                    print(f"  eBay inventory item {sku} was already updated; "
+                          f"its ledger title was not written.", file=sys.stderr)
+                    raise
 
     if offer_fields:
         offer_id = _find_offer_id_for_sku(sku, creds)
@@ -2399,7 +2420,22 @@ def update_listing_fields(draft_path: Path, fields,
             plan.append(dict(method="PUT", path=path, before=cur, after=offer))
         if not dry_run:
             api_send("PUT", path, offer, creds=creds)
+            if "price" in offer_fields:
+                try:
+                    no_row |= upsert_listing(sku, "", price=_to_decimal_str(draft.get("price")) or "",
+                                             store=creds.store, strict=True) is None
+                except LedgerWriteError:
+                    print(f"  eBay offer {offer_id} (sku {sku}) was already updated; "
+                          f"its ledger price was not written.", file=sys.stderr)
+                    raise
 
+    if no_row:
+        # A live listing rebuilt with tools/draft_rebuild.py can have no row;
+        # --update never invents one (#224), reconcile adds it from eBay.
+        print(f"[WARN] ledger: no row for SKU {sku}; eBay was updated but the "
+              f"ledger was not. Run `python tools/ledger_reconcile.py --apply"
+              f"{' --store ' + creds.store if creds.store != DEFAULT_STORE else ''}` to add it.",
+              file=sys.stderr)
     if not dry_run:
         update_meta(draft_path, {"last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
     return changed
