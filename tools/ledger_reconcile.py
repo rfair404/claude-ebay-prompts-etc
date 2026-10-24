@@ -32,8 +32,17 @@ and the row itself for a SKU that was drafted but never synced).
     python tools/ledger_reconcile.py --apply --prune-unknown
     python tools/ledger_reconcile.py --store junk          # a named store (#156)
     python tools/ledger_reconcile.py --all-stores          # report every store
+    python tools/ledger_reconcile.py --prune-sku <sku> --store default          # dry run
+    python tools/ledger_reconcile.py --prune-sku <sku> --store default --apply  # remove it
 
 A backup is written next to the ledger before any rewrite.
+
+`--prune-sku` removes exactly one stale row: an item that moved to another
+store and is still DRAFTED (or similar) here. `--prune-unknown` would drop every
+orphan, including drafts that were never synced and are still being worked on.
+`--prune-sku` drops only the named row, and only once the SKU is shown to
+belong to another store (its ledger, or its eBay account) and to have no offer
+or sale under this one.
 
 Per store (#156): each store reconciles its own listings ledger against its own
 Sell API account, protects SOLD rows with its own sales ledger, and writes its
@@ -405,6 +414,107 @@ def reconcile(store: str, apply: bool = False, prune: bool = False) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- --prune-sku
+
+def _read_ledger(path: Path) -> tuple[list[str], list[dict]]:
+    if not path.exists():
+        return [], []
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        r = csv.DictReader(f)
+        return list(r.fieldnames or []), list(r)
+
+
+def _offers(sku: str, store: str) -> list[dict]:
+    """The SKU's offers on `store`'s account. No inventory item (404) = none.
+    Any other error raises: an unanswered question is not a "no"."""
+    try:
+        return get_offers_for_sku(sku, load_credentials(store=store))
+    except EbayAPIError as e:
+        if e.status == 404:
+            return []
+        raise
+
+
+def _belongs_elsewhere(sku: str, store: str) -> str | None:
+    """Evidence that `sku` belongs to a store other than `store`, or None.
+    A row in another store's ledger counts unless it is VOIDED; failing that,
+    an offer on another store's eBay account."""
+    others = [s for s in stores.configured_stores() if s != store]
+    for other in others:
+        _, rows = _read_ledger(stores.paths(other).listings_ledger)
+        for r in rows:
+            st = (r.get("status") or "").strip().upper()
+            if r.get("sku") == sku and st not in ("", "VOIDED"):
+                where = f", listing {r['listing_id']}" if r.get("listing_id") else ""
+                return f"{stores.paths(other).listings_ledger.name}: {st}{where}"
+    for other in others:
+        offers = _offers(sku, other)
+        if offers:
+            lid = ((offers[0].get("listing") or {}).get("listingId")) or ""
+            return f"eBay ({other} account): offer {offers[0].get('offerId')}" \
+                   + (f", listing {lid}" if lid else "")
+    return None
+
+
+def prune_sku(sku: str, store: str, apply: bool = False) -> int:
+    """Remove exactly one row (`sku`) from `store`'s listings ledger.
+
+    Refuses unless every check passes: one row for the SKU here; no eBay ids or
+    sale on it; no offer for it on this store's eBay account; and the SKU is
+    in another store's ledger or on another store's eBay account. Dry run
+    unless `apply`; a backup is written before the rewrite."""
+    ledger = stores.paths(store).listings_ledger
+    fields, rows = _read_ledger(ledger)
+    mine = [r for r in rows if r.get("sku") == sku]
+
+    def refuse(why: str) -> int:
+        print(f"[X] not pruning {sku} from {ledger.name}: {why}")
+        return 1
+
+    if len(mine) != 1:
+        return refuse(f"{len(mine)} rows for it (expected exactly 1)")
+    row = mine[0]
+    status = (row.get("status") or "").strip().upper()
+    ids = [f"{k} {row[k]}" for k in ("offer_id", "listing_id") if (row.get(k) or "").strip()]
+    if ids:
+        return refuse(f"the row carries {', '.join(ids)}; it is a real eBay record here")
+    if status in ("SOLD", "SHIPPED"):
+        return refuse(f"the row is {status}; sales history is never pruned")
+    if sku in _sold_skus(stores.paths(store).sales_ledger):
+        return refuse(f"{stores.paths(store).sales_ledger.name} has an order for it")
+    try:
+        here = _offers(sku, store)
+        if here:
+            return refuse(f"eBay ({store} account) has offer {here[0].get('offerId')} for it")
+        elsewhere = _belongs_elsewhere(sku, store)
+    except EbayAPIError as e:
+        return refuse(f"eBay lookup failed ({e}); nothing checked, nothing changed")
+    if not elsewhere:
+        return refuse("no other store's ledger or eBay account has it")
+
+    print(f"{sku}  {status or '(blank)'}  {row.get('title') or '(no title)'}")
+    print(f"  in {ledger}")
+    print(f"  no offer on the {store} account; belongs elsewhere: {elsewhere}")
+    if not apply:
+        print("[DRY RUN] nothing written. Re-run with --apply to remove this one row.")
+        return 0
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = ledger.with_name(f"{ledger.stem}.backup-{stamp}.csv")
+    shutil.copyfile(ledger, backup)
+    print(f"backed up -> {backup.name}")
+    with ledger.open(encoding="utf-8-sig", newline="") as f:
+        eol = "\r\n" if f.readline().endswith("\r\n") else "\n"
+    kept = [r for r in rows if r is not row]
+    with ledger.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields, lineterminator=eol)
+        w.writeheader()
+        w.writerows(kept)
+    print(f"[OK] pruned {sku} from {ledger.name} — {len(kept)} rows remain")
+    ledger_changed(ledger)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -413,8 +523,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prune-unknown", action="store_true", dest="prune",
                     help="drop ledger rows for SKUs eBay has no inventory item for "
                          "(default: keep them and flag)")
+    ap.add_argument("--prune-sku", metavar="SKU",
+                    help="remove this one row from --store's ledger, once the SKU is "
+                         "shown to belong to another store. Dry run unless --apply.")
     stores.add_store_args(ap, all_stores=True)
     a = ap.parse_args(argv)
+
+    if a.prune_sku:
+        if a.all_stores or a.prune:
+            print("[X] --prune-sku takes one --store and no --all-stores/--prune-unknown")
+            return 2
+        return prune_sku(a.prune_sku, stores.require_explicit_store(a, "--prune-sku"),
+                         apply=a.apply)
 
     if a.apply and a.all_stores:
         # Local files only, but still a bulk rewrite: name the store (#156 §4).
