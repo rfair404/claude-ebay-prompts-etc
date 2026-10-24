@@ -265,6 +265,47 @@ def test_an_unknown_stage_is_refused():
         raise AssertionError("an unknown stage was accepted")
 
 
+# ---------------------------------------------------------------------------
+# re-rendering keeps the decision it re-renders
+# ---------------------------------------------------------------------------
+
+def test_a_rerender_does_not_turn_an_adopted_default_into_a_pick():
+    """estate-jewelry-lots-10-08-2026, four shoots out of seven: colour approved
+    on the auto-adopted 'crisp', then --apply kept the look but re-picked it as
+    the operator's, and the PREP gate refused with "look 'crisp' (auto) ->
+    'crisp' (operator)" over identical pixels. Re-rendering is not a decision;
+    only --pick is, and a real change of look must still invalidate."""
+    import tempfile
+    sys.path.insert(0, str(ROOT / "tests"))
+    import test_prep as TP                                  # noqa: E402
+    P = TP.P
+
+    with tempfile.TemporaryDirectory() as td:
+        shoot = TP._shoot(Path(td) / "s", n=1)
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        m = P.run_apply(shoot, quiet=True)
+        look = m["chosen_preset"]
+        assert not m["preset_picked_by_operator"]
+        P.run_approve_stage(shoot, "color")
+
+        m = P.run_apply(shoot, quiet=True)                  # the re-render
+        assert m["chosen_preset"] == look
+        assert not m["preset_picked_by_operator"], \
+            "re-rendering promoted the default to an operator pick"
+        assert D.stale_stages(m, S.STAGES) == []
+        assert S.stage_state(m)["color"]["approved"]
+
+        # An operator's pick stays the operator's through a re-render too.
+        other = next(p for p in P.colormod.PRESETS if p != look)
+        P.run_apply(shoot, quiet=True, only=(look, other))
+        m = P.run_pick(shoot, other, quiet=True)
+        (stage, why), = D.stale_stages(m, ["color"])
+        assert any("look" in w for w in why), why
+        m = P.run_apply(shoot, quiet=True, only=(look, other))
+        assert m["chosen_preset"] == other and m["preset_picked_by_operator"]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]

@@ -1495,11 +1495,17 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
     # caught by hashing the files, which nobody does.
     #
     # An already-chosen look is a decision. Re-render its files, leave the
-    # choice alone.
+    # choice alone -- and that includes WHO made it. Re-picking an adopted
+    # default as auto=False promoted it to an operator pick, which moves the
+    # colour-stage decision record with identical pixels: every re-render of a
+    # shoot whose default was signed off then failed the PREP gate with
+    # "look 'crisp' (auto) -> 'crisp' (operator)". Only --pick makes it the
+    # operator's.
     prior = m.get("chosen_preset")
     if prior and prior in (only or colormod.PRESETS):
         save_manifest(shoot, m)
-        m = run_pick(shoot, prior, quiet=True, auto=False)
+        m = run_pick(shoot, prior, quiet=True,
+                     auto=not m.get("preset_picked_by_operator"))
         if not quiet:
             print(f"  kept the look already chosen for this shoot: {prior}")
         return m
