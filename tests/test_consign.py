@@ -678,7 +678,7 @@ def test_mall_fee_is_worked_out_with_no_postage(card, fee, net, share, complete)
 PAID_IN = (TODAY - timedelta(days=35)).isoformat()      # funds received 35 days ago
 
 
-def test_a_sale_typed_by_hand_is_kept_and_clears_30_days_after_funds(shop):
+def test_a_sale_typed_by_hand_is_kept_and_clears_at_month_end_once_paid(shop):
     d = _intake(shop, [
         {"item_id": "C001", "channel": "mall", "sold_at": OLD, "item_price": "100.00",
          "card_paid": "0.00", "funds_received": PAID_IN},
@@ -690,15 +690,15 @@ def test_a_sale_typed_by_hand_is_kept_and_clears_30_days_after_funds(shop):
         # money all typed but not received yet: stays SOLD, however old the sale
         {"item_id": "C005", "channel": "dealer", "sold_at": OLD, "item_price": "50.00",
          "ebay_fee": "5.00", "actual_postage": "0.00"},
-        # received 10 days ago: inside the 30 days
-        {"item_id": "C006", "channel": "mall", "sold_at": OLD, "item_price": "20.00",
-         "card_paid": "0.00", "funds_received": (TODAY - timedelta(days=10)).isoformat()}])
+        # sold and paid today: clears when this month ends, not before
+        {"item_id": "C006", "channel": "mall", "sold_at": TODAY.isoformat(),
+         "item_price": "20.00", "card_paid": "0.00", "funds_received": TODAY.isoformat()}])
     fee = {"K99": {"client_code": "K99", "handling_fee": "2.00"}}
     for _ in range(2):                           # nothing typed is overwritten or lost
         assert consign.sync_intake(d, consign.Books(), fee, apply=True, today=TODAY) == 0
         got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
         mall, dealer = got["K99-C001"], got["K99-C002"]
-        cleared = (date.fromisoformat(PAID_IN) + timedelta(days=30)).isoformat()
+        cleared = consign.month_end(date.fromisoformat(OLD)).isoformat()  # month of sale
         assert (mall["state"], mall["cleared_on"], mall["ebay_fee"], mall["handling"],
                 mall["client_share"]) == ("CLEARED", cleared, "10.00", "2.00", "44.00")
         assert (dealer["state"], dealer["order_id"], dealer["net"], dealer["handling"]) == (
