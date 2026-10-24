@@ -2757,9 +2757,20 @@ def main(argv=None) -> int:
 
     if args.rotate:
         m = run_rotate(shoot, _pairs(args.rotate))
-    if getattr(args, "set_rotate", None):
-        m = run_rotate(shoot, _pairs(args.set_rotate), absolute=True)
-        _print_status(shoot, m)
+    # Every override given in one call is applied. Each used to return on its
+    # own, so `--crop X=off --detail Y=on` recorded the crop, dropped the detail
+    # and still exited 0. Orientation first: a crop is planned on the rotated
+    # frame, and a detail flip may re-plan the crop after it.
+    set_rotate = getattr(args, "set_rotate", None)
+    if set_rotate or args.crop or args.detail:
+        if set_rotate:
+            m = run_rotate(shoot, _pairs(set_rotate), absolute=True)
+        if args.crop:
+            m = run_set_crop(shoot, _pairs(args.crop))
+        if args.detail:
+            m = run_set_detail(shoot, _pairs(args.detail))
+        if set_rotate:
+            _print_status(shoot, m)
         return 0
     if args.auto:
         run_auto(shoot, aspect_s, pad, args.pop,
@@ -2774,12 +2785,6 @@ def main(argv=None) -> int:
         return 0
     if args.approve_stage:
         run_approve_stage(shoot, args.approve_stage)
-        return 0
-    if args.crop:
-        run_set_crop(shoot, _pairs(args.crop))
-        return 0
-    if args.detail:
-        run_set_detail(shoot, _pairs(args.detail))
         return 0
     if args.sheet:
         run_sheet(shoot, quiet=args.quiet)
