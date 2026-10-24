@@ -1,5 +1,5 @@
 ---
-version: 1.4.0
+version: 1.5.0
 updated: 2026-10-23
 ---
 
@@ -84,7 +84,7 @@ shoot directory, so phases compose without re-deriving.
 Every item is in exactly one state, and every state has exactly one owner.
 The owner moves the item to the next state and hands it on. Everyone else
 who works on it (price researcher, copywriter, photo-editor, art director,
-presenter) is a helper: a helper returns its output to the owner and never
+historian, presenter) is a helper: a helper returns its output to the owner and never
 moves the item itself. The state names are the ones the ledgers already use
 (`listings_ledger*.csv` status, `client_ledger.csv` state); this table only
 says who owns each one and what "done" means.
