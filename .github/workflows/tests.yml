@@ -1,7 +1,7 @@
 name: tests
 
 # The suite was red for weeks without anyone noticing (a leaked monkeypatch in
-# test_marble_index.py), because nothing ran it on push. This is the guard.
+# a test module), because nothing ran it on push. This is the guard.
 #
 # It deliberately installs only what the tests import — no eBay credentials, no
 # network. Every test builds its own fixtures; anything that would need a live
@@ -32,10 +32,9 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      # Deliberately only what the tests import. The one skip is
-      # tests/test_marble_gate.py, which runs the real CLIP gate and needs
-      # sentence-transformers (torch, ~2GB, plus a model download on first
-      # use) — not a CI dependency. No count named here on purpose: the last
+      # Deliberately only what the tests import: sentence-transformers
+      # (torch, ~2GB, plus a model download on first use) is not a CI
+      # dependency. No count named here on purpose: the last
       # one said "53 passed" long after the suite had grown past 600, and a
       # number that specific and that stale invites someone to trust it.
       - name: Install test dependencies

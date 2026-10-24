@@ -2,7 +2,7 @@
 
 ```yaml
 triggers: [marble, marbles, shooter, swirl, sulphide, onionskin, "glass ball toy", "marble lot", "marble jar", "marble collection", agate-marble, seam, cutline, "fisheye", moonie, "patch and ribbon"]
-version: 5
+version: 6.0.0
 last_reviewed: 2026-06-25
 sources:
   - Marble Collectors Society of America — marblecollecting.com (taxonomy, grading)
@@ -59,62 +59,54 @@ sources:
 > "eyelashes") is proof. The per-maker seam playbook is in **"Reading seams,
 > cutlines & poles"** below; light it and shoot it per **Inspection shots**.
 
-> ⛔ **CROP GATE — stop and SHOW the crops before identifying (HARD, bulk/group shoots).**
-> A multi-marble shoot is cropped into per-marble images before any ID. After the
-> crops exist you **STOP and present them to the user** — do not begin identifying
-> until the user confirms the crops are right. Procedure:
->   1. Make crops + the numbered contact sheet ONLY (no classify/forum/comps):
->      `python tools/marble_triage.py <shoot-dir> --crops-only --expect N`.
->      (`--crops-only` already skips the CLIP forum/comps step — consistent with
->      the CLIP-disabled policy below.)
->   2. **Show the user** the `*_contact.jpg` contact sheet + the crop count vs the
->      expected N, and STOP. Each cell must be ONE clean marble; the count must
->      match; never count a ruler/blurry frame as a marble (per the photo protocol).
->   3. Proceed to IDENTIFY only on the user's go-ahead. If the crops are wrong
->      (miscount, split/merged marbles, junk cells), do **not** identify on them —
->      show the best attempt, say what's off, and re-crop with adjusted detector
->      flags (`--min-frac` / `--max-frac` / `--circ` / `--no-detect`) or ask what's
->      acceptable.
+> ⛔ **CROP GATE — stop and SHOW the lot before identifying (HARD, bulk/group shoots).**
+> Before any ID on a multi-marble shoot you **STOP and present the numbered
+> frames to the user** — do not begin identifying until the user confirms the
+> count is right. Procedure:
+>   1. Build the numbered contact card ONLY (no comps):
+>      `python -m lib.photo_prep.prep <shoot-dir> --check`, then
+>      `python tools/prep_card.py <shoot-dir>` (→ `<shoot>/.prep/card.jpg`).
+>      Count the marbles frame by frame against the expected N.
+>   2. **Show the user** the card + your marble count vs the expected N, and
+>      STOP. Each marble must be clearly shown in at least one frame; the count
+>      must match; never count a ruler/blurry frame as a marble (per the photo
+>      protocol).
+>   3. Proceed to IDENTIFY only on the user's go-ahead. If the count is wrong or
+>      a marble isn't clearly shown, do **not** identify on it — say what's off
+>      and ask for a reshoot or what's acceptable.
 > HARD stop in an **interactive** run. **Headless** (no user) degrades to SOFT:
-> verify crop count == expected yourself, log any mismatch to `NEEDS_REVIEW.md`,
-> and proceed — never identify on a count you couldn't verify. (Extends the
-> standing crop-check-first rule: crops are now shown for approval, not just
-> self-checked.) **Single-pass mode**
-> ([../prompts/single_pass.md](../prompts/single_pass.md)) keeps this HARD —
-> write `{"stage": "identify", "detail": "<contact sheet path> — N crops vs
-> expected M, go-ahead needed"}` to `<shoot>/.single_pass/ask.json` instead of
-> pausing the chat, and stop before IDENTIFY starts.
+> verify count == expected yourself, log any mismatch to `NEEDS_REVIEW.md`,
+> and proceed — never identify on a count you couldn't verify. **Single-pass
+> mode** ([../prompts/single_pass.md](../prompts/single_pass.md)) keeps this
+> HARD — write `{"stage": "identify", "detail": "<contact card path> — N marbles
+> vs expected M, go-ahead needed"}` to `<shoot>/.single_pass/ask.json` instead
+> of pausing the chat, and stop before IDENTIFY starts.
 
-> 🚫 **CLIP / forum-index are DISABLED for IDENTIFY (proved ineffective — kept, not used).**
+> 🚫 **No CLIP / forum-index step in IDENTIFY.**
 >
-> The `marbleconnection` forum CLIP index and EVERY tool that queries it are
-> **turned OFF for IDENTIFY**: `lib/marble_index.py` (`query`/`search`/`verify`),
-> `tools/marble_triage.py`, `tools/marble_matches.py`, `tools/verify_batch.py`,
-> `tools/marble_colormatch.py`, `tools/marble_refset.py`, and any `marbleconnection`
-> /MCSA CLIP retrieval. Do **NOT** run any of them during IDENTIFY — not for the
-> maker, not for the type, **not as an escalation, not as a "colour-match lead,"
-> not for corroboration.** The forum expert-answer text is likewise not used to set
-> the maker. There is no in-IDENTIFY CLIP step at all.
+> The old CLIP marble tooling (the `marbleconnection` forum index and the
+> triage, match, crop and classifier tools) proved **ineffective for
+> identification** and was removed (2026-10-24). The MCSA CLIP index
+> (`lib/mcsa_index.py`) stays in the repo and stays **OFF for IDENTIFY**: do
+> **NOT** run it during IDENTIFY — not for the maker, not for the type, **not as
+> an escalation, not as a "colour-match lead," not for corroboration.** Forum
+> expert-answer text is likewise not used to set the maker.
 >
-> **Why disabled:** CLIP ViT-B/32 embeds a 224px image, so it only matches COLOUR
-> + gross pattern — it cannot resolve the seams/ribbons that separate makers within
-> a family (measured: `verify_batch` saturates on the WV-swirl family). It proved
-> **ineffective for identification**. The code is retained but DORMANT.
+> **Why:** CLIP ViT-B/32 embeds a 224px image, so it only matches COLOUR + gross
+> pattern — it cannot resolve the seams/ribbons that separate makers within a
+> family (measured: maker scores saturated on the WV-swirl family).
 >
 > **IDENTIFY = photos + this module's tells ONLY** — method (handmade vs machine),
 > seams/poles, base transparency (backlit), pattern, ribbons-vs-patch, colour
 > idiom, size, surface. The maker is FIRMLY named from those tells or stays
 > `Unknown` / `[BEST-CASE] + verify` — never promoted by CLIP or forum data. Still
 > allowed (your/the user's eyes, not CLIP): HUMAN triangulation with LABELED
-> reference photos ("which is closest?", per
-> [`../prompts/marble_decide.md`](../prompts/marble_decide.md)) and WebFetch of the
-> Reference Library.
+> reference photos ("which is closest?") and WebFetch of the Reference Library.
 >
 > **Re-enable ONLY on the user's EXPLICIT request.** If the user explicitly asks
-> for a colour-match / forum look-alike run, you may run those tools THEN — as a
-> separate, user-driven step OUTSIDE the identify record, framed strictly as a
-> colour lead (never a maker verdict). Absent that explicit ask, the entire
-> CLIP/forum path stays off.
+> for an MCSA look-alike run, you may run it THEN — as a separate, user-driven
+> step OUTSIDE the identify record, framed strictly as a colour lead (never a
+> maker verdict).
 
 ## When this applies
 
@@ -602,7 +594,7 @@ settled AND value swings on it, poll with the SPECIFIC question(s) below
 never silently default to the low tier.
 
 **Decision question bank (each tied to which tier it moves):**
-1. **Provenance / age** of the lot → sets the age dial (`lib/marble_prior.py`).
+1. **Provenance / age** of the lot → sets the age dial.
 2. **Size — assume ~5/8″ by default; only ask/measure when flagged.** Don't poll
    size on every marble (at 5/8″ it neither names a maker nor moves tier). Trigger
    on a **size word** (big/small/large/tiny/peewee/shooter/boulder) or a stated
@@ -723,13 +715,9 @@ titles — trust high-rep regulars):**
 |---|---|
 | **Seams, cutlines & poles + photo tips** (per-maker seam vocabulary; Master U/V cutlines, MK patch-and-ribbon, Akro Moonie fisheye-pole, Acme Realer glow; gray/smooth background, flash, underwater) — Steph, moderator | https://marbleconnection.com/topic/24889-seams-cutlines-and-poles-and-photo-tips/ |
 
-> The forum look-alike index (`lib/marble_index.py`, the `marbleconnection`
-> CLIP index) and `lib/forum_replies.py` operationalize this source — retrieval
-> reports the reputation-ranked expert ANSWER, never the OP's guess.
-> 🚫 **But the whole CLIP/forum path is DISABLED for IDENTIFY** (proved
-> ineffective — see the policy near the top of this module). None of it feeds the
-> maker/type; it runs ONLY when the user explicitly asks, as a separate colour-lead
-> step outside the identify record.
+> `lib/forum_replies.py` operationalizes this source — it reports the
+> reputation-ranked expert ANSWER, never the OP's guess. 🚫 It does **not**
+> feed the maker/type in IDENTIFY (see the policy near the top of this module).
 
 For an independent visual second opinion on a markless/can't-place marble, also
 see `lib/lens_id.py` (Google Lens) per [`../prompts/identify.md`](../prompts/identify.md).
@@ -760,8 +748,7 @@ see `lib/lens_id.py` (Google Lens) per [`../prompts/identify.md`](../prompts/ide
   trust high-reputation regulars (moderators/long-tenured members). Steph's
   "Seams, cutlines and poles and photo tips" tutorial is the primary source for
   the per-maker seam/cutline/pole vocabulary and the camera-craft tips above.
-  This forum is also the corpus behind the `marbleconnection` CLIP look-alike
-  index and `lib/forum_replies.py`.
+  `lib/forum_replies.py` reads this forum's expert answers.
 - **Reference books**: *American Machine-Made Marbles* (AMMM — the standard for
   the WV swirl makers and machine tells); Paul Baumann, *Collecting Antique
   Marbles*; Robert Block, *Marbles Identification & Price Guide*; Everett Grist,

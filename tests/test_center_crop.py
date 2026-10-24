@@ -8,7 +8,7 @@ bare background or clipped the legend off a hang tag. The tool must now refuse
 those crops and pass the original through instead.
 
 Synthetic images (drawn with cv2) rather than the real JPGs, matching the house
-style in test_marble_crop.py: deterministic, fast, no fixtures to carry.
+style: deterministic, fast, no fixtures to carry.
 
 Run:  python tests/test_center_crop.py
   or: pytest tests/test_center_crop.py

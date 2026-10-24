@@ -68,13 +68,13 @@ SLOW_PREFIXES = (
     "python -m lib.cli observe",
     "python -m pytest",
     "python tests/run_all.py",
+    "tools/green_test.sh",
     "python tools/ledger_reconcile.py",
     "python tools/prep_sheet_html.py",
     "python tools/review_card_html.py",
     "python lib/ebay_sold_browse.py",
     "python lib/lens_id.py",
     "python lib/list_edit.py",
-    "python tools/reindex_",
 )
 
 # `cd x && python …`, `a; b`, `a | b` — a prefix can sit in any segment.

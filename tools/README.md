@@ -71,25 +71,6 @@ assumed stale. These are how you check.
 | `promote.py` | Plans a Promoted Listings campaign. Proposes; never writes. |
 | `session_observer.py` | Reads our own transcripts and finds the friction (V4_PLAN Phase 5). |
 
-## Marbles
-
-The marble specialization's tooling. See
-[`../specializations/marbles.md`](../specializations/marbles.md) for the
-rules these serve.
-
-| Script | What it does |
-|---|---|
-| `marble_triage.py` | One-shot triage — the fast batch pipeline for sorting shoots. Always verify crops before sorting on them. |
-| `marble_decide.py` | A never-dead-end decision packet: a direction, the in-hand questions that resolve it, and a labeled reference panel. |
-| `marble_matches.py` | The top-N CLIP forum matches for one marble — the "let me help decide" panel. Forum matching is a gross sort, not a maker assertion. |
-| `marble_colormatch.py` | Tight-crops one marble and lists colour/visual look-alikes from the forum index. |
-| `marble_refset.py` | A maker-*labelled* reference set built from forum posts showing marbles in known packaging, then matches a subject against it. |
-| `marble_typechart.py` | A labeled type-reference chart from the MCSA studio references. |
-| `verify_batch.py` | Visual maker discrimination for a whole shoot — head-to-head or matrix. |
-| `gold_eval.py` | Gold-set regression for the classifier: "am I right, or going soft?" |
-| `reindex_forum.py` / `reindex_full.py` | Re-crop and re-embed the marbleconnection forum index. `reindex_full.py` is the resumable production run. |
-| `marble_index_next.cmd` | What the scheduled Windows task runs to index one more forum page. |
-
 ## Camera import (runs on its own)
 
 | Script | What it does |
