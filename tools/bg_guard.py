@@ -68,6 +68,7 @@ SLOW_PREFIXES = (
     "python -m lib.cli observe",
     "python -m pytest",
     "python tests/run_all.py",
+    "tools/green_test.sh",
     "python tools/ledger_reconcile.py",
     "python tools/prep_sheet_html.py",
     "python tools/review_card_html.py",

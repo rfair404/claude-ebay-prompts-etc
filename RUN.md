@@ -1,5 +1,5 @@
 ---
-version: 1.5.1
+version: 1.6.0
 updated: 2026-10-24
 ---
 
@@ -131,7 +131,7 @@ forms used throughout `prompts/`, not bare names):
 `python -m lib.photo_prep.prep`, `python -m lib.cli prep`,
 `python -m lib.cli single-pass`, `python -m lib.cli observe`,
 `python -m pytest`,
-`python tests/run_all.py`, `python tools/ledger_reconcile.py`,
+`python tests/run_all.py`, `tools/green_test.sh`, `python tools/ledger_reconcile.py`,
 `python tools/prep_sheet_html.py`, `python tools/review_card_html.py`,
 the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
@@ -154,6 +154,13 @@ re-issue the same call with `run_in_background`. The prefix list lives in
 one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
+
+**Run the full suite on green, not here.** `tools/green_test.sh [pytest args]`
+copies the checkout to green (the second machine, `ssh green`) and runs pytest
+there. A full run peaks near 900 MB, and sessions running it side by side beside
+the app, Firefox and OBS got the desktop app OOM-killed (2026-10-24). It runs on
+green, so the on-air hold below does not stop it. Local `python -m pytest` stays
+for one test file. `tools/green_test.sh --setup` builds green's venv once.
 
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
