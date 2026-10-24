@@ -1,6 +1,6 @@
 ---
-version: 1.5.0
-updated: 2026-10-23
+version: 1.7.0
+updated: 2026-10-24
 ---
 
 # RUN — v4 headless runbook
@@ -84,26 +84,28 @@ shoot directory, so phases compose without re-deriving.
 Every item is in exactly one state, and every state has exactly one owner.
 The owner moves the item to the next state and hands it on. Everyone else
 who works on it (price researcher, copywriter, photo-editor, art director,
-historian, presenter) is a helper: a helper returns its output to the owner and never
-moves the item itself. The state names are the ones the ledgers already use
-(`listings_ledger*.csv` status, `client_ledger.csv` state); this table only
-says who owns each one and what "done" means.
+historian, presenter) is a helper: a helper returns its output to the
+owner and never moves the item itself. Most names are `client_ledger.csv`
+states; REVIEW and LIVE map onto ledger values as noted under the table.
+The table says who owns each state and what "done" means.
 
 | State | Owner | Done when (the evidence) | Hands to |
 |---|---|---|---|
 | **INTAKE** | inventory-buyer | It's ours or consigned to us, and it has a folder under `inventory/` with `context.txt`. Bought: `spend:` recorded. Consigned: a `client_ledger.csv` row. | Russell (shoot), via a shot list on his card |
 | **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
-| **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist, `prep --auto` has run, and `list_edit.py --record` has stamped the SKU **and the ledger row exists** (`grep <sku> listings_ledger*.csv`, since a failed write can still print `[OK]`). The SKU is the item number. | listing-manager |
-| **REVIEW** | listing-manager | PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
+| **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. | listing-manager |
+| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`grep <sku> listings_ledger*.csv` in the main checkout, since a failed write can still print `[OK]`), PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
 | **LIVE** | listing-manager until the live read-back matches the approved card, then the inventory-manager | Ledger `PUBLISHED` (client ledger `LISTED`), listing URL reported, live price, Best Offer floors, shipping, photos and promotion match the card. | inventory-manager (aging), listing-manager for any approved revision |
 | **SOLD** | shipping-assistant | Label bought, item packed, tracking uploaded within handling time. | accountant |
 | **ENDED** (unsold) | inventory-manager | A next step chosen: relist, lot, junk store, live-show slot or return. A relist goes back through the listing manager. | listing-manager or Russell's card |
 | **CLEARED / SETTLED** | accountant | Fees, ad fee and postage booked. A consignment row is cleared by `consign sync --apply` and paid by a settlement. | (closed) |
 | **RETURNED / DISPOSED / EXCLUDED** | typed by hand on Russell's word | `state_note` says why (EXCLUDED also needs `buyout_price`). | (closed) |
 
-`SYNCED` (an eBay draft offer exists, not live) counts as REVIEW. `PREP` on
-the client ledger is a hand-entered SHOT/DRAFTED stand-in until `consign
-sync` derives the real state.
+In `listings_ledger*.csv`, `DRAFTED` and `SYNCED` (an eBay draft offer, not
+live) are REVIEW, `PUBLISHED` is LIVE, `SOLD`/`SHIPPED` is SOLD and `ENDED`
+is ENDED. On `client_ledger.csv`, `DRAFTED` means `draft.md` exists, `LISTED`
+is LIVE, and a hand-entered `PREP` is an on-hand label that `consign sync`
+keeps until the item is LISTED.
 
 **Waiting is not a state.** An item waiting on Russell's card, a reshoot or
 another agent stays in its state with the same owner. A `NEEDS_REVIEW.md`
@@ -162,7 +164,9 @@ the conductor never needs a worker's reasoning, only its verdict.
 unlocked CSV — `list_edit.py --record` / `--sync` / `--list --confirm` all
 read-modify-write it, and two callers at once lose a row. Every ledger-
 touching call runs in the conductor, serialized, never inside a worker —
-which is also where it already belongs, since it follows the gate.
+which is also where it already belongs, since it follows the gate. In the
+agent team the conductor's ledger seat is the listing manager, one job at a
+time (see "Item states and handoffs").
 
 **Gates become a queue, not a barrier.** A finished item's review card joins
 a queue instead of stopping the run; the user answers gates whenever they're
@@ -387,9 +391,12 @@ client. Names and contacts live only in `inventory/_consign/clients.csv`
 Its optional columns are `agreement_signed` (date), `w9_on_file` (yes/no, a
 flag only, never the TIN), `payee_type`, `payout_method` (last 4 digits at
 most), `payout_cadence`, `floor_main`, `floor_junk`, `loss_rule`,
-`abandon_election` and `handling_fee` (blank = no fee; set it, normally to
-2.00, only when the client's signed agreement names the fee). `loss_rule` is `split` (the default: the client carries
-their split of a loss) or `client_never_owes` (a loss pays the client $0).
+`abandon_election`, `handling_fee` (blank = no fee; set it, normally to 2.00,
+only when the client's signed agreement names the fee), `min_payout` (blank =
+none; 500 for K01), `listing_days` (blank = 180) and `pickup_days` (blank =
+30). `loss_rule` is `split` (the default: the client carries their split of a
+loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
+(the client carries the whole loss, not split; K01's agreement).
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
     python -m lib.cli consign import CONSIGN-K01 -          # paste a CSV/TSV on stdin
@@ -441,11 +448,36 @@ larger figure into `handling` for an oversize box. A lot pays one fee, on its
 lead row. Rows paid before the fee existed are left alone. The report shows
 "handling kept", and settlements and statements carry a `handling` column.
 
+**Other channels and the mall.** A blank `channel` is eBay. Any other
+`channel` (one word: `dealer`, `etsy`) is a sale typed by hand into the row:
+`sold_at`, `item_price`, `ebay_fee` (that channel's fee, 0.00 if none),
+`actual_postage` (0.00 if none) and `order_id` if it has one. `sync` never
+overwrites those or calls the sale vanished, and flags an eBay sale that
+matches the same item. Type `funds_received` when the channel's money reaches
+us: the sale then clears at the end of the month it sold (agreement §5.1(b)),
+so it is paid on the 15th after, and it is flagged until that date is typed. `channel` `mall` is
+the antique-mall booth, where every consigned antique sells: type `sold_at`,
+`item_price` and `card_paid` (the part paid by card, 0.00 for cash), and sync
+works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
+(agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
+no postage. Handling applies on every channel.
+
+**Floors and time limits.** These only raise flags. A row's `floor` (from
+Exhibit A; a lot's floor is the total of its rows) is checked against the ask
+while listed and against the price once sold. A listing live longer than the
+client's `listing_days`, counted from its first `published_at`, is flagged to
+end and tell the client. Once `return_notice_sent` is typed, an item still
+unsold after `pickup_days` is flagged for the abandonment election.
+
 **Settlements.** `settle` gathers what is owed through `--through`: CLEARED
 rows not yet paid, unpaid buyouts above 0.00, and any adjustment to a row
 already paid. It adds one row to `inventory/_consign/K01/settlements.csv`
 (`settlement_id` like `K01-S001`) and writes the statement to
-`reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. A
+`reports/consign/K01/K01-S001.csv`, item by item, with no buyer data. If the
+total due is under the client's `min_payout`, the sales and adjustments
+carry forward; a buyout is still paid in that run (agreement §7.2), and with
+no buyout nothing is written. When the agreement ends, `settle K01 --through <date>
+--final` pays the full balance, a negative one included. A
 statement is written once and never overwritten. `settle` does not record a
 payment. When Russell pays, the accountant sets `paid_date` and `amount_paid`
 on that settlements row, and the next `sync --apply` copies the date and
@@ -478,6 +510,8 @@ An older ledger loads as it is. The first `sync --apply` adds the new columns
 (`client_code`, `intake`, `lot_id`, `split_locked`, `delivered_at`,
 `handling`) and
 rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
+
+Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
 
 ## Background dispatch (optional, #59)
 
