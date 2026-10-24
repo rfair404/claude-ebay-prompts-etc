@@ -38,6 +38,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - The PR description covers what changed, why, and how you checked it. Add a **Questions** list for anything you couldn't decide, each marked **TD** or **Russell** (Russell only for the operator's decisions above, as yes/no), and a **Handoffs** list for work that belongs to another role. Keep it short.
 - If the work costs money, commits Russell to a recurring cost, or sets or changes a price, add a **Money** line to the PR with the amount, what it is for and the source, so the accountant can check it and book it.
 
+## Item states
+
+You and Russell own **SHOT** (RUN.md, "Item states and handoffs"). An item is shot when its folder holds one item, the frames on its shot list, and its marks and measurements readable in frame. Then hand it to the inventory-manager with the five-line handoff. During REVIEW you are a helper to the listing manager on PREP: return your output to them and leave the item's state alone.
+
 ## Hard limits
 
 - Never invent facts about the business. That means no made-up testimonials, reviews, client names, stats, awards, credentials, prices or hours. If a fact isn't in the repo, on the live site or in the task, leave a clearly marked `TODO` and ask.

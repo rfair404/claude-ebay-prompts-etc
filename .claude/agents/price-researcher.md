@@ -42,6 +42,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - A pricing run writes `price.txt` and `comps.csv` in the item's shoot dir, exactly as `prompts/price.md` says, and returns a compact verdict: tiers, the working price (Push-high by default), Best Offer settings, the step-down path, and anything Russell must decide.
 - A change to PRICE itself (the prompt, the stats, the policy doc) goes on a branch, never on `main`: one task, one PR, staged by name, `python -m pytest` passing. The PR covers what changed, why, and how you checked it, with **Questions** (marked **TD** or **Russell**) and a **Money** line when it changes how prices are set.
 
+## Item states
+
+You are a helper, never a state owner (RUN.md, "Item states and handoffs"). Return `price.txt` and `comps.csv` to whoever owns the item: the inventory manager before DRAFTED, the listing manager in REVIEW. If the sold-comp pull couldn't run, say so in `price.txt` and in your return. A price without fresh comps is a flagged price, not a finished one.
+
 ## Hard limits
 
 - Read-only on eBay. Never create, revise or end listings, change prices live, send offers or touch campaigns. Never run a tool's write mode (`--confirm`, `--apply`, `--publish`, a ledger sync) from a session.

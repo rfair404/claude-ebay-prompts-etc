@@ -1,5 +1,5 @@
 ---
-version: 1.3.0
+version: 1.4.0
 updated: 2026-10-23
 ---
 
@@ -76,6 +76,59 @@ resolution applies.
 
 Run phases in order. Each phase reads the prior phase's file from the
 shoot directory, so phases compose without re-deriving.
+
+---
+
+## Item states and handoffs
+
+Every item is in exactly one state, and every state has exactly one owner.
+The owner moves the item to the next state and hands it on. Everyone else
+who works on it (price researcher, copywriter, photo-editor, art director,
+presenter) is a helper: a helper returns its output to the owner and never
+moves the item itself. The state names are the ones the ledgers already use
+(`listings_ledger*.csv` status, `client_ledger.csv` state); this table only
+says who owns each one and what "done" means.
+
+| State | Owner | Done when (the evidence) | Hands to |
+|---|---|---|---|
+| **INTAKE** | inventory-buyer | It's ours or consigned to us, and it has a folder under `inventory/` with `context.txt`. Bought: `spend:` recorded. Consigned: a `client_ledger.csv` row. | Russell (shoot), via a shot list on his card |
+| **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
+| **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist, `prep --auto` has run, and `list_edit.py --record` has stamped the SKU **and the ledger row exists** (`grep <sku> listings_ledger*.csv`, since a failed write can still print `[OK]`). The SKU is the item number. | listing-manager |
+| **REVIEW** | listing-manager | PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
+| **LIVE** | listing-manager until the live read-back matches the approved card, then the inventory-manager | Ledger `PUBLISHED` (client ledger `LISTED`), listing URL reported, live price, Best Offer floors, shipping, photos and promotion match the card. | inventory-manager (aging), listing-manager for any approved revision |
+| **SOLD** | shipping-assistant | Label bought, item packed, tracking uploaded within handling time. | accountant |
+| **ENDED** (unsold) | inventory-manager | A next step chosen: relist, lot, junk store, live-show slot or return. A relist goes back through the listing manager. | listing-manager or Russell's card |
+| **CLEARED / SETTLED** | accountant | Fees, ad fee and postage booked. A consignment row is cleared by `consign sync --apply` and paid by a settlement. | (closed) |
+| **RETURNED / DISPOSED / EXCLUDED** | typed by hand on Russell's word | `state_note` says why (EXCLUDED also needs `buyout_price`). | (closed) |
+
+`SYNCED` (an eBay draft offer exists, not live) counts as REVIEW. `PREP` on
+the client ledger is a hand-entered SHOT/DRAFTED stand-in until `consign
+sync` derives the real state.
+
+**Waiting is not a state.** An item waiting on Russell's card, a reshoot or
+another agent stays in its state with the same owner. A `NEEDS_REVIEW.md`
+line never blocks a state change; only a missing piece of evidence above
+does.
+
+**Done means the evidence exists.** A worker is done with an item when every
+item in its row's "Done when" column can be shown: the file is there, the
+ledger row reads right, the exit code was 0. "I ran the phase" is not done.
+If one piece can't be finished, the worker stops and reports **BLOCKED**
+with the one missing thing and who can supply it. It doesn't move the item,
+and it doesn't start the next owner's work to get round the gap.
+
+**Every handoff carries the same five lines**, whoever sends it:
+
+    item:      <item id or shoot dir>   (and SKU once it has one)
+    state:     <the state it is now in>
+    evidence:  <the files / ledger row / URL that prove it>
+    open:      <NEEDS_REVIEW.md lines, or "none">
+    next:      <the next owner, and the one thing they do first>
+
+The receiver checks the evidence before taking the item (`python -m lib.cli
+status <shoot-dir>` shows phase files, PREP state, ledger row and next
+action in one call). If the evidence is short, the item goes back to the
+sender, not forward.
 
 ---
 

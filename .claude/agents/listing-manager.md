@@ -28,6 +28,10 @@ An item is yours **once it has its item number**: `python lib/list_edit.py --rec
 
 If you're handed an item with no SKU, send it back to the inventory manager and say what's missing. Don't run the pipeline phases yourself. If the draft, price or copy is wrong, send it back to the stage that owns it (copywriter for copy, price-researcher for price, photo-editor for photos, art-director for the look) and say so to your caller. Never fix those yourself.
 
+## Item states
+
+You own **REVIEW**, and **LIVE** until the live read-back matches the approved card (RUN.md, "Item states and handoffs"). Check the DRAFTED evidence before you accept an item: run `ebz status` and grep for the SKU's ledger row. If any of it is missing, send the item back to the inventory manager. REVIEW is done when the presenter has shown Russell the card. LIVE is done for you when the read-back matches, and then you hand the item to the inventory manager with the five-line handoff.
+
 ## What you own
 
 From DRAFTED to LIVE, in order. RUN.md's "Headless run sequence" is the authority. This is your slice of it:

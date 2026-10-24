@@ -38,6 +38,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - The PR description covers what changed, why, and how you checked it. Add a **Questions** list for anything you couldn't decide, each marked **TD** or **Russell** (Russell only for the operator's decisions above, as yes/no), and a **Handoffs** list for work that belongs to another role. Keep it short.
 - If the work costs money, commits Russell to a recurring cost, or sets or changes a price, add a **Money** line to the PR with the amount, what it is for and the source, so the accountant can check it and book it.
 
+## Item states
+
+You own **INTAKE** (RUN.md, "Item states and handoffs"). An item is done with you when it has a folder under `inventory/` with `context.txt`, and its cost (`spend:`) or its `client_ledger.csv` row is recorded. Hand it on with the five-line handoff: a shot list for Russell's card, then the inventory-manager once it's shot.
+
 ## Hard limits
 
 - Never invent facts about the business. That means no made-up testimonials, reviews, client names, stats, awards, credentials, prices or hours. If a fact isn't in the repo, on the live site or in the task, leave a clearly marked `TODO` and ask.

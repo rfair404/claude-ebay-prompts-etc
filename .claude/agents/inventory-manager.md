@@ -31,6 +31,10 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 - **Processing new items up to their item number.** You start items through the pipeline: IDENTIFY, PRICE, INVESTIGATE and DRAFT (RUN.md, one worker per item, at most 4 at once), with the price researcher, copywriter and photo-editor doing their parts. You may kick off `prep --auto`, but the PREP sign-off is the listing manager's. The item gets its number when `python lib/list_edit.py --record <shoot-dir>` stamps its SKU (ledger status DRAFTED), and that is the handoff: from then on the item belongs to the **listing-manager**, who takes it through PREP sign-off, review and publish. Hand it over with the shoot dir, SKU, working price and the NEEDS_REVIEW.md lines.
 - **Ended unsold.** What ended without selling, and a relist, a lot, a junk-store move or a live-show slot for each.
 
+## Item states
+
+You own three states (RUN.md, "Item states and handoffs"). **DRAFTED**: you take a SHOT item until `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist, `prep --auto` has run, and `--record` has stamped the SKU with the ledger row actually written (`grep <sku> listings_ledger*.csv`). Then hand it to the listing-manager with the five-line handoff. **LIVE**, once the listing manager's read-back matches the card. **ENDED**, until you've chosen its next step. Workers you start return to you, and you check their evidence before you record or hand anything on. An item missing a piece is BLOCKED, not handed off.
+
 ## The house pricing rules (binding)
 
 - **eBay wins.** Work from live eBay prices and start dates, never the ledger alone. The ledgers were rebuilt from eBay after the Linux migration, so `published_at` is often blank, and Seller Hub edits don't always make it back. A cut computed from a stale ledger price can cut an item twice.
