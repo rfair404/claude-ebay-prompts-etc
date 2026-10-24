@@ -6,7 +6,7 @@ printed "[OK] recorded DRAFTED" with no row written. These tests drive the
 real CLI against a ledger path that can't be written and check what the
 operator sees: --record, --review, --sync and --list print
 "[FAIL] ledger write: <path>: <error>" and exit non-zero with no [OK];
---sync names the eBay draft offer it made; --list stops before it
+--sync names the eBay offer it made; --list stops before it
 publishes; --publish shows the live listing, then fails.
 
 Run:  pytest tests/test_ledger_write_fail.py
@@ -166,11 +166,11 @@ def test_publish_cli_shows_live_listing_then_fails_when_published_row_is_unwrita
 
 def test_sync_cli_fails_and_names_the_offer_when_ledger_is_unwritable(
         tmp_path, ro_ledger, monkeypatch, capsys):
-    """The eBay draft offer exists by the time the SYNCED row fails: fail,
+    """The eBay offer exists by the time the SYNCED row fails: fail,
     and say which offer so the operator knows it is on eBay."""
     _fake_sync_collaborators(monkeypatch)
     _fake_api(monkeypatch, {"/offer?sku=": EbayAPIError(404, "no offer yet")})
     draft = _write_single_draft(tmp_path)
     code, out, err = _run_cli(monkeypatch, capsys, "--sync", str(draft))
     _assert_failed(code, out, err, ro_ledger)
-    assert "eBay draft offer OFFER-9 " in err, err
+    assert "eBay offer OFFER-9 " in err, err

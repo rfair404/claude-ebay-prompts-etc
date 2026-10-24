@@ -174,6 +174,15 @@ class SyncResult:
     photo_eps_urls: list[str]
     category_id: str
     eb_seller_hub_url: str
+    # eBay's own view of the offer after the write (getOffer), not the draft's
+    # meta: a re-sync of a PUBLISHED offer revises the live listing.
+    offer_status: str = ""    # "PUBLISHED" / "UNPUBLISHED" / "" if unknown
+    listing_id: str = ""
+    listing_status: str = ""  # listing.listingStatus, e.g. "ACTIVE"
+
+    @property
+    def is_live(self) -> bool:
+        return self.offer_status == "PUBLISHED"
 
 
 # ---------------------------------------------------------------------------
@@ -1900,14 +1909,38 @@ def create_or_update_listing(draft_path: Path,
             print(f"  [ledger] {sku} -> SYNCED")
     except LedgerWriteError:
         # The offer already exists on eBay; say which one before the CLI fails.
-        print(f"  eBay draft offer {offer_id} (sku {sku}) was {operation}; "
+        print(f"  eBay offer {offer_id} (sku {sku}) was {operation}; "
               f"its SYNCED ledger row was not written.", file=sys.stderr)
         raise
+
+    # 6) Ask eBay what we just wrote to. An update to a PUBLISHED offer
+    #    revises the live listing; the caller must not call it a draft.
+    offer_status, listing_id, listing_status = "UNPUBLISHED", "", ""
+    if operation == "updated":
+        offer_status = ""
+        try:
+            o = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+            listing = o.get("listing") or {}
+            offer_status = str(o.get("status") or "").upper()
+            listing_id = str(listing.get("listingId") or "")
+            listing_status = str(listing.get("listingStatus") or "").upper()
+        except EbayAPIError as e:
+            print(f"  [warn] could not read offer {offer_id} status back from eBay: {e}")
 
     hub = "https://www.ebay.com/sh/lst/drafts"
     return SyncResult(offer_id=offer_id, inventory_sku=sku, operation=operation,
                       photo_eps_urls=image_urls, category_id=category_id,
-                      eb_seller_hub_url=hub)
+                      eb_seller_hub_url=hub, offer_status=offer_status,
+                      listing_id=listing_id, listing_status=listing_status)
+
+
+def _sync_headline(res: SyncResult) -> str:
+    """One-line `[OK] ...` summary for a sync, by eBay's offer status."""
+    if res.is_live:
+        return f"[OK] revised LIVE listing {res.listing_id or '(id unknown)'} (offer {res.offer_id})."
+    if res.offer_status == "UNPUBLISHED":
+        return f"[OK] {res.operation} eBay DRAFT (not published)."
+    return f"[OK] {res.operation} eBay offer {res.offer_id} (status unknown — eBay did not report it)."
 
 
 # ---------------------------------------------------------------------------
@@ -2676,7 +2709,7 @@ def _cli() -> None:
     ap.add_argument("--set-hero", nargs=2, metavar=("TARGET", "PHOTO"),
                     help="move PHOTO to the front of the draft's photos list (eBay gallery image)")
     ap.add_argument("--review", metavar="TARGET", help="One step: record + preflight + build the REVIEW decision card. Stops for approval; does NOT publish.")
-    ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay DRAFT (unpublished offer) from a draft.md or shoot dir.")
+    ap.add_argument("--sync", metavar="TARGET", help="Create/update the eBay offer from a draft.md or shoot dir. Never publishes; if the offer is already PUBLISHED this revises the live listing.")
     ap.add_argument("--publish", metavar="TARGET", help="Publish a synced offer to a LIVE listing. DRY RUN unless --confirm is also given.")
     ap.add_argument("--list", metavar="TARGET", dest="list_target", help="Sync THEN publish in one step (post review-gate). DRY RUN unless --confirm is also given.")
     ap.add_argument("--update", metavar="TARGET", help="Update ONLY the --fields groups on an existing item/offer (GET-merge-PUT; never publishes; preserves photos + everything else). Add --dry-run to see the field-level diff first. A live listing with no local draft: tools/draft_rebuild.py.")
@@ -2796,13 +2829,21 @@ def _cli() -> None:
             sync_creds = load_credentials(store=_resolve_store(args.sync, args.store))
             res = create_or_update_listing(Path(args.sync), creds=sync_creds,
                                            strict_ledger=True)
-            print(f"[OK] {res.operation} eBay DRAFT (not published).")
+            print(_sync_headline(res))
             print(f"  offer_id:  {res.offer_id}")
             print(f"  sku:       {res.inventory_sku}")
             print(f"  category:  {res.category_id}")
             print(f"  photos:    {len(res.photo_eps_urls)} uploaded to EPS")
-            print(f"  status:    UNPUBLISHED (a draft; API offers don't appear in Seller Hub Drafts)")
-            print(f"  to go live: python list_edit.py --publish {args.sync} --confirm")
+            if res.is_live:
+                print(f"  status:    PUBLISHED / {res.listing_status or 'listing status unknown'}"
+                      f" (changes are on the public listing now)")
+                if res.listing_id:
+                    print(f"  listing:   https://www.ebay.com/itm/{res.listing_id}")
+            elif res.offer_status == "UNPUBLISHED":
+                print(f"  status:    UNPUBLISHED (a draft; API offers don't appear in Seller Hub Drafts)")
+                print(f"  to go live: python list_edit.py --publish {args.sync} --confirm")
+            else:
+                print(f"  status:    unknown — check with: python list_edit.py --status {args.sync}")
             return
         if args.publish:
             pub_creds = load_credentials(store=_resolve_store(args.publish, args.store))
@@ -2834,7 +2875,7 @@ def _cli() -> None:
             list_creds = load_credentials(store=_resolve_store(args.list_target, args.store))
             sres = create_or_update_listing(Path(args.list_target), creds=list_creds,
                                             strict_ledger=True)
-            print(f"[OK] {sres.operation} eBay DRAFT (offer {sres.offer_id}, {len(sres.photo_eps_urls)} photos).")
+            print(f"{_sync_headline(sres)} ({len(sres.photo_eps_urls)} photos)")
             res = publish_offer(Path(args.list_target), creds=list_creds, confirm=args.confirm)
             if res.status_before == "PUBLISHED":
                 print(f"[i] Already LIVE. listing {res.listing_id}")

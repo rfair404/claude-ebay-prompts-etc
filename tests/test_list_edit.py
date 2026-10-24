@@ -734,6 +734,69 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
     assert len(updates) == 1, "the second sync must PUT (update) the existing offer"
 
 
+def _run_sync_cli(draft_path, send):
+    """Run `list_edit.py --sync <draft>` against a fake eBay; return stdout."""
+    import io
+    out = io.StringIO()
+    real_argv = sys.argv
+    sys.argv = ["list_edit.py", "--sync", str(draft_path)]
+    try:
+        with _patch_sync_collaborators(), _patched(L, api_send=send,
+                                                    load_credentials=lambda store=None: _Creds()), \
+             _ledger_at(draft_path.parent), contextlib.redirect_stdout(out):
+            L._cli()
+    finally:
+        sys.argv = real_argv
+    return out.getvalue()
+
+
+def test_sync_of_a_published_offer_reports_the_live_listing_not_a_draft():
+    """2026-10-13, junk offer 308971645011 / listing 880009332259: --sync
+    revised the live listing but printed "updated eBay DRAFT (not published)"
+    and a "to go live: --publish" hint. The status must come from eBay."""
+    def send(method, path, body=None, creds=None, **kw):
+        if "/offer?sku=" in path:
+            return {"offers": [{"offerId": "308971645011"}]}
+        if method == "GET" and path.endswith("/offer/308971645011"):
+            return {"offerId": "308971645011", "status": "PUBLISHED",
+                    "listing": {"listingId": "880009332259", "listingStatus": "ACTIVE"}}
+        return {}
+
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        with _patch_sync_collaborators(), _patched(L, api_send=send), _ledger_at(Path(td)):
+            res = L.create_or_update_listing(draft_path, creds=_Creds())
+        assert (res.offer_status, res.listing_id, res.listing_status) == \
+            ("PUBLISHED", "880009332259", "ACTIVE")
+        assert res.is_live
+
+        out = _run_sync_cli(draft_path, send)
+
+    assert "[OK] revised LIVE listing 880009332259" in out
+    assert "PUBLISHED / ACTIVE" in out
+    assert "DRAFT" not in out
+    assert "UNPUBLISHED" not in out
+    assert "to go live" not in out
+    assert "--publish" not in out
+
+
+def test_sync_of_a_new_offer_still_reports_an_unpublished_draft():
+    def send(method, path, body=None, creds=None, **kw):
+        if "/offer?sku=" in path:
+            raise EbayAPIError(404, "no offer yet")
+        if method == "POST" and path.endswith("/offer"):
+            return {"offerId": "OFFER-9"}
+        return {}
+
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        out = _run_sync_cli(draft_path, send)
+
+    assert "[OK] created eBay DRAFT (not published)." in out
+    assert "status:    UNPUBLISHED" in out
+    assert "to go live: python list_edit.py --publish" in out
+
+
 # ---------------------------------------------------------------------------
 # Per-store ledger (GH #158): each store gets its own listings_ledger file,
 # so a junk-store item can never land in the same file as the main store's.
