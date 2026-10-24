@@ -70,7 +70,8 @@ EXIT_NO_PRINTER, EXIT_FIREWALL_OFF = 3, 4
 
 # The Brother driver is a Perl filter around i386 binaries, fed PostScript by
 # CUPS (pdftops from cups-filters, gs and pdf2ps from ghostscript).
-BASE_PKGS = ["cups", "cups-filters", "ghostscript", "perl", "libc6:i386", "ufw"]
+BASE_PKGS = ["cups", "cups-filters", "ghostscript", "perl", "libc6:i386", "ufw",
+             "python3-venv"]  # the ship page's venv (tools/ship_station.sh setup)
 DESKTOPS = {  # dpkg package -> name; the first one installed is "green's desktop"
     "xfce4": "XFCE", "lxqt-core": "LXQt", "gnome-shell": "GNOME", "plasma-desktop": "KDE Plasma",
     "cinnamon": "Cinnamon", "mate-desktop-environment-core": "MATE", "lxde-core": "LXDE",
@@ -233,7 +234,7 @@ echo "green: done"
 def root_steps(plan: dict) -> list[Step]:
     d = plan["desktop"]
     steps = [
-        Step("Packages: CUPS, Ghostscript, the driver's i386 runtime, ufw",
+        Step("Packages: CUPS, Ghostscript, the driver's i386 runtime, ufw, python3-venv",
              r"""dpkg --print-foreign-architectures | grep -qx i386 || dpkg --add-architecture i386
 NEED=$(missing @BASE@)
 if [ -n "$NEED" ]; then apt-get update -q; apt-get install -y -q --no-install-recommends $NEED
