@@ -2,7 +2,7 @@
 """GREEN: set green up as the shipping station, from the laptop over SSH.
 
     python tools/green_setup.py --dry-run          # read green, print the plan and its root script
-    python tools/green_setup.py                    # apply: a sudo prompt on green, then one here
+    python tools/green_setup.py                    # apply: a sudo prompt here, then one on green
     python tools/green_setup.py --autologin yes    # also log green's desktop in at boot
     python tools/green_setup.py --laptop usb       # cable back on the laptop: print by USB again
 
@@ -11,22 +11,24 @@ Green is a thin client plus a print server. The heavy work and every key
 none of them. Every connection opens from the laptop (`ssh green`, the key
 tools/green_test.sh uses), so green holds no way back in.
 
-On green, as root (sudo asks for green's password once):
-  - a desktop only if green has none: XFCE with LightDM (LXQt under 2 GB
-    of RAM), plus Firefox. A desktop that is already there is kept;
-  - auto-login only with --autologin yes (LightDM); --autologin no removes it;
+On green, as root (sudo asks for green's password once), printer first:
   - the Brother QL-1100 driver, the same ql1100pdrv 2.1.4 .deb the laptop
     runs (checked by SHA-256), and the i386 runtime it needs;
   - a QL-1100 queue on green's USB with the laptop's 4x6 setting, shared;
   - CUPS shared to the local subnet only (cupsctl --share-printers
     --no-remote-any --no-remote-admin) and ufw opening 631/tcp and SSH to
     green's own /24 only. ufw is not switched on over other listeners
-    unless --close-others says so.
+    unless --close-others says so;
+  - last, as it is the slow download: a desktop only if green has none,
+    XFCE with LightDM (LXQt under 2 GB of RAM), plus Firefox. A desktop
+    that is already there is kept. Auto-login only with --autologin yes
+    (LightDM); --autologin no removes it.
 On green, as the user: a "Ship" launcher for the /ship/box page on green's
 own 127.0.0.1:8770 (the web app stays localhost-only, #311).
-On the laptop (sudo asks once): the QL-1100 queue keeps its name, so
-tools/print_label.sh is unchanged, and forwards raw to green's queue,
+On the laptop, first (sudo asks once): the QL-1100 queue keeps its name,
+so tools/print_label.sh is unchanged, and forwards raw to green's queue,
 which runs the Brother driver. Jobs wait and retry while green is down.
+It is refused while the printer is still on the laptop's own USB.
 
 Re-running is safe: each step checks before it changes anything. Nothing
 is applied while inventory/_live/ON_AIR exists; --dry-run always works.
@@ -234,19 +236,6 @@ def root_steps(plan: dict) -> list[Step]:
 NEED=$(missing @BASE@)
 if [ -n "$NEED" ]; then apt-get update -q; apt-get install -y -q --no-install-recommends $NEED
 else echo "already installed"; fi"""),
-        Step(f"Desktop: {d['name']} " + ("(already there)" if not d["install"] else "and Firefox, as needed"),
-             r"""NEED=$(missing @DESKTOP@)
-if [ -n "$NEED" ]; then apt-get update -q; apt-get install -y -q $NEED; else echo "already installed"; fi
-[ "$(systemctl get-default)" = graphical.target ] || systemctl set-default graphical.target
-systemctl is-active --quiet display-manager || systemctl start display-manager || true"""),
-    ]
-    if plan["autologin"] == "yes":
-        steps.append(Step(f"Auto-login: {plan['user']} on LightDM", r"""mkdir -p /etc/lightdm/lightdm.conf.d
-printf '[Seat:*]\nautologin-user=%s\nautologin-user-timeout=0\n' "$U" > /etc/lightdm/lightdm.conf.d/50-pops-autologin.conf
-echo "next boot logs $U in" """))
-    elif plan["autologin"] == "no":
-        steps.append(Step("Auto-login: off", "rm -f /etc/lightdm/lightdm.conf.d/50-pops-autologin.conf"))
-    steps += [
         Step(f"Brother QL-1100 driver {DRIVER_VERSION} (the laptop's .deb, SHA-256 checked)",
              r"""if dpkg-query -W -f='${Version} ${db:Status-Abbrev}' ql1100pdrv:i386 2>/dev/null | grep -q '^@DRVVER@ ii'; then
   echo "driver @DRVVER@ already installed"
@@ -272,7 +261,19 @@ else
 fi
 cupsctl | grep -E '^_(share_printers|remote_any|remote_admin)='"""),
         Step(f"Firewall: SSH and CUPS :{CUPS_PORT} from {plan['lan']} only", _firewall(plan)),
+        # The desktop comes last: it is the slow download, and labels shouldn't wait for it.
+        Step(f"Desktop: {d['name']} " + ("(already there)" if not d["install"] else "and Firefox, as needed"),
+             r"""NEED=$(missing @DESKTOP@)
+if [ -n "$NEED" ]; then apt-get update -q; apt-get install -y -q $NEED; else echo "already installed"; fi
+[ "$(systemctl get-default)" = graphical.target ] || systemctl set-default graphical.target
+systemctl is-active --quiet display-manager || systemctl start display-manager || true"""),
     ]
+    if plan["autologin"] == "yes":
+        steps.append(Step(f"Auto-login: {plan['user']} on LightDM", r"""mkdir -p /etc/lightdm/lightdm.conf.d
+printf '[Seat:*]\nautologin-user=%s\nautologin-user-timeout=0\n' "$U" > /etc/lightdm/lightdm.conf.d/50-pops-autologin.conf
+echo "next boot logs $U in" """))
+    elif plan["autologin"] == "no":
+        steps.append(Step("Auto-login: off", "rm -f /etc/lightdm/lightdm.conf.d/50-pops-autologin.conf"))
     subs = {"@BASE@": " ".join(BASE_PKGS), "@DESKTOP@": " ".join(d["install"]),
             "@DRVVER@": DRIVER_VERSION, "@SHA@": DRIVER_SHA256, "@QUEUE@": QUEUE, "@PPD@": PPD,
             "@PAGE@": PAGE}
@@ -371,15 +372,23 @@ def green_answers(run=subprocess.run) -> bool:
     return r.returncode == 0 and f"printer {QUEUE}" in r.stdout
 
 
+def laptop_has_printer(run=subprocess.run) -> bool:
+    r = run(["lsusb"], capture_output=True, text=True)
+    return bool(re.search(r"\b04f9:|brother", r.stdout or "", re.I))
+
+
 def point_laptop(mode: str, say=print, run=subprocess.run) -> int:
+    """Point the laptop's QL-1100 queue at green (or back at its USB). Going
+    to green doesn't wait for green: with the cable on green the laptop's
+    queue points at nothing, and a forward that retries is no worse."""
     uri, model = laptop_queue(run)
     if mode == "green":
         if uri == GREEN_URI and "raw" in model.lower():
             say(f"laptop: {QUEUE} already forwards to green")
             return 0
-        if not green_answers(run):
-            raise ProvisionError(f"green's {QUEUE} doesn't answer on :{CUPS_PORT}; the laptop's "
-                                 "queue was left as it was")
+        if laptop_has_printer(run):
+            raise ProvisionError(f"the {QUEUE} is still on this laptop's USB; move the cable to green, "
+                                 "or run with --laptop skip. The laptop's queue was left as it was")
     elif uri.startswith("usb://") and "brother" in model.lower():
         say(f"laptop: {QUEUE} already prints by USB")
         return 0
@@ -410,13 +419,14 @@ def describe(plan: dict, steps: list[Step], laptop: str) -> str:
     for i, s in enumerate(steps, 1):
         lines.append(f"  {i:2}. {s.title}")
         lines += [f"        {l}" for l in s.script.splitlines()]
-    lines += ["", "On green, as the user:", f"      Ship launcher -> {plan['firefox']} {SHIP_URL}",
-              "", "On the laptop:"]
+    lines += ["", "On green, as the user:", f"      Ship launcher -> {plan['firefox']} {SHIP_URL}"]
+    head = ["On the laptop, first (one sudo prompt):"]
     if laptop == "skip":
-        lines.append(f"      {QUEUE} queue left as it is")
+        head.append(f"      {QUEUE} queue left as it is")
     else:
-        lines += [f"      sudo: {l}" for l in LAPTOP[laptop].splitlines()[1:]]
-    return "\n".join(lines)
+        head += [f"      sudo: {l}" for l in LAPTOP[laptop].splitlines()[1:]]
+    i = lines.index("On green, as root (one sudo prompt):")
+    return "\n".join(lines[:i] + head + [""] + lines[i:])
 
 
 def gather(ssh) -> dict[str, str]:
@@ -445,6 +455,9 @@ def setup(a, ssh, say=print, run=subprocess.run) -> int:
         if not DRIVER_DEB.is_file():
             raise ProvisionError(f"green needs the driver and {DRIVER_DEB} isn't here")
         deb = DRIVER_DEB
+    # The laptop first: with the cable on green its queue points at nothing,
+    # so labels start working the moment green's queue is up.
+    lrc = 0 if a.laptop == "skip" else point_laptop("green", say, run)
     remote = f"~/{REMOTE_DIR}/bundle"
     r = ssh.run(f"rm -rf {remote} && mkdir -p {remote} && chmod 700 ~/{REMOTE_DIR} && tar -xf - -C {remote}",
                 input=bundle(root_script(plan, steps), deb))
@@ -453,13 +466,15 @@ def setup(a, ssh, say=print, run=subprocess.run) -> int:
     say("green: running the setup as root (sudo asks for green's password)")
     rc = ssh.run(f"sudo bash {remote}/root.sh", tty=True).returncode
     if rc not in (0, EXIT_NO_PRINTER, EXIT_FIREWALL_OFF):
-        raise ProvisionError(f"green's setup stopped (exit {rc}); the laptop was not changed")
+        raise ProvisionError(f"green's setup stopped (exit {rc}); re-run once the cause is fixed")
     u = ssh.run("bash -s", input=user_script(plan).encode())
     say(u.stdout.decode(errors="replace").strip() or u.stderr.decode(errors="replace").strip())
     if rc == EXIT_NO_PRINTER:
-        say("green: plug the QL-1100 into green, power it on, run this again; the laptop was not changed")
+        say("green: plug the QL-1100 into green, power it on, run this again")
         return rc
-    lrc = 0 if a.laptop == "skip" else point_laptop("green", say, run)
+    if a.laptop != "skip":
+        say(f"laptop -> green: {QUEUE} answers" if green_answers(run) else
+            f"laptop -> green: green's {QUEUE} doesn't answer on :{CUPS_PORT} yet; labels wait in the laptop's queue")
     return rc or lrc
 
 

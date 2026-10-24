@@ -134,8 +134,9 @@ def test_laptop_green_queue_is_raw_forwarding_and_keeps_its_name():
 
 
 class FakeRun:
-    def __init__(self, uri, model, green_ok=True):
-        self.uri, self.model, self.green_ok, self.calls = uri, model, green_ok, []
+    def __init__(self, uri, model, green_ok=True, on_laptop_usb=False, log=None):
+        self.uri, self.model, self.green_ok, self.usb = uri, model, green_ok, on_laptop_usb
+        self.calls = log if log is not None else []
 
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
@@ -146,33 +147,44 @@ class FakeRun:
             out = f"printer-make-and-model='{self.model}' printer-state=3"
         elif cmd[:2] == ["lpstat", "-h"]:
             out, rc = ("printer QL-1100 is idle.\n", 0) if self.green_ok else ("", 1)
+        elif cmd[0] == "lsusb":
+            out = "Bus 001 Device 009: ID 04f9:20a7 Brother Industries, Ltd QL-1100\n" if self.usb else ""
         return SimpleNamespace(returncode=rc, stdout=out, stderr="")
 
 
-def test_laptop_switch_is_skipped_when_already_done_and_refused_when_green_is_silent():
+def sudo_calls(calls):
+    return [c for c in calls if isinstance(c, list) and c[0] == "sudo"]
+
+
+def test_laptop_switch_is_skipped_when_already_done():
     run = FakeRun(gs.GREEN_URI, "Local Raw Printer")
     assert gs.point_laptop("green", say=lambda *_: None, run=run) == 0
-    assert not any(c[0] == "sudo" for c in run.calls)
-    run = FakeRun("usb://Brother/QL-1100?serial=X", "Brother QL-1100 CUPS", green_ok=False)
-    with pytest.raises(gs.ProvisionError, match="left as it was"):
+    assert not sudo_calls(run.calls)
+
+
+def test_laptop_switch_is_refused_while_the_printer_is_still_on_the_laptops_usb():
+    run = FakeRun("usb://Brother/QL-1100?serial=X", "Brother QL-1100 CUPS", on_laptop_usb=True)
+    with pytest.raises(gs.ProvisionError, match="still on this laptop's USB"):
         gs.point_laptop("green", say=lambda *_: None, run=run)
-    assert not any(c[0] == "sudo" for c in run.calls)
+    assert not sudo_calls(run.calls)
 
 
-def test_laptop_switch_runs_one_sudo_when_green_answers():
-    run = FakeRun("usb://Brother/QL-1100?serial=X", "Brother QL-1100 CUPS")
+def test_laptop_switch_does_not_wait_for_green_and_runs_one_sudo():
+    run = FakeRun("usb://Brother/QL-1100?serial=X", "Brother QL-1100 CUPS", green_ok=False)
     gs.point_laptop("green", say=lambda *_: None, run=run)
-    assert [c[:3] for c in run.calls if c[0] == "sudo"] == [["sudo", "bash", "-c"]]
+    assert [c[:3] for c in sudo_calls(run.calls)] == [["sudo", "bash", "-c"]]
 
 
 class FakeSsh:
-    def __init__(self, f):
+    def __init__(self, f, log=None, root_rc=0):
         self.text = "".join(f"##{k}\n{v}\n" for k, v in f.items())
-        self.calls = []
+        self.calls = log if log is not None else []
+        self.root_rc = root_rc
 
     def run(self, command, input=None, tty=False):
         self.calls.append(command)
-        return SimpleNamespace(returncode=0, stdout=self.text.encode(), stderr=b"")
+        rc = self.root_rc if command.startswith("sudo ") else 0
+        return SimpleNamespace(returncode=rc, stdout=self.text.encode(), stderr=b"")
 
 
 def args(**kw):
@@ -188,6 +200,27 @@ def test_dry_run_reads_green_once_and_changes_nothing():
     assert ssh.calls == ["bash -s"] and run.calls == []
     text = "\n".join(out)
     assert "RAM budget:" in text and "dry run: nothing changed" in text and "ipp://green.lan" in text
+    assert text.index("On the laptop, first") < text.index("On green, as root")
+
+
+def test_root_script_sets_the_printer_up_before_the_desktop():
+    _, script = script_for(autologin="yes")
+    assert script.index("lpadmin -p QL-1100") < script.index("ufw --force enable") < script.index("xfce4")
+    assert script.index("xfce4") < script.index("autologin-user")
+
+
+def test_apply_points_the_laptop_at_green_before_greens_root_step(tmp_path, monkeypatch):
+    monkeypatch.setattr(gs, "ON_AIR", tmp_path / "ON_AIR")
+    deb = tmp_path / "ql1100pdrv.deb"
+    deb.write_bytes(b"x")
+    monkeypatch.setattr(gs, "DRIVER_DEB", deb)
+    log = []
+    ssh = FakeSsh(facts(), log=log)
+    run = FakeRun("usb://Brother/QL-1100?serial=X", "Brother QL-1100 CUPS", log=log)
+    assert gs.setup(args(dry_run=False), ssh, say=lambda *_: None, run=run) == 0
+    laptop = next(i for i, c in enumerate(log) if isinstance(c, list) and c[0] == "sudo")
+    green = next(i for i, c in enumerate(log) if isinstance(c, str) and c.startswith("sudo bash"))
+    assert laptop < green
 
 
 def test_nothing_is_applied_on_air(tmp_path, monkeypatch):

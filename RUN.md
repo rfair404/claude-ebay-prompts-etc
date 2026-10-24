@@ -232,7 +232,7 @@ back in. Green is optional: if it is down, label jobs wait in the laptop's
 queue, and `--laptop usb` puts the printer back on the laptop.
 
     python tools/green_setup.py --dry-run         # read green, print every step; change nothing
-    python tools/green_setup.py                   # apply: sudo on green, then sudo here
+    python tools/green_setup.py                   # apply: sudo here, then sudo on green
     python tools/green_setup.py --autologin yes   # also log green's desktop in at boot
     python tools/green_setup.py --laptop usb      # cable back on the laptop
 
@@ -253,10 +253,15 @@ does only what is missing:
   --no-remote-admin` limits CUPS to the local subnet. ufw opens 631/tcp and
   SSH to green's own /24 and nothing else. ufw is not switched on over other
   listening ports unless `--close-others` says so.
-- **Laptop.** The laptop's queue keeps its name `QL-1100` and becomes a raw
-  forward to `ipp://green.lan:631/printers/QL-1100`. Green's queue runs the
-  driver, and jobs retry while green is down. `print_label.sh` also checks
-  the far queue and says if green's is paused.
+- **Laptop, first.** With the cable on green, the laptop's queue points at
+  nothing until it is repointed, so this step runs before green's. The
+  queue keeps its name `QL-1100` and becomes a raw forward to
+  `ipp://green.lan:631/printers/QL-1100`. Green's queue runs the driver,
+  and jobs retry while green is down. The repoint is refused while the
+  printer is still on the laptop's USB. `print_label.sh` also checks the
+  far queue and says if green's is paused.
+- **Order on green.** Packages, driver, queue, sharing and firewall come
+  first, so labels work before the desktop's long download.
 
 The dry run prints a RAM budget for desktop, Firefox and a
 `green_test.sh` run at once. The test run's 900 MB peak was measured. The
