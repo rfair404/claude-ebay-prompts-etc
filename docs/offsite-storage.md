@@ -1,6 +1,6 @@
 ---
-version: 1.1.0
-updated: 2026-10-23
+version: 1.1.1
+updated: 2026-10-24
 ---
 
 # Offsite storage for listing data
@@ -149,10 +149,9 @@ take out both copies.
 
 It runs on its own:
 
-- **After every ledger write**: draft, sync, publish, end, delete, sale
-  (`lib/sync_actuals.py --apply`), shipment (`pick-list`) and
-  `reconcile --apply`. A price edit doesn't write the ledger yet, so it
-  reaches Drive with the daily push. A detached background job pushes the
+- **After every ledger write**: draft, sync, publish, price/title edit
+  (`--update`), end, delete, sale (`lib/sync_actuals.py --apply`), shipment
+  (`pick-list`) and `reconcile --apply`. A detached background job pushes the
   ledger files about 20 s later. Writes that land while it waits or runs are
   batched into one upload. It never blocks or fails the command that wrote
   the ledger. Only the main checkout's ledgers count; a worktree's copy and

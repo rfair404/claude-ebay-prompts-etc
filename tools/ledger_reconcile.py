@@ -5,11 +5,13 @@ THE LEDGER IS A LOG, NOT A RECORD OF TRUTH.
 
 Every writer in this repo appends its own step and nothing ever re-reads what
 eBay actually holds: `list_edit.py --record` stamps DRAFTED, `--sync` stamps
-SYNCED, `--publish` stamps PUBLISHED. But `--update --fields price` writes a new
-price to eBay and touches no ledger row at all, so the moment a live price is
-edited the ledger is wrong and stays wrong. That is exactly what happened to
-`acda0eb2`: published at $99, marked down to $85 on eBay, ledger still reading
-99.0 with nothing anywhere to catch it.
+SYNCED, `--publish` stamps PUBLISHED, `--update` writes the title/price it
+changed. Anything that changes eBay without one of those steps leaves the
+ledger wrong, and it stays wrong: an edit made in Seller Hub, or an `--update`
+on a live listing whose SKU has no ledger row. Before #324, every `--update
+--fields price` was one of them. That is exactly what happened to `acda0eb2`:
+published at $99, marked down to $85 on eBay, ledger still reading 99.0 with
+nothing anywhere to catch it.
 
 So the rule this file enforces: **the API is truth and the local copy is assumed
 stale.** A field that disagrees is not a conflict to weigh up — it is a local
