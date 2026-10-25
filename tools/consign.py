@@ -354,6 +354,26 @@ def client_dirs(code: str) -> list[Path]:
     return [d for d in all_intakes() if intake_client(d) == code]
 
 
+def find_item(*, sku: str = "", listing_id: str = "",
+              folder: str = "") -> Optional[tuple[str, str]]:
+    """(client code, intake folder name) of the consignment item with this
+    SKU, listing id or inventory folder, or None when it is not consignment.
+    A folder inside a CONSIGN-* intake counts before it has a ledger row, and
+    the folder catches a fresh publish whose SKU `sync` hasn't copied yet.
+    Read-only; lib/auto_promote and tools/promote ask it before adding an ad."""
+    folder = norm_folder(folder)
+    for d in all_intakes():
+        rows, _ = read_ledger(d / LEDGER_NAME)
+        for r in rows:
+            if ((sku and r["sku"] == sku)
+                    or (listing_id and r["listing_id"] == listing_id)
+                    or (folder and norm_folder(r["inventory_folder"]) == folder)):
+                return r["client_code"] or intake_client(d), d.name
+        if folder.startswith(norm_folder(d.name) + "/"):
+            return intake_client(d), d.name
+    return None
+
+
 def registry_path() -> Path:
     return INVENTORY / "_consign" / "clients.csv"
 

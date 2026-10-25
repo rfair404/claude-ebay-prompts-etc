@@ -18,6 +18,15 @@ WHAT IT WILL AND WON'T DO
   problem (campaign missing or not RUNNING, eBay refusing the ad) is
   returned as a message for the caller to print, not raised.
 * A listing priced below `min_price` is skipped.
+* A consignment item whose lot is named in `exclude_consignment` is never
+  promoted (Russell's rule, 2026-10-25: nothing from K01's lot). The lot is
+  found the way tools/consign.py keeps it: a client_ledger.csv row with the
+  SKU, listing id or inventory folder, or a folder inside a CONSIGN-* intake.
+  If the consignment ledgers can't be found at all, nothing is promoted.
+  tools/promote.py's `add_ads()` applies the same check to bulk adds.
+  A campaign that picks listings by itself (a Smart cost-per-click campaign,
+  an auto-select rule) can still promote it, and the API can't take it back
+  out, so the outcome then names the campaign and the Seller Hub step.
 
 CONFIG (per store, #156)
 
@@ -26,6 +35,7 @@ CONFIG (per store, #156)
         campaign: "Revenue Seasoned 15d"
         min_price: 25
         enabled: true
+        exclude_consignment: [K01]   # client codes or CONSIGN-* folder names
 
     storefronts:
       junk:
@@ -43,10 +53,18 @@ those: it adds every live listing at or above the floor that has no ad yet.
 """
 from __future__ import annotations
 
-from typing import Optional
+import sys
+from pathlib import Path
+from typing import Iterable, Optional
 from urllib.parse import quote
 
-DEFAULTS = {"enabled": True, "campaign": "Revenue Seasoned 15d", "min_price": 25.0}
+REPO = Path(__file__).resolve().parent.parent
+
+# Named lots only: other consignment agreements may allow ads, and the ad fee
+# comes out of the client's net (tools/consign.py), so excluding a lot is a
+# per-client decision. Replacing the list in config replaces this default.
+DEFAULTS = {"enabled": True, "campaign": "Revenue Seasoned 15d", "min_price": 25.0,
+            "exclude_consignment": ["K01"]}
 
 API = "/sell/marketing/v1"
 
@@ -67,6 +85,65 @@ def settings(store: Optional[str] = None, config: Optional[dict] = None) -> dict
                  .get("auto_promote")) or {}
         out = {**DEFAULTS, "enabled": bool(block.get("campaign")), **block}
     out["min_price"] = float(out.get("min_price") or 0)
+    ex = out.get("exclude_consignment") or []
+    out["exclude_consignment"] = [str(x).strip() for x in
+                                  ([ex] if isinstance(ex, str) else ex) if str(x).strip()]
+    return out
+
+
+def _consign():
+    tools = str(REPO / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import consign
+    return consign
+
+
+def _inventory_folder(folder) -> str:
+    """`.../inventory/CONSIGN-x/bin-01` -> `inventory/CONSIGN-x/bin-01`, the
+    shape client_ledger.csv's inventory_folder uses; '' outside inventory/."""
+    parts = Path(folder).parts if folder else ()
+    if "inventory" not in parts:
+        return ""
+    i = len(parts) - 1 - parts[::-1].index("inventory")
+    return "/".join(parts[i:])
+
+
+def consignment_excluded(s: dict, *, sku: str = "", listing_id: str = "",
+                         folder=None) -> Optional[str]:
+    """'consignment K01 excluded' when the item is in a lot that `s`'s
+    `exclude_consignment` names (client code or CONSIGN-* folder), else None.
+    Fails closed: with lots excluded and no consignment ledgers to read, it
+    can't tell, so it says so instead of letting the ad through."""
+    names = {n.upper() for n in s.get("exclude_consignment") or []}
+    if not names:
+        return None
+    c = _consign()
+    if not c.INVENTORY.is_dir():
+        return f"consignment ledgers not found ({c.INVENTORY})"
+    hit = c.find_item(sku=str(sku or ""), listing_id=str(listing_id or ""),
+                      folder=_inventory_folder(folder))
+    if hit and {hit[0].upper(), hit[1].upper()} & names:
+        return f"consignment {hit[0] or hit[1]} excluded"
+    return None
+
+
+def excluded_listings(listing_ids: Iterable, store: Optional[str] = None,
+                      config: Optional[dict] = None) -> dict[str, str]:
+    """{listing_id: reason} for the ids that must not get an ad, for a bulk
+    add (tools/promote.add_ads). A listing id is matched in the consignment
+    ledgers directly and through its SKU in `store`'s listings ledger."""
+    s = settings(store, config)
+    if not s["exclude_consignment"]:
+        return {}
+    import sync_actuals
+    sku_of = {str(r.get("listing_id") or ""): str(r.get("sku") or "")
+              for r in sync_actuals.load_listings_ledger(store)}
+    out = {}
+    for lid in map(str, listing_ids):
+        why = consignment_excluded(s, sku=sku_of.get(lid, ""), listing_id=lid)
+        if why:
+            out[lid] = why
     return out
 
 
@@ -77,11 +154,66 @@ def _price(v) -> Optional[float]:
         return None
 
 
+# eBay's API can't take an ad out of a Smart campaign (delete 400/36101,
+# archive 409/35064, 2026-10-25), and the campaign's own rules are Russell's
+# to change, so a listing one of them picks up is stopped by hand.
+SELLER_HUB_STOP = ("Seller Hub > Active Listings > Actions > Edit promoted listing > "
+                   "turn off the cost-per-click toggle > Stop promoting > Apply")
+
+
+def _covers(rule: dict, price: Optional[float]) -> bool:
+    lo = _price((rule.get("minPrice") or {}).get("value"))
+    hi = _price((rule.get("maxPrice") or {}).get("value"))
+    return price is None or ((lo is None or price >= lo) and (hi is None or price <= hi))
+
+
+def auto_campaigns(listing_id: str, price, api_send, creds=None) -> list[str]:
+    """What still promotes `listing_id` without us: each campaign that already
+    has an ad for it, and each RUNNING campaign that picks listings by rule
+    (Smart targeting or auto-select) at `price`. Read-only."""
+    out, named = [], set()
+    try:
+        r = api_send("GET", f"{API}/ad_campaign/find_campaign_by_ad_reference"
+                            f"?listing_id={quote(str(listing_id))}", creds=creds) or {}
+    except Exception:                                                # noqa: BLE001
+        r = {}                       # eBay answers 404 when no campaign has it
+    for c in r.get("campaigns") or []:
+        named.add(c.get("campaignName"))
+        out.append(f"'{c.get('campaignName')}' has an ad for it")
+    p = _price(price)
+    r = api_send("GET", f"{API}/ad_campaign?campaign_status=RUNNING&limit=100",
+                 creds=creds) or {}
+    for c in r.get("campaigns") or []:
+        crit = c.get("campaignCriterion") or {}
+        if c.get("campaignName") in named or not (
+                c.get("campaignTargetingType") == "SMART"
+                or crit.get("autoSelectFutureInventory")):
+            continue
+        if any(_covers(x, p) for x in crit.get("selectionRules") or [{}]):
+            out.append(f"'{c.get('campaignName')}' auto-selects listings at this price")
+    return out
+
+
+def _still_promoted(listing_id, price, api_send, creds) -> str:
+    """The operator step to append to an excluded listing's outcome when a
+    campaign we don't fill by id still promotes it; '' when none does."""
+    try:
+        found = auto_campaigns(listing_id, price, api_send, creds)
+    except Exception as e:                                           # noqa: BLE001
+        return f"; could not check for Smart campaigns ({str(e)[:80]})"
+    if not found:
+        return ""
+    return (f"\n    STILL PROMOTED: {'; '.join(found)}. The API can't remove it. "
+            f"Stop it by hand: {SELLER_HUB_STOP}")
+
+
 def promote_new_listing(listing_id: str, price, creds=None, *,
                         store: Optional[str] = None, api_send=None,
-                        config: Optional[dict] = None) -> str:
+                        config: Optional[dict] = None, sku: str = "",
+                        folder=None) -> str:
     """Add `listing_id` to the store's auto-promote campaign. Returns a
-    one-line outcome for the caller to print. Never raises."""
+    one-line outcome for the caller to print. Never raises. `sku` and
+    `folder` (the draft's item folder) find a consignment lot."""
     try:
         if api_send is None:
             from ebay_client import api_send
@@ -89,6 +221,10 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         s = settings(store, config)
         if not s["enabled"] or not s.get("campaign"):
             return "auto-promote off for this store"
+        why = consignment_excluded(s, sku=sku, listing_id=listing_id, folder=folder)
+        if why:
+            return f"not promoted: {why}" + (_still_promoted(listing_id, price, api_send, creds)
+                                             if why.endswith(" excluded") else "")
         p = _price(price)
         if p is not None and p < s["min_price"]:
             return f"not promoted: ${p:.2f} is under the ${s['min_price']:.2f} floor"
