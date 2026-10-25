@@ -74,11 +74,11 @@ into, not the one the order came from. `--store NAME` picks the account the
 order is looked up in; a group of orders from two stores is refused.
 
 Box form. Also screen only: the box's length, width, height, lb and oz,
-prefilled from the drafts' estimates (pick_list._box_prefill, the same numbers
-the shipping station's /ship/box page shows), each with a Copy button. eBay's
-label link takes the order id and nothing else: no size or weight parameter is
-documented or has been seen in use, so the numbers are copied into Seller Hub
-by hand, in the station's field order, rather than guessed onto the URL.
+prefilled from the drafts' estimates (pick_list._box_prefill), each with a
+Copy button. eBay's label link takes the order id and nothing else: no size or
+weight parameter is documented or has been seen in use, so the numbers are
+copied into Seller Hub by hand, in its field order, rather than guessed onto
+the URL.
 """
 from __future__ import annotations
 
@@ -334,10 +334,9 @@ def _label_url(order_id: str) -> str:
     return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
-# Seller Hub's package fields for the box form. Names, order and limits match
-# webapp/ship.py's /ship/box page (HEADS and BoxIn), so the station and the
-# sheet read the same: sizes above 0, lb a whole number, oz 0-15.99, and a
-# weight above 0 lb 0 oz.
+# Seller Hub's package fields for the box form, in Seller Hub's order. The
+# names are _box_prefill's keys and BOX_JS's field list; the limits are BOX_JS's:
+# sizes above 0, lb a whole number, oz 0-15.99, and a weight above 0 lb 0 oz.
 BOX_FIELDS = [("length_in", "Length (in)", "0.1"), ("width_in", "Width (in)", "0.1"),
               ("depth_in", "Height (in)", "0.1"), ("weight_lb", "lb", "1"),
               ("weight_oz", "oz", "0.01")]

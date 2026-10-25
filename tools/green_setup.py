@@ -6,11 +6,11 @@
     python tools/green_setup.py --close-others     # also switch ufw on over green's other listeners
     python tools/green_setup.py --laptop usb       # cable back on the laptop: print by USB again
     python tools/green_setup.py --remove-desktop   # purge the desktop an earlier run installed
-    python tools/green_setup.py --desktop          # opt in: desktop, Firefox, Ship launcher
+    python tools/green_setup.py --desktop          # opt in: desktop and Firefox
 
 Green is a print server and nothing else (Russell, 2026-10-24): no desktop,
-no browser, no tests, no shipping screen. The /ship/box page runs on the
-laptop's own `lib.cli serve`. The eBay keys, the R2 keys, config.yaml and
+no browser, no tests, no shipping screen. The box size and weight form is
+on the pick sheets. The eBay keys, the R2 keys, config.yaml and
 the ledgers stay on the laptop, and green holds no login. Every connection
 opens from the laptop (`ssh green`, key ~/.ssh/green), so green holds no
 way back in.
@@ -32,9 +32,9 @@ On green, as root (sudo asks for green's password once):
     unless --close-others says so;
   - only with --desktop (kept "for now"), last, as it is the slow
     download: a desktop only if green has none, XFCE with LightDM (LXQt
-    under 2 GB of RAM), plus Firefox and a "Ship" launcher for
-    127.0.0.1:8770/ship/box. Auto-login only with --autologin yes.
---remove-desktop undoes a --desktop run. It reads green's apt history for
+    under 2 GB of RAM), plus Firefox. Auto-login only with --autologin yes.
+--remove-desktop undoes a --desktop run, and removes the "Ship" launcher an
+older --desktop run wrote. It reads green's apt history for
 the desktop installs this script ran, purges those packages and what only
 they pulled in (autoremove), removes the auto-login file and boots green to
 the console (multi-user.target). Anything apt would remove that the script
@@ -67,7 +67,6 @@ HOST = "green"
 QUEUE = "QL-1100"
 PAGE = "103x164"  # 4x6 shipping labels, a PageSize in the Brother PPD
 CUPS_PORT = 631
-SHIP_URL = "http://127.0.0.1:8770/ship/box"  # webapp/server.py DEFAULT_PORT
 GREEN_URI = f"ipp://{HOST}.lan:{CUPS_PORT}/printers/{QUEUE}"
 REMOTE_DIR = ".cache/pops-green"
 PPD = "/opt/brother/PTouch/ql1100/cupswrapper/brother_ql1100_printer_en.ppd"  # the laptop's driver
@@ -309,27 +308,6 @@ def root_script(plan: dict, steps: list[Step]) -> str:
                                        "@EXIT_FIREWALL_OFF@": str(EXIT_FIREWALL_OFF)})
 
 
-def user_script(plan: dict) -> str:
-    """--desktop only. Runs on green as the user, no sudo: the Ship launcher (menu and desktop)."""
-    ff = plan["firefox"]
-    return f"""set -eu
-A="$HOME/.local/share/applications"; mkdir -p "$A"
-cat > "$A/{LAUNCHER}" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Ship
-Comment=Pop's Games: box size and weight for each order
-Exec={ff} {SHIP_URL}
-Icon={ff}
-Terminal=false
-Categories=Office;
-EOF
-D=$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop"); mkdir -p "$D"
-install -m 755 "$A/{LAUNCHER}" "$D/{LAUNCHER}"
-echo "Ship launcher: $A/{LAUNCHER} and $D/"
-"""
-
-
 def bundle(script: str, extra: dict[str, bytes] | None = None) -> bytes:
     files = {"root.sh": script.encode(), **(extra or {})}
     buf = io.BytesIO()
@@ -561,8 +539,6 @@ def describe(plan: dict, steps: list[Step], laptop: str) -> str:
     for i, s in enumerate(steps, 1):
         lines.append(f"  {i:2}. {s.title}")
         lines += [f"        {l}" for l in s.script.splitlines()]
-    if d:
-        lines += ["", "On green, as the user:", f"      Ship launcher -> {plan['firefox']} {SHIP_URL}"]
     return "\n".join(lines)
 
 
@@ -636,9 +612,6 @@ def setup(a, ssh, say=print, run=subprocess.run) -> int:
     rc = ssh.run(f"sudo bash {remote}/root.sh", tty=True).returncode
     if rc not in (0, EXIT_NO_PRINTER, EXIT_FIREWALL_OFF):
         raise ProvisionError(f"green's setup stopped (exit {rc}); re-run once the cause is fixed")
-    if plan["desktop"]:
-        u = ssh.run("bash -s", input=user_script(plan).encode())
-        say(u.stdout.decode(errors="replace").strip() or u.stderr.decode(errors="replace").strip())
     if rc == EXIT_NO_PRINTER:
         say("green: plug the QL-1100 into green, power it on, run this again")
         return rc
@@ -658,7 +631,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--close-others", action="store_true",
                    help="switch ufw on even though green listens on other ports")
     p.add_argument("--desktop", action="store_true",
-                   help="also a desktop, Firefox and the Ship launcher (off: green is print-only for now)")
+                   help="also a desktop and Firefox (off: green is print-only for now)")
     p.add_argument("--autologin", choices=["yes", "no"], help="with --desktop: log green's desktop in at boot")
     p.add_argument("--remove-desktop", action="store_true",
                    help="purge the desktop packages an earlier --desktop run installed (apt history), "

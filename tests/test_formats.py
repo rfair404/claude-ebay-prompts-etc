@@ -321,60 +321,6 @@ def test_the_publish_command_on_the_card_is_still_gated():
     assert m, "the card's publish command lost --confirm"
 
 
-# ---------------------------------------------------------------------------
-# the shipping station — ship_queue.json goes laptop -> green, boxes.csv back
-# ---------------------------------------------------------------------------
-
-SHIP_QUEUE_TOP = {"version", "generated_at", "boxes"}
-SHIP_QUEUE_BOX = {"store", "order_ids", "buyer", "city", "state", "prefill"}
-SHIP_QUEUE_PREFILL = {"length_in", "width_in", "depth_in", "weight_lb", "weight_oz"}
-BOXES_COLUMNS = ["recorded_at", "store", "order_ids", "length_in", "width_in",
-                 "depth_in", "weight_lb", "weight_oz"]
-
-
-def test_ship_queue_fields_are_fixed_and_buyer_safe():
-    """green reads this file with no eBay access, so what it shows is what is
-    in here. The buyer is "First L." plus city and state; the street never
-    leaves the laptop."""
-    import tempfile
-    sys.path.insert(0, str(ROOT / "tools"))
-    import pick_list
-    with tempfile.TemporaryDirectory() as d:
-        item = Path(d) / "item"
-        item.mkdir()
-        (item / "draft.md").write_text(
-            "---\nshipping:\n  package_in: {length: 12, width: 9, depth: 4}\n"
-            "  weight: {major_lb: 1, minor_oz: 6}\n---\nbody\n", encoding="utf-8")
-        order = {"orderId": "03-11111-22222",
-                 "lineItems": [{"sku": "abc123def4", "legacyItemId": "", "title": "",
-                                "quantity": 1}],
-                 "fulfillmentStartInstructions": [{"shippingStep": {"shipTo": {
-                     "fullName": "Jamie Buyer", "contactAddress": {
-                         "addressLine1": "1 Test Way", "city": "Springfield",
-                         "stateOrProvince": "OH", "postalCode": "45501"}}}}]}
-        drafts = [{"dir": str(item), "sku": "abc123def4", "listing_id": "",
-                   "title": "", "price": ""}]
-        path = pick_list.write_ship_queue([order], drafts, [], "default",
-                                          Path(d) / "ship_queue.json")
-        text = path.read_text(encoding="utf-8")
-    q = json.loads(text)
-    assert set(q) == SHIP_QUEUE_TOP and q["version"] == 1
-    box, = q["boxes"]
-    assert set(box) == SHIP_QUEUE_BOX
-    assert set(box["prefill"]) == SHIP_QUEUE_PREFILL
-    assert box == {"store": "default", "order_ids": ["03-11111-22222"],
-                   "buyer": "Jamie B.", "city": "Springfield", "state": "OH",
-                   "prefill": {"length_in": 12.0, "width_in": 9.0, "depth_in": 4.0,
-                               "weight_lb": 1, "weight_oz": 6.0}}
-    assert "Test Way" not in text and "Buyer" not in text and "45501" not in text
-
-
-def test_boxes_csv_columns_and_their_order():
-    """The laptop reads green's boxes.csv back; its header is the contract."""
-    import webapp.ship as ship
-    assert ship.BOXES_COLUMNS == BOXES_COLUMNS
-
-
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items())
            if k.startswith("test_") and callable(v)]
