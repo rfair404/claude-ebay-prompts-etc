@@ -114,11 +114,20 @@ from report import to_report_date  # noqa: E402  Pacific bucketing (#122 convent
 
 # transactionType values that carry a real dollar amount against an order.
 # Built defensively: any transactionType this module doesn't recognize
-# (SALE, REFUND, CREDIT, TRANSFER, ADJUSTMENT, DISPUTE, ...) is simply
-# skipped rather than mis-parsed — this reader only claims to extract fees
-# and postage, nothing else.
+# (CREDIT, TRANSFER, ADJUSTMENT, DISPUTE, ...) is simply skipped rather than
+# mis-parsed — this reader only claims to extract fees and postage.
 FEE_TRANSACTION_TYPE = "NON_SALE_CHARGE"
 POSTAGE_TRANSACTION_TYPE = "SHIPPING_LABEL"
+# SALE and REFUND are read for their per-line fees only (the per-item fee
+# breakdown on consignment statements). Shape confirmed with one live
+# read-only GET on 2026-10-25: each `orderLineItems[]` entry carries
+# `lineItemId`, `feeBasisAmount` and `marketplaceFees[]` ({feeType, amount}),
+# and no SKU or listing id, so sync_actuals maps lineItemId to those from the
+# Fulfillment orders. The line's feeBasisAmount differed from the
+# transaction's totalFeeBasisAmount on every sale read, so the line figure is
+# the one kept. The sale amount, `buyer` and memo fields are never read.
+SALE_TRANSACTION_TYPE = "SALE"
+REFUND_TRANSACTION_TYPE = "REFUND"
 
 # Case-insensitive substrings that flag a NON_SALE_CHARGE as promoted-listing
 # / ad spend specifically, checked against both a feeType-shaped field (if
@@ -136,6 +145,25 @@ class FeeLine:
     fee_type: str   # "AD" or "OTHER" — never eBay's raw feeType/memo text
     amount: Decimal
     date: str       # YYYY-MM-DD, Pacific-bucketed (report.to_report_date); "" if unparsable
+    # The same money, charge-positive: bookingEntry CREDIT (a fee given back)
+    # is negative, anything else positive. The live feed sends a DEBIT ad fee
+    # as a positive `amount`, so `amount`'s sign can't tell a charge from a
+    # credit. fee_lines.csv uses this field.
+    charge: Decimal = Decimal(0)
+
+
+@dataclass(frozen=True)
+class SaleFeeLine:
+    """One `marketplaceFees[]` entry on a SALE or REFUND line item, PII-free.
+    `amount` is charge-positive: a SALE fee is a charge (+), a REFUND fee a
+    credit back to us (-). `basis` is the line's feeBasisAmount with the same
+    sign, or None when eBay sent none."""
+    order_id: str
+    line_item_id: str
+    fee_type: str   # eBay's own feeType code, e.g. FINAL_VALUE_FEE
+    amount: Decimal
+    basis: Optional[Decimal]
+    date: str
 
 
 @dataclass(frozen=True)
@@ -184,6 +212,40 @@ def _order_id_for(txn: dict) -> str:
         if (ref.get("referenceType") or "").upper() == "ORDER_ID" and ref.get("referenceId"):
             return str(ref["referenceId"])
     return ""
+
+
+def _charge(txn: dict) -> Decimal:
+    """A NON_SALE_CHARGE's amount, charge-positive (see FeeLine.charge)."""
+    amt = abs(_dec(txn.get("amount")))
+    return -amt if (txn.get("bookingEntry") or "").upper() == "CREDIT" else amt
+
+
+def _sale_fee_lines(txn: dict, order_id: str, date_s: str) -> list[SaleFeeLine]:
+    """Every marketplace fee on a SALE (charges) or REFUND (credits), per line
+    item, built from an allowlist of fields: no buyer, memo or sale amount."""
+    sign = -1 if txn.get("transactionType") == REFUND_TRANSACTION_TYPE else 1
+    out = []
+    for li in txn.get("orderLineItems") or []:
+        raw = li.get("feeBasisAmount")
+        basis = sign * abs(_dec(raw)) if raw else None
+        for f in li.get("marketplaceFees") or []:
+            out.append(SaleFeeLine(
+                order_id=order_id, line_item_id=str(li.get("lineItemId") or ""),
+                fee_type=(f.get("feeType") or "").strip() or "UNLABELED",
+                amount=sign * abs(_dec(f.get("amount"))), basis=basis, date=date_s))
+    return out
+
+
+def _split_even(amt: Decimal, n: int) -> list[Decimal]:
+    """`amt` in `n` cent-rounded shares that sum back to it exactly, the
+    rounding remainder on the last share (a plain amt / n can drift, e.g.
+    $1.00 across 3)."""
+    if n <= 1:
+        return [amt]
+    share = (amt / n).quantize(Decimal("0.01"))
+    shares = [share] * n
+    shares[-1] += amt - sum(shares, Decimal(0))
+    return shares
 
 
 def _skus_for(txn: dict) -> list[str]:
@@ -301,7 +363,11 @@ def parse_transactions(transactions: list[dict]) -> dict:
 
     Returns:
         {"fees": [FeeLine, ...], "postage": [PostageLine, ...],
-         "other_fee_labels": Counter}
+         "sale_fees": [SaleFeeLine, ...], "other_fee_labels": Counter}
+
+    `sale_fees` are the per-line marketplace fees on SALE and REFUND
+    transactions (FVF, the per-order fixed fee, the regulatory fee, ...),
+    eBay's feeType code kept as-is.
 
     `other_fee_labels` counts every NON_SALE_CHARGE that did NOT match an
     ad-fee marker, by its raw feeType (or a placeholder) — visible so an
@@ -315,6 +381,7 @@ def parse_transactions(transactions: list[dict]) -> dict:
     """
     fees: list[FeeLine] = []
     postage: list[PostageLine] = []
+    sale_fees: list[SaleFeeLine] = []
     other_labels: Counter = Counter()
 
     for t in transactions or []:
@@ -330,26 +397,21 @@ def parse_transactions(transactions: list[dict]) -> dict:
                 other_labels[_other_fee_label(t)] += 1
             fee_type = "AD" if is_ad else "OTHER"
             skus = _skus_for(t)
-            # Quantized per-SKU, with the rounding remainder folded into the
-            # last SKU, so the shares sum back to `amt` exactly (a plain
-            # amt / len(skus) can drift for amounts that don't divide evenly,
-            # e.g. $1.00 across 3 SKUs).
-            if len(skus) > 1:
-                share = (amt / len(skus)).quantize(Decimal("0.01"))
-                shares = [share] * len(skus)
-                shares[-1] += amt - sum(shares, Decimal(0))
-            else:
-                shares = [amt]
-            for sku, s in zip(skus, shares):
+            shares = _split_even(amt, len(skus))
+            charges = _split_even(_charge(t), len(skus))
+            for sku, s, c in zip(skus, shares, charges):
                 fees.append(FeeLine(order_id=order_id, sku=sku, fee_type=fee_type,
-                                    amount=s, date=date_s))
+                                    amount=s, date=date_s, charge=c))
         elif ttype == POSTAGE_TRANSACTION_TYPE:
             postage.append(PostageLine(order_id=order_id, amount=_dec(t.get("amount")),
                                        date=date_s))
-        # everything else (SALE, REFUND, CREDIT, TRANSFER, ADJUSTMENT,
-        # DISPUTE, ...) is out of scope for this reader and skipped.
+        elif ttype in (SALE_TRANSACTION_TYPE, REFUND_TRANSACTION_TYPE):
+            sale_fees += _sale_fee_lines(t, order_id, date_s)
+        # everything else (CREDIT, TRANSFER, ADJUSTMENT, DISPUTE, ...) is out
+        # of scope for this reader and skipped.
 
-    return {"fees": fees, "postage": postage, "other_fee_labels": other_labels}
+    return {"fees": fees, "postage": postage, "sale_fees": sale_fees,
+            "other_fee_labels": other_labels}
 
 
 # ---------------------------------------------------------------------------
