@@ -22,6 +22,7 @@ Run:  python tests/test_prep.py
 import argparse
 import contextlib
 import copy
+import io
 import json
 import sys
 import tempfile
@@ -359,6 +360,74 @@ def test_approval_goes_stale_when_a_file_changes():
             raise AssertionError("a changed file must void the approval")
         except P.PrepGateError as e:
             assert "stale" in str(e)
+
+
+def _approved_shoot_with_a_redaction(tmp: Path):
+    """A fully approved shoot whose second frame is a `_REDACTED` copy."""
+    shoot = tmp / "s"
+    shoot.mkdir(parents=True)
+    img, _ = _scene(seed=0)
+    cv2.imwrite(str(shoot / "IMG_0.jpg"), img)
+    img, _ = _scene(seed=1)
+    cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img)
+    with contextlib.redirect_stdout(None):
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+        P.run_approve_stage(shoot, "color")
+        P.run_approve(shoot)
+    P.assert_approved(shoot)
+    return shoot, img
+
+
+def test_a_re_redacted_source_clears_with_the_command_the_gate_names():
+    """The art director re-redacts `<stem>_REDACTED.jpg` after analysis. The
+    gate must refuse, name the commands that clear it, and those commands must
+    actually clear it -- --apply used to re-render without re-hashing the
+    source, so the same "source changed" refusal came back forever."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot, img = _approved_shoot_with_a_redaction(Path(td))
+        img[320:360, 450:600] = 0                      # a wider black bar
+        cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img)
+
+        try:
+            P.assert_approved(shoot)
+            raise AssertionError("a re-redacted source must void the approval")
+        except P.PrepGateError as e:
+            msg = str(e)
+        assert "label_REDACTED.jpg (source changed)" in msg, msg
+        assert f"python -m lib.photo_prep.prep {shoot} --apply" in msg, msg
+        assert f"python -m lib.photo_prep.prep {shoot} --approve" in msg, msg
+
+        with contextlib.redirect_stdout(None):
+            P.run_apply(shoot, quiet=True)
+            P.run_approve(shoot)
+        m = P.assert_approved(shoot)
+        rec = m["photos"]["label_REDACTED.jpg"]
+        assert rec["src_sha256"] == P._sha256(shoot / "label_REDACTED.jpg")
+        # What ships is the new redaction, not a copy of the old render.
+        shipped = P._load_bgr(shoot / rec["output"])
+        assert shipped.min() < 40, "the re-redacted bar did not reach listing/"
+
+
+def test_a_resized_source_is_sent_back_to_check():
+    """A different-size source is a different frame: its rotation and crop
+    were decided on the old one. --apply must refuse it by name and point at
+    --check, not quietly re-stamp the hash and let the gate pass."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot, img = _approved_shoot_with_a_redaction(Path(td))
+        cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img[:, :-40])
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            m = P.run_apply(shoot)
+        assert m["apply_run"]["failed"] == ["label_REDACTED.jpg"], m["apply_run"]
+        assert f"python -m lib.photo_prep.prep {shoot} --check" in out.getvalue()
+        try:
+            P.assert_approved(shoot)
+            raise AssertionError("a resized source must not clear the gate")
+        except P.PrepGateError:
+            pass
 
 
 def test_cannot_approve_while_a_frame_is_unresolved():
