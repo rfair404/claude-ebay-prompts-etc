@@ -351,6 +351,15 @@ store:
   #   state: ""
   #   zip: ""
 
+  # Promotion at publish (lib/auto_promote.py). Unset = these defaults.
+  # exclude_consignment: consignment lots that never get an ad, by client
+  # code or CONSIGN-* folder name. Setting it replaces the default list, so
+  # keep K01 in it.
+  # auto_promote:
+  #   campaign: "Revenue Seasoned 15d"
+  #   min_price: 25
+  #   exclude_consignment: [K01]
+
   closing_block: |
     Please message me with any questions before buying — I'd rather answer
     one than have you guess.

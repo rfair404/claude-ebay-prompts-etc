@@ -140,6 +140,9 @@ Two funding models, and they are not interchangeable:
 
 ## What PROMOTE must never do
 
+- **K01 consignment (CONSIGN-20261022) items are never promoted: no ads,
+  cost-per-sale or cost-per-click.** The code skips them
+  (`store.auto_promote.exclude_consignment`, `lib/auto_promote.py`).
 - **Never promote an item that is not sellable.** Sold, ended and
   out-of-stock listings are excluded by reading the live sheet, not by trusting
   a local ledger.

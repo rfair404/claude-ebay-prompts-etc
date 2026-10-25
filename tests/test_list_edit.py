@@ -518,6 +518,37 @@ def test_publish_offer_promotes_the_new_listing():
     assert res.promotion and res.promotion.startswith("promoted")
 
 
+def test_publish_offer_never_promotes_a_k01_consignment_listing(tmp_path, monkeypatch):
+    """Russell's rule (2026-10-25): nothing from the K01 consignment lot is
+    promoted. publish_offer hands the offer's SKU to auto_promote, which finds
+    it in K01's client ledger and sends no ad."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import consign
+    lot = tmp_path / "inventory" / "CONSIGN-20261022"
+    lot.mkdir(parents=True)
+    with (lot / consign.LEDGER_NAME).open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=consign.COLUMNS)
+        w.writeheader()
+        w.writerow({**{c: "" for c in consign.COLUMNS}, "item_id": "K01-C001",
+                    "client_code": "K01", "sku": "decd0001"})
+    monkeypatch.setattr(consign, "INVENTORY", tmp_path / "inventory")
+    send, calls = _fake_api({
+        "/offer/OFFER-1/publish": {"listingId": "999888777"},
+        "/offer/OFFER-1": {"status": "UNPUBLISHED", "sku": "decd0001",
+                           "pricingSummary": {"price": {"value": "49.99"}}},
+        "get_campaign_by_name": {"campaignId": "C1", "campaignStatus": "RUNNING",
+                                 "fundingStrategy": {"fundingModel": "COST_PER_SALE"}},
+        "bulk_create_ads_by_listing_id": {"responses": [{"statusCode": 201}]},
+    })
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="decd0001", offer_id="OFFER-1")
+        with _patched(L, api_send=send), _ledger_at(Path(td)):
+            res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+    assert res.listing_id == "999888777"
+    assert res.promotion.startswith("not promoted: consignment K01 excluded")
+    assert not [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
+
+
 def test_publish_succeeds_when_promotion_fails():
     """The listing is live before promotion runs; an ad error must not turn a
     successful publish into a failure."""

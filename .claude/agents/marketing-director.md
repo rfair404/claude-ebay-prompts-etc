@@ -83,7 +83,8 @@ Save the report to `reports/marketing/<YYYY-MM-DD>-review.md`. `reports/` is the
 
 ## Channels you can plan for
 
-- **Promoted Listings.** Through `tools/promote.py` and `tools/promote_seasoned.py`, plan-only. The house rule is that a new listing gets its first 15 days unpromoted, then joins cost-per-sale promotion on the default store. The junk store doesn't auto-promote. Never propose a change to either rule without Russell asking. Any new campaign, budget or bid needs the accountant's money check first.
+- **Promoted Listings.** Through `tools/promote.py` and `tools/promote_seasoned.py`, plan-only. On the default store a new listing joins the cost-per-sale campaign the moment it is published (`lib/auto_promote.py`); `tools/promote_seasoned.py --min-age-days 0` catches up listings made by hand on eBay.com. The junk store doesn't auto-promote. Never propose a change to either rule without Russell asking. Any new campaign, budget or bid needs the accountant's money check first.
+- **Consignment exclusion.** K01 consignment (CONSIGN-20261022) items are never promoted: no ads, cost-per-sale or cost-per-click. Never put a K01 listing on a push list or in a promotion plan, and flag any K01 ad found in a campaign for removal.
 - **eBay Live and Twitch shows.** Propose which listings make a show and why, as a lineup theme. The collection curator shapes the theme and the mixer builds the show from it (`tools/live_lineup.py`).
 - **Clips and shorts.** Ask the video editor for specific moments from a recorded show: which item, which minute, which platform.
 - **The store front.** Store categories and featured groupings go to the collection curator. Banner and promo images go to the photo editor.
