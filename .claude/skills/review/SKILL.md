@@ -13,9 +13,10 @@ cards in its place, because only this session can ask Russell a question.
 ## 1. Collect the queue
 
 List every item with a finished draft that isn't live yet, sorted by how far
-it has got:
+it has got. Run it from the main checkout: a worktree has no
+`listings_ledger*.csv`, so there every live item reads as unlisted.
 
-    python - <<'EOF'
+    cd /home/russ/EBAYBIZ && python - <<'EOF'
     import sys
     from pathlib import Path
     sys.path.insert(0, "lib")
@@ -41,6 +42,9 @@ it has got:
   Don't start PREP from here.
 
 If the queue and the PREPPED list are both empty, say so in one line.
+
+A draft newer than its card on an item that is already live is a revision,
+not a publish. It isn't in this queue.
 
 ## 2. Show, then ask, per item
 
