@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-25
 ---
 
@@ -488,6 +488,17 @@ needed before review` instead, and don't hand the item on as ready.
 - **Authenticity & fakes** — repro problem? Name the tell + an auth step.
 - **Restrictions & legal** — eBay-prohibited, CITES, NAGPRA, militaria bans,
   hazmat, recalls, intl-ship eligibility, state rules. Sellable internationally?
+  For anything animal-derived, check all three before calling it ALLOWED:
+  the [Animal products policy](https://www.ebay.com/help/policies/prohibited-restricted-items/animal-products-policy?id=5046)
+  (ECOS, CITES), its named banned-species list (bats, bears, marine mammals,
+  protected turtles, migratory birds, cats/dogs, and ivory or bone from the
+  animals it names), and the [Live animals policy](https://www.ebay.com/help/policies/prohibited-restricted-items/live-animals-policy?id=4327),
+  which allows only the animals it lists. eBay's publish filters block more than
+  those pages name, and sold comps don't prove an item is still allowed.
+  Recorded example: a dried seahorse (K01-C080, 2026-10-25) passed 5046 and ECOS
+  and had sold comps, but eBay refused it at publish under the Live animals
+  policy, errorId 25019, filter `PI_Global_APW_SeaHorses`. Seahorses, dried
+  included, can't be sold on eBay; pull them from a lot.
 - **Scams & buyer issues** — category-typical scams + the protection.
 - **Authenticity Guarantee** — covered at this value tier?
 - **Disclosure** — what to state up front to head off returns.
