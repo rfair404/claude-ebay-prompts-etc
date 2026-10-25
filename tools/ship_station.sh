@@ -17,7 +17,8 @@
 # On green:  ~/pops-ship/            the code, replaced whole by `setup`
 #            ~/pops-ship/reports  -> ~/pops-ship-data/reports  (survives redeploys)
 #            ~/pops-ship-venv/       fastapi, uvicorn, pyyaml, pillow: what `serve` imports
-#            ~/.config/systemd/user/pops-serve.service   `python -m lib.cli serve`, 127.0.0.1:8770
+#            ~/.config/systemd/user/pops-serve.service   `python -m lib.cli serve`, 127.0.0.1:8770,
+#            started at boot (linger)
 set -euo pipefail
 
 HOST=${SHIP_STATION_HOST:-green}
@@ -94,6 +95,10 @@ VENV_STEP="set -euo pipefail
 SERVICE="set -euo pipefail
 mkdir -p ~/.config/systemd/user
 printf '%s\n' \"\$UNIT_FILE\" > ~/.config/systemd/user/$UNIT
+# Linger: the user manager runs from boot and outlives this ssh session, so
+# pops-serve starts at boot without a desktop login.
+[ \"\$(loginctl show-user \"\$USER\" -p Linger --value 2>/dev/null)\" = yes ] || loginctl enable-linger \"\$USER\" || {
+  echo 'loginctl enable-linger was refused; tools/green_setup.py turns it on as root' >&2; exit 7; }
 systemctl --user daemon-reload
 systemctl --user enable -q $UNIT
 systemctl --user restart $UNIT
@@ -128,6 +133,7 @@ status() {
   local rev; rev=$(rev)
   if ((DRY)); then echo "would read $HOST: $UNIT, $URL, ~/$APP/.deployed, the queue's age, lpstat -p QL-1100"; return 0; fi
   on_green "echo \"serve:   \$(systemctl --user is-active $UNIT 2>&1)\"
+    echo \"linger:  \$(loginctl show-user \"\$USER\" -p Linger --value 2>&1)\"
     ~/$VENV/bin/python -c \"import urllib.request as u; u.urlopen('$URL', timeout=3)\" 2>/dev/null \
       && echo 'page:    $URL answers' || echo 'page:    $URL does not answer'
     d=\$(cat ~/$APP/.deployed 2>/dev/null || echo none)

@@ -34,8 +34,11 @@ def env(tmp_path):
     for d in (bin_, green, main):
         d.mkdir()
     (bin_ / "ssh").write_text(FAKE_SSH)
-    (bin_ / "systemctl").write_text("#!/bin/bash\nexit 0\n")
-    for f in ("ssh", "systemctl"):
+    # Stubs that log, so nothing reaches the laptop's own systemd or logind.
+    (bin_ / "systemctl").write_text('#!/bin/bash\necho "systemctl $*" >> "$FAKE_TOOLS"\n')
+    (bin_ / "loginctl").write_text('#!/bin/bash\necho "loginctl $*" >> "$FAKE_TOOLS"\n'
+                                   '[ "$1" = show-user ] && echo "${FAKE_LINGER:-no}"; exit 0\n')
+    for f in ("ssh", "systemctl", "loginctl"):
         (bin_ / f).chmod(0o755)
     venv = green / "pops-ship-venv" / "bin"  # a venv that is already there: no pip, no network
     venv.mkdir(parents=True)
@@ -50,8 +53,10 @@ def env(tmp_path):
     subprocess.run(git + ["add", "lib/cli.py"], check=True)
     subprocess.run(git + ["commit", "-q", "-m", "x"], check=True)
     e = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", FAKE_HOME=str(green),
-             FAKE_LOG=str(tmp_path / "ssh.log"), SHIP_STATION_MAIN=str(main), SHIP_STATION_REF="HEAD")
-    return {"env": e, "green": green, "main": main, "log": tmp_path / "ssh.log"}
+             FAKE_LOG=str(tmp_path / "ssh.log"), FAKE_TOOLS=str(tmp_path / "tools.log"),
+             SHIP_STATION_MAIN=str(main), SHIP_STATION_REF="HEAD")
+    return {"env": e, "green": green, "main": main, "log": tmp_path / "ssh.log",
+            "tools": tmp_path / "tools.log"}
 
 
 def run(env, *args, **extra):
@@ -144,3 +149,22 @@ def test_pull_never_replaces_the_laptops_copy_with_nothing(env):
     assert run(env, "pull").returncode == 0           # green has no boxes.csv
     assert run(env, "pull", FAKE_DOWN="1").returncode == 1
     assert back.read_bytes() == b"kept\r\n" and not back.with_name("boxes-green.csv.tmp").exists()
+
+
+def test_setup_turns_linger_on_before_enabling_the_unit(env):
+    assert run(env, "setup").returncode == 0
+    calls = env["tools"].read_text().splitlines()
+    linger = calls.index(next(c for c in calls if c.startswith("loginctl enable-linger")))
+    enable = calls.index(next(c for c in calls if c.startswith("systemctl --user enable")))
+    assert linger < enable
+
+
+def test_setup_skips_linger_when_already_on(env):
+    assert run(env, "setup", FAKE_LINGER="yes").returncode == 0
+    assert not any(c.startswith("loginctl enable-linger") for c in env["tools"].read_text().splitlines())
+
+
+def test_status_prints_linger(env):
+    assert run(env, "setup").returncode == 0
+    r = run(env, "status", FAKE_LINGER="yes")
+    assert "linger:  yes" in r.stdout, r.stdout + r.stderr

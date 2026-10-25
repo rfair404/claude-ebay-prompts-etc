@@ -76,8 +76,10 @@ DESKTOPS = {  # dpkg package -> name; the first one installed is "green's deskto
     "xfce4": "XFCE", "lxqt-core": "LXQt", "gnome-shell": "GNOME", "plasma-desktop": "KDE Plasma",
     "cinnamon": "Cinnamon", "mate-desktop-environment-core": "MATE", "lxde-core": "LXDE",
 }
-NEW_DESKTOP = {"xfce": ["xfce4", "xfce4-terminal", "lightdm", "xorg"],
-               "lxqt": ["lxqt-core", "lightdm", "xorg"]}
+# lightdm-gtk-greeter by name: on a bare Ubuntu, lightdm alone pulls unity-greeter.
+GREETER = ["lightdm", "lightdm-gtk-greeter"]
+NEW_DESKTOP = {"xfce": ["xfce4", "xfce4-terminal", *GREETER, "xorg"],
+               "lxqt": ["lxqt-core", "qterminal", *GREETER, "xorg"]}
 LXQT_BELOW_MB = 2048
 # Rough budget in MB for desktop + Firefox + a test run at once. An estimate
 # for the dry run, not a measurement; only the 900 MB test peak is measured
@@ -171,7 +173,7 @@ def make_plan(facts: dict[str, str], autologin: str | None = None, lan: str | No
     if existing:
         desktop = {"name": existing, "install": [], "why": f"keep {existing}, already on green"}
         if not dm:
-            desktop["install"] = ["lightdm"]
+            desktop["install"] = list(GREETER)
     else:
         kind = "lxqt" if mem and mem < LXQT_BELOW_MB else "xfce"
         name = "LXQt" if kind == "lxqt" else "XFCE"
@@ -264,6 +266,8 @@ else
 fi
 cupsctl | grep -E '^_(share_printers|remote_any|remote_admin)='"""),
         Step(f"Firewall: SSH and CUPS :{CUPS_PORT} from {plan['lan']} only", _firewall(plan)),
+        Step("User services run from boot (linger), for the ship page's pops-serve",
+             'loginctl enable-linger "$U"'),
         # The desktop comes last: it is the slow download, and labels shouldn't wait for it.
         Step(f"Desktop: {d['name']} " + ("(already there)" if not d["install"] else "and Firefox, as needed"),
              r"""NEED=$(missing @DESKTOP@)

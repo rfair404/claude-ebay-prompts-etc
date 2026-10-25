@@ -242,7 +242,9 @@ desktop packages, the printer on USB, the listening ports and ufw. Then it
 does only what is missing:
 
 - **Desktop.** A desktop green already has is kept. If it has none, it gets XFCE
-  with LightDM (LXQt under 2 GB of RAM) and Firefox (`firefox-esr` on Debian).
+  with LightDM and its GTK greeter (LXQt under 2 GB of RAM) and Firefox
+  (`firefox-esr` on Debian). The greeter is named because on a bare Ubuntu,
+  LightDM alone pulls in unity-greeter.
   A **Ship** launcher in the menu and on the desktop opens `/ship/box`.
   Auto-login is only set with `--autologin yes`.
 - **Printer.** The same Brother driver as the laptop (`ql1100pdrv` 2.1.4,
@@ -286,8 +288,9 @@ laptop and over IPv4 like everything else:
   pyyaml and pillow.
 - **Serve.** The `pops-serve` systemd **user** unit runs `python -m lib.cli
   serve` on green's `127.0.0.1:8770` (still localhost-only, #311). It
-  restarts on failure and starts at login, and auto-login makes that boot.
-  Logs: `journalctl --user -u pops-serve`.
+  restarts on failure and starts at boot (linger: `loginctl enable-linger`,
+  set by `setup` and by `green_setup.py`), with or without a desktop login.
+  `status` prints the Linger value. Logs: `journalctl --user -u pops-serve`.
 - **Queue in, boxes out.** `push` puts `reports/shipping/ship_queue.json`
   at the same path on green, by temp file and rename. `pull` brings green's
   `boxes.csv` back byte for byte (CRLF) as `boxes-green.csv`. It never

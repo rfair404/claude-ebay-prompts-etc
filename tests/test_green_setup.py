@@ -42,12 +42,13 @@ def test_no_desktop_gets_xfce_and_firefox_esr_with_a_reason_from_the_facts():
     plan, script = script_for()
     assert plan["desktop"]["name"] == "XFCE"
     assert "7900 MB RAM" in plan["desktop"]["why"] and "Intel HD 530" in plan["desktop"]["why"]
-    assert "xfce4 xfce4-terminal lightdm xorg firefox-esr" in script
+    assert "xfce4 xfce4-terminal lightdm lightdm-gtk-greeter xorg firefox-esr" in script
 
 
 def test_small_ram_gets_lxqt_and_ubuntu_gets_firefox():
-    plan, _ = script_for(mem="1900", os=OS_UBUNTU)
+    plan, script = script_for(mem="1900", os=OS_UBUNTU)
     assert plan["desktop"]["name"] == "LXQt" and plan["firefox"] == "firefox"
+    assert "lxqt-core qterminal lightdm lightdm-gtk-greeter xorg firefox" in script
 
 
 def test_an_existing_desktop_is_kept():
@@ -245,3 +246,13 @@ def test_ssh_to_green_is_ipv4_only():
 def test_a_rerun_finishes_an_interrupted_apt_first():
     _, script = script_for()
     assert script.index("dpkg --configure -a") < script.index("apt-get install")
+
+
+def test_an_existing_desktop_without_a_display_manager_gets_lightdm_and_the_gtk_greeter():
+    # A bare Ubuntu's lightdm alone would pull unity-greeter.
+    plan, _ = script_for(pkgs="xfce4 4.20 ii \n", dm="", firefox="firefox")
+    assert plan["desktop"]["install"] == ["lightdm", "lightdm-gtk-greeter"]
+
+
+def test_root_script_turns_linger_on_for_the_ship_page():
+    assert 'loginctl enable-linger "$U"' in script_for()[1]
