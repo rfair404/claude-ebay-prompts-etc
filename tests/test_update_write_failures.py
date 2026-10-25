@@ -136,6 +136,9 @@ def ebay(tmp_path, monkeypatch):
     for cache in (ebay_client._app_caches, ebay_client._user_caches,
                   ebay_client._user_scopes_by_store):
         cache.clear()
+    # Other suites assign fakes straight onto list_edit; put the real seams back.
+    for name in ("api_send", "get_listing_hold", "load_credentials"):
+        monkeypatch.setattr(L, name, getattr(ebay_client, name))
     monkeypatch.setattr(ebay_client.time, "sleep", lambda s: None)
     monkeypatch.setattr(L.time, "sleep", lambda s: None)
 
