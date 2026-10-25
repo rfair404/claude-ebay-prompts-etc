@@ -104,7 +104,7 @@ from draft_io import (Draft, iter_drafts, parse_draft, resolve_photo_paths, set_
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from price_gate import sold_pull_issues
-from us_only import us_only_reasons
+from us_only import ship_to_warning, us_only_reasons
 from dir_context import load as load_dir_context
 from ebay_schema import CONDITION_ENUM
 from ebay_client import (
@@ -1560,8 +1560,9 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                        "; ".join(us_reasons) + ") but "
                        "ebay.fulfillment_policy_id_us_only is unset. The default "
                        "policy ships Worldwide, so eBay will refuse this publish. "
-                       "Create a US-only fulfillment policy (shipToLocations = US) "
-                       "and set that key before listing this item.")
+                       "Create a US-only fulfillment policy (shipToLocations = "
+                       "us_only.US_ONLY_SHIP_TO) and set that key before listing "
+                       "this item.")
             if strict:
                 raise ValueError(blocker)
             chosen, label = default_fid, "default ground (NO US-only policy configured)"
@@ -1596,6 +1597,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     try:
         pols = get_fulfillment_policies(creds=creds)
         pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == chosen), None)
+        if pol and usonly_fid and chosen == usonly_fid and ship_to_warning(pol):
+            msgs.append(ship_to_warning(pol))
         if not pol:
             msgs.append(f"shipping: chosen fulfillment_policy_id {chosen} not found on this account")
         else:

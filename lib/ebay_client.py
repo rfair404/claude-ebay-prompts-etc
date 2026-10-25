@@ -73,6 +73,7 @@ Default: sandbox (safer until you've tested end-to-end).
 from __future__ import annotations
 
 import base64
+import copy
 import html
 import json
 import os
@@ -88,6 +89,7 @@ from typing import Optional
 from config import ConfigError, config_path, load_config
 from stores import DEFAULT_STORE, resolve_store_name
 from ebay_schema import get_schema, print_schema
+from us_only import US_ONLY_SHIP_TO
 
 
 # ---------------------------------------------------------------------------
@@ -836,10 +838,12 @@ def create_calculated_shipping_policy(
     draft's packed weight and package_in dimensions stop being cosmetic and
     start being the price the buyer sees.
 
-    shipToLocations is left unset: US-only domestic. The main store's default
-    carries Worldwide, and that (not any international flag) is what makes a
-    listing eBay-International-Shipping eligible — see lib/us_only.py and the
-    ITAR refusal it exists for. An as-is store has no reason to opt into that.
+    shipToLocations is set to `us_only.US_ONLY_SHIP_TO`: US included, every
+    other region excluded by name. Leaving it unset is NOT US-only: on an
+    account enrolled in eBay International Shipping, eIS offered listings on
+    an empty-shipToLocations policy to GB, CA and DE buyers (measured
+    2026-10-25, lib/us_only.py has the details). An as-is store has no reason
+    to opt into eIS, and the main store's US-only policy needs the same body.
 
     The service code is `USPSParcel`, NOT `USPSGroundAdvantage`. eBay's UI
     calls this service "USPS Ground Advantage" and the Fulfillment/draft layer
@@ -877,6 +881,7 @@ def create_calculated_shipping_policy(
                 "freeShipping": False,
             }],
         }],
+        "shipToLocations": copy.deepcopy(US_ONLY_SHIP_TO),
     }
     return api_send("POST", "/sell/account/v1/fulfillment_policy",
                     body=body, creds=creds, marketplace=None,
