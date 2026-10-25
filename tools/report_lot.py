@@ -352,13 +352,17 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<10}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
     L += [hdr, "-" * len(hdr)]
     out = []
+    fee_lines, terms_mall = C.load_fee_lines(), C.mall_terms()
     for r in rows:
         d = _report.ascii_text((r.get("description") or "").split(";")[0].replace("\n", " "))
         d = d if len(d) <= 52 else d[:51] + "~"
         L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:11]:<12}"
                  f"{plan.get(r.get('cut') or '', '-'):<10}{r.get('state') or '':<10}{val(r):<13}"
                  f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
-        out.append({"item_id": r["item_id"], "item": r.get("description") or "",
+        # the shared renderer (tools/consign.py fee_breakdown), under the sale
+        bd = C.fee_breakdown(r, fee_lines, terms_mall)
+        L += C.fee_text(bd, indent=" " * 10)
+        out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
                     "state": r.get("state") or "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
@@ -366,7 +370,11 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
                     "sku": r.get("sku") or "", "listing_id": r.get("listing_id") or "",
                     "sold_at": r.get("sold_at") or "", "item_price": r.get("item_price") or "",
                     "net": r.get("net") or "", "client_share": r.get("client_share") or "",
-                    "folder": r.get("inventory_folder") or ""})
+                    "folder": r.get("inventory_folder") or "",
+                    "ebay_fee": r.get("ebay_fee") or "", "ad_fee": r.get("ad_fee") or "",
+                    **{k: "" for k in C.FEE_COLUMNS}, "note": ""})
+        blank = {k: "" for k in out[-1]}
+        out += [dict(blank, line="fee", item_id=r["item_id"], **f) for f in C.fee_rows(bd)]
     return "\n".join(L) + "\n", out
 
 

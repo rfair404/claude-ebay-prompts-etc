@@ -146,6 +146,7 @@ def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
     monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
     monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [])
     lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
     base = {k: "" for k in C.COLUMNS}
     rows = [dict(base, item_id="K01-C033", description="Sterling set", state="PREP",
@@ -161,3 +162,40 @@ def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
     assert "$1682.55-3365.09" in line["K01-C033"] and "5995" not in line["K01-C033"]
     assert "ask $145.00" in line["K01-C040"]
     assert "ask $24.99" in line["K01-C041"]
+
+
+def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
+    # report_lot's consignment path renders the breakdown with consign's own
+    # renderer, under the sale, in the text and in the CSV.
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    line = {"order_id": "1-1-1", "line_item_id": "L1", "listing_id": "", "sku": "s1",
+            "date": "2026-10-20"}
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [
+        dict(line, fee_type="FINAL_VALUE_FEE", amount="5.00", basis="40.00"),
+        dict(line, fee_type="AD", amount="3.20", basis="", bid_pct="8.0",
+             bid_pct_as_of="2026-10-25T19:12:31+00:00")])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    C.write_ledger(lot / C.LEDGER_NAME, [
+        dict(base, item_id="K01-C050", description="Sold bowl", state="CLEARED",
+             order_id="1-1-1", sku="s1", item_price="40.00", ebay_fee="5.00",
+             ad_fee="3.20", net="27.80", client_share="13.90"),
+        dict(base, item_id="K01-C051", description="Unsold cup", state="LISTED",
+             ask="20.00")])
+    text, rows = RL.consign_account(lot, "K01", date(2026, 10, 25))
+    sale = text.splitlines()
+    i = next(n for n, ln in enumerate(sale) if ln.startswith("K01-C050"))
+    assert "fee FINAL_VALUE_FEE" in sale[i + 1] and "12.5% DERIVED (fee / $40.00 base)" in sale[i + 1]
+    assert "fee AD" in sale[i + 2] and "8.0% SOURCED (eBay campaign bid, read 2026-10-25)" in sale[i + 2]
+    assert "taken off gross before the split" in sale[i + 2]
+    assert sale[i + 3].startswith("K01-C051")          # no breakdown for an unsold item
+    assert [(r["line"], r["item_id"], r["fee_type"], r["fee_rate"]) for r in rows] == [
+        ("item", "K01-C050", "", ""), ("fee", "K01-C050", "FINAL_VALUE_FEE", "12.5%"),
+        ("fee", "K01-C050", "AD", "8.0%"), ("item", "K01-C051", "", "")]
+    monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
+    _, csv_path = RL.write(lot, text, rows, date(2026, 10, 25))
+    assert b"DERIVED (fee / $40.00 base)" in csv_path.read_bytes()
