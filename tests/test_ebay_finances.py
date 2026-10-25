@@ -105,8 +105,8 @@ def test_parses_ad_fee_other_fee_postage_and_skips_sale():
     assert len(parsed["postage"]) == 1
     ad = [f for f in parsed["fees"] if f.fee_type == "AD"]
     other = [f for f in parsed["fees"] if f.fee_type == "OTHER"]
-    assert len(ad) == 1 and ad[0].amount == Decimal("-2.50")
-    assert len(other) == 1 and other[0].amount == Decimal("-0.30")
+    assert len(ad) == 1 and ad[0].charge == Decimal("2.50")
+    assert len(other) == 1 and other[0].charge == Decimal("0.30")
     assert parsed["postage"][0].amount == Decimal("-6.85")
     assert parsed["postage"][0].order_id == "1-2-3"
     assert parsed["other_fee_labels"]["INTERNATIONAL_FEE"] == 1
@@ -131,7 +131,7 @@ def test_fee_transaction_split_evenly_across_multi_sku_order():
     parsed = EF.parse_transactions([txn])
     assert len(parsed["fees"]) == 3
     assert {f.sku for f in parsed["fees"]} == {"sku-a", "sku-b", "sku-c"}
-    assert sum((f.amount for f in parsed["fees"]), Decimal(0)) == Decimal("-9.00")
+    assert sum((f.charge for f in parsed["fees"]), Decimal(0)) == Decimal("9.00")
 
 
 def test_date_is_pacific_bucketed_not_raw_utc():
@@ -182,6 +182,8 @@ FVF, FIXED, REG = "FINAL_VALUE_FEE", "FINAL_VALUE_FEE_FIXED_PER_ORDER", "REGULAT
     # an order-tied ad fee: the live feed sends a DEBIT as a positive amount
     (dict(_ad_fee_txn(amount="3.00"), bookingEntry="DEBIT"), [], [D("3.00")]),
     (dict(_ad_fee_txn(amount="3.00"), bookingEntry="CREDIT"), [], [D("-3.00")]),
+    # a CREDIT gives the fee back whatever sign its amount carries
+    (dict(_ad_fee_txn(amount="-1.25"), bookingEntry="CREDIT"), [], [D("-1.25")]),
 ])
 def test_parse_reads_sale_and_refund_fee_lines_and_ad_charges(txn, want_sale, want_ad):
     parsed = EF.parse_transactions([txn])
@@ -189,6 +191,9 @@ def test_parse_reads_sale_and_refund_fee_lines_and_ad_charges(txn, want_sale, wa
             for f in parsed["sale_fees"]] == want_sale
     assert all(f.order_id == "1-2-3" and f.date == "2026-10-25" for f in parsed["sale_fees"])
     assert [f.charge for f in parsed["fees"] if f.fee_type == "AD"] == want_ad
+    # what reaches ad_fee: a credit lowers the order's total, never raises it
+    assert EF.attribute_fees_by_order(parsed["fees"]) == \
+        ({"1-2-3": sum(want_ad, D(0))} if want_ad else {})
     blob = repr(parsed)
     assert "definitely_pii_do_not_leak" not in blob and "John Q Buyer" not in blob
 
@@ -202,21 +207,21 @@ def test_ad_fee_attributed_by_order_without_any_ad_campaign_flag():
     # attribution worked, it worked without it.
     parsed = EF.parse_transactions([_ad_fee_txn(order_id="9-9-9", amount="-3.10")])
     by_order = EF.attribute_fees_by_order(parsed["fees"])
-    assert by_order == {"9-9-9": Decimal("-3.10")}
+    assert by_order == {"9-9-9": Decimal("3.10")}
 
 
 def test_ad_fee_attributed_by_sku_too():
     parsed = EF.parse_transactions([_ad_fee_txn(sku="the-sku", amount="-3.10")])
     by_sku = EF.attribute_fees_by_sku(parsed["fees"])
-    assert by_sku == {"the-sku": Decimal("-3.10")}
+    assert by_sku == {"the-sku": Decimal("3.10")}
 
 
 def test_ad_only_attribution_excludes_other_fees_by_default():
     parsed = EF.parse_transactions([_ad_fee_txn(amount="-2.00"),
                                     _other_fee_txn(amount="-0.50")])
-    assert EF.attribute_fees_by_order(parsed["fees"]) == {"1-2-3": Decimal("-2.00")}
+    assert EF.attribute_fees_by_order(parsed["fees"]) == {"1-2-3": Decimal("2.00")}
     assert EF.attribute_fees_by_order(parsed["fees"], ad_only=False) == \
-        {"1-2-3": Decimal("-2.50")}
+        {"1-2-3": Decimal("2.50")}
 
 
 def test_multiple_ad_fee_transactions_on_one_order_sum():
@@ -224,7 +229,7 @@ def test_multiple_ad_fee_transactions_on_one_order_sum():
         _ad_fee_txn(order_id="1-2-3", amount="-2.00"),
         _ad_fee_txn(order_id="1-2-3", amount="-1.25"),
     ])
-    assert EF.attribute_fees_by_order(parsed["fees"]) == {"1-2-3": Decimal("-3.25")}
+    assert EF.attribute_fees_by_order(parsed["fees"]) == {"1-2-3": Decimal("3.25")}
 
 
 # --------------------------------------------------------------------------
@@ -314,7 +319,7 @@ def test_feeline_and_postageline_have_no_pii_shaped_fields():
     # Fields are an explicit allowlist — this pins the dataclass shape so a
     # future edit can't quietly add buyerInfo/memo/tracking back in.
     assert set(EF.FeeLine.__dataclass_fields__) == {"order_id", "sku", "fee_type",
-                                                     "amount", "date", "charge"}
+                                                     "charge", "date"}
     assert set(EF.SaleFeeLine.__dataclass_fields__) == {
         "order_id", "line_item_id", "fee_type", "amount", "basis", "date"}
     assert set(EF.PostageLine.__dataclass_fields__) == {"order_id", "amount", "date"}

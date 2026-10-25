@@ -494,7 +494,7 @@ def test_sync_finances_returns_attribution_on_success(monkeypatch):
 
     monkeypatch.setattr(ebay_finances, "fetch_transactions", fake)
     ad_by_order, postage_by_order, status = SA.sync_finances(90, verbose=False)
-    assert ad_by_order == {"1-2-3": Decimal("-2.50")}
+    assert ad_by_order == {"1-2-3": Decimal("2.50")}   # charge-positive
     assert status["ok"] is True and status["reason"] is None
 
 
@@ -916,8 +916,7 @@ def test_fee_lines_carry_listing_and_sku_split_the_ad_fee_and_freeze_the_bid(sho
     # the Finances feed names lines by lineItemId only; the ad fee is per order
     parsed = {"sale_fees": [EF.SaleFeeLine("F-1", "L1", "FINAL_VALUE_FEE", Decimal("5.00"),
                                            Decimal("42.00"), "2026-10-25")],
-              "fees": [EF.FeeLine("F-1", "", "AD", Decimal("4.00"), "2026-10-25",
-                                  charge=Decimal("4.00"))]}
+              "fees": [EF.FeeLine("F-1", "", "AD", Decimal("4.00"), "2026-10-25")]}
     ads = {"pulled_at": "2026-10-25T19:00:00+00:00",
            "ads": [{"listingId": "206000000001", "bidPercentage": "8"},
                    {"listingId": "206000000002", "bidPercentage": None}]}   # per-click

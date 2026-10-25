@@ -87,11 +87,13 @@ never copied into a returned record or logged.
 
 ----- Sign convention -----
 
-`FeeLine.amount` / `PostageLine.amount` and the `attribute_*` dicts keep
-eBay's own sign (a charge is negative — a payout-reducing transaction) since
-that is what a caller summing several transactions together needs to net
-correctly. `unwound_order_losses()` is the one exception: it returns
-POSITIVE magnitudes (money actually lost), matching the existing
+`FeeLine.charge` and the `attribute_fees_*` / `unattributed_ad_spend`
+figures are charge-positive: a fee is positive and a fee given back
+(bookingEntry CREDIT) negative, so a credit nets a charge down. The sign of
+eBay's `amount` can't be used for that: the live feed sends a DEBIT ad fee
+as a positive amount. `PostageLine.amount` and `attribute_postage_by_order`
+keep eBay's own sign (a label is negative). `unwound_order_losses()`
+returns POSITIVE magnitudes (money actually lost), matching the existing
 `sales_ledger.csv` convention (`ebay_fee`, `item_price`, ... are all stored
 positive) — `sync_actuals.py` does the same `abs()` when it merges
 `attribute_fees_by_order` / `attribute_postage_by_order` into a sales row's
@@ -138,18 +140,14 @@ _AD_FEE_MARKERS = ("ad fee", "ad_fee", "promoted", "promotion", "advertising")
 
 @dataclass(frozen=True)
 class FeeLine:
-    """One NON_SALE_CHARGE, PII-free. `amount` is signed as eBay reports it
-    (a fee is negative)."""
+    """One NON_SALE_CHARGE, PII-free."""
     order_id: str
     sku: str
     fee_type: str   # "AD" or "OTHER" — never eBay's raw feeType/memo text
-    amount: Decimal
+    # Charge-positive: bookingEntry CREDIT (a fee given back) is negative,
+    # anything else positive (see "Sign convention" above).
+    charge: Decimal
     date: str       # YYYY-MM-DD, Pacific-bucketed (report.to_report_date); "" if unparsable
-    # The same money, charge-positive: bookingEntry CREDIT (a fee given back)
-    # is negative, anything else positive. The live feed sends a DEBIT ad fee
-    # as a positive `amount`, so `amount`'s sign can't tell a charge from a
-    # credit. fee_lines.csv uses this field.
-    charge: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True)
@@ -391,17 +389,14 @@ def parse_transactions(transactions: list[dict]) -> dict:
         date_s = d.isoformat() if d else ""
 
         if ttype == FEE_TRANSACTION_TYPE:
-            amt = _dec(t.get("amount"))
             is_ad = _is_ad_fee(t)
             if not is_ad:
                 other_labels[_other_fee_label(t)] += 1
             fee_type = "AD" if is_ad else "OTHER"
             skus = _skus_for(t)
-            shares = _split_even(amt, len(skus))
-            charges = _split_even(_charge(t), len(skus))
-            for sku, s, c in zip(skus, shares, charges):
+            for sku, c in zip(skus, _split_even(_charge(t), len(skus))):
                 fees.append(FeeLine(order_id=order_id, sku=sku, fee_type=fee_type,
-                                    amount=s, date=date_s, charge=c))
+                                    charge=c, date=date_s))
         elif ttype == POSTAGE_TRANSACTION_TYPE:
             postage.append(PostageLine(order_id=order_id, amount=_dec(t.get("amount")),
                                        date=date_s))
@@ -430,7 +425,7 @@ def attribute_fees_by_order(fees: list[FeeLine], *, ad_only: bool = True) -> dic
             continue
         if ad_only and f.fee_type != "AD":
             continue
-        out[f.order_id] += f.amount
+        out[f.order_id] += f.charge
     return dict(out)
 
 
@@ -443,7 +438,7 @@ def unattributed_ad_spend(fees: list[FeeLine]) -> tuple[Decimal, int]:
     General fees. Real ad cost that no per-order figure contains, so it is
     reported beside them rather than dropped (which would read as "ads cost
     $0")."""
-    orphan = [f.amount for f in fees if f.fee_type == "AD" and not f.order_id]
+    orphan = [f.charge for f in fees if f.fee_type == "AD" and not f.order_id]
     return sum(orphan, Decimal(0)), len(orphan)
 
 
@@ -461,7 +456,7 @@ def attribute_fees_by_sku(fees: list[FeeLine], *, ad_only: bool = True) -> dict[
             continue
         if ad_only and f.fee_type != "AD":
             continue
-        out[f.sku] += f.amount
+        out[f.sku] += f.charge
     return dict(out)
 
 

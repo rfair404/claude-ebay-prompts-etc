@@ -186,9 +186,9 @@ def _one_line(s: str, limit: int) -> str:
 
 def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: dict,
                           field: str, *, absence_is_zero: bool = False) -> None:
-    """Split each order-level total in `totals_by_order` (eBay-signed — a
-    charge is negative) across that order's line-item rows in `order_lines`,
-    writing a positive-magnitude Decimal share onto `field` on each row (or
+    """Split each order-level total in `totals_by_order` (ad fees
+    charge-positive, postage eBay-signed) across that order's line-item rows
+    in `order_lines`, writing a positive-magnitude Decimal share onto `field` on each row (or
     None/0 when the order's total isn't known — see `absence_is_zero`).
 
     `ebay_finances.attribute_fees_by_order` / `attribute_postage_by_order`
