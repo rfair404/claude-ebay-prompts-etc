@@ -60,6 +60,7 @@ import difflib
 import json
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -99,6 +100,7 @@ _MONEY_FIELDS = ("item_price", "buyer_shipping", "refunded", "gross",
 # every field above, these two are legitimately ABSENT (None) rather than
 # always present at 0.00 — see the SALES_FIELDS comment.
 _OPTIONAL_MONEY_FIELDS = ("ad_fee", "actual_postage")
+CENT = Decimal("0.01")
 
 # unwound_orders.csv: what a refunded or cancelled order WAS (original_gross)
 # and what went back (refunded). Separate from sales_ledger on purpose: every
@@ -107,6 +109,19 @@ _OPTIONAL_MONEY_FIELDS = ("ad_fee", "actual_postage")
 UNWOUND_FIELDS = [
     "order_id", "sold_at", "store", "sku", "listing_id", "original_gross",
     "refunded", "reason", "ad_fee", "actual_postage",
+]
+
+# fee_lines.csv (stores.paths().fee_lines): one row per eBay fee line, for
+# the per-item fee breakdown on consignment statements (tools/consign.py).
+# SALE/REFUND marketplace fees keep eBay's feeType code; order-tied ad fees
+# are fee_type AD, split across the order's lines the way ad_fee is. amount
+# and basis are charge-positive (a credit is negative). bid_pct is the
+# listing's campaign bidPercentage from reports/ebay_ads.json and
+# bid_pct_as_of that file's pulled_at: filled once, then never rewritten.
+# No buyer or memo field, ever.
+FEE_LINE_FIELDS = [
+    "order_id", "line_item_id", "listing_id", "sku", "date", "fee_type",
+    "amount", "basis", "bid_pct", "bid_pct_as_of",
 ]
 
 STORE_JS = r"""
@@ -169,11 +184,25 @@ def _one_line(s: str, limit: int) -> str:
     return " ".join(str(s).split())[:limit]
 
 
+def _split_by(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
+    """`total` in cent shares proportional to `weights` (even when they sum to
+    0), the remainder on the last share — the one split rule, used by
+    allocate_order_totals (ad_fee, actual_postage) and build_fee_lines (AD
+    fee lines), so both land an order's money on its lines the same way."""
+    wsum = sum(weights, Decimal(0))
+    if wsum > 0:
+        shares = [(total * w / wsum).quantize(CENT) for w in weights]
+    else:
+        shares = [(total / len(weights)).quantize(CENT)] * len(weights)
+    shares[-1] += total - sum(shares, Decimal(0))
+    return shares
+
+
 def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: dict,
                           field: str, *, absence_is_zero: bool = False) -> None:
-    """Split each order-level total in `totals_by_order` (eBay-signed — a
-    charge is negative) across that order's line-item rows in `order_lines`,
-    writing a positive-magnitude Decimal share onto `field` on each row (or
+    """Split each order-level total in `totals_by_order` (ad fees
+    charge-positive, postage eBay-signed) across that order's line-item rows
+    in `order_lines`, writing a positive-magnitude Decimal share onto `field` on each row (or
     None/0 when the order's total isn't known — see `absence_is_zero`).
 
     `ebay_finances.attribute_fees_by_order` / `attribute_postage_by_order`
@@ -216,15 +245,8 @@ def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: d
             continue
         # positive magnitudes, matching ebay_fee/item_price's convention —
         # see ebay_finances' module docstring "Sign convention".
-        total = abs(total)
-        basis = [ln["item_price"] + ln["buyer_shipping"] for ln in lines]
-        basis_sum = sum(basis, Decimal(0))
-        if basis_sum > 0:
-            shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
-        else:
-            even = (total / len(lines)).quantize(Decimal("0.01"))
-            shares = [even] * len(lines)
-        shares[-1] += total - sum(shares, Decimal(0))
+        shares = _split_by(abs(total),
+                           [ln["item_price"] + ln["buyer_shipping"] for ln in lines])
         for ln, s in zip(lines, shares):
             ln[field] = s
 
@@ -712,6 +734,112 @@ def write_unwound_orders(rows: list[dict], store: Optional[str] = None, *,
     return path
 
 
+def ad_bids(ads_doc: Optional[dict]) -> dict[str, str]:
+    """{listing_id: bidPercentage} from one store's reports/ebay_ads.json.
+    A cost-per-click ad has no bidPercentage and is skipped; a listing whose
+    ads carry two different percentages is left out, since which one billed
+    the sale can't be told from this file."""
+    seen: dict[str, set] = {}
+    for a in (ads_doc or {}).get("ads") or []:
+        lid, pct = str(a.get("listingId") or ""), a.get("bidPercentage")
+        if not lid or pct in (None, ""):
+            continue
+        try:
+            seen.setdefault(lid, set()).add(format(Decimal(str(pct)), ".1f"))
+        except InvalidOperation:
+            continue
+    return {lid: next(iter(v)) for lid, v in seen.items() if len(v) == 1}
+
+
+def build_fee_lines(orders: list[dict], parsed: dict,
+                    ads_doc: Optional[dict] = None) -> list[dict]:
+    """fee_lines.csv rows (FEE_LINE_FIELDS) from one store's orders and its
+    parsed Finances read. The Finances feed names a line item only by
+    lineItemId, so listing_id and sku come from the Fulfillment order. An AD
+    fee is per order: it is split over the order's lines by item price plus
+    shipping, as allocate_order_totals splits ad_fee. Per-click ad fees with
+    no order are not sale fees and are left out."""
+    by_order: dict[str, list[tuple]] = {}
+    for o in orders:
+        for li in o.get("lineItems") or []:
+            by_order.setdefault(o.get("orderId", ""), []).append((
+                str(li.get("lineItemId") or ""), str(li.get("legacyItemId") or ""),
+                li.get("sku") or "",
+                _dec(li, "lineItemCost") + _dec(li, "deliveryCost", "shippingCost")))
+    by_line = {rec[0]: rec for recs in by_order.values() for rec in recs}
+    bids = ad_bids(ads_doc)
+    as_of = (ads_doc or {}).get("pulled_at") or ""
+
+    def row(order_id, rec, sku, date_s, fee_type, amount, basis):
+        return {"order_id": order_id, "line_item_id": rec[0], "listing_id": rec[1],
+                "sku": rec[2] or sku, "date": date_s, "fee_type": fee_type,
+                "amount": _money(amount), "basis": "" if basis is None else _money(basis),
+                "bid_pct": "", "bid_pct_as_of": ""}
+
+    out = []
+    for f in parsed.get("sale_fees") or []:
+        rec = by_line.get(f.line_item_id) or (f.line_item_id, "", "", Decimal(0))
+        out.append(row(f.order_id, rec, "", f.date, f.fee_type, f.amount, f.basis))
+    for f in parsed.get("fees") or []:
+        if f.fee_type != "AD" or not f.order_id:
+            continue
+        recs = by_order.get(f.order_id) or [("", "", "", Decimal(0))]
+        for rec, share in zip(recs, _split_by(f.charge, [r[3] for r in recs])):
+            r = row(f.order_id, rec, f.sku, f.date, "AD", share, None)
+            if rec[1] in bids:
+                r["bid_pct"], r["bid_pct_as_of"] = bids[rec[1]], as_of
+            out.append(r)
+    return out
+
+
+def _fee_keys(rows: list[dict]) -> list[tuple]:
+    """A key per fee line: what it is, plus a running number for lines that
+    are otherwise identical (two same-day ad charges on one order), so the
+    merge neither collapses them nor needs eBay's transaction id."""
+    seen: Counter = Counter()
+    keys = []
+    for r in rows:
+        k = (r["order_id"], r["line_item_id"], r["fee_type"], r["date"],
+             r["amount"].startswith("-"))
+        keys.append(k + (seen[k],))
+        seen[k] += 1
+    return keys
+
+
+def write_fee_lines(rows: list[dict], store: Optional[str] = None) -> Path:
+    """Merge `rows` (build_fee_lines) into `store`'s fee_lines file. Lines
+    outside this run's window are kept; a line read again replaces itself,
+    except that a bid_pct already filled is kept as it was (frozen at the
+    first fill, so a later bid change never rewrites a past sale)."""
+    path = stores.paths(store).fee_lines
+    old: list[dict] = []
+    if path.exists():
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            old = list(csv.DictReader(f))
+    merged = dict(zip(_fee_keys(old), old))
+    for k, r in zip(_fee_keys(rows), rows):
+        prev = merged.get(k) or {}
+        if (prev.get("bid_pct") or "").strip():
+            r = dict(r, bid_pct=prev["bid_pct"], bid_pct_as_of=prev.get("bid_pct_as_of", ""))
+        merged[k] = r
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=FEE_LINE_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        for r in sorted(merged.values(), key=lambda x: (x["date"], x["order_id"]),
+                        reverse=True):
+            w.writerow(r)
+    return path
+
+
+def _load_ads(store: Optional[str]) -> Optional[dict]:
+    p = stores.paths(store).ebay_ads_json
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except ValueError:
+        return None
+
+
 def stamp_folder(row: dict, store: Optional[str] = None) -> bool:
     """Per-item outcome stamp, so a folder tells its own story without the CSV.
 
@@ -757,7 +885,8 @@ def stamp_folder(row: dict, store: Optional[str] = None) -> bool:
 
 
 def sync_finances(days: int, verbose: bool = True,
-                  store: Optional[str] = None) -> tuple[dict, dict, dict]:
+                  store: Optional[str] = None, *,
+                  parsed_out: Optional[dict] = None) -> tuple[dict, dict, dict]:
     """Fetch + parse `store`'s Finances API window and attribute it by order id.
 
     Per store (#156): sell.finances consent is per ACCOUNT, and so is the
@@ -778,6 +907,9 @@ def sync_finances(days: int, verbose: bool = True,
     a `status["reason"]` — exactly like `tools/sales_report.py.sync()`
     already does for the ads pull, so one degraded source doesn't crash the
     whole `--apply`.
+
+    `parsed_out`, when given, receives parse_transactions()'s result (for
+    build_fee_lines); it is left empty when the read fails.
     """
     if verbose:
         print(f"Fetching ad-fee + postage transactions (last {days} days, "
@@ -796,6 +928,8 @@ def sync_finances(days: int, verbose: bool = True,
         return {}, {}, {"ok": False, "reason": reason, "other_fee_labels": {}}
 
     parsed = ebay_finances.parse_transactions(txns)
+    if parsed_out is not None:
+        parsed_out.update(parsed)
     ad_fee_by_order = ebay_finances.attribute_fees_by_order(parsed["fees"])
     postage_by_order = ebay_finances.attribute_postage_by_order(parsed["postage"])
     orphan_total, orphan_n = ebay_finances.unattributed_ad_spend(parsed["fees"])
@@ -1044,11 +1178,17 @@ def sync_store(store: str, args) -> int:
 
     # #119 (route B): real ad fee + actual postage, per order — degrades to
     # "unavailable" rather than failing the whole sync (see sync_finances).
+    parsed: dict = {}
     if args.skip_finances:
         ad_fee_by_order, postage_by_order = {}, {}
         fin_status = {"ok": False, "reason": "--skip-finances", "other_fee_labels": {}}
     else:
-        ad_fee_by_order, postage_by_order, fin_status = sync_finances(args.days, store=store)
+        ad_fee_by_order, postage_by_order, fin_status = sync_finances(
+            args.days, store=store, parsed_out=parsed)
+    # Per-line fees for the consignment fee breakdown; only from a read that
+    # worked (a failed one leaves the file as it was).
+    fee_rows = (build_fee_lines(orders, parsed, _load_ads(store))
+                if fin_status.get("ok") and parsed else None)
 
     # Both totals are ORDER-level (one ad fee, one shipping label, per order —
     # not per line item), but flatten_orders() produces one row per line item.
@@ -1106,6 +1246,8 @@ def sync_store(store: str, args) -> int:
         print(f"  • {p.unwound_orders.name} — {len(unwound)} refunded/cancelled row(s)")
         print(f"  • SOLD.md in {len({r['shoot_dir'] for r in rows if r['shoot_dir']})} folder(s)")
         print(f"  • {p.listings_ledger.name} — advance matched SKUs to SOLD")
+        if fee_rows is not None:
+            print(f"  • {p.fee_lines.name} — {len(fee_rows)} fee line(s)")
         return 0
 
     written = write_sales_ledger(
@@ -1123,6 +1265,8 @@ def sync_store(store: str, args) -> int:
     marked = mark_sold_in_ledger(rows, store)
     print(f"\n[OK] wrote {written}  ({len(rows)} rows)")
     print(f"[OK] wrote {unwound_path}  ({len(unwound)} refunded/cancelled rows)")
+    if fee_rows is not None:
+        print(f"[OK] wrote {write_fee_lines(fee_rows, store)}  ({len(fee_rows)} fee lines)")
     print(f"[OK] stamped SOLD.md in {stamped} folder(s)"
           + (f"; {declined} left alone (already record a different order)" if declined else ""))
     print(f"[OK] advanced {marked} ledger row(s) to SOLD (ask price left intact)")
