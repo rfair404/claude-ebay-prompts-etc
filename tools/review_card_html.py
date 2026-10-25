@@ -106,41 +106,22 @@ def _card_lines(shoot: Path) -> tuple[list[str], list[str]]:
 
 # A later line that settles an earlier one. NEEDS_REVIEW.md is append-only, so
 # the card carries both the question and its answer; without this the ⚠ list
-# asks Russell for things he already answered. Two shapes are recognised:
-#   "2026-10-24 RESOLVED: cover shingles reshoot — dropped (...)"
-#       -> hides earlier lines that mention every word of the subject
+# asks Russell for things he already answered. Only the explicit form counts:
 #   'Supersedes the [DRAFT] "photos point at ORIGINALS" line.'
 #       -> hides earlier lines containing the quoted phrase
-# Hidden lines are still on the page, folded under the list.
-_RESOLVED_SUBJECT = re.compile(r"\bRESOLVED\b(?:\s*\([^)]*\))?\s*:\s*(.+?)\s+—\s", re.I)
+# A "RESOLVED: <subject>" line hides nothing: matching its words folded away
+# unrelated open flags. Hidden lines are still on the page, folded under the list.
 _SUPERSEDES = re.compile(r"\bsupersedes the ([^.]*?)\blines?\b", re.I)
-_STOP = {"the", "and", "for", "now", "with", "from", "not", "vs"}
-
-
-def _subject_words(subject: str) -> list[str]:
-    words = []
-    for w in re.findall(r"[a-z0-9_$.]+", subject.lower()):
-        w = w.strip(".")
-        if len(w) < 3 or w in _STOP:
-            continue
-        words.append(w[:-1] if len(w) > 4 and w.endswith("s") else w)
-    return words
 
 
 def _settle(warn: list[str]) -> tuple[list[str], list[str]]:
     """(still open, settled by a later line) — order kept."""
     settled: set[int] = set()
     for i, line in enumerate(warn):
-        tests = []
-        m = _RESOLVED_SUBJECT.search(line)
-        if m and (words := _subject_words(m.group(1))):
-            tests.append(lambda low, words=words: all(w in low for w in words))
-        for clause in _SUPERSEDES.findall(line):
-            for phrase in re.findall(r'"([^"]+)"', clause):
-                tests.append(lambda low, ph=phrase.lower(): ph in low)
+        phrases = [ph.lower() for clause in _SUPERSEDES.findall(line)
+                   for ph in re.findall(r'"([^"]+)"', clause)]
         for j in range(i):
-            low = warn[j].lower()
-            if not _RESOLVED_SUBJECT.search(warn[j]) and any(t(low) for t in tests):
+            if any(ph in warn[j].lower() for ph in phrases):
                 settled.add(j)
     return ([w for k, w in enumerate(warn) if k not in settled],
             [w for k, w in enumerate(warn) if k in settled])

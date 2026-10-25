@@ -362,18 +362,14 @@ def test_a_comps_board_in_the_folder_is_embedded_without_scripts(tmp_path):
     assert 'sandbox="allow-popups allow-popups-to-escape-sandbox"' in frame
 
 
-def test_a_resolved_line_hides_the_flag_it_settles(tmp_path):
+def test_a_supersedes_line_hides_the_flag_it_quotes(tmp_path):
     card = ("Needs review / manual intervention\n"
-            "  • - [RESHOOT · lot photo list] Cover shingles Feb-Dec, 4-6 covers a frame\n"
             "  • - [PRICE] tiers are active asks, run Stage B\n"
             "  • - [DRAFT] photos point at ORIGINALS; PREP not run\n"
-            "  • - [PREP] AD re-signed. Supersedes the [DRAFT] \"photos point at ORIGINALS\" line.\n"
-            "  • - 2026-10-24 RESOLVED: cover shingles reshoot — dropped (no new photos)\n")
+            "  • - [PREP] AD re-signed. Supersedes the [DRAFT] \"photos point at ORIGINALS\" line.\n")
     page = _with(tmp_path, card=card)
     flagged = re.search(r"<h2>Flagged for a human</h2>\s*<ul class=\"flags\">(.*?)</ul>", page, re.S).group(1)
-    assert "Cover shingles Feb-Dec" not in flagged
     assert "photos point at ORIGINALS; PREP not run" not in flagged
     assert "run Stage B" in flagged                         # unrelated flag stays
-    assert "RESOLVED: cover shingles reshoot" in flagged     # the answer stays
     settled = re.search(r'<details class="settled">(.*?)</details>', page, re.S).group(1)
-    assert "2 earlier lines settled" in settled and "Cover shingles Feb-Dec" in settled
+    assert "1 earlier line settled" in settled and "PREP not run" in settled
