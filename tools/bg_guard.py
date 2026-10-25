@@ -69,6 +69,7 @@ SLOW_PREFIXES = (
     "python -m pytest",
     "python tests/run_all.py",
     "tools/green_test.sh",
+    "tools/ci_test.sh",         # waits minutes on GitHub; not in ON_AIR_JOBS (no local load)
     "python tools/ledger_reconcile.py",
     "python tools/prep_sheet_html.py",
     "python tools/review_card_html.py",
@@ -82,6 +83,9 @@ _SEPARATORS = ("&&", "||", ";", "|", "\n")
 # `python3 …`, `py …` and a venv's `/…/.venv/bin/python …` are the same
 # runner; normalise before matching.
 _RUNNER = re.compile(r"^(?:\S*[/\\])?(?:python3?(?:\.\d+)?|py)(?:\.exe)?(?=\s|$)")
+# `./tools/x.sh`, `bash tools/x.sh` and `/repo/tools/x.sh` run the same
+# script as `tools/x.sh`; strip down to that before matching.
+_SCRIPT = re.compile(r"^(?:(?:ba)?sh\s+)?(?:\S*[/\\])?(?=tools[/\\]\S+\.sh)")
 _ESCAPE = re.compile(r"^\s*#\s*fg-ok\b", re.I)
 _ON_AIR_ESCAPE = re.compile(r"^\s*#\s*on-air-ok\b", re.I)
 
@@ -143,7 +147,7 @@ def segments(command: str) -> list[str]:
         seg = raw.strip()
         while seg[:1] in ("(", "{"):
             seg = seg[1:].strip()
-        cleaned.append(_RUNNER.sub("python", seg))
+        cleaned.append(_SCRIPT.sub("", _RUNNER.sub("python", seg)))
     return cleaned
 
 

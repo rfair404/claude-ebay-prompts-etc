@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# DEPRECATED (2026-10-24): green is print-only; run the full suite in CI with tools/ci_test.sh.
 # Run the test suite on green, the second machine on the LAN, instead of here.
 #
 #   tools/green_test.sh [pytest args]     # e.g. tests/test_prep.py -x

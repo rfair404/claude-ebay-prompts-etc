@@ -8,8 +8,9 @@ name: tests
 # API or a logged-in browser belongs in a manual smoke check, not here.
 
 on:
+  # ci/**: any branch on demand, pushed there by tools/ci_test.sh.
   push:
-    branches: [main]
+    branches: [main, 'ci/**']
   pull_request:
 
 jobs:

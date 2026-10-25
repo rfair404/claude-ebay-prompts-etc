@@ -1,5 +1,5 @@
 ---
-version: 3.0.0
+version: 3.1.0
 updated: 2026-10-24
 ---
 
@@ -189,7 +189,8 @@ forms used throughout `prompts/`, not bare names):
 `python -m lib.photo_prep.prep`, `python -m lib.cli prep`,
 `python -m lib.cli single-pass`, `python -m lib.cli observe`,
 `python -m pytest`,
-`python tests/run_all.py`, `tools/green_test.sh`, `python tools/ledger_reconcile.py`,
+`python tests/run_all.py`, `tools/ci_test.sh`, `tools/green_test.sh`,
+`python tools/ledger_reconcile.py`,
 `python tools/prep_sheet_html.py`, `python tools/review_card_html.py`,
 the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
@@ -213,12 +214,20 @@ one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
 
-**Run the full suite on green, not here.** `tools/green_test.sh [pytest args]`
-copies the checkout to green (the second machine, `ssh green`) and runs pytest
-there. A full run peaks near 900 MB, and sessions running it side by side beside
-the app, Firefox and OBS got the desktop app OOM-killed (2026-10-24). It runs on
-green, so the on-air hold below does not stop it. Local `python -m pytest` stays
-for one test file. `tools/green_test.sh --setup` builds green's venv once.
+**Run the full suite in CI, not here.** For a commit not yet on a PR, commit,
+then run `tools/ci_test.sh [branch]` (backgrounded; the current branch by
+default). A PR already runs the suite on every push. The script force-pushes
+the branch's commit to `ci/<branch>`, a throwaway ref it owns and deletes on
+exit (never `main`, which it refuses). `.github/workflows/tests.yml` runs on
+every push to `ci/**`. The script watches the new run of that exact commit and
+exits non-zero with the failed jobs' log tail if it fails. It refuses
+uncommitted changes, because CI only tests the commit. `ci/` is reserved for
+`ci_test.sh`; never name a working branch `ci/…`. A full local run peaks near
+900 MB, and sessions running it side by side beside the app, Firefox and OBS
+got the desktop app OOM-killed (2026-10-24). CI runs on GitHub, so the on-air hold
+below does not stop `ci_test.sh`. Local `python -m pytest <one test file>`
+stays. Green is print-only now: `tools/green_test.sh` is deprecated, use
+`tools/ci_test.sh`.
 
 ### Green: the print server
 
