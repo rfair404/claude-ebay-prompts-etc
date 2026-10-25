@@ -164,6 +164,7 @@ def _draft(tmp_path, offer_id=""):
         + (f"  ebay_offer_id: \"{offer_id}\"\n" if offer_id else "")
         + "---\n\n## Markings\n\nEach spine is printed with its month and year.\n",
         encoding="utf-8")
+    (d / "price.txt").write_text("OPERATOR PRICE: test fixture (2026-10-25)\n", encoding="utf-8")
     return d
 
 
