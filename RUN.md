@@ -1,5 +1,5 @@
 ---
-version: 2.0.0
+version: 3.0.0
 updated: 2026-10-24
 ---
 
@@ -224,8 +224,8 @@ for one test file. `tools/green_test.sh --setup` builds green's venv once.
 
 Green is a print server and nothing else (Russell, 2026-10-24): its CUPS
 spools the Brother QL-1100 for the LAN. It runs no desktop, no browser, no
-tests and no shipping screen. The `/ship/box` page runs on the laptop's own
-`lib.cli serve`, and heavy jobs are going to a cloud service rather than to
+tests and no shipping screen. Each box's size and weight form is on its pick
+sheet, and heavy jobs are going to a cloud service rather than to
 green. The eBay API keys and refresh tokens, the R2 keys, `config.yaml` and
 the ledgers stay on the laptop, and green holds no login. Every connection
 opens from the laptop over `ssh green` (host `green.lan`, key
@@ -268,14 +268,14 @@ Then it does only what is missing:
 Nothing is applied while `inventory/_live/ON_AIR` exists.
 
 **The desktop is opt-in, off for now.** `--desktop` (with `--autologin
-yes|no`) still adds XFCE with LightDM (LXQt under 2 GB of RAM), Firefox and
-a **Ship** launcher, last, after the printer. `--remove-desktop` undoes a
+yes|no`) still adds XFCE with LightDM (LXQt under 2 GB of RAM) and Firefox,
+last, after the printer. `--remove-desktop` undoes a
 desktop run. It reads green's apt history for the desktop installs this
 script ran (`apt-get install -y -q` with only desktop packages named) and
 purges those of `xfce4`, `xfce4-terminal`, `lightdm`, `lightdm-gtk-greeter`,
 `xorg` and `firefox`/`firefox-esr` that are still installed, plus what only
 they pulled in (`apt-get purge --autoremove`). It also removes
-`50-pops-autologin.conf` and the Ship launcher, and sets
+`50-pops-autologin.conf` and the Ship launcher an older run wrote, and sets
 `multi-user.target`. If apt would remove a package the script didn't
 install, the cleanup marks it manual and keeps it, or stops before changing
 anything. The dry run shows the list.
