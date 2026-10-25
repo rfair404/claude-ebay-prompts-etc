@@ -373,3 +373,14 @@ def test_a_supersedes_line_hides_the_flag_it_quotes(tmp_path):
     assert "run Stage B" in flagged                         # unrelated flag stays
     settled = re.search(r'<details class="settled">(.*?)</details>', page, re.S).group(1)
     assert "1 earlier line settled" in settled and "PREP not run" in settled
+
+
+def test_a_resolved_line_never_hides_a_flag_that_is_still_open(tmp_path):
+    # TD repro on #349: "RESOLVED: price" used to fold the open label-weight flag.
+    card = ("Needs review / manual intervention\n"
+            "  • - [DRAFT] weight is a guess; price the label\n"
+            "  • - 2026-10-24 RESOLVED: price — Push-high confirmed\n")
+    page = _with(tmp_path, card=card)
+    flagged = re.search(r"<h2>Flagged for a human</h2>\s*<ul class=\"flags\">(.*?)</ul>", page, re.S).group(1)
+    assert "weight is a guess; price the label" in flagged
+    assert '<details class="settled">' not in page
