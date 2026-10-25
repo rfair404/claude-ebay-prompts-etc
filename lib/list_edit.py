@@ -103,6 +103,7 @@ from draft_io import (Draft, iter_drafts, parse_draft, resolve_photo_paths, set_
                        update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
+from price_gate import sold_pull_issues
 from us_only import us_only_reasons
 from dir_context import load as load_dir_context
 from ebay_schema import CONDITION_ENUM
@@ -725,6 +726,10 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     # In-hand voice (GH #40): camera-frame confessions in buyer copy block a
     # sync. Warns are advisory — see `python lib/voice_check.py`.
     issues += [f for f in check_voice(draft) if f.startswith("voice (block)")]
+
+    # A price set without a sold pull (asks or judgment only) does not go
+    # live — see lib/price_gate.py. Not-yet-live drafts only.
+    issues += sold_pull_issues(draft)
 
     return issues
 
@@ -2495,6 +2500,12 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                              status_before=status, listing_id=lid or None,
                              listing_url=(f"https://www.ebay.com/itm/{lid}" if lid else None))
+
+    # --publish skips validate_draft_for_sync, so the sold-pull gate runs here
+    # too: the offer may have been synced before the price was checked.
+    gate = sold_pull_issues(draft)
+    if gate:
+        raise ValueError("refusing to publish:\n  - " + "\n  - ".join(gate))
 
     if not confirm:
         return PublishResult(dry_run=True, offer_id=offer_id, title=title,

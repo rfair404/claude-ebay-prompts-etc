@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-25
+---
+
 # DRAFT — v4, Function 5
 
 Obeys [`_shared.md`](_shared.md). Read it first.
@@ -158,6 +163,12 @@ that's a bug in the gate below, not a judgement call.
   5. A1 and A2 apply on top of B, not instead of it — a candidate that
      passes the headroom test can still be blocked by A1 (sub-$100) or
      raised by A2 (gold).
+- **C — one-off** (price.txt has a `ONE-OFF:` line, see price.md): `price`
+  = its `push-high` and Best Offer **on**, floor at the judgment value; or
+  `format: AUCTION` if price.txt says so, or if the storefront sets
+  `best_offer: false`. Under $100, say "best offer
+  (one-off)" in `meta.notes` (A1). The sold-pull gate refuses a one-off
+  priced below Push-high or without Best Offer.
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
 **Net-floor check (MANDATORY — the floor is a price we AGREE to, not a

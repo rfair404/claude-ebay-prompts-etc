@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-25
+---
+
 # PRICE — v4, Function 2
 
 Obeys [`_shared.md`](_shared.md). Read it first.
@@ -196,7 +201,12 @@ Escalate only as each stage dries up; never stop to ask.
    spans — see [reference/price-notes.md](reference/price-notes.md)).
 
    No Chrome MCP ⇒ record `B — UNAVAILABLE: no logged-in browser`, fall through
-   to Stage A only. Never silently skip B; never re-enable Apify.
+   to Stage A only. Never silently skip B; never re-enable Apify. **An item
+   whose B line is not `RAN`/`THIN` is NOT READY**: the tiers are recorded
+   for context, but the sold-pull gate (below) refuses the draft at
+   `--validate`, `--sync`, `--list`, `--publish` and on the review card until
+   a sold refresh runs. Asks alone run above solds for common goods (2026-10-24
+   comp audit: ~25 of ~30 asks-only prices came out high).
 
    **Zero comps:** `challenge:true` ⇒ verification page — don't solve, reload
    and retry. `n:0` on a page that visibly has results ⇒ selector drift — fix
@@ -222,13 +232,57 @@ Escalate only as each stage dries up; never stop to ask.
    captured, cite the sold-search URL and say so. Log to comps.csv as stage C.
 
 6. **Active fallback** (zero sold matches only): active listings, tag
-   `[active — ASKING PRICE]`, Tier C ceiling-context only.
+   `[active — ASKING PRICE]`, Tier C ceiling-context only. Never the anchor:
+   a zero-sold item that is a one-off follows the one-off rule below.
 
 7. **Cross-reference:** A vs B (vs C). Agreement = high confidence; divergence
    = trust direct-eBay sold (B/C) over A.
 
 Only after the hunt dries up, fall back to the closest era-peer — and state how
 hard you looked. An exact match beats any era-peer; commit to it (per _shared).
+
+## One-off — sold pull ran, no usable sold comps
+
+Trigger: B is `THIN`, or `RAN` with `n_kept=0`, and no era-peer
+is close enough to anchor on (a unique antique, an odd maker, a one-of tool).
+Asks and judgment give no ceiling here, so they come out LOW: K01-C021, a
+Hopkins bench band saw priced on judgment at $119.99, sold the same day at
+full ask.
+
+1. **Historian first.** Hand the item to the `historian` agent for maker,
+   era and what it was made for before setting any number. That ID feeds the
+   query ladder and the title.
+2. **Judgment value** = what the evidence you do have supports (era-peers,
+   active asks as context, maker standing). Record it.
+3. **Push-high well above judgment.** List at Push-high with Best Offer on, so
+   the market tells us where the ceiling is and we accept down; or list as an
+   auction with a start bid at the judgment value. The gap is your call; say
+   why.
+4. Write this line in price.txt (the gate reads it):
+
+       ONE-OFF: historian <maker, era> · judgment $<X> · push-high $<Y>
+
+The gate refuses a one-off unless the historian field is filled and the
+draft either is `format: AUCTION` or has `best_offer.enabled: true` with
+`price` at or above `push-high $<Y>`.
+
+## Sold-pull gate (enforced — `lib/price_gate.py`)
+
+`validate_draft_for_sync()` and `publish_offer()` read the FIRST
+`B · Browser :` line in the price.txt beside draft.md (a refresh block goes
+on top, so that is the latest run). Drafts already live (`meta.ebay_listing_id`
+set) are exempt.
+
+| B line | passes when |
+|---|---|
+| `RAN` | the shoot dir holds a Stage B save (`apify_run_*browse-*.json`) or comps.csv has stage B/C sold rows with URLs (active asks don't count) |
+| `THIN`, or `RAN` with `n_kept=0` (a thin cohort with comps kept is the era-peer path, not a one-off) | the one-off rule above is met |
+| `UNAVAILABLE`, `BLOCKED`, `SKIPPED`, no B line, no price.txt | never; re-run PRICE with a sold pull |
+
+**Russell's own number.** When Russell sets the price himself, write
+`OPERATOR PRICE: <his words> (<YYYY-MM-DD>)` in price.txt and the gate passes.
+Only a session quoting Russell writes this line; never write it to get a
+draft past the gate.
 
 ## Tooling — CLI contracts (do NOT read the .py source)
 
@@ -304,9 +358,15 @@ method; distinct from comp-quality Tier A/B/C.)
 
 Hard rules:
 - A and B must show `RAN` on every item; otherwise it's a flagged problem —
-  also append to `NEEDS_REVIEW.md`.
+  also append to `NEEDS_REVIEW.md`. B not `RAN`/`THIN` blocks sync and
+  publish (sold-pull gate above).
+- The B status word is machine-read: keep it the first word after the colon,
+  one of `RAN` / `THIN` / `UNAVAILABLE` / `BLOCKED` / `SKIPPED`.
 - B's `RAN` line must carry both per-sort counts + the saved-JSON proof. No
   saved JSONs ⇒ it did not run ⇒ `UNAVAILABLE — <reason>`, never `RAN`.
+- Every `RAN` line carries `n_kept=<n>` (from `price_stats`, or your own count
+  of usable sold comps when it didn't run). `n_kept=0` is the one-off trigger
+  the gate reads; leaving the field out hides a zero-comp item.
 - C is always accounted for — never omit the line.
 - The log records what you DID; the tiers record what you CONCLUDED.
 
@@ -419,6 +479,9 @@ year-specific attribution.
 
     Working price (provisional): $X (Recommended tier). Final price is the
     user's call at publish time; recorded here for review.
+
+When B did not run, close with `NOT READY — no sold pull; sold refresh
+needed before review` instead, and don't hand the item on as ready.
 
 ## Research notes (per item — 2–4 lines each; `N/A — <reason>` if inapplicable)
 
