@@ -184,6 +184,20 @@ def _one_line(s: str, limit: int) -> str:
     return " ".join(str(s).split())[:limit]
 
 
+def _split_by(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
+    """`total` in cent shares proportional to `weights` (even when they sum to
+    0), the remainder on the last share — the one split rule, used by
+    allocate_order_totals (ad_fee, actual_postage) and build_fee_lines (AD
+    fee lines), so both land an order's money on its lines the same way."""
+    wsum = sum(weights, Decimal(0))
+    if wsum > 0:
+        shares = [(total * w / wsum).quantize(CENT) for w in weights]
+    else:
+        shares = [(total / len(weights)).quantize(CENT)] * len(weights)
+    shares[-1] += total - sum(shares, Decimal(0))
+    return shares
+
+
 def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: dict,
                           field: str, *, absence_is_zero: bool = False) -> None:
     """Split each order-level total in `totals_by_order` (ad fees
@@ -231,15 +245,8 @@ def allocate_order_totals(order_lines: dict[str, list[dict]], totals_by_order: d
             continue
         # positive magnitudes, matching ebay_fee/item_price's convention —
         # see ebay_finances' module docstring "Sign convention".
-        total = abs(total)
-        basis = [ln["item_price"] + ln["buyer_shipping"] for ln in lines]
-        basis_sum = sum(basis, Decimal(0))
-        if basis_sum > 0:
-            shares = [(total * b / basis_sum).quantize(Decimal("0.01")) for b in basis]
-        else:
-            even = (total / len(lines)).quantize(Decimal("0.01"))
-            shares = [even] * len(lines)
-        shares[-1] += total - sum(shares, Decimal(0))
+        shares = _split_by(abs(total),
+                           [ln["item_price"] + ln["buyer_shipping"] for ln in lines])
         for ln, s in zip(lines, shares):
             ln[field] = s
 
@@ -742,19 +749,6 @@ def ad_bids(ads_doc: Optional[dict]) -> dict[str, str]:
         except InvalidOperation:
             continue
     return {lid: next(iter(v)) for lid, v in seen.items() if len(v) == 1}
-
-
-def _split_by(total: Decimal, weights: list[Decimal]) -> list[Decimal]:
-    """`total` in cent shares proportional to `weights` (even when they sum to
-    0), the remainder on the last share — allocate_order_totals' rule, so an
-    order's AD fee lines land on its lines the same way ad_fee does."""
-    wsum = sum(weights, Decimal(0))
-    if wsum > 0:
-        shares = [(total * w / wsum).quantize(CENT) for w in weights]
-    else:
-        shares = [(total / len(weights)).quantize(CENT)] * len(weights)
-    shares[-1] += total - sum(shares, Decimal(0))
-    return shares
 
 
 def build_fee_lines(orders: list[dict], parsed: dict,
