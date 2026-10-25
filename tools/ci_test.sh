@@ -11,11 +11,13 @@
 # It pushes the commit to ci/<branch> on origin, and .github/workflows/tests.yml
 # runs on every push to ci/**. That needs only push access, which every session
 # has; `gh workflow run` needs a token that can write Actions, and the laptop's
-# cannot. ci/<branch> is a throwaway ref this script owns, so it is
-# force-pushed: a rebased branch must not be refused. Then it finds the run of
-# that exact commit (headSha, event push, branch ci/<branch>) and
+# cannot. ci/<branch> is a throwaway ref this script owns: it is force-pushed (a
+# rebased branch must not be refused) and deleted again on exit, so every push
+# starts a fresh run. ci/ is reserved for this script, so it refuses when an
+# open PR's branch already has that name. Then it finds the new run of that
+# exact commit (headSha, event push, branch ci/<branch>) and
 # `gh run watch --exit-status`. On failure it prints the failed jobs' log tail
-# and exits non-zero.
+# and exits non-zero. The run and its logs outlive the ref.
 #
 # Uncommitted changes are refused, because CI would test the commit without
 # them. It waits minutes, so start it with run_in_background
@@ -50,23 +52,33 @@ fi
 sha=$(git rev-parse -q --verify "$src^{commit}") || die "no local branch $branch"
 ci_ref="ci/$branch"
 
+# The force-push below would overwrite a working branch literally named ci/<x>.
+open_pr=$(gh pr list --head "$ci_ref" --state open --json number -q '.[].number') ||
+  die "could not check for an open PR on $ci_ref (gh's error above)"
+[[ -z $open_pr ]] || die "$ci_ref is an open PR's branch (#$open_pr), and ci/ is reserved for this script.
+Rename that branch; this would force-push over it."
+
+runs() {  # id, headSha, url of recent push runs of this workflow on the ci ref
+  gh run list --workflow "$WORKFLOW" --branch "$ci_ref" --event push --limit 30 \
+    --json databaseId,headSha,url --jq '.[] | [.databaseId, .headSha, .url] | @tsv'
+}
+# Runs from earlier invocations stay listed after their ref is gone; ours is new.
+before=$(runs | cut -f1 | tr '\n' ' ')
+
 git push -q -f origin "$src:refs/heads/$ci_ref" ||
   die "could not push $branch to $ci_ref on origin (git's error above)"
+trap 'git push -q origin --delete "$ci_ref" 2>/dev/null || true' EXIT
 printf 'ci_test: pushed %s to %s\n' "${sha:0:12}" "$ci_ref"
 
 run_id='' url=''
 for (( i = 0; i < POLL_N; i++ )); do
-  # Newest run of this exact commit. Any run of the same commit on this ref
-  # tests the same code with the same workflow, including one from an earlier
-  # push of an unchanged commit (that push starts no new run).
-  read -r run_id url < <(
-    gh run list --workflow "$WORKFLOW" --branch "$ci_ref" --event push --limit 30 \
-      --json databaseId,headSha,url --jq '.[] | [.databaseId, .headSha, .url] | @tsv' |
-    awk -F'\t' -v sha="$sha" '$2 == sha { print $1 " " $3; exit }') || true
+  read -r run_id url < <(runs | awk -F'\t' -v sha="$sha" -v before="$before" '
+      BEGIN { n = split(before, b, " "); for (k = 1; k <= n; k++) seen[b[k]] = 1 }
+      $2 == sha && !($1 in seen) { print $1 " " $3; exit }') || true
   [[ -n $run_id ]] && break
   sleep "$POLL_S"
 done
-[[ -n $run_id ]] || die "pushed, but no run for ${sha:0:12} showed up; look at: gh run list --workflow $WORKFLOW --branch $ci_ref"
+[[ -n $run_id ]] || die "pushed, but no new run for ${sha:0:12} showed up; look at: gh run list --workflow $WORKFLOW --branch $ci_ref"
 
 printf 'ci_test: watching run %s  %s\n' "$run_id" "$url"
 if gh run watch "$run_id" --exit-status --interval 15; then
