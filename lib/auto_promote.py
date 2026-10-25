@@ -11,9 +11,17 @@ sell, so a new listing is promoted with no wait.
 WHAT IT WILL AND WON'T DO
 
 * Adds ONE ad (the new listing) to ONE named cost-per-sale campaign. It never
-  creates, ends, pauses or re-rates a campaign, and never touches a
-  cost-per-click campaign. A cost-per-sale ad costs nothing unless the item
-  sells through it, which is why this may run unattended inside publish.
+  creates, ends, pauses or re-rates a campaign. A cost-per-sale ad costs
+  nothing unless the item sells through it, which is why this may run
+  unattended inside publish.
+* Also adds it to ONE named key-based Smart cost-per-click campaign
+  (`cpc_campaign`) when the price is inside that campaign's band. That
+  campaign replaces the rule-based "All Items $25-5000 CPC" (2026-10-11),
+  which picked up every listing in its price band, K01 included. A rule
+  can't name an exclusion and can't be edited after creation, and eBay
+  refuses per-ad changes in a rule-based campaign ("only supported for key
+  based campaigns", 409/35064). A key-based campaign holds only what we add,
+  so the lot exclusion below covers it; its daily budget caps the spend.
 * Never fails a publish. The listing is already live when this runs; every
   problem (campaign missing or not RUNNING, eBay refusing the ad) is
   returned as a message for the caller to print, not raised.
@@ -36,6 +44,8 @@ CONFIG (per store, #156)
         min_price: 25
         enabled: true
         exclude_consignment: [K01]   # client codes or CONSIGN-* folder names
+        cpc_campaign: "All Items $25-5000 CPC keyed"   # "" turns it off
+        cpc_max_price: 5000
 
     storefronts:
       junk:
@@ -64,7 +74,8 @@ REPO = Path(__file__).resolve().parent.parent
 # comes out of the client's net (tools/consign.py), so excluding a lot is a
 # per-client decision. Replacing the list in config replaces this default.
 DEFAULTS = {"enabled": True, "campaign": "Revenue Seasoned 15d", "min_price": 25.0,
-            "exclude_consignment": ["K01"]}
+            "exclude_consignment": ["K01"],
+            "cpc_campaign": "All Items $25-5000 CPC keyed", "cpc_max_price": 5000.0}
 
 API = "/sell/marketing/v1"
 
@@ -83,7 +94,8 @@ def settings(store: Optional[str] = None, config: Optional[dict] = None) -> dict
     else:
         block = (((config.get("storefronts") or {}).get(name) or {})
                  .get("auto_promote")) or {}
-        out = {**DEFAULTS, "enabled": bool(block.get("campaign")), **block}
+        out = {**DEFAULTS, "enabled": bool(block.get("campaign")), "cpc_campaign": "",
+               **block}
     out["min_price"] = float(out.get("min_price") or 0)
     ex = out.get("exclude_consignment") or []
     out["exclude_consignment"] = [str(x).strip() for x in
@@ -211,8 +223,9 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
                         store: Optional[str] = None, api_send=None,
                         config: Optional[dict] = None, sku: str = "",
                         folder=None) -> str:
-    """Add `listing_id` to the store's auto-promote campaign. Returns a
-    one-line outcome for the caller to print. Never raises. `sku` and
+    """Add `listing_id` to the store's auto-promote campaign, and to its
+    key-based cost-per-click campaign when one is named. Returns a one-line
+    outcome for the caller to print. Never raises. `sku` and
     `folder` (the draft's item folder) find a consignment lot."""
     try:
         if api_send is None:
@@ -228,7 +241,26 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         p = _price(price)
         if p is not None and p < s["min_price"]:
             return f"not promoted: ${p:.2f} is under the ${s['min_price']:.2f} floor"
+    except Exception as e:                                           # noqa: BLE001
+        return f"not promoted: {str(e)[:160]}"
+    out = _add_cps(listing_id, s, api_send, creds)
+    if s.get("cpc_campaign"):
+        out += "; " + _add_keyed_cpc(listing_id, p, s, api_send, creds)
+    return out
 
+
+def _add_ad(cid: str, listing_id, api_send, creds) -> tuple[int, str]:
+    """POST one ad; (status code, eBay's message)."""
+    r = api_send("POST", f"{API}/ad_campaign/{cid}/bulk_create_ads_by_listing_id",
+                 {"requests": [{"listingId": str(listing_id)}]}, creds=creds) or {}
+    resp = (r.get("responses") or [{}])[0]
+    msg = ((resp.get("errors") or [{}])[0].get("message") or "").strip()
+    return int(resp.get("statusCode") or 201), msg
+
+
+def _add_cps(listing_id, s: dict, api_send, creds) -> str:
+    """Add the listing to the store's cost-per-sale campaign."""
+    try:
         camp = api_send("GET", f"{API}/ad_campaign/get_campaign_by_name"
                                f"?campaign_name={quote(s['campaign'])}", creds=creds)
         cid = str(camp.get("campaignId") or "")
@@ -240,14 +272,9 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         if (camp.get("fundingStrategy") or {}).get("fundingModel") != "COST_PER_SALE":
             return (f"not promoted: '{s['campaign']}' is not cost-per-sale; "
                     f"auto-promote only adds to cost-per-sale campaigns")
-
-        r = api_send("POST", f"{API}/ad_campaign/{cid}/bulk_create_ads_by_listing_id",
-                     {"requests": [{"listingId": str(listing_id)}]}, creds=creds) or {}
-        resp = (r.get("responses") or [{}])[0]
-        code = int(resp.get("statusCode") or 201)
+        code, msg = _add_ad(cid, listing_id, api_send, creds)
         if code < 300:
             return f"promoted in '{s['campaign']}'"
-        msg = ((resp.get("errors") or [{}])[0].get("message") or "").strip()
         if "already exists" in msg.lower():
             # A listing can sit in only one cost-per-sale campaign; this may be
             # that campaign or another one, and either way it is promoted.
@@ -255,3 +282,36 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         return f"not promoted: eBay refused the ad ({code}) {msg[:120]}"
     except Exception as e:                                           # noqa: BLE001
         return f"not promoted: {str(e)[:160]}"
+
+
+def _add_keyed_cpc(listing_id, price: Optional[float], s: dict, api_send, creds) -> str:
+    """Add the listing to the key-based Smart cost-per-click campaign. Only
+    that shape is filled: a rule-based campaign picks its own listings, and a
+    manual one needs keywords for every ad."""
+    name = s["cpc_campaign"]
+    hi = _price(s.get("cpc_max_price"))
+    if price is not None and hi is not None and price > hi:
+        return f"not in '{name}': ${price:.2f} is over its ${hi:.2f} ceiling"
+    try:
+        try:
+            camp = api_send("GET", f"{API}/ad_campaign/get_campaign_by_name"
+                                   f"?campaign_name={quote(name)}", creds=creds) or {}
+        except Exception:                                            # noqa: BLE001
+            camp = {}                       # eBay answers 404 for an unknown name
+        cid = str(camp.get("campaignId") or "")
+        if not cid:
+            return f"not in '{name}': campaign not found"
+        if camp.get("campaignStatus") != "RUNNING":
+            return f"not in '{name}': it is {camp.get('campaignStatus')}, not RUNNING"
+        if ((camp.get("fundingStrategy") or {}).get("fundingModel") != "COST_PER_CLICK"
+                or camp.get("campaignTargetingType") != "SMART"
+                or camp.get("campaignCriterion")):
+            return f"not in '{name}': not a key-based Smart cost-per-click campaign"
+        code, msg = _add_ad(cid, listing_id, api_send, creds)
+        if code < 300:
+            return f"promoted in '{name}'"
+        if "already exists" in msg.lower():
+            return f"already in '{name}'"
+        return f"not in '{name}': eBay refused the ad ({code}) {msg[:120]}"
+    except Exception as e:                                           # noqa: BLE001
+        return f"not in '{name}': {str(e)[:120]}"
