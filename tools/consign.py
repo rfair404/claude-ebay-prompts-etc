@@ -160,13 +160,11 @@ CHANNEL_RE = re.compile(r"^[a-z0-9_-]+$")
 # postage; the handling fee still applies (labels and data entry, Russell
 # 2026-10-23). These must match the consignment agreement
 # §4.2(b) (docs/client-onboarding/consignment-agreement.md): change both together.
+# The fee breakdown labels a mall % from these, citing AGREEMENT_CITE;
+# tests/test_consign.py reads the agreement and fails if the two drift apart.
 MALL = "mall"
 MALL_COMMISSION = Decimal("0.10")
 MALL_CARD_RATE = Decimal("0.03")
-# The fee breakdown labels a mall % with the agreement's own figure, read
-# from the agreement at render time (mall_terms), never from the constants
-# above; the breakdown's tie-out then shows if the two have drifted apart.
-AGREEMENT = REPO / "docs" / "client-onboarding" / "consignment-agreement.md"
 AGREEMENT_CITE = "consignment agreement sec. 4.2(b)"
 
 TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
@@ -229,15 +227,18 @@ SETTLEMENT_COLUMNS = [
     "adjustments", "amount_paid", "paid_date", "method", "receipt_ref", "client_ack",
     "handling",
 ]
+# A line=fee row's own fields. Its amount goes in fee_amount, never in
+# ebay_fee or ad_fee: those are the sale row's totals, and a fee row there
+# would count the fee twice when the column is summed.
+FEE_COLUMNS = ["fee_type", "fee_amount", "fee_base", "fee_rate", "rate_source"]
 STATEMENT_COLUMNS = [
     "settlement_id", "client_code", "line", "item_id", "intake", "description",
     "lot_id", "sold_at", "delivered_at", "cleared_on", "item_price", "buyer_shipping",
     "refunded", "gross", "ebay_fee", "ad_fee", "actual_postage", "handling",
     "other_costs", "net", "split", "client_share", "amount", "note", "channel",
     # line=fee rows: the per-item fee breakdown (fee_breakdown)
-    "fee_type", "fee_base", "fee_rate", "rate_source",
+    *FEE_COLUMNS,
 ]
-FEE_COLUMNS = ["fee_type", "fee_base", "fee_rate", "rate_source"]
 
 # What `import` accepts beyond the ledger's own column names (roster.csv).
 IMPORT_ALIASES = {"item": "description", "note": "why", "notes": "why"}
@@ -1390,7 +1391,8 @@ def _sum(vals) -> Decimal:
 # fee breakdown: one renderer for the settle statement, the report and
 # tools/report_lot.py. Every % is marked by where it came from:
 #   SOURCED  a rate eBay or the contract states (the listing's campaign bid
-#            from reports/ebay_ads.json; the mall terms from the agreement)
+#            from reports/ebay_ads.json; the mall terms, MALL_COMMISSION and
+#            MALL_CARD_RATE, citing the agreement)
 #   DERIVED  fee / base, worked out here and never stored; never "eBay's rate"
 #   FLAT     a fixed fee: the amount only
 # The ad fee is a selling fee and comes off gross before the split (Russell):
@@ -1400,9 +1402,6 @@ FEES_MISSING = "FEE LINES MISSING"
 FEES_DONT_TIE = "DON'T TIE"
 AD_GAP = Decimal("0.1")          # SOURCED vs DERIVED ad %, in points, before a flag
 AD_NOTE = "selling fee, taken off gross before the split"
-_MALL_TERMS_RE = re.compile(r"^\(b\) for a sale at our antique-mall booth.*$", re.M)
-_COMMISSION_RE = re.compile(r"commission of (\d+(?:\.\d+)?)%")
-_CARD_FEE_RE = re.compile(r"card fee of (\d+(?:\.\d+)?)%")
 
 
 def load_fee_lines() -> list[dict]:
@@ -1415,22 +1414,6 @@ def load_fee_lines() -> list[dict]:
             with p.open(encoding="utf-8-sig", newline="") as f:
                 out += list(csv.DictReader(f))
     return out
-
-
-def mall_terms(path: Optional[Path] = None) -> dict:
-    """The mall's commission and card-fee rates as the agreement states them
-    (§4.2(b)), as fractions; None for a rate the agreement doesn't state."""
-    try:
-        text = (path or AGREEMENT).read_text(encoding="utf-8")
-    except OSError:
-        text = ""
-    m = _MALL_TERMS_RE.search(text)
-    para = m.group(0) if m else ""
-
-    def rate(rx):
-        hit = rx.search(para)
-        return Decimal(hit.group(1)) / 100 if hit else None
-    return {"commission": rate(_COMMISSION_RE), "card": rate(_CARD_FEE_RE)}
 
 
 def _pct(d: Decimal) -> str:
@@ -1469,18 +1452,18 @@ def _same_item(x: dict, r: dict) -> bool:
     return True
 
 
-def _mall_breakdown(r: dict, terms: dict) -> dict:
+def _mall_breakdown(r: dict) -> dict:
     fee, price, card = dec(r["ebay_fee"]), dec(r["item_price"]), dec(r["card_paid"])
-    com, card_rate = terms.get("commission"), terms.get("card")
     if fee is None:
         return {"status": "OK", "detail": "", "lines": []}
-    if com is None or card_rate is None or card is None:
+    if card is None:
         return {"status": "OK", "detail": "", "lines": [_fee(
-            "MALL_FEE", fee, source=f"no recorded rate in {AGREEMENT_CITE}: amount only")]}
+            "MALL_FEE", fee, source="card_paid not recorded: amount only")]}
     src = f"SOURCED ({AGREEMENT_CITE})"
-    lines = [_fee("MALL_COMMISSION", (com * price).quantize(CENT), price, _pct(com), src),
-             _fee("MALL_CARD_FEE", (card_rate * card).quantize(CENT), card, _pct(card_rate),
-                  src)]
+    lines = [_fee("MALL_COMMISSION", (MALL_COMMISSION * price).quantize(CENT), price,
+                  _pct(MALL_COMMISSION), src),
+             _fee("MALL_CARD_FEE", (MALL_CARD_RATE * card).quantize(CENT), card,
+                  _pct(MALL_CARD_RATE), src)]
     total = _sum(ln["amount"] for ln in lines)
     if abs(total - fee) > CENT:
         return {"status": FEES_DONT_TIE, "lines": lines,
@@ -1488,8 +1471,7 @@ def _mall_breakdown(r: dict, terms: dict) -> dict:
     return {"status": "OK", "detail": "", "lines": lines}
 
 
-def fee_breakdown(r: dict, fee_lines: list[dict],
-                  terms: Optional[dict] = None) -> Optional[dict]:
+def fee_breakdown(r: dict, fee_lines: list[dict]) -> Optional[dict]:
     """A sold row's fees, one entry per fee line, each % labelled SOURCED,
     DERIVED or FLAT. None for a row with no sale of its own (unsold, or a
     lot-mate). `status` is OK, FEES_MISSING (no fee lines for an eBay sale)
@@ -1499,7 +1481,7 @@ def fee_breakdown(r: dict, fee_lines: list[dict],
         return None
     channel = channel_of(r)
     if channel == MALL:
-        return _mall_breakdown(r, terms if terms is not None else mall_terms())
+        return _mall_breakdown(r)
     if channel != EBAY:
         fee = dec(r["ebay_fee"])
         return {"status": "OK", "detail": "", "lines": [] if fee is None else [
@@ -1549,18 +1531,18 @@ def fee_text(bd: Optional[dict], indent: str = "      ") -> list[str]:
 
 
 def fee_rows(bd: Optional[dict]) -> list[dict]:
-    """The breakdown as CSV fields (FEE_COLUMNS plus the fee's amount in
-    ebay_fee or ad_fee, and a note), for the statement, the report --csv and
-    report_lot. A sale that is not OK gets one more row naming why."""
+    """The breakdown as CSV fields (FEE_COLUMNS and a note), for the
+    statement, the report --csv and report_lot. ebay_fee and ad_fee stay
+    blank: the sale's own row already totals them. A sale that is not OK gets
+    one more row naming why."""
     if not bd:
         return []
     out = []
     for ln in bd["lines"]:
-        out.append({"fee_type": ln["fee_type"], "fee_base": money(ln["base"]),
-                    "fee_rate": ln["rate"],
+        out.append({"fee_type": ln["fee_type"], "fee_amount": money(ln["amount"]),
+                    "fee_base": money(ln["base"]), "fee_rate": ln["rate"],
                     "rate_source": ln["source"] + (" FLAG: SOURCED and DERIVED differ"
                                                    if ln["flag"] else ""),
-                    "ad_fee" if ln["fee_type"] == "AD" else "ebay_fee": money(ln["amount"]),
                     "note": ln["note"]})
     if bd["status"] != "OK":
         out.append({"rate_source": bd["status"], "note": bd["detail"]})
@@ -1721,7 +1703,7 @@ def report(intakes: list[Path], client: Optional[str], write_csv: bool,
         print("no consignment intakes match" + (f" client {client}" if client else ""))
         return 1
     print("States are as of the last `consign sync --apply`.")
-    fee_lines, terms_mall = load_fee_lines(), mall_terms()
+    fee_lines = load_fee_lines()
     for code in sorted(groups):
         reg = registry.get(code) or {}
         terms = client_terms(registry, code)
@@ -1736,7 +1718,7 @@ def report(intakes: list[Path], client: Optional[str], write_csv: bool,
         settlements = read_settlements(code) if code != "UNASSIGNED" else []
         for line in client_summary(items, split, settlements, terms["loss_rule"], today):
             print(line)
-        breakdowns = {r["item_id"]: fee_breakdown(r, fee_lines, terms_mall) for _, r in items}
+        breakdowns = {r["item_id"]: fee_breakdown(r, fee_lines) for _, r in items}
         for line in fee_section(items, breakdowns):
             print(ascii_text(line))
         if write_csv:
@@ -1803,8 +1785,8 @@ def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int
                and r["cleared_on"] and iso(r["cleared_on"]) <= through]
     # A sale whose fee lines are missing or don't tie to its ledger fees waits:
     # the client's statement shows every fee, so it can't go out unexplained.
-    fee_lines, terms_mall = load_fee_lines(), mall_terms()
-    breakdown = {r["item_id"]: fee_breakdown(r, fee_lines, terms_mall) for r in cleared}
+    fee_lines = load_fee_lines()
+    breakdown = {r["item_id"]: fee_breakdown(r, fee_lines) for r in cleared}
     for r in cleared:
         bd = breakdown[r["item_id"]]
         if bd and bd["status"] != "OK":

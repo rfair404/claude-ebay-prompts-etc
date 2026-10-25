@@ -352,7 +352,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<10}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
     L += [hdr, "-" * len(hdr)]
     out = []
-    fee_lines, terms_mall = C.load_fee_lines(), C.mall_terms()
+    fee_lines = C.load_fee_lines()
     for r in rows:
         d = _report.ascii_text((r.get("description") or "").split(";")[0].replace("\n", " "))
         d = d if len(d) <= 52 else d[:51] + "~"
@@ -360,7 +360,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
                  f"{plan.get(r.get('cut') or '', '-'):<10}{r.get('state') or '':<10}{val(r):<13}"
                  f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
         # the shared renderer (tools/consign.py fee_breakdown), under the sale
-        bd = C.fee_breakdown(r, fee_lines, terms_mall)
+        bd = C.fee_breakdown(r, fee_lines)
         L += C.fee_text(bd, indent=" " * 10)
         out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),

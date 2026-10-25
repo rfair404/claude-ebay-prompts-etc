@@ -193,9 +193,12 @@ def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
     assert "fee AD" in sale[i + 2] and "8.0% SOURCED (eBay campaign bid, read 2026-10-25)" in sale[i + 2]
     assert "taken off gross before the split" in sale[i + 2]
     assert sale[i + 3].startswith("K01-C051")          # no breakdown for an unsold item
-    assert [(r["line"], r["item_id"], r["fee_type"], r["fee_rate"]) for r in rows] == [
-        ("item", "K01-C050", "", ""), ("fee", "K01-C050", "FINAL_VALUE_FEE", "12.5%"),
-        ("fee", "K01-C050", "AD", "8.0%"), ("item", "K01-C051", "", "")]
+    assert [(r["line"], r["item_id"], r["fee_type"], r["fee_amount"], r["fee_rate"],
+             r["ebay_fee"], r["ad_fee"]) for r in rows] == [
+        ("item", "K01-C050", "", "", "", "5.00", "3.20"),
+        ("fee", "K01-C050", "FINAL_VALUE_FEE", "5.00", "12.5%", "", ""),   # counted once
+        ("fee", "K01-C050", "AD", "3.20", "8.0%", "", ""),
+        ("item", "K01-C051", "", "", "", "", "")]
     monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
     _, csv_path = RL.write(lot, text, rows, date(2026, 10, 25))
     assert b"DERIVED (fee / $40.00 base)" in csv_path.read_bytes()

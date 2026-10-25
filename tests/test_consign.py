@@ -490,11 +490,18 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
         ("sale", "K99-C001", "2.00", "7.10"), ("fee", "K99-C001", "", ""),
         ("fee", "K99-C001", "", ""), ("fee", "K99-C001", "", ""),
         ("buyout", "K99-C002", "", "12.50"), ("total", "", "2.00", "19.60")]
-    assert [(x["fee_type"], x["ebay_fee"], x["ad_fee"], x["fee_rate"], x["rate_source"])
+    assert [(x["fee_type"], x["fee_amount"], x["fee_rate"], x["rate_source"])
             for x in lines if x["line"] == "fee"] == [
-        ("FINAL_VALUE_FEE", "2.90", "", "11.6%", "DERIVED (fee / $25.00 base)"),
-        ("FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40", "", "", "FLAT (fixed fee: amount only)"),
-        ("AD", "", "1.00", "4.0%", "DERIVED (fee / $25.00 FVF base)")]
+        ("FINAL_VALUE_FEE", "2.90", "11.6%", "DERIVED (fee / $25.00 base)"),
+        ("FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40", "", "FLAT (fixed fee: amount only)"),
+        ("AD", "1.00", "4.0%", "DERIVED (fee / $25.00 FVF base)")]
+    # A fee row leaves ebay_fee and ad_fee blank, so summing either column
+    # over the statement's lines gives the sale's own totals, counted once.
+    total = next(x for x in lines if x["line"] == "total")
+    for col, want in (("ebay_fee", "3.30"), ("ad_fee", "1.00")):
+        summed = sum((Decimal(x[col]) for x in lines if x["line"] != "total" and x[col]),
+                     Decimal(0))
+        assert summed == Decimal(want) == Decimal(total[col])
     first = stmt.read_bytes()
 
     # Everything owed is on the open settlement now.
@@ -965,34 +972,39 @@ def test_settle_holds_a_sale_whose_fee_lines_are_missing_or_dont_tie(shop, capsy
     assert [x["rate_source"] for x in export if x["line"] == "fee"][-1] == status
 
 
-def test_mall_fee_rates_come_from_the_agreement_or_show_no_percent(tmp_path):
-    agreement = tmp_path / "agreement.md"
-    agreement.write_text(
-        "4.2. **Net Proceeds** means:\n\n(a) for an eBay sale, ...;\n"
-        "(b) for a sale at our antique-mall booth, the price the buyer pays, minus (1) "
-        "the mall's commission of 12% of that price, (2) the mall's card fee of 2.5% of "
-        "any part the buyer pays by card;\n", encoding="utf-8")
+def test_mall_fee_rates_are_the_constants_cited_to_the_agreement():
     r = _row(state="CLEARED", channel="mall", item_price="100.00", card_paid="40.00",
-             ebay_fee="13.00")
-    bd = consign.fee_breakdown(r, [], consign.mall_terms(agreement))
+             ebay_fee="11.20")
+    bd = consign.fee_breakdown(r, [])
     cite = "SOURCED (consignment agreement sec. 4.2(b))"
     assert bd["status"] == "OK"
     assert [(x["fee_type"], _amt(x), _base(x), x["rate"], x["source"])
             for x in bd["lines"]] == [
-        ("MALL_COMMISSION", "12.00", "100.00", "12.0%", cite),
-        ("MALL_CARD_FEE", "1.00", "40.00", "2.5%", cite)]
+        ("MALL_COMMISSION", "10.00", "100.00", "10.0%", cite),
+        ("MALL_CARD_FEE", "1.20", "40.00", "3.0%", cite)]
     # a ledger fee worked out at other rates doesn't tie, and settle holds it
-    r2 = dict(r, ebay_fee="11.20")
-    assert consign.fee_breakdown(r2, [], consign.mall_terms(agreement))["status"] == \
+    assert consign.fee_breakdown(dict(r, ebay_fee="13.00"), [])["status"] == \
         consign.FEES_DONT_TIE
-    # no recorded rate: the fee as an amount, no %
-    bd = consign.fee_breakdown(r, [], consign.mall_terms(tmp_path / "none.md"))
+    # card_paid unknown: the fee as an amount, no %
+    bd = consign.fee_breakdown(dict(r, card_paid=""), [])
     assert [(x["fee_type"], _amt(x), x["rate"]) for x in bd["lines"]] == [
-        ("MALL_FEE", "13.00", "")]
-    assert "no recorded rate" in bd["lines"][0]["source"]
-    # the repo's own agreement states the rates the mall fee is worked out with
-    assert consign.mall_terms() == {"commission": consign.MALL_COMMISSION,
-                                    "card": consign.MALL_CARD_RATE}
+        ("MALL_FEE", "11.20", "")]
+
+
+def test_agreement_states_the_mall_rates_the_constants_hold():
+    # The breakdown labels the mall % from MALL_COMMISSION / MALL_CARD_RATE.
+    # If the agreement is reworded or its rates change, this fails, so the
+    # constants and the contract are changed together.
+    import re
+    text = (Path(__file__).resolve().parents[1] / "docs" / "client-onboarding"
+            / "consignment-agreement.md").read_text(encoding="utf-8")
+    para = re.search(r"^\(b\) for a sale at our antique-mall booth.*$", text, re.M)
+    assert para, "agreement sec. 4.2(b) mall paragraph not found"
+    com = re.search(r"commission of (\d+(?:\.\d+)?)%", para.group(0))
+    card = re.search(r"card fee of (\d+(?:\.\d+)?)%", para.group(0))
+    assert com and card, "sec. 4.2(b) no longer states a commission % and a card fee %"
+    assert Decimal(com.group(1)) / 100 == consign.MALL_COMMISSION
+    assert Decimal(card.group(1)) / 100 == consign.MALL_CARD_RATE
 
 
 def _amt(x):
