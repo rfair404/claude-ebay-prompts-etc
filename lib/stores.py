@@ -144,6 +144,7 @@ class StorePaths:
     pick_list_state: Path
     offer_policy_survey: Path
     finances_sync_status: Path
+    fee_lines: Path
     ebay_ads_json: Path
     ad_report_json: Path
     sales_dashboard_html: Path
@@ -172,6 +173,9 @@ def paths(store: Optional[str] = None) -> StorePaths:
         pick_list_state=f(".pick_list_state.json"),
         offer_policy_survey=f(".offer_policy_survey.json"),
         finances_sync_status=f("reports/finances_sync_status.json"),
+        # Under reports/ (linked into worktrees) so consign report/settle,
+        # which run in worktrees, read the real fee lines.
+        fee_lines=f("reports/fee_lines.csv"),
         ebay_ads_json=f("reports/ebay_ads.json"),
         ad_report_json=f("reports/ad_report.json"),
         sales_dashboard_html=f("reports/sales_dashboard.html"),

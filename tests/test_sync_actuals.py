@@ -700,7 +700,7 @@ def _unwound_run(monkeypatch, store, batches, finances=None):
     monkeypatch.setattr(SA, "fetch_orders",
                         lambda days, verbose=True, *, store=None: batches.pop(0))
     if finances is not None:
-        monkeypatch.setattr(SA, "sync_finances", lambda days, verbose=True, *, store=None:
+        monkeypatch.setattr(SA, "sync_finances", lambda days, verbose=True, *, store=None, **_:
                             (*finances, {"ok": True, "reason": None, "other_fee_labels": {}}))
     while batches:
         assert SA.sync_store(store, _args(skip_finances=finances is None)) == 0
@@ -902,3 +902,41 @@ def test_a_sale_falls_back_to_its_recovered_folder(shop, monkeypatch, recovered,
     stamped = {p.parent.relative_to(shop).as_posix()
                for p in (shop / "inventory").rglob("SOLD.md")}
     assert stamped == {w[0] for w in want.values() if w[0]}
+
+
+# fee_lines.csv: the per-line fees behind the consignment fee breakdown
+def test_fee_lines_carry_listing_and_sku_split_the_ad_fee_and_freeze_the_bid(shop):
+    import ebay_finances as EF
+    o = _order(oid="F-1", sku="aaaa1111", item=30.0, ship=10.0)
+    line = o["lineItems"][0]
+    line["lineItemId"] = "L1"
+    o["lineItems"].append(dict(line, lineItemId="L2", sku="dddd4444",
+                               legacyItemId="206000000002", lineItemCost=_money(60.0),
+                               deliveryCost={"shippingCost": _money(0)}))
+    # the Finances feed names lines by lineItemId only; the ad fee is per order
+    parsed = {"sale_fees": [EF.SaleFeeLine("F-1", "L1", "FINAL_VALUE_FEE", Decimal("5.00"),
+                                           Decimal("42.00"), "2026-10-25")],
+              "fees": [EF.FeeLine("F-1", "", "AD", Decimal("4.00"), "2026-10-25",
+                                  charge=Decimal("4.00"))]}
+    ads = {"pulled_at": "2026-10-25T19:00:00+00:00",
+           "ads": [{"listingId": "206000000001", "bidPercentage": "8"},
+                   {"listingId": "206000000002", "bidPercentage": None}]}   # per-click
+    rows = SA.build_fee_lines([o], parsed, ads)
+    assert [(r["line_item_id"], r["listing_id"], r["sku"], r["fee_type"], r["amount"],
+             r["basis"], r["bid_pct"]) for r in rows] == [
+        ("L1", "206000000001", "aaaa1111", "FINAL_VALUE_FEE", "5.00", "42.00", ""),
+        ("L1", "206000000001", "aaaa1111", "AD", "1.60", "", "8.0"),     # 40 of 100
+        ("L2", "206000000002", "dddd4444", "AD", "2.40", "", "")]
+    path = SA.write_fee_lines(rows, "default")
+    assert path == shop / "reports" / "fee_lines.csv"
+
+    # the bid changes later; the next sync keeps the first one it recorded
+    ads.update(pulled_at="2026-11-01T00:00:00+00:00",
+               ads=[{"listingId": "206000000001", "bidPercentage": "12"}])
+    SA.write_fee_lines(SA.build_fee_lines([o], parsed, ads), "default")
+    with path.open(encoding="utf-8") as f:
+        got = list(csv.DictReader(f))
+    assert len(got) == 3
+    assert [(r["bid_pct"], r["bid_pct_as_of"]) for r in got
+            if r["fee_type"] == "AD" and r["line_item_id"] == "L1"] == [
+        ("8.0", "2026-10-25T19:00:00+00:00")]

@@ -56,6 +56,11 @@ sales_ledger-*.csv
 unwound_orders.csv
 unwound_orders-*.csv
 unwound_orders.*.csv
+# Per-line eBay fees (lib/sync_actuals.py, reports/fee_lines*.csv). /reports
+# already covers the real file; these catch a copy anywhere else.
+fee_lines.csv
+fee_lines-*.csv
+fee_lines.*.csv
 
 # Consignment (tools/consign.py): each intake's client_ledger.csv (what a
 # client's items sold for and what we owe them, plus its .backup-* copies)
