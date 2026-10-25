@@ -33,6 +33,7 @@ assumed stale. These are how you check.
 |---|---|
 | `prep_run.py` | Runs PREP over a queue of shoots, in-process and in parallel. |
 | `prep_card.py` | A shoot's current state as one wide preview card, for chat. This is the review loop. |
+| `photo_sheet.py` | One to three frames of an item side by side, numbered, with its name and price in the header: the photo shown before each `/yn` question. Writes a JPEG to a temp dir. |
 | `prep_sheet_html.py` | The same review as an interactive page instead of a tall JPEG. |
 | `prep_index.py` | One review artifact for a whole batch of PREP'd shoots. |
 | `prep_proposal.py` | The auto first pass as one page — what PREP decided before anyone was asked, with the proposed crop drawn on the frame. |
