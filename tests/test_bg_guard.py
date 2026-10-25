@@ -53,6 +53,27 @@ def test_a_similar_looking_path_is_not_a_prefix():
     assert offending_prefix("python tools/prep_sheet_html.py shoot") == "python tools/prep_sheet_html.py"
 
 
+@pytest.mark.parametrize("cmd", [
+    "tools/ci_test.sh",
+    "./tools/ci_test.sh my-branch",
+    "bash tools/ci_test.sh",
+    'cd "/srv/repo" && /srv/repo/tools/ci_test.sh',
+], ids=["bare", "dot-slash", "via-bash", "absolute-after-cd"])
+def test_ci_test_is_caught_in_every_invocation_form(cmd):
+    """It waits minutes on GitHub. A script is run by path as often as by its
+    repo-relative name, and a guard that only knows one form misses the rest."""
+    assert offending_prefix(cmd) == "tools/ci_test.sh"
+
+
+@pytest.mark.parametrize("cmd", [
+    "mytools/ci_test.sh",
+    "echo tools/ci_test.sh",
+    "cat tools/ci_test.sh.bak",
+])
+def test_a_mention_or_lookalike_of_ci_test_is_not_a_run(cmd):
+    assert offending_prefix(cmd) is None
+
+
 def test_backgrounded_call_is_allowed():
     ti = {"command": "python -m pytest", "run_in_background": True}
     assert verdict(ti) is None
@@ -193,6 +214,18 @@ def test_on_air_leaves_show_controls_and_reads_alone(on_air_flag, cmd):
     on_air_flag.write_text("{}")
     assert on_air_job(cmd) is None
     assert verdict({"command": cmd, "run_in_background": True}) is None
+
+
+def test_ci_test_runs_on_air_but_only_backgrounded(on_air_flag):
+    """The suite runs on GitHub, so dispatching and watching it takes nothing
+    from the stream: it is not an on-air batch job. It still waits minutes,
+    so the background rule holds on air as it does off air."""
+    on_air_flag.write_text("{}")
+    assert on_air_job("./tools/ci_test.sh") is None
+    assert verdict({"command": "tools/ci_test.sh", "run_in_background": True}) is None
+    reason = verdict({"command": "tools/ci_test.sh"})
+    assert reason is not None and "run_in_background" in reason
+    assert "show is live" not in reason
 
 
 def test_a_stale_flag_no_longer_blocks(on_air_flag):
