@@ -32,15 +32,16 @@ buys it; needs a buyout_price, which is the client's share, no split; a
 0.00 buyout is closed with nothing owed).
 Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
 DRAFTED (draft.md exists), LISTED (live on eBay: the SKU or listing id has
-a listings-ledger row PUBLISHED or later, OUT_OF_STOCK included; DRAFTED and
-SYNCED are not live, and DELETED counts as ENDED only if it was published),
-SOLD (a sales_ledger row), CLEARED (sold, ad fee and postage known, and
-past the later of sold_at + 40 days and delivered_at + 30 days), SETTLED
-(paid_to_client_date set, copied from a paid settlement). RETURNED,
-DISPOSED and EXCLUDED win over anything derived; PREP stands in for SHOT
-and DRAFTED but gives way to LISTED and later. Two cases are flagged in
-state_note rather than given a state: a listing that ended unsold, and a
-sale that has left the sales ledger (refund or cancel). Once
+a listings-ledger row PUBLISHED, OUT_OF_STOCK, SOLD or SHIPPED; DRAFTED and
+SYNCED are not live, and an ENDED row, or a DELETED one that was published,
+leaves the item in its on-hand state), SOLD (a sales_ledger row), CLEARED
+(sold, ad fee and postage known, and past the later of sold_at + 40 days and
+delivered_at + 30 days), SETTLED (paid_to_client_date set, copied from a
+paid settlement). RETURNED, DISPOSED and EXCLUDED win over anything
+derived; PREP stands in for SHOT and DRAFTED but gives way to LISTED and
+later. Two cases are flagged in state_note rather than given a state: a
+listing that ended without a sale, and a sale that has left the sales ledger
+(refund or cancel). Once
 paid_to_client_date is set the row's client_share is frozen; a
 recalculation that differs is flagged and settled as an adjustment.
 
@@ -1090,8 +1091,9 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
                 r["store"] = d["store"]
     listing = books.listing_for(r["sku"], r["listing_id"])
     if listing:
-        state = "LISTED"
         lstore, lrow = listing
+        if listing_status(lrow) != "ENDED":      # an ended listing keeps its on-hand state
+            state = "LISTED"
         r["store"] = lstore
         r["listing_id"] = r["listing_id"] or lrow.get("listing_id", "")
         r["ask"] = lrow.get("price") or r["ask"]
@@ -1146,8 +1148,9 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         if not r["handling"] and not r["paid_to_client_date"]:  # every channel pays it
             r["handling"] = money(handling)
     elif listing and listing_status(listing[1]) == "ENDED":
-        flags.append(f"listing {r['listing_id'] or r['sku']} ended unsold: "
-                     f"relist, return or dispose")
+        ended = (listing[1].get("ended_at") or "").strip()[:10]
+        flags.append(f"listing {r['listing_id'] or r['sku']} ended"
+                     f"{' ' + ended if ended else ''}: relist, return or dispose")
     elif listing and listing_status(listing[1]) == "SOLD" and not vanished:
         flags.append("the listings ledger says SOLD but no sales ledger row matches: "
                      "run the finance sync (lib/sync_actuals.py --all-stores --apply)")

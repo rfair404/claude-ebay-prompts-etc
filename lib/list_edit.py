@@ -2627,6 +2627,40 @@ class EndResult:
     listing_id: Optional[str] = None
 
 
+def _record_end(sku: str, status: str, *, store: Optional[str], offer_id: str = "",
+                listing_ids: list[str] | tuple[str, ...] = (), title: str = "",
+                draft_path: Optional[Path] = None, offer_gone: bool = False) -> list[Path]:
+    """Record a listing end (status ENDED or DELETED) locally. Every end path
+    calls this after its eBay call, and nothing else records an end.
+
+    Writes `store`'s listings-ledger row (upsert_listing), then the drafts:
+    `draft_path` when the caller has one, otherwise every draft whose own
+    ebay_listing_id is in `listing_ids` (sync_actuals.scan_drafts). Each gets
+    ebay_listing_id cleared and ended_at set; `offer_gone` (the offer was
+    deleted) clears ebay_offer_id too. A draft that only shares the SKU is a
+    re-shoot or a copy and is left alone. client_ledger.csv is not written
+    here: `consign sync --apply` derives it from the listings ledger.
+    Returns the drafts it updated."""
+    ids = [str(i) for i in listing_ids if i]
+    drafts: list[Path] = []
+    if draft_path is not None:
+        drafts = [Path(draft_path)]
+    elif ids:
+        import sync_actuals
+        found = [d for d in sync_actuals.scan_drafts() if d.get("listing_id") in ids]
+        drafts = [sync_actuals.REPO / d["dir"] / "draft.md" for d in found]
+        title = title or next((d["title"] for d in found if d.get("title")), "")
+    upsert_listing(sku, status, title=title, offer_id=offer_id,
+                   listing_id=ids[0] if ids else "", store=store)
+    meta = {"ebay_listing_id": "",
+            "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if offer_gone:
+        meta["ebay_offer_id"] = ""
+    for dp in drafts:
+        update_meta(dp, meta)
+    return drafts
+
+
 def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
                 confirm: bool = False) -> EndResult:
     """End (withdraw) a live listing. Dry run unless confirm=True.
@@ -2658,12 +2692,9 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
                          status_before=status, listing_id=listing_id or None)
 
     api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw", {}, creds=creds)
-    update_meta(draft_path, {
-        "ebay_listing_id": "",
-        "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
-    upsert_listing(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED",
-                   title=title, offer_id=offer_id, store=creds.store)
+    _record_end(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED", store=creds.store,
+                offer_id=offer_id, listing_ids=[listing_id], title=title,
+                draft_path=draft_path)
     return EndResult(dry_run=False, offer_id=offer_id, title=title,
                      status_before=status, ended=True, listing_id=listing_id or None)
 
@@ -2744,7 +2775,8 @@ def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("withdraw", True, False, offer_id, status, listing_id=listing_id)
     withdraw_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "ENDED", offer_id=offer_id, store=creds.store)
+    _record_end(str(off.get("sku") or ""), "ENDED", store=creds.store, offer_id=offer_id,
+                listing_ids=[listing_id or ""])
     return OfferActionResult("withdraw", False, True, offer_id, status,
                              detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
 
@@ -2762,7 +2794,8 @@ def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
         return OfferActionResult("delete-offer", True, False, offer_id, status,
                                  detail=f"sku={off.get('sku')} price={price}", listing_id=listing_id)
     delete_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "DELETED", offer_id=offer_id, store=creds.store)
+    _record_end(str(off.get("sku") or ""), "DELETED", store=creds.store, offer_id=offer_id,
+                listing_ids=[listing_id or ""], offer_gone=True)
     return OfferActionResult("delete-offer", False, True, offer_id, status,
                              detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
 
@@ -2781,7 +2814,9 @@ def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("delete-item", True, False, sku, detail=detail)
     delete_inventory_item(sku, creds=creds)
-    upsert_listing(str(sku), "DELETED", store=creds.store)
+    _record_end(str(sku), "DELETED", store=creds.store, offer_gone=True,
+                listing_ids=[str((o.get("listing") or {}).get("listingId") or "")
+                             for o in offers])
     return OfferActionResult("delete-item", False, True, sku,
                              detail=f"inventory item + {len(offers)} offer(s) deleted")
 

@@ -1,6 +1,6 @@
 ---
-version: 3.1.0
-updated: 2026-10-24
+version: 3.1.1
+updated: 2026-10-25
 ---
 
 # RUN — v4 headless runbook
@@ -582,9 +582,11 @@ lot-mate that already has an order, a share, a settlement or a paid date
 `order_id` on two active rows. Across ledgers it also
 refuses a folder claimed from two ledgers (unless it is one client's lot), a
 lot on two folders, and one id in two of a client's ledgers. A listing that
-ended unsold, a sale that left the sales ledger (the finance sync drops
-refunded and cancelled orders) and an auction-format listing (consigned items
-stay fixed-price for now) are flagged in `state_note`, not given a state. Net
+ended (the row goes back to its on-hand state, `DRAFTED`, `SHOT` or `PREP`,
+flagged `listing <id> ended <date>: relist, return or dispose`), a sale that
+left the sales ledger (the finance sync drops refunded and cancelled orders)
+and an auction-format listing (consigned items stay fixed-price for now) are
+flagged in `state_note`, not given a state. Net
 is eBay's net before postage minus ad fee, postage and other costs; a blank ad
 fee or postage is unknown, not zero, so the row can't clear. Once
 `paid_to_client_date` is set, the row's `client_share` is frozen at what was
