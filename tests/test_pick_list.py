@@ -307,6 +307,7 @@ def test_poll_prints_each_held_order_with_buyer_and_release_time():
                        (pick_list, "load_listings_ledger"): lambda *_a: [],
                        (pick_list, "STATE_FILE"): state_file,
                        (pick_list, "OUT_DIR"): out_dir,
+                       (pick_list, "SHIP_QUEUE"): out_dir / "ship_queue.json",
                        (pick_list, "poll_and_print"): lambda **k: real_poll(
                            **k, fetch=lambda: [a, b], live_windows=[win])}), \
                 contextlib.redirect_stdout(buf):
@@ -1320,6 +1321,7 @@ def _multi(cfg=THREE):
     try:
         with _Patched({(pick_list, "STATE_FILE"): tmp / ".pick_list_state.json",
                        (pick_list, "OUT_DIR"): tmp / "pick_lists",
+                       (pick_list, "SHIP_QUEUE"): tmp / "ship_queue.json",
                        (pick_list, "scan_drafts"): lambda *_a: [],
                        (pick_list, "load_listings_ledger"): lambda *_a: []}):
             yield tmp

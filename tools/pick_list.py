@@ -94,6 +94,13 @@ OPEN_FILTER = "orderfulfillmentstatus:%7BNOT_STARTED%7CIN_PROGRESS%7D"
 STATE_FILE = ROOT / ".pick_list_state.json"
 OUT_DIR = ROOT / "pick_lists"
 
+# The shipping station's queue (webapp/ship.py reads it at /ship/box): one row
+# per open box, buyer-safe. reports/ is gitignored and, from a worktree, links
+# to the main checkout's, so every poll writes the same file. The sysadmin's
+# push copies it to green at the same repo-relative path.
+SHIP_QUEUE = ROOT / "reports" / "shipping" / "ship_queue.json"
+SHIP_QUEUE_VERSION = 1
+
 # The key an order is tagged with once we know which store's credentials
 # fetched it (#156). Underscored so it can never be mistaken for an eBay field.
 STORE_KEY = "_store"
@@ -422,6 +429,74 @@ def publish_sheet(orders: dict | list[dict], drafts: list[dict], ledger: list[di
         return None
 
 
+def _box_prefill(group: list[dict], drafts: list[dict], ledger: list[dict]) -> dict:
+    """Seller Hub's package fields for one box, estimated from the drafts:
+    the largest item's `shipping.package_in` and the summed packed weights.
+    All None unless every line item has a draft carrying both, because a box
+    that is only half known is measured, not guessed."""
+    from draft_io import DraftParseError, parse_draft            # noqa: PLC0415
+    empty = dict.fromkeys(("length_in", "width_in", "depth_in",
+                           "weight_lb", "weight_oz"))
+    boxes, total_oz = [], 0.0
+    for o in group:
+        for li in o.get("lineItems") or []:
+            row = {"sku": li.get("sku") or "", "listing_id": li.get("legacyItemId", ""),
+                   "title": li.get("title", "")}
+            folder, _ask, _how = match_sale(row, drafts, ledger)
+            if not folder:
+                return empty
+            try:
+                d = parse_draft(ROOT / folder / "draft.md")
+                box = [float(d.get(f"shipping.package_in.{k}") or 0)
+                       for k in ("length", "width", "depth")]
+                oz = (float(d.get("shipping.weight.major_lb") or 0) * 16
+                      + float(d.get("shipping.weight.minor_oz") or 0))
+            except (OSError, DraftParseError, TypeError, ValueError):
+                return empty
+            if min(box) <= 0 or oz <= 0:
+                return empty
+            boxes.append(box)
+            total_oz += oz * int(li.get("quantity") or 1)
+    if not boxes:
+        return empty
+    length, width, depth = max(boxes, key=lambda b: b[0] * b[1] * b[2])
+    lb, oz = divmod(round(total_oz, 2), 16)
+    return {"length_in": length, "width_in": width, "depth_in": depth,
+            "weight_lb": int(lb), "weight_oz": round(oz, 2)}
+
+
+def write_ship_queue(orders: list[dict], drafts: list[dict], ledger: list[dict],
+                     store: str | None = None, path: Path | None = None) -> Path:
+    """Write the shipping station's queue: one row per box (group_shipments),
+    with the buyer as "First L." plus city and state (#311's PII rule; the
+    street address stays on the pick sheet) and the drafts' size and weight
+    as prefill. One poll is one store, so this replaces that store's rows and
+    keeps the other stores' rows from their own last poll."""
+    from pick_list_html import _short_name                       # noqa: PLC0415
+    path = path or SHIP_QUEUE
+    this = store or stores.DEFAULT_STORE
+    boxes = []
+    for group in group_shipments(orders):
+        to = ship_to(group[0])
+        a = to.get("contactAddress") or {}
+        boxes.append({"store": order_store(group[0]),
+                      "order_ids": [o["orderId"] for o in group],
+                      "buyer": _short_name(to.get("fullName", "")),
+                      "city": a.get("city") or "", "state": a.get("stateOrProvince") or "",
+                      "prefill": _box_prefill(group, drafts, ledger)})
+    try:
+        old = json.loads(path.read_text(encoding="utf-8")).get("boxes") or []
+    except (OSError, ValueError, AttributeError):
+        old = []
+    keep = [b for b in old if b.get("store") != this]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"version": SHIP_QUEUE_VERSION, "generated_at": _now_iso(),
+                               "boxes": keep + boxes}, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
 def _record_link(entry: dict, sheet) -> None:
     """Remember a published sheet's link on its state entry — the one place a
     link is written down, and a gitignored one (STATE_FILE). A sheet that
@@ -450,6 +525,7 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                    ttl_hours: float | None = None,
                    store: str | None = None,
                    live_windows: list[dict] | None = None,
+                   ship_queue: Path | None = None,
                    ) -> tuple[list[str], list[str], dict]:
     """Fetch orders awaiting shipment; render each NEW one to `out_dir`.
 
@@ -479,6 +555,9 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
     after that picks them up. `reprint` overrides, and an order already
     recorded as printed is never held: it keeps its "already printed" line
     and link instead of vanishing from the poll.
+
+    `ship_queue`: also write every open box, held orders excluded, to that
+    path for the shipping station (write_ship_queue). None writes nothing.
     """
     orders = tag_orders(fetch() if fetch is not None else fetch_open(store), store)
     st = state if state is not None else _load_state(store)
@@ -535,6 +614,11 @@ def poll_and_print(*, out_dir: Path = OUT_DIR, state: dict | None = None,
                 sheet = publish_sheet(group, drafts, ledger, ttl_hours=ttl_hours)
             for oid in group_ids:
                 _record_link(st["printed"][oid], sheet)
+    if ship_queue is not None:
+        try:
+            write_ship_queue(orders, drafts, ledger, store, ship_queue)
+        except Exception as e:                                      # noqa: BLE001
+            print(f"  ! could not write the ship queue {ship_queue} ({e})")
     return new_ids, skipped_ids, st
 
 
@@ -684,7 +768,8 @@ def _poll_one_store(args, store: str) -> int:
     # a repointed OUT_DIR is honoured here too.
     new_ids, skipped_ids, state = poll_and_print(
         out_dir=OUT_DIR, reprint=args.reprint,
-        publish=not args.no_links, ttl_hours=args.ttl, store=store)
+        publish=not args.no_links, ttl_hours=args.ttl, store=store,
+        ship_queue=SHIP_QUEUE)
     _save_state(state, store)
     held = state.get("held") or {}
     if held:

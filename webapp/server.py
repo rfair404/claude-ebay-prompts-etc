@@ -55,6 +55,10 @@ book one (dry run, then an explicit confirm), track it. It is the one area
 that calls a paid third-party API with a stored key — see that module's
 docstring for why, and `freight.web_booking: false` to switch booking off.
 
+`/ship/box` (webapp/ship.py) is the shipping station's box entry: size and
+weight per box, appended to reports/shipping/boxes.csv. It runs on green,
+which has no config.yaml, so the app must start and serve it without one.
+
     python -m lib.cli serve                 # -> http://127.0.0.1:8770
     python -m lib.cli serve --port 8080
 """
@@ -82,6 +86,7 @@ import tools.review_card_html as _review_card_html   # noqa: E402
 import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
 import webapp.pager as _pager                          # noqa: E402
+import webapp.ship as _ship                            # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
 
@@ -91,6 +96,7 @@ DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
 app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
 app.include_router(_pager.router)     # /api/pager — which page of the live show is on air
+app.include_router(_ship.router)      # /ship/box — box size and weight at the shipping station
 _queue: Optional[JobQueue] = None
 
 
