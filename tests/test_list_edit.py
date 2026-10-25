@@ -137,6 +137,17 @@ _BODY = ("A well-loved vintage widget from our collection, kept in a "
          "climate-controlled space and gently cared for over the years.")
 
 
+def _write_passing_price(shoot: Path) -> None:
+    """price.txt + Stage B save that pass lib/price_gate.py, so a fixture
+    that reaches validate_draft_for_sync / publish_offer isn't refused for a
+    missing sold pull. Tests of the gate itself overwrite price.txt."""
+    (shoot / "price.txt").write_text(
+        "  B · Browser   : RAN — query \"widget\" — best_match n=9 + price_high n=9"
+        " — saved 2 JSONs — price_stats n_kept=8, conf=good\n", encoding="utf-8")
+    (shoot / "apify_run_20261024T000000Z_browse-best_match-p1-20261023T200000.json"
+     ).write_text("{}", encoding="utf-8")
+
+
 def _write_single_draft(tmp: Path, *, sku="", offer_id="") -> Path:
     """A minimal, sync-ready single-item draft.md with one real (empty) photo
     file on disk, so validate_draft_for_sync passes."""
@@ -145,6 +156,7 @@ def _write_single_draft(tmp: Path, *, sku="", offer_id="") -> Path:
     (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff")  # jpeg magic, content irrelevant
     meta_sku_line = f'  ebay_inventory_sku: "{sku}"\n' if sku else ""
     meta_offer_line = f'  ebay_offer_id: "{offer_id}"\n' if offer_id else ""
+    _write_passing_price(shoot)
     draft_path = shoot / "draft.md"
     draft_path.write_text(
         "---\n"
@@ -422,6 +434,38 @@ def test_publish_offer_dry_run_makes_no_publish_call():
     assert res.dry_run is True
     assert res.price == "24.99"
     assert not [c for c in calls if c[0] == "POST"], "dry run must never publish"
+
+
+_UNAVAILABLE_PRICE = ("  B · Browser   : UNAVAILABLE — no claude-in-chrome (logged-in "
+                      "browser) in this session\n")
+
+
+def test_validate_refuses_a_price_set_without_a_sold_pull():
+    """2026-10-24 comp audit: ~30 prices were set from asks while Stage B
+    was UNAVAILABLE. Such a draft must not pass --validate/--sync/--list."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        assert L.validate_draft_for_sync(draft_path) == []
+        (draft_path.parent / "price.txt").write_text(_UNAVAILABLE_PRICE, encoding="utf-8")
+        issues = L.validate_draft_for_sync(draft_path)
+    assert [i for i in issues if "without a sold pull" in i], issues
+
+
+def test_publish_offer_refuses_a_price_set_without_a_sold_pull():
+    """--publish skips validate, so publish_offer itself refuses: no
+    publishOffer POST, nothing in the ledger."""
+    send, calls = _fake_api({"/offer/OFFER-1": {
+        "status": "UNPUBLISHED", "sku": "abc12300",
+        "pricingSummary": {"price": {"value": "24.99"}},
+    }})
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
+        (draft_path.parent / "price.txt").write_text(_UNAVAILABLE_PRICE, encoding="utf-8")
+        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+            with pytest.raises(ValueError, match="without a sold pull"):
+                L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+            assert not _ledger_rows(ledger)
+    assert not [c for c in calls if c[0] == "POST"], "refused publish must never POST"
 
 
 def test_publish_offer_golden_publish_body_is_empty_and_updates_ledger():
@@ -1145,6 +1189,7 @@ def _write_bo_draft(tmp: Path, *, price="199.00", enabled=True, decline=None,
     if melt is not None:
         lines.append(f'  melt_value: "{melt}"')
     lines += ["---", _BODY, ""]
+    _write_passing_price(shoot)
     draft_path = shoot / "draft.md"
     draft_path.write_text("\n".join(lines), encoding="utf-8")
     return draft_path
