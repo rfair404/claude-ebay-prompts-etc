@@ -61,7 +61,7 @@ GH = f"""#!/bin/bash
 printf '%s{SEP}' gh "$@" >> "$STUB_DIR/calls"; echo >> "$STUB_DIR/calls"
 case "$1 $2" in
   "run list") if [[ -e $STUB_DIR/dispatched ]]; then cat "$STUB_DIR/after"; else cat "$STUB_DIR/before"; fi ;;
-  "workflow run") touch "$STUB_DIR/dispatched" ;;
+  "workflow run") [[ ${{GH_DISPATCH_RC:-0}} == 0 ]] || exit "$GH_DISPATCH_RC"; touch "$STUB_DIR/dispatched" ;;
   "run watch") exit "${{GH_WATCH_RC:-0}}" ;;
   "run view") for i in $(seq 1 200); do echo "failed log line $i"; done ;;
   *) echo "gh stub: unexpected: $*" >&2; exit 99 ;;
@@ -160,6 +160,15 @@ def test_dispatches_the_current_branch_and_watches_only_its_own_run(ci):
     for flag, value in (("--workflow", "tests.yml"), ("--branch", "feature-x"),
                         ("--event", "workflow_dispatch")):
         assert listing[listing.index(flag) + 1] == value, listing
+
+
+def test_a_refused_dispatch_says_why_and_watches_nothing(ci):
+    """Seen live on 2026-10-24: the laptop's gh token got HTTP 403 from the
+    dispatches endpoint because it had no Actions write scope."""
+    proc = ci(runs_after=[row(202, OURS, 5)], GH_DISPATCH_RC="1")
+    assert proc.returncode == 2
+    assert "Actions: Read and write" in proc.stderr
+    assert not any(c[:2] == ["run", "watch"] for c in proc.gh)
 
 
 def test_a_run_that_never_appears_fails_instead_of_watching_another(ci):

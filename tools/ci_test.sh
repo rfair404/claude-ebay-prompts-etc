@@ -56,7 +56,10 @@ before=$(runs | cut -f1 | tr '\n' ' ')
 # A minute of slack for clock skew between here and GitHub. A run that was
 # already listed above is never ours, so the slack cannot pick an old run.
 since=$(date -u -d "@$(( $(date +%s) - 60 ))" +%Y-%m-%dT%H:%M:%SZ)
-gh workflow run "$WORKFLOW" --ref "$branch"
+gh workflow run "$WORKFLOW" --ref "$branch" ||
+  die "the dispatch was refused (gh's error above). An HTTP 403 means the gh token cannot
+write Actions: a fine-grained token needs 'Actions: Read and write' on this repo.
+Until then, open the branch's PR: CI runs the suite on every PR."
 printf 'ci_test: dispatched %s on %s at %s\n' "$WORKFLOW" "$branch" "${sha:0:12}"
 
 run_id='' url=''
