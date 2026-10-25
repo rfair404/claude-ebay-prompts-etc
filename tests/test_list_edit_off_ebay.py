@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -178,7 +179,7 @@ def test_an_eligible_draft_still_syncs(tmp_path, ledger, api, monkeypatch, capsy
 @pytest.mark.parametrize("value", ["false", '"false"', '"no"', "0", '"nope"'])
 def test_ebay_eligible_fails_closed(value):
     """Anything that isn't missing or true-like keeps the item off eBay."""
-    fm = {"meta": {"ebay_eligible": __import__("yaml").safe_load(value)}}
+    fm = {"meta": {"ebay_eligible": yaml.safe_load(value)}}
     assert ebay_block_reason(fm) == "INELIGIBLE for eBay: no reason given"
 
 
