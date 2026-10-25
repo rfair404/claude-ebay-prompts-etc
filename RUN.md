@@ -229,54 +229,74 @@ below does not stop `ci_test.sh`. Local `python -m pytest <one test file>`
 stays. Green is print-only now: `tools/green_test.sh` is deprecated, use
 `tools/ci_test.sh`.
 
-### Green: the shipping station
+### Green: the print server
 
-Green is a thin client plus a print server. Its desk is a browser for the
-R2 pick-sheet links, Seller Hub and the `/ship/box` page on green's own
-`127.0.0.1:8770`. Its CUPS serves the Brother QL-1100 to the LAN. The heavy
-work, the eBay API keys and refresh tokens, the R2 keys, `config.yaml` and
-the ledgers stay on the laptop. Green holds only a browser login: Seller Hub
-signed in in its Firefox, which is an eBay session on green. Every connection opens from the laptop over `ssh green` (host
-`green.lan`, key `~/.ssh/green`, in `~/.ssh/config`), so green has no way
-back in. Green is optional: if it is down, label jobs wait in the laptop's
-queue, and `--laptop usb` puts the printer back on the laptop.
+Green is a print server and nothing else (Russell, 2026-10-24): its CUPS
+spools the Brother QL-1100 for the LAN. It runs no desktop, no browser, no
+tests and no shipping screen. The `/ship/box` page runs on the laptop's own
+`lib.cli serve`, and heavy jobs are going to a cloud service rather than to
+green. The eBay API keys and refresh tokens, the R2 keys, `config.yaml` and
+the ledgers stay on the laptop, and green holds no login. Every connection
+opens from the laptop over `ssh green` (host `green.lan`, key
+`~/.ssh/green`, in `~/.ssh/config`), so green has no way back in. Green is
+optional: if it is down, label jobs wait in the laptop's queue, and
+`--laptop usb` puts the printer back on the laptop.
 
     python tools/green_setup.py --dry-run         # read green, print every step; change nothing
     python tools/green_setup.py                   # apply: sudo here, then sudo on green
-    python tools/green_setup.py --autologin yes   # also log green's desktop in at boot
+    python tools/green_setup.py --close-others    # also switch ufw on over green's other listeners
+    python tools/green_setup.py --laptop skip     # green only; the laptop's queue stays as it is
     python tools/green_setup.py --laptop usb      # cable back on the laptop
+    python tools/green_setup.py --remove-desktop  # purge the desktop an earlier run installed
 
-It reads green first: OS, RAM, GPU, display manager and sessions, the
-desktop packages, the printer on USB, the listening ports and ufw. Then it
-does only what is missing:
+It reads green first: OS, the printer on USB, the listening ports and ufw.
+Then it does only what is missing:
 
-- **Desktop.** A desktop green already has is kept. If it has none, it gets XFCE
-  with LightDM (LXQt under 2 GB of RAM) and Firefox (`firefox-esr` on Debian).
-  A **Ship** launcher in the menu and on the desktop opens `/ship/box`.
-  Auto-login is only set with `--autologin yes`.
-- **Printer.** The same Brother driver as the laptop (`ql1100pdrv` 2.1.4,
-  copied from the laptop's `~/Downloads` and checked by SHA-256), a
-  `QL-1100` queue on green's USB at `PageSize=103x164`, shared.
-  `tools/print_label.sh` works unchanged on green, with the labels in
-  green's `~/Downloads`.
+- **Driver on the laptop.** The laptop's queue keeps its name `QL-1100` and
+  the Brother PPD (`ql1100pdrv` 2.1.4), so browser print dialogs and
+  `tools/print_label.sh` see `103x164` and the other label sizes. With the
+  cable on green it forwards the filtered job to
+  `ipp://green.lan:631/printers/QL-1100`, and jobs retry while green is
+  down. After the repoint the tool checks that `lpoptions -p QL-1100 -l`
+  lists `103x164` and fails loud if it doesn't. A raw forward (the first
+  version) had no PPD, so dialogs showed no label sizes. An `-m everywhere`
+  queue was not used: it needs green up to be created, and its size names
+  are not the PPD's `103x164` that `print_label.sh` asks for.
+- **Laptop, first.** With the cable on green, the laptop's queue points at
+  nothing until it is repointed, so this step runs before green's. The
+  repoint is refused while the printer is still on the laptop's USB.
+  `print_label.sh` also checks the far queue and says if green's is paused.
+- **Green's queue.** CUPS and ufw only, then a raw `QL-1100` queue on
+  green's USB, shared. CUPS 2.4 warns that raw queues are deprecated; they
+  still work, and green needs no driver.
 - **Sharing, LAN only.** `cupsctl --share-printers --no-remote-any
   --no-remote-admin` limits CUPS to the local subnet. ufw opens 631/tcp and
   SSH to green's own /24 and nothing else. ufw is not switched on over other
   listening ports unless `--close-others` says so.
-- **Laptop, first.** With the cable on green, the laptop's queue points at
-  nothing until it is repointed, so this step runs before green's. The
-  queue keeps its name `QL-1100` and becomes a raw forward to
-  `ipp://green.lan:631/printers/QL-1100`. Green's queue runs the driver,
-  and jobs retry while green is down. The repoint is refused while the
-  printer is still on the laptop's USB. `print_label.sh` also checks the
-  far queue and says if green's is paused.
-- **Order on green.** Packages, driver, queue, sharing and firewall come
-  first, so labels work before the desktop's long download.
 
-The dry run prints a RAM budget for desktop, Firefox and a
-`green_test.sh` run at once. The test run's 900 MB peak was measured. The
-other figures are estimates, so read the verdict as a guide. Nothing is
-applied while `inventory/_live/ON_AIR` exists.
+Nothing is applied while `inventory/_live/ON_AIR` exists.
+
+**The desktop is opt-in, off for now.** `--desktop` (with `--autologin
+yes|no`) still adds XFCE with LightDM (LXQt under 2 GB of RAM), Firefox and
+a **Ship** launcher, last, after the printer. `--remove-desktop` undoes a
+desktop run. It reads green's apt history for the desktop installs this
+script ran (`apt-get install -y -q` with only desktop packages named) and
+purges those of `xfce4`, `xfce4-terminal`, `lightdm`, `lightdm-gtk-greeter`,
+`xorg` and `firefox`/`firefox-esr` that are still installed, plus what only
+they pulled in (`apt-get purge --autoremove`). It also removes
+`50-pops-autologin.conf` and the Ship launcher, and sets
+`multi-user.target`. If apt would remove a package the script didn't
+install, the cleanup marks it manual and keeps it, or stops before changing
+anything. The dry run shows the list.
+
+**Next on green: MicroK8s off, then the firewall.** Green also runs
+MicroK8s (snap) and LXD. Russell's user has no MicroK8s access, and it
+listens to the LAN on 10250, 10257, 10259, 16443 and 25000 with ufw off. A
+print server needs none of it. `sudo snap disable microk8s` stops it and
+keeps its data (`snap enable microk8s` brings it back). Then
+`green_setup.py --laptop skip --close-others` switches ufw on, so only SSH
+and CUPS answer from the /24. LXD's bridge (`lxdbr0`) loses DHCP under
+ufw's default deny, which only matters if a container is in use there.
 
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
