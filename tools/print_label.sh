@@ -25,7 +25,7 @@ fi
 
 lpstat -p "$PRINTER" | grep -q disabled && { echo "$PRINTER is paused: cupsenable $PRINTER" >&2; exit 1; }
 # On the laptop the queue may forward to green's (RUN.md, "Green: the
-# shipping station"). Check the far queue too; if green is down the job waits
+# print server"). Check the far queue too; if green is down the job waits
 # here and prints when green is back.
 uri=$(lpstat -v "$PRINTER" 2>/dev/null | awk '{print $NF}')
 if [[ $uri == ipp://* ]]; then
