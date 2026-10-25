@@ -136,3 +136,28 @@ def test_written_account_is_plain_ascii(estate, monkeypatch):
     header = next(ln for ln in lines if ln.startswith("#"))
     row = next(ln for ln in lines if "Petit Modele" in ln)
     assert row.index("LIVE") == header.index("STATUS")
+
+
+def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
+    # The client reads the account: an unlisted row shows its estimate, not
+    # the push-high ask it will list at. A live or sold row shows its ask.
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    rows = [dict(base, item_id="K01-C033", description="Sterling set", state="PREP",
+                 est_low="1682.55", est_high="3365.09", ask="5995"),
+            dict(base, item_id="K01-C040", description="Listed cup", state="LISTED",
+                 est_low="90.00", est_high="90.00", ask="145.00"),
+            dict(base, item_id="K01-C041", description="Asked only", state="PREP",
+                 ask="24.99")]
+    C.write_ledger(lot / C.LEDGER_NAME, rows)
+    text, _ = RL.consign_account(lot, "K01", date(2026, 10, 25))
+    line = {r["item_id"]: next(ln for ln in text.splitlines() if ln.startswith(r["item_id"]))
+            for r in rows}
+    assert "$1682.55-3365.09" in line["K01-C033"] and "5995" not in line["K01-C033"]
+    assert "ask $145.00" in line["K01-C040"]
+    assert "ask $24.99" in line["K01-C041"]
