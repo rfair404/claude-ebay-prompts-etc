@@ -262,3 +262,125 @@ def test_main_says_so_when_the_local_app_is_down(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(R.pick_store, "server_is_up", lambda *a, **k: False)
     assert R.main([str(s)]) == 0
     assert "lib.cli serve" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# The money line: what the buyer pays, from the draft and the resolved policy
+# ---------------------------------------------------------------------------
+
+def _price_fact(page):
+    m = re.search(r"<dt>Price</dt><dd>(.*?)</dd>", page)
+    return re.sub(r"<[^>]+>", "", m.group(1))
+
+
+def _with(tmp_path, *, fm_extra="", ship_extra="", card=CARD):
+    s = _shoot(tmp_path)
+    d = DRAFT.replace('quantity: 1\n', 'quantity: 1\n' + fm_extra)
+    d = d.replace('  primary_service: "USPSGroundAdvantage"\n',
+                  '  primary_service: "USPSGroundAdvantage"\n' + ship_extra)
+    (s / "draft.md").write_text(d, encoding="utf-8")
+    (s / "review_card.md").write_text(card, encoding="utf-8")
+    return R.render(s)
+
+
+FREE_CARD = ("Preflight\n  • shipping: using default ground policy -> "
+             "'Free USPS Ground' (USPSParcel) · seller pays (free shipping)\n")
+CALC_CARD = ("Preflight\n  • shipping: using default ground policy -> "
+             "'Buyer pays calculated - USPS Ground (1 day)' (USPSParcel) · buyer pays calculated\n")
+
+
+def test_fixed_price_with_free_shipping_reads_as_delivered(tmp_path):
+    page = _with(tmp_path, ship_extra="  free_shipping: true\n", card=FREE_CARD)
+    assert _price_fact(page) == "$42.00 delivered — free shipping"
+
+
+def test_fixed_price_with_calculated_shipping_never_says_free(tmp_path):
+    page = _with(tmp_path, ship_extra='  free_shipping: false\n  domestic_shipping_type: "CALCULATED"\n',
+                 card=CALC_CARD)
+    assert _price_fact(page) == "$42.00 + buyer-paid calculated shipping"
+    assert "free shipping" not in page and "delivered" not in _price_fact(page)
+
+
+def test_calculated_shipping_from_the_draft_when_the_card_predates_the_policy_word(tmp_path):
+    # Cards written before preflight said who pays: the draft decides.
+    page = _with(tmp_path, ship_extra='  free_shipping: false\n  domestic_shipping_type: "CALCULATED"\n')
+    assert _price_fact(page) == "$42.00 + buyer-paid calculated shipping"
+
+
+def test_an_auction_shows_its_start_bid_and_length(tmp_path):
+    page = _with(tmp_path, fm_extra='format: "AUCTION"\nlisting_duration: "DAYS_10"\n',
+                 ship_extra='  free_shipping: false\n  domestic_shipping_type: "CALCULATED"\n',
+                 card=CALC_CARD)
+    assert _price_fact(page) == "start bid $42.00 · 10-day auction · buyer pays calculated shipping"
+    assert "delivered" not in page
+    assert "start bid · 10-day auction" in page              # header, under the amount
+
+
+def test_the_policy_wins_and_a_disagreeing_draft_is_flagged(tmp_path):
+    # The draft's free_shipping is read by nothing at publish; the policy is.
+    page = _with(tmp_path, ship_extra="  free_shipping: true\n", card=CALC_CARD)
+    fact = _price_fact(page)
+    assert fact.startswith("$42.00 + buyer-paid calculated shipping")
+    assert "the draft says seller pays (free shipping)" in fact
+
+
+def test_unknown_payer_is_said_not_guessed(tmp_path):
+    page = R.render(_shoot(tmp_path))
+    assert "who pays shipping is not stated" in _price_fact(page)
+    assert "free shipping" not in _price_fact(page)
+
+
+# ---------------------------------------------------------------------------
+# Same page, smaller facts
+# ---------------------------------------------------------------------------
+
+def test_condition_shows_what_the_buyer_sees_not_the_enum(tmp_path):
+    card = 'Preflight\n  • condition: USED_EXCELLENT OK for category -> buyer sees "Pre-owned"\n'
+    page = _with(tmp_path, card=card)
+    m = re.search(r"<dt>Condition</dt><dd>(.*?)</dd>", page)
+    assert re.sub(r"<[^>]+>", "", m.group(1)) == "Pre-owned"
+
+
+def test_the_page_scales_on_a_phone(tmp_path):
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in R.render(_shoot(tmp_path))
+
+
+def test_the_cover_hint_names_no_command_the_page_lacks(tmp_path):
+    page = R.render(_shoot(tmp_path))
+    assert "command" not in re.search(r'<p class="hint">(.*?)</p>', page, re.S).group(1)
+
+
+def test_a_comps_board_in_the_folder_is_embedded_without_scripts(tmp_path):
+    s = _shoot(tmp_path)
+    assert "Comps board" not in R.render(s)
+    (s / "comps_board.html").write_text(
+        '<!doctype html><h3>EXACT COPY $19.84</h3><script>alert(1)</script>', encoding="utf-8")
+    page = R.render(s)
+    assert "Comps board" in page and "EXACT COPY $19.84" in page
+    assert "<script" not in page.lower()                   # escaped into srcdoc
+    frame = re.search(r"<iframe[^>]*>", page).group(0)
+    assert 'sandbox="allow-popups allow-popups-to-escape-sandbox"' in frame
+
+
+def test_a_supersedes_line_hides_the_flag_it_quotes(tmp_path):
+    card = ("Needs review / manual intervention\n"
+            "  • - [PRICE] tiers are active asks, run Stage B\n"
+            "  • - [DRAFT] photos point at ORIGINALS; PREP not run\n"
+            "  • - [PREP] AD re-signed. Supersedes the [DRAFT] \"photos point at ORIGINALS\" line.\n")
+    page = _with(tmp_path, card=card)
+    flagged = re.search(r"<h2>Flagged for a human</h2>\s*<ul class=\"flags\">(.*?)</ul>", page, re.S).group(1)
+    assert "photos point at ORIGINALS; PREP not run" not in flagged
+    assert "run Stage B" in flagged                         # unrelated flag stays
+    settled = re.search(r'<details class="settled">(.*?)</details>', page, re.S).group(1)
+    assert "1 earlier line settled" in settled and "PREP not run" in settled
+
+
+def test_a_resolved_line_never_hides_a_flag_that_is_still_open(tmp_path):
+    # TD repro on #349: "RESOLVED: price" used to fold the open label-weight flag.
+    card = ("Needs review / manual intervention\n"
+            "  • - [DRAFT] weight is a guess; price the label\n"
+            "  • - 2026-10-24 RESOLVED: price — Push-high confirmed\n")
+    page = _with(tmp_path, card=card)
+    flagged = re.search(r"<h2>Flagged for a human</h2>\s*<ul class=\"flags\">(.*?)</ul>", page, re.S).group(1)
+    assert "weight is a guess; price the label" in flagged
+    assert '<details class="settled">' not in page

@@ -1610,10 +1610,35 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             else:
                 desc = ", ".join(offered) if offered else (
                     "local pickup" if pol.get("localPickup") else "freight")
-                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})")
+                who = policy_who_pays(pol)
+                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})"
+                               + (f" · {who}" if who else ""))
     except (EbayAPIError, EbayAuthError) as e:
         msgs.append(f"shipping: could not verify fulfillment policy ({e})")
     return chosen, msgs
+
+
+def policy_who_pays(pol: dict) -> str:
+    """Who pays domestic postage under a fulfillment policy, in the words the
+    review card prints: "seller pays (free shipping)", "buyer pays
+    calculated", "buyer pays flat rate", "local pickup", or "" when the policy
+    doesn't say.
+
+    The policy, not the draft, decides this: nothing reads the draft's
+    `shipping.free_shipping` at publish. eBay's free-shipping flag lives on
+    the first domestic service, so that is the one checked.
+    """
+    dom = [o for o in (pol.get("shippingOptions") or [])
+           if str(o.get("optionType") or "DOMESTIC").upper() == "DOMESTIC"]
+    services = sorted((s for o in dom for s in (o.get("shippingServices") or [])),
+                      key=lambda s: s.get("sortOrder") or 0)
+    if not services:
+        return "local pickup" if pol.get("localPickup") else ""
+    if services[0].get("freeShipping"):
+        return "seller pays (free shipping)"
+    cost = str(dom[0].get("costType") or "").upper()
+    return {"CALCULATED": "buyer pays calculated",
+            "FLAT_RATE": "buyer pays flat rate"}.get(cost, "")
 
 
 def _insurance_notes(draft: Draft) -> list[str]:
