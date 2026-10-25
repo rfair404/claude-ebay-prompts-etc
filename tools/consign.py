@@ -42,7 +42,8 @@ Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
 DRAFTED (draft.md exists), LISTED (live on eBay: the SKU or listing id has
 a listings-ledger row PUBLISHED, OUT_OF_STOCK, SOLD or SHIPPED; DRAFTED and
 SYNCED are not live, and an ENDED row, or a DELETED one that was published,
-leaves the item in its on-hand state), SOLD (a sales_ledger row), CLEARED
+leaves the item in its on-hand state; off eBay, placed_at is typed: on the
+mall floor), SOLD (a sales_ledger row), CLEARED
 (sold, ad fee and postage known, and past the later of sold_at + 40 days and
 delivered_at + 30 days), SETTLED (paid_to_client_date set, copied from a
 paid settlement). RETURNED, DISPOSED and EXCLUDED win over anything
@@ -67,7 +68,9 @@ it clears at the end of the month it sold, once funds_received (typed when
 the money reaches us) is set, and never before. channel `mall` is the antique-mall booth:
 type sold_at, item_price and card_paid, and sync works out the fee (10% plus
 3% of card_paid), with no postage. Every sold row pays handling, whatever
-the channel.
+the channel. Off eBay, listing_id is the channel's own item id (the mall's
+GAM SKU) and is never looked up in the eBay ledgers; type it with placed_at
+(the date it went on the floor) and the row is LISTED until it sells.
 
 Set B flags (no state change): an ask or sale below the client's floor (a
 lot's floor is its rows' total), a listing live longer than listing_days
@@ -128,6 +131,9 @@ COLUMNS = [
     # card_paid: on a mall sale, the part the buyer paid by card.
     # funds_received: off eBay, the date the channel's money reached us.
     "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
+    # placed_at: off eBay, the date the item went on the channel's floor (the
+    # mall booth), with that channel's own item id (the GAM SKU) in listing_id.
+    "placed_at",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
@@ -138,7 +144,7 @@ MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded
 SALE_MONEY = tuple(k for k in MONEY
                    if k not in ("est_low", "est_high", "buyout_price", "floor"))
 DATES = ("sold_at", "cleared_on", "paid_to_client_date", "intake", "delivered_at",
-         "return_notice_sent", "funds_received")
+         "return_notice_sent", "funds_received", "placed_at")
 # Copied from the sales ledger row on every sync. ad_fee / actual_postage are
 # copied only when the sales ledger knows them: a blank there means "not read
 # yet", and a figure typed into the client ledger by hand is kept instead.
@@ -146,7 +152,8 @@ SALE_FIELDS = ("order_id", "sold_at", "item_price", "buyer_shipping", "refunded"
                "ebay_fee", "net_before_postage")
 SALE_OPTIONAL = ("ad_fee", "actual_postage")
 # What a lot-mate copies from its lead, besides the state.
-LOT_COPY = ("store", "sku", "listing_id", "sold_at", "cleared_on", "channel")
+LOT_COPY = ("store", "sku", "listing_id", "sold_at", "cleared_on", "channel",
+            "placed_at")
 # A row's channel: blank is eBay, matched against the sales ledgers. Any other
 # channel (booth, dealer, another marketplace) is a sale typed by hand:
 # channel, sold_at, item_price, ebay_fee (that channel's fee), actual_postage
@@ -251,6 +258,7 @@ EXPORT_COLUMNS = [
     "other_costs_note", "buyout_price", "net", "split_locked", "client_share",
     "actuals_complete", "cleared_on", "settlement_id", "paid_to_client_date",
     "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
+    "placed_at",
     # line is "item", or "fee" for a row of the item's fee breakdown
     "line", *FEE_COLUMNS,
 ]
@@ -752,6 +760,12 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
         if r["channel"] and not CHANNEL_RE.match(r["channel"].lower()):
             errs.append(f"{tag}: channel {r['channel']!r} is not one word of letters, "
                         f"digits, - and _ (blank is ebay)")
+        if r["placed_at"] and not off_ebay(r):
+            errs.append(f"{tag}: placed_at is for an off-eBay channel (the {MALL} booth); "
+                        f"an eBay listing's date comes from the listings ledger")
+        elif r["placed_at"] and not r["listing_id"]:
+            errs.append(f"{tag}: placed_at needs the {channel_of(r)} item id in listing_id "
+                        f"(the mall's GAM SKU)")
         if r["card_paid"] and channel_of(r) != MALL:
             errs.append(f"{tag}: card_paid is for a {MALL} sale only (channel is "
                         f"{channel_of(r)})")
@@ -1089,6 +1103,10 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         r["state_note"] = NOTE_SEP.join(([note] if note else []) + [FLAG + f for f in flags])
         return flags
     was_prep = r["state"] == "PREP"
+    # Off eBay, listing_id is the channel's own id (the mall's GAM SKU): the
+    # eBay ledgers are never searched for it, and never write an eBay id over it.
+    off = off_ebay(r)
+    ebay_id = "" if off else r["listing_id"]
     folder = r["inventory_folder"] = norm_folder(r["inventory_folder"])
     state = "INTAKE"
     fmt = ""
@@ -1104,20 +1122,25 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         d = books.drafts.get(folder)
         if d:
             r["sku"] = r["sku"] or d.get("sku", "")
-            r["listing_id"] = r["listing_id"] or d.get("listing_id", "")
+            if not off:
+                r["listing_id"] = r["listing_id"] or d.get("listing_id", "")
             r["ask"] = r["ask"] or d.get("price", "")
             if not r["store"] and d.get("store"):
                 r["store"] = d["store"]
-    listing = books.listing_for(r["sku"], r["listing_id"])
+    listing = books.listing_for(r["sku"], ebay_id)
     if listing:
         lstore, lrow = listing
         if listing_status(lrow) != "ENDED":      # an ended listing keeps its on-hand state
             state = "LISTED"
         r["store"] = lstore
-        r["listing_id"] = r["listing_id"] or lrow.get("listing_id", "")
+        if not off:
+            r["listing_id"] = r["listing_id"] or lrow.get("listing_id", "")
         r["ask"] = lrow.get("price") or r["ask"]
+    placed = off and bool(r["placed_at"])        # on the channel's floor (validated)
+    if placed:
+        state = "LISTED"
 
-    sales = books.sales_for(folder, r["sku"], r["listing_id"])
+    sales = books.sales_for(folder, r["sku"], ebay_id)
     channel = channel_of(r)
     hand_sold = False
     vanished = False
@@ -1224,15 +1247,18 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         flags.append(f"sold at ${money(price)}, below the client's floor "
                      f"${money(floor)}: needs the client's written OK")
     # 180 days listed, then the client is told and has 30 days to pick it up.
-    if state == "LISTED" and listing and listing_status(listing[1]) != "ENDED":
-        first = books.first_published(r["sku"], r["listing_id"])
+    first = None
+    if state == "LISTED" and placed:
+        first = iso(r["placed_at"])
+    elif state == "LISTED" and listing and listing_status(listing[1]) != "ENDED":
+        first = books.first_published(r["sku"], ebay_id)
         if first is None:
             flags.append("listing window not checked: no published_at for this "
                          "listing in the listings ledger")
-        elif (today - first).days > listing_days:
-            flags.append(f"listing window over: end it and notify client (live since "
-                         f"{first}, {(today - first).days} days; the limit is "
-                         f"{listing_days})")
+    if first is not None and (today - first).days > listing_days:
+        flags.append(f"listing window over: end it and notify client (live since "
+                     f"{first}, {(today - first).days} days; the limit is "
+                     f"{listing_days})")
     notice = iso(r["return_notice_sent"])
     if notice and state not in SOLD_STATES:
         deadline = notice + timedelta(days=pickup_days)
