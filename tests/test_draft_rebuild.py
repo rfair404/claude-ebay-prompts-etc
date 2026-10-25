@@ -38,6 +38,11 @@ class _Creds:
     environment = "sandbox"
 
 
+def _not_held(listing_id, creds=None):
+    """Stand-in for the Trading GetItem hold check: the listing is not on hold."""
+    return None
+
+
 BODY_MD = """Vintage 1847 Rogers Bros Reflection pierced serving spoon, new old stock.
 
 It still has the factory sleeve, and the **pierced bowl** catches the light.
@@ -184,7 +189,7 @@ def _live_api():
 
 def test_dry_run_writes_nothing_and_reports_the_diff():
     send, calls = _live_api()
-    undo = _patch(L, api_send=send, get_allowed_condition_ids=lambda *a, **k: (set(), None))
+    undo = _patch(L, get_listing_hold=_not_held, api_send=send, get_allowed_condition_ids=lambda *a, **k: (set(), None))
     try:
         with tempfile.TemporaryDirectory() as td:
             path = _rebuilt(Path(td))
@@ -210,7 +215,7 @@ def test_dry_run_writes_nothing_and_reports_the_diff():
 
 def test_unchanged_rebuilt_draft_diffs_clean():
     send, _ = _live_api()
-    undo = _patch(L, api_send=send, get_allowed_condition_ids=lambda *a, **k: (set(), None))
+    undo = _patch(L, get_listing_hold=_not_held, api_send=send, get_allowed_condition_ids=lambda *a, **k: (set(), None))
     try:
         with tempfile.TemporaryDirectory() as td:
             plan: list = []
@@ -226,7 +231,7 @@ def test_unchanged_rebuilt_draft_diffs_clean():
 def test_empty_photos_never_reach_a_live_listing():
     for dry in (True, False):
         send, calls = _live_api()
-        undo = _patch(L, api_send=send)
+        undo = _patch(L, get_listing_hold=_not_held, api_send=send)
         try:
             with tempfile.TemporaryDirectory() as td:
                 try:

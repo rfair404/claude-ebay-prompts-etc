@@ -71,6 +71,11 @@ class _Creds:
     environment = "sandbox"
 
 
+def _not_held(listing_id, creds=None):
+    """Stand-in for the Trading GetItem hold check: the listing is not on hold."""
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Shared fakes / helpers
 # ---------------------------------------------------------------------------
@@ -428,7 +433,7 @@ def test_publish_offer_dry_run_makes_no_publish_call():
     }})
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=False)
 
     assert res.dry_run is True
@@ -481,7 +486,7 @@ def test_publish_offer_golden_publish_body_is_empty_and_updates_ledger():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
 
             assert res.dry_run is False
@@ -511,7 +516,7 @@ def test_publish_offer_promotes_the_new_listing():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
     adds = [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
     assert adds and adds[0][2] == {"requests": [{"listingId": "999888777"}]}
@@ -560,7 +565,7 @@ def test_publish_succeeds_when_promotion_fails():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
             assert _ledger_rows(ledger)[0]["status"] == "PUBLISHED"
     assert res.listing_id == "999888777"
@@ -592,7 +597,7 @@ def test_publish_offer_is_idempotent_second_call_does_not_republish():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=counting_send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=counting_send), _ledger_at(Path(td)) as ledger:
             first = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
             second = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
 
@@ -788,7 +793,7 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td))
-        with _patch_sync_collaborators(), _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             first = L.create_or_update_listing(draft_path, creds=_Creds())
             assert first.operation == "created"
             sku = first.inventory_sku
@@ -818,7 +823,7 @@ def _run_sync_cli(draft_path, send):
     real_argv = sys.argv
     sys.argv = ["list_edit.py", "--sync", str(draft_path)]
     try:
-        with _patch_sync_collaborators(), _patched(L, api_send=send,
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send,
                                                     load_credentials=lambda store=None: _Creds()), \
              _ledger_at(draft_path.parent), contextlib.redirect_stdout(out):
             L._cli()
@@ -841,7 +846,7 @@ def test_sync_of_a_published_offer_reports_the_live_listing_not_a_draft():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td))
-        with _patch_sync_collaborators(), _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.create_or_update_listing(draft_path, creds=_Creds())
         assert (res.offer_status, res.listing_id, res.listing_status) == \
             ("PUBLISHED", "880009332259", "ACTIVE")
@@ -1303,6 +1308,7 @@ def test_edit_bestoffer_refuses_floor_at_or_above_the_live_price():
                                   "listingPolicies": {"fulfillmentPolicyId": "F-1"}},
     })
     L.api_send = send
+    L.get_listing_hold = _not_held
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / "s"
         tmp.mkdir()
@@ -1364,7 +1370,7 @@ def _update(tmp, fields, *, api=None, dry_run=False):
     import io
     err = io.StringIO()
     draft_path = _write_single_draft(tmp, sku=_UPD_SKU, offer_id="9")
-    with _patched(L, api_send=api or _live_listing_api()), contextlib.redirect_stderr(err):
+    with _patched(L, get_listing_hold=_not_held, api_send=api or _live_listing_api()), contextlib.redirect_stderr(err):
         L.update_listing_fields(draft_path, fields, creds=_Creds(), dry_run=dry_run)
     return err.getvalue()
 
@@ -1417,7 +1423,7 @@ def test_update_cli_exits_1_when_the_ledger_write_fails():
         draft_path = _write_single_draft(Path(td), sku=_UPD_SKU, offer_id="9")
         sys.argv = ["list_edit.py", "--update", str(draft_path), "--fields", "price"]
         try:
-            with _patched(L, api_send=_live_listing_api(),
+            with _patched(L, get_listing_hold=_not_held, api_send=_live_listing_api(),
                           load_credentials=lambda store=None: _Creds()), \
                  contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 L._cli()

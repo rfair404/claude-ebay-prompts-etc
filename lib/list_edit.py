@@ -123,6 +123,7 @@ from ebay_client import (
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
+    get_listing_hold,
     get_condition_names,
     get_category_suggestions,
     get_fulfillment_policies,
@@ -2142,6 +2143,15 @@ class ListingNotSellable(RuntimeError):
     """The SKU's offer is not live — updating it could resurrect a sold item."""
 
 
+class ListingOnHold(RuntimeError):
+    """eBay has the listing on a policy hold; the Inventory API refuses revisions."""
+
+
+def _revise_url(listing_id: str) -> str:
+    """Seller Hub's revise page, where eBay's "fix it" flow for a held listing runs."""
+    return f"https://www.ebay.com/sl/list?mode=ReviseItem&itemId={listing_id}"
+
+
 def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
     """Ask eBay — not the local ledger — whether this SKU is still on sale.
 
@@ -2150,7 +2160,7 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
     that sees every sale. So a sold item can sit in the ledger as PUBLISHED for
     hours, and a batch update will happily write to it.
 
-    Returns {sellable, status, quantity, offer_id, listing_id, reason}.
+    Returns {sellable, status, quantity, offer_id, listing_id, on_hold, reason}.
     """
     try:
         d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}",
@@ -2180,7 +2190,8 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
         reason = "availableQuantity is 0 — the item has sold out"
     return dict(sellable=not reason, status=status or lstatus or "unknown",
                 quantity=qty, offer_id=o.get("offerId"),
-                listing_id=listing.get("listingId"), reason=reason)
+                listing_id=listing.get("listingId"),
+                on_hold=bool(listing.get("listingOnHold")), reason=reason)
 
 
 def resolve_draft_state(draft_path: Path,
@@ -2275,6 +2286,9 @@ def update_listing_fields(draft_path: Path, fields,
     hand eBay a positive quantity for an item that had already sold and get the
     listing resurrected as a new one. That happened on a real SKU. Checking the
     ledger is not sufficient — an accepted Best Offer never writes back to it.
+
+    REFUSES a listing eBay has on a policy hold (ListingOnHold), with the
+    Seller Hub revise link. A dry run warns and still builds the plan.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
@@ -2295,6 +2309,20 @@ def update_listing_fields(draft_path: Path, fields,
             f"writing to a sold item can relist it as a new listing. "
             f"(offer {state['offer_id']}, listing {state['listing_id']}) "
             f"Pass --allow-not-sellable only if you know the offer is live.")
+
+    # A held listing answers every revision with a bare HTTP 500 (25001), and
+    # the hold shows in GetItem, not always on the offer. Ask before writing.
+    listing_id = state.get("listing_id")
+    hold = get_listing_hold(str(listing_id), creds=creds) if listing_id else None
+    if not hold and state.get("on_hold"):
+        hold = "the offer reports listingOnHold"
+    if hold:
+        msg = (f"listing {listing_id} (SKU {sku}) is on hold by eBay ({hold}). "
+               f"The Inventory API refuses revisions to a held listing. "
+               f"Fix it in Seller Hub: {_revise_url(listing_id)}")
+        if not dry_run:
+            raise ListingOnHold(msg + " Nothing was sent.")
+        print(f"[HOLD] {msg}", file=sys.stderr)
 
     if item_fields:
         try:
@@ -2526,6 +2554,10 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
                 time.sleep(2.0 * (attempt + 1)); continue
             raise
     listing_id = str(resp.get("listingId") or "")
+    if not listing_id:
+        # Not a success: the CLI would print "[LIVE] ... listing None" and exit 0.
+        raise EbayAPIError(0, f"publish of offer {offer_id} returned no listingId; "
+                              f"check Seller Hub before running it again", json.dumps(resp))
     ledger_error = None
     if listing_id:
         update_meta(draft_path, {
@@ -3090,6 +3122,9 @@ def _cli() -> None:
             except ListingNotSellable as e:
                 print(f"[SKIP] {e}")
                 sys.exit(2)
+            except ListingOnHold as e:
+                print(f"[HOLD] {e}", file=sys.stderr)
+                sys.exit(3)
             if args.dry_run:
                 print(f"[DRY RUN] nothing sent. {args.update} would update: {', '.join(changed) or 'nothing'}")
                 for w in plan:

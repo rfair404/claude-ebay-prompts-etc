@@ -38,6 +38,11 @@ class _Creds:
     environment = "sandbox"
 
 
+def _not_held(listing_id, creds=None):
+    """Stand-in for the Trading GetItem hold check: the listing is not on hold."""
+    return None
+
+
 def _fake_api(responses):
     """Stub api_send; record every write so a test can assert none happened."""
     calls = []
@@ -62,6 +67,7 @@ def test_published_with_stock_is_sellable():
         {"offerId": "1", "status": "PUBLISHED", "availableQuantity": 1,
          "listing": {"listingId": "206", "listingStatus": "ACTIVE"}}]}})
     L.api_send = send
+    L.get_listing_hold = _not_held
     st = L.offer_sellable_state("abc", _Creds())
     assert st["sellable"] and st["listing_id"] == "206"
 
@@ -72,6 +78,7 @@ def test_sold_out_quantity_zero_is_not_sellable():
         {"offerId": "1", "status": "PUBLISHED", "availableQuantity": 0,
          "listing": {"listingId": "206", "listingStatus": "ENDED"}}]}})
     L.api_send = send
+    L.get_listing_hold = _not_held
     st = L.offer_sellable_state("abc", _Creds())
     assert not st["sellable"]
     assert "ENDED" in st["reason"] or "sold out" in st["reason"]
@@ -81,12 +88,14 @@ def test_unpublished_offer_is_not_sellable():
     send, _ = _fake_api({"/offer?sku=": {"offers": [
         {"offerId": "1", "status": "UNPUBLISHED", "availableQuantity": 1}]}})
     L.api_send = send
+    L.get_listing_hold = _not_held
     assert not L.offer_sellable_state("abc", _Creds())["sellable"]
 
 
 def test_missing_offer_is_not_sellable():
     send, _ = _fake_api({"/offer?sku=": L.EbayAPIError(404, "gone")})
     L.api_send = send
+    L.get_listing_hold = _not_held
     st = L.offer_sellable_state("abc", _Creds())
     assert not st["sellable"] and st["status"] == "NO_OFFER"
 
@@ -110,6 +119,7 @@ def test_update_refuses_a_sold_sku_and_writes_nothing():
         {"offerId": "1", "status": "PUBLISHED", "availableQuantity": 0,
          "listing": {"listingId": "206", "listingStatus": "ENDED"}}]}})
     L.api_send = send
+    L.get_listing_hold = _not_held
     with tempfile.TemporaryDirectory() as td:
         d = _draft(Path(td) / "s")
         try:
@@ -140,6 +150,7 @@ def test_update_always_sends_availability():
         "/inventory_item/": inv,
     })
     L.api_send = send
+    L.get_listing_hold = _not_held
     L.upload_photos_to_eps = lambda paths, creds=None: ["https://eps/new.jpg"]
 
     with tempfile.TemporaryDirectory() as td:

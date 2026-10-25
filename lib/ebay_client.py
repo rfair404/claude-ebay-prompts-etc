@@ -73,6 +73,7 @@ Default: sandbox (safer until you've tested end-to-end).
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import re
@@ -1164,6 +1165,64 @@ def upload_site_hosted_picture(image_bytes: bytes, picture_name: str = "photo",
     if not full_url:
         raise EbayAPIError(0, "UploadSiteHostedPictures response had no <FullURL>", body_text)
     return full_url
+
+
+# A policy hold comes back from GetItem as an <Errors> block with this code,
+# whose parameters carry the hold state (ON_HOLD_FIXABLE on junk 880048096663,
+# 2026-10-25). SellingStatus.ListingOnHold is the documented flag for the same.
+_HOLD_ERROR_CODE = "21920397"
+
+
+def get_listing_hold(listing_id: str,
+                     creds: Optional[EbayCredentials] = None) -> Optional[str]:
+    """Trading GetItem -> why eBay has this listing on hold, or None if it isn't.
+
+    The Inventory API refuses revisions to a held listing (a bare HTTP 500,
+    errorId 25001), so a writer asks this first. Raises EbayAPIError when
+    GetItem fails for any other reason: a caller that writes only on None
+    then fails closed.
+    """
+    creds = creds or load_credentials()
+    if not creds.dev_id:
+        raise EbayAuthError("GetItem via the Trading API needs ebay.dev_id (Dev ID) in config.")
+    xml = ('<?xml version="1.0" encoding="utf-8"?>'
+           '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+           f"<ItemID>{_xml_escape(str(listing_id))}</ItemID>"
+           "</GetItemRequest>")
+    headers = {
+        "X-EBAY-API-COMPATIBILITY-LEVEL": _TRADING_COMPAT_LEVEL,
+        "X-EBAY-API-CALL-NAME": "GetItem",
+        "X-EBAY-API-SITEID": _TRADING_SITE_ID,
+        "X-EBAY-API-DEV-NAME": creds.dev_id,
+        "X-EBAY-API-APP-NAME": creds.app_id,
+        "X-EBAY-API-CERT-NAME": creds.cert_id,
+        "X-EBAY-API-IAF-TOKEN": get_user_access_token(creds),
+        "Content-Type": "text/xml",
+    }
+    req = urllib.request.Request(_trading_endpoint(creds), data=xml.encode("utf-8"),
+                                 method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body_text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        raise EbayAPIError(e.code, f"GetItem {listing_id} → HTTP {e.code}",
+                           e.read().decode("utf-8", errors="replace")) from e
+    except urllib.error.URLError as e:
+        raise EbayAPIError(0, f"GetItem {listing_id} → network error: {e}", None) from e
+
+    for block in re.findall(r"<(?:\w+:)?Errors>(.*?)</(?:\w+:)?Errors>", body_text, re.DOTALL):
+        values = [v.strip() for v in
+                  re.findall(r"<(?:\w+:)?Value>(.*?)</(?:\w+:)?Value>", block, re.DOTALL)]
+        state = next((v for v in values if v.startswith("ON_HOLD")), None)
+        if state or _xml_tag(block, "ErrorCode") == _HOLD_ERROR_CODE:
+            msg = _xml_tag(block, "LongMessage") or _xml_tag(block, "ShortMessage") or ""
+            return f"{state or 'ON_HOLD'}: {html.unescape(msg)}".rstrip(": ")
+    if (_xml_tag(body_text, "ListingOnHold") or "").lower() == "true":
+        return "ListingOnHold: on hold for an eBay policy violation"
+    ack = _xml_tag(body_text, "Ack") or ""
+    if ack.lower() not in ("success", "warning"):
+        raise EbayAPIError(0, f"GetItem {listing_id} returned {ack or 'no Ack'}", body_text)
+    return None
 
 
 def _xml_escape(s: str) -> str:
