@@ -94,7 +94,9 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C010", {"inventory_folder": f("b/refunded", sku="aaaa0010"), "order_id": "9-9-9",
                   "client_share": "8.10", "paid_to_client_date": "2026-11-02"},
          "LISTED", "needs a negative adjustment"),
-        ("C011", {"inventory_folder": f("b/ended", sku="aaaa0011")}, "LISTED", "ended unsold"),
+        # an ended listing is not LISTED: the row keeps its on-hand state, flagged
+        ("C011", {"inventory_folder": f("b/ended", sku="aaaa0011")}, "DRAFTED",
+         "listing aaaa0011 ended 2026-11-20: relist, return or dispose"),
         ("C012", {"state": "EXCLUDED", "buyout_price": "5.00"}, "EXCLUDED", ""),
         # PREP holds through SHOT/DRAFTED and gives way to LISTED
         ("C013", {"state": "PREP"}, "PREP", ""),
@@ -109,22 +111,32 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C019", {"sku": "aaaa0019"}, "INTAKE", ""),
         ("C020", {"inventory_folder": f("b/shipped", sku="aaaa0020")}, "LISTED", ""),
         # DELETED after it was published is an ended listing; never published, never live
-        ("C021", {"inventory_folder": f("b/deleted-live", sku="aaaa0021")}, "LISTED",
-         "ended unsold"),
+        ("C021", {"inventory_folder": f("b/deleted-live", sku="aaaa0021")}, "DRAFTED",
+         "ended"),
         ("C022", {"inventory_folder": f("b/deleted-draft", sku="aaaa0022")}, "DRAFTED", ""),
         ("C023", {"inventory_folder": f("b/out-of-stock", sku="aaaa0023")}, "LISTED", ""),
+        ("C024", {"state": "PREP", "inventory_folder": f("b/prep-ended", sku="aaaa0024")},
+         "PREP", "ended"),
+        # ended on junk, relisted on default: the live row wins
+        ("C025", {"inventory_folder": f("b/relisted", sku="aaaa0025")}, "LISTED", ""),
     ]
-    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id", "published_at"],
+    _csv(shop / "listings_ledger.csv",
+         ["sku", "status", "price", "listing_id", "published_at", "ended_at", "updated_at"],
          [{"sku": f"aaaa{n:04d}", "status": "PUBLISHED", "price": "24.00"}
           for n in (4, 5, 6, 7, 8, 9, 15)]
-         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"},
+         + [{"sku": "aaaa0010", "status": "SOLD"},
+            {"sku": "aaaa0011", "status": "ENDED", "ended_at": "2026-11-20T18:00:00Z"},
             {"sku": "aaaa0016", "status": "DRAFTED", "price": "30.00"},
             {"sku": "aaaa0017", "status": "SYNCED", "price": "30.00"},
             {"sku": "aaaa0018", "status": "SYNCED"}, {"sku": "aaaa0019", "status": "DRAFTED"},
             {"sku": "aaaa0020", "status": "SHIPPED"},
             {"sku": "aaaa0021", "status": "DELETED", "published_at": "2026-10-01"},
             {"sku": "aaaa0022", "status": "DELETED"},
-            {"sku": "aaaa0023", "status": "OUT_OF_STOCK"}])
+            {"sku": "aaaa0023", "status": "OUT_OF_STOCK"},
+            {"sku": "aaaa0024", "status": "ENDED"},
+            {"sku": "aaaa0025", "status": "PUBLISHED", "updated_at": "2026-11-01"}])
+    _csv(shop / "listings_ledger-junk.csv", ["sku", "status", "updated_at"],
+         [{"sku": "aaaa0025", "status": "ENDED", "updated_at": "2026-11-15"}])
     _csv(shop / "sales_ledger.csv", SALES_HEADER,
          [_sale("1-1-5", "aaaa0005", NEW), _sale("1-1-7", "aaaa0007", OLD, actual_postage=""),
           _sale("1-1-8", "aaaa0008", OLD)])
@@ -142,6 +154,8 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         assert got[item_id]["state"] == state, item_id
         assert note in got[item_id]["state_note"], item_id
     assert got["C006"]["store"] == "junk"
+    assert got["C025"]["store"] == "default"
+    assert "ended" not in got["C025"]["state_note"]
     assert got["C006"]["cleared_on"] == (TODAY - timedelta(days=10)).isoformat()
     assert got["C008"]["client_share"] == "9.00"
     assert got["C012"]["client_share"] == "5.00"
