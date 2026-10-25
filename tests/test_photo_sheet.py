@@ -41,7 +41,7 @@ def test_frames_land_in_order_with_the_header_above(tmp_path):
         assert right[2] > 180 and right[0] < 80    # frame 2 is the blue one
         # the header band carries text (title and price), not just background
         header = sheet.crop((0, 0, sheet.width, PS.HEAD_H)).convert("L")
-        assert min(header.getdata()) < 120
+        assert header.getextrema()[0] < 120
 
 
 def test_portrait_frame_is_fitted_not_cropped(tmp_path):
