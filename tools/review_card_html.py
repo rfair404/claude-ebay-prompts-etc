@@ -104,6 +104,133 @@ def _card_lines(shoot: Path) -> tuple[list[str], list[str]]:
     return pre, [w for w in warn if w.strip().lower() not in ("none", "none.")]
 
 
+# A later line that settles an earlier one. NEEDS_REVIEW.md is append-only, so
+# the card carries both the question and its answer; without this the ⚠ list
+# asks Russell for things he already answered. Two shapes are recognised:
+#   "2026-10-24 RESOLVED: cover shingles reshoot — dropped (...)"
+#       -> hides earlier lines that mention every word of the subject
+#   'Supersedes the [DRAFT] "photos point at ORIGINALS" line.'
+#       -> hides earlier lines containing the quoted phrase
+# Hidden lines are still on the page, folded under the list.
+_RESOLVED_SUBJECT = re.compile(r"\bRESOLVED\b(?:\s*\([^)]*\))?\s*:\s*(.+?)\s+—\s", re.I)
+_SUPERSEDES = re.compile(r"\bsupersedes the ([^.]*?)\blines?\b", re.I)
+_STOP = {"the", "and", "for", "now", "with", "from", "not", "vs"}
+
+
+def _subject_words(subject: str) -> list[str]:
+    words = []
+    for w in re.findall(r"[a-z0-9_$.]+", subject.lower()):
+        w = w.strip(".")
+        if len(w) < 3 or w in _STOP:
+            continue
+        words.append(w[:-1] if len(w) > 4 and w.endswith("s") else w)
+    return words
+
+
+def _settle(warn: list[str]) -> tuple[list[str], list[str]]:
+    """(still open, settled by a later line) — order kept."""
+    settled: set[int] = set()
+    for i, line in enumerate(warn):
+        tests = []
+        m = _RESOLVED_SUBJECT.search(line)
+        if m and (words := _subject_words(m.group(1))):
+            tests.append(lambda low, words=words: all(w in low for w in words))
+        for clause in _SUPERSEDES.findall(line):
+            for phrase in re.findall(r'"([^"]+)"', clause):
+                tests.append(lambda low, ph=phrase.lower(): ph in low)
+        for j in range(i):
+            low = warn[j].lower()
+            if not _RESOLVED_SUBJECT.search(warn[j]) and any(t(low) for t in tests):
+                settled.add(j)
+    return ([w for k, w in enumerate(warn) if k not in settled],
+            [w for k, w in enumerate(warn) if k in settled])
+
+
+def _buyer_condition(pre: list[str]) -> str:
+    """eBay's label for the condition in this category, as preflight read it.
+    Never from a fixed table: the same id reads differently per category
+    (lib/ebay_client.get_condition_names)."""
+    for ln in pre:
+        m = re.match(r'condition:.*buyer sees "([^"]+)"', ln)
+        if m:
+            return m.group(1)
+    return ""
+
+
+# Who pays postage. The policy the --review preflight resolved is what
+# publishes (list_edit.policy_who_pays puts it on the "shipping: using" line);
+# the draft's own shipping block is the fallback for a card that predates it.
+_PAYERS = ("seller pays (free shipping)", "buyer pays calculated",
+           "buyer pays flat rate", "local pickup")
+
+
+def _policy_payer(pre: list[str]) -> str:
+    for ln in pre:
+        if ln.startswith("shipping: using"):
+            return next((p for p in _PAYERS if ln.rstrip().endswith("· " + p)), "")
+    return ""
+
+
+def _draft_payer(ship: dict) -> str:
+    if str(ship.get("fulfillment_mode") or "").upper() == "LOCAL_PICKUP":
+        return "local pickup"
+    if ship.get("free_shipping") is True:
+        return "seller pays (free shipping)"
+    kind = str(ship.get("domestic_shipping_type") or "").upper()
+    if kind == "CALCULATED":
+        return "buyer pays calculated"
+    if kind in ("FLAT_RATE", "FLAT"):
+        return "buyer pays flat rate"
+    return "buyer pays" if ship.get("free_shipping") is False else ""
+
+
+_FIXED_SHIP = {"seller pays (free shipping)": "delivered — free shipping",
+               "buyer pays calculated": "+ buyer-paid calculated shipping",
+               "buyer pays flat rate": "+ buyer-paid flat-rate shipping",
+               "buyer pays": "+ buyer-paid shipping",
+               "local pickup": "· local pickup only"}
+_AUCTION_SHIP = {"seller pays (free shipping)": "free shipping",
+                 "buyer pays calculated": "buyer pays calculated shipping",
+                 "buyer pays flat rate": "buyer pays flat-rate shipping",
+                 "buyer pays": "buyer pays shipping",
+                 "local pickup": "local pickup only"}
+
+
+def _offer_terms(fm: dict, pre: list[str]) -> dict:
+    """The money facts the page states, from the draft and the preflight.
+
+    Returns {"fact": html for the Price row, "sub": text under the header
+    amount, "warn": html notes when the draft and policy disagree or neither
+    says who pays}."""
+    price = html.escape(str(fm.get("price") or ""))
+    ship = fm.get("shipping") or {}
+    policy, drafted = _policy_payer(pre), _draft_payer(ship)
+    payer = policy or drafted
+    warn = []
+    if policy and drafted and not (drafted == policy or
+                                   (drafted == "buyer pays" and policy.startswith("buyer"))):
+        warn.append(f"the draft says {html.escape(drafted)}; the policy that "
+                    f"publishes says {html.escape(policy)}")
+    if not payer:
+        warn.append("who pays shipping is not stated — check the policy")
+    auction = str(fm.get("format") or "").upper() == "AUCTION"
+    if auction:
+        dur = str(fm.get("listing_duration") or "DAYS_7").upper()   # list_edit's default
+        m = re.fullmatch(r"DAYS_(\d+)", dur)
+        length = f"{m.group(1)}-day auction" if m else f"auction ({html.escape(dur)})"
+        tail = _AUCTION_SHIP.get(payer, "")
+        fact = (f'start bid <span class="mono">${price}</span> · {length}'
+                + (f" · {tail}" if tail else ""))
+        sub = f"start bid · {length}"
+    else:
+        tail = _FIXED_SHIP.get(payer, "")
+        fact = f'<span class="mono">${price}</span>' + (f" {tail}" if tail else "")
+        sub = tail.lstrip("·+ ").replace("delivered — ", "")
+    if warn:
+        fact += "".join(f'<br><span class="pill warn">{w}</span>' for w in warn)
+    return {"fact": fact, "sub": sub}
+
+
 def _body_html(body: str) -> str:
     """The description, as blocks. Deliberately small: headings, bullets and
     paragraphs are the only things a listing body uses."""
@@ -177,7 +304,16 @@ def render(shoot: Path) -> str:
     extra = spec.get("extra") or {}
     sku = (fm.get("meta") or {}).get("ebay_inventory_sku") or "not recorded"
     pre, warn = _card_lines(shoot)
+    warn, settled = _settle(warn)
+    terms = _offer_terms(fm, pre)
+    cond_code = str(fm.get("condition") or "")
+    cond_shown = _buyer_condition(pre)
+    cond_html = (f'<span class="pill acc" title="{html.escape(cond_code)}">'
+                 f'{html.escape(cond_shown)}</span>' if cond_shown else
+                 f'<span class="pill acc">{html.escape(cond_code)}</span> '
+                 f'<span class="note">eBay label not reported by preflight</span>')
     tiers = _price_tiers(shoot)
+    comps = shoot / "comps_board.html"
     # Which store this publishes to (#156 §5). Since #150 a draft's `store:`
     # picks the account, its policies and its storefront voice, so it is part
     # of what is being approved — shown in the header, not buried in specifics.
@@ -241,12 +377,30 @@ def render(shoot: Path) -> str:
 
     warn_html = ("".join(f"<li>{html.escape(w)}</li>" for w in warn)
                  if warn else '<li class="clear">Nothing flagged.</li>')
+    settled_html = (f'<details class="settled"><summary>{len(settled)} earlier '
+                    f'line{"s" if len(settled) != 1 else ""} settled by a later one</summary>'
+                    f'<ul class="flags">'
+                    + "".join(f"<li>{html.escape(w)}</li>" for w in settled)
+                    + "</ul></details>") if settled else ""
+    # The comps board is its own page; embedded so it travels with this one
+    # (from the app's /review/ route a relative link would not resolve).
+    # Sandboxed without scripts; links open a new tab because eBay refuses
+    # to be framed.
+    comps_html = ""
+    if comps.exists():
+        board = re.sub(r"^\s*<!doctype[^>]*>", "", comps.read_text(encoding="utf-8"), flags=re.I)
+        comps_html = ('<div class="wide"><h2>Comps board</h2>'
+                      '<iframe class="comps" title="Comps board" '
+                      'sandbox="allow-popups allow-popups-to-escape-sandbox" srcdoc="'
+                      + html.escape('<!doctype html><base target="_blank">' + board, quote=True)
+                      + '"></iframe></div>')
     pre_html = "".join(f"<li>{html.escape(x)}</li>" for x in pre)
 
     # The charset must be declared IN the page: opened from disk or from a
     # link that serves it with a bare text/html type, a browser falls back
     # to windows-1252 and every em dash shows up as "â€”".
     page = f"""<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(_page_name(title))}</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
@@ -365,6 +519,10 @@ td.note{{color:var(--muted);font-size:12.5px}}
 .desc li{{margin:0 0 4px}}
 ul.flags{{margin:0;padding-left:18px;font-size:13.5px}}
 ul.flags li{{margin:0 0 5px}} ul.flags .clear{{color:var(--ok);list-style:none;margin-left:-18px}}
+.settled{{margin-top:10px;font-size:12.5px;color:var(--muted)}}
+.settled summary{{cursor:pointer}} .settled ul{{margin-top:6px}}
+.note{{color:var(--muted);font-size:12.5px}}
+iframe.comps{{width:100%;height:520px;border:1px solid var(--rule);border-radius:3px;background:#fff}}
 
 pre{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:12.5px;
   background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
@@ -397,6 +555,7 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
     </div>
     <div class="ask">
       <div class="amt">${html.escape(price)}</div>
+      <div class="sub">{html.escape(terms["sub"])}</div>
       <div class="sub">Best Offer {html.escape(bo_line)}</div>
     </div>
   </div>
@@ -408,16 +567,16 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
         <div class="shotcol">{shots}</div>
         <div class="strip">{chips}</div>
       </div>
-      <p class="hint">Frame 1 is eBay's gallery image. Pick another and the command
-        below changes to match — the page can't reach the CLI, so run it yourself.</p>
+      <p class="hint">Frame 1 is eBay's gallery image. Picking a frame here only
+        previews it; to change the cover, name its number in the chat.</p>
     </div>
 
     <div class="col">
       <h2>The offer</h2>
       <dl>
-        {_fact("Price", f'<span class="mono">${html.escape(price)}</span> delivered — free shipping')}
+        {_fact("Price", terms["fact"])}
         {_fact("Best Offer", html.escape(bo_line))}
-        {_fact("Condition", f'<span class="pill acc">{html.escape(str(fm.get("condition") or ""))}</span>')}
+        {_fact("Condition", cond_html)}
         {_fact("Quantity", html.escape(str(fm.get("quantity") or "")))}
         {_fact("Category", html.escape(str(fm.get("category_path") or "") or "eBay will suggest"))}
         {_fact("Ships", f'{html.escape(str(ship.get("primary_service") or ""))} · {html.escape(weight)} · {html.escape(dims)} packed')}
@@ -429,6 +588,8 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
       <div class="scroll"><table>{specs_rows}</table></div>
     </div>
   </div>
+
+  {comps_html}
 
   <div class="wide">
     <h2>Condition disclosure — what the buyer is told</h2>
@@ -445,6 +606,7 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
     <ul class="flags">{pre_html}</ul>
     <h2>Flagged for a human</h2>
     <ul class="flags">{warn_html}</ul>
+    {settled_html}
   </div>
 
   <div class="wide">
