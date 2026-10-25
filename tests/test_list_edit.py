@@ -1180,6 +1180,48 @@ def test_review_card_intl_block_says_enabled_when_policy_is_configured():
     assert "domestic-only" not in card
 
 
+def _card_on_policy(td: Path, policy: dict) -> str:
+    """Card for a clean draft (no `shipping.international`) whose preflight
+    resolved to `policy`."""
+    draft_path = _write_single_draft(td)
+
+    def _pf(*a, policy_out=None, **kw):
+        if policy_out is not None:
+            policy_out.update(policy)
+        return ["category: 12345"]
+    with _patched(L, preflight_listing=_pf,
+                 resolve_draft_state=lambda *a, **kw:
+                     {"stale": False, "offer_id": "", "meta_offer_id": ""},
+                 _ebay_extra=lambda field, store="default": None), \
+         _ledger_at(td):
+        card, _path = L.build_review_card(draft_path, creds=_Creds())
+    return card
+
+
+def test_review_card_intl_block_reports_the_policys_own_reach():
+    """2026-10-25, C087/C088 on the default store: the card said "eligible,
+    not enabled (shipping.international: false)" while the item's policy was
+    'Free USPS Ground + eBay International Shipping'. The draft flag only
+    picks the separate international policy; the resolved policy decides."""
+    with tempfile.TemporaryDirectory() as td:
+        card = _card_on_policy(Path(td), {
+            "name": "Free USPS Ground + eBay International Shipping",
+            "shipToLocations": {}})
+    assert ("✓ ON through policy 'Free USPS Ground + eBay International "
+            "Shipping'") in card
+    assert "not enabled" not in card
+
+
+def test_review_card_intl_block_names_a_policys_exclusions():
+    with tempfile.TemporaryDirectory() as td:
+        card = _card_on_policy(Path(td), {
+            "name": "US only",
+            "shipToLocations": {"regionExcluded": [{"regionName": "Africa"},
+                                                   {"regionName": "Asia"}]}})
+    assert "• off: policy 'US only' excludes Africa, Asia." in card
+    assert "✓ ON" not in card
+
+
 # ---------------------------------------------------------------------------
 # Best Offer gate cross-field checks (#140)
 # ---------------------------------------------------------------------------

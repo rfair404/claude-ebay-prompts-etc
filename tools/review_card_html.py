@@ -69,12 +69,19 @@ def _uri(path: Path) -> str:
 
 
 def _price_tiers(shoot: Path) -> list[tuple[str, str, str]]:
-    """(tier, price, note) rows from price.txt's Tiers block, if there is one."""
+    """(tier, price, note) rows from price.txt's current Tiers block.
+
+    A re-price goes on top of the prior record and closes with an
+    `=== END ... (prior record below) ===` line, so only the lines above the
+    first END are current. Reading past it put superseded Push-high rows
+    beside the live ones (C087/C088, 2026-10-25)."""
     p = shoot / "price.txt"
     if not p.exists():
         return []
     rows = []
     for ln in p.read_text(encoding="utf-8").splitlines():
+        if ln.startswith("=== END"):
+            break
         m = re.match(r"\s{2}(Conservative|Recommended|PUSH-HIGH \(list\)|Push-high)\s+"
                      r"\$?\s*([\d,]+(?:\.\d\d)?)\s*(.*)$", ln)
         if m:
