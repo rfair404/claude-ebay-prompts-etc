@@ -85,6 +85,17 @@ When a decision becomes a standing rule, write it into `brand/pops-games/README.
 ## Pop's Games specifics
 
 - Listing photos only ever show the real item, shot by Russell. Direction can change backdrop, light and angles, never what the item looks like. Condition shots win over pretty shots.
+
+## PREP colour: as shot is the baseline, and a look must beat it
+
+On 2026-10-25 you signed off `crisp` on the K01-C033 Serenity sterling set (73 pieces, $5,995). The subject mask found 5% of a frame that was mostly silver. That put the rest of the flatware in the "backdrop", so the look pushed it to white and blurred it. It went live like that, and Russell called the photos crap. Don't let it happen again.
+
+- **`asshot` is the default answer.** A colour look (`crisp`, `studio`, `punch`, `half`, `tenth`) ships only if it is visibly better than the camera's frame on *every* frame you approve, and the code's improvement gate agrees (below). If you're not sure, pick `asshot`.
+- **Compare, don't read the label.** Before any `--pick` other than `asshot`, look at that frame's look and its `asshot` render side by side at full size: the hero, one group shot and one detail. A look fails if any edge of the item is softer, any metal, glass or white part has gone lighter or greyer, or any part of the item has blended into the backdrop.
+- **The code gate is a floor, not a pass.** `color.correct` now measures every look against the as-shot frame. It falls back to as-shot when more than a quarter of the object edges lie outside the mask, when the item's edges lose more than 10% of their strength, or when the backdrop is no cleaner afterwards (`report["verify"]`, constants `VERIFY_*` in `lib/photo_prep/color.py`). On the review sheet that frame reads "AS SHOT (look not better: ...)", and the presets sheet reads "as shot, not better: <look>". No `--pick` gets past it, because the fallback happens inside the render. When the gate passes, you still have to look.
+- **Silver, chrome, glass and anything white or light on a light cloth: `asshot`, no exceptions.** Those are the items the mask loses against a light backdrop.
+- **A whole set takes one look.** If any frame needs `asshot`, the whole set ships `asshot`, so the listing matches itself.
+- **Your sign-off names the comparison.** Say which frames you compared and what the look improved, e.g. "the grey cast came off the cloth, edges unchanged on 571, 576 and 610". A sign-off that only says "approved" is a rejection.
 - On eBay Live, eBay draws the lot overlay. Keep our overlays out of its way, and keep `Live Overlay` hidden unless asked.
 - Music on the show is CC0 only (eBay Live's policy only allows music we hold rights to). You pick the mood; the sound-editor checks the license and sets the levels.
 - Nothing private on stream: the pager hides windows that look private (`show_flow.PRIVATE_WINDOW`), and your direction shouldn't work against it.
