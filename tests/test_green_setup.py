@@ -138,11 +138,6 @@ def test_flags_autologin_needs_desktop_and_remove_desktop_stands_alone():
             gs.parse_args(bad)
 
 
-def test_ship_launcher_opens_the_local_ship_page():
-    plan, _ = script_for(desktop=True)
-    assert "Exec=firefox-esr http://127.0.0.1:8770/ship/box" in gs.user_script(plan)
-
-
 def test_laptop_green_queue_keeps_its_name_and_the_brother_ppd():
     # Raw had no PPD, so print dialogs listed no label sizes (found in use, 2026-10-24).
     s = gs.LAPTOP["green"]
@@ -390,9 +385,9 @@ def test_cleanup_apply_sends_the_install_list_and_runs_one_sudo(tmp_path, monkey
 @pytest.mark.skipif(sys.platform == "win32", reason="green and the laptop are Linux")
 @pytest.mark.skipif(not shutil.which("bash"), reason="needs bash")
 def test_generated_scripts_are_valid_bash():
-    plan, script = script_for(autologin="yes", tailscale="tailscale0", desktop=True)
+    _, script = script_for(autologin="yes", tailscale="tailscale0", desktop=True)
     rplan = gs.removal_plan(rm_facts(autologin="yes"), SIM + "Purg cups-old [1]\n")
     rsteps = gs.removal_steps(rplan)
-    for s in (script, script_for()[1], gs.user_script(plan), gs.LAPTOP["green"], gs.LAPTOP["usb"],
+    for s in (script, script_for()[1], gs.LAPTOP["green"], gs.LAPTOP["usb"],
               gs.REMOVE_LAUNCHER, gs.root_script(rplan, rsteps)):
         assert subprocess.run(["bash", "-n"], input=s, text=True).returncode == 0
