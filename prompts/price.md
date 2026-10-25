@@ -493,12 +493,13 @@ needed before review` instead, and don't hand the item on as ready.
   (ECOS, CITES), its named banned-species list (bats, bears, marine mammals,
   protected turtles, migratory birds, cats/dogs, and ivory or bone from the
   animals it names), and the [Live animals policy](https://www.ebay.com/help/policies/prohibited-restricted-items/live-animals-policy?id=4327),
-  which allows only the animals it lists. eBay's publish filters block more than
-  those pages name, and sold comps don't prove an item is still allowed.
-  Recorded example: a dried seahorse (K01-C080, 2026-10-25) passed 5046 and ECOS
-  and had sold comps, but eBay refused it at publish under the Live animals
-  policy, errorId 25019, filter `PI_Global_APW_SeaHorses`. Seahorses, dried
-  included, can't be sold on eBay; pull them from a lot.
+  which allows only the live animals it lists. eBay's publish filters block more
+  than those pages name, and sold comps don't prove an item is still allowed.
+  Recorded example: a dried seahorse (K01-C080, 2026-10-25) is not a live
+  animal, passed 5046 and ECOS and had sold comps, yet eBay refused it at
+  publish: errorId 25019, filter `PI_Global_APW_SeaHorses`, citing the Live
+  animals policy anyway. No help page names it; the filter blocks seahorses,
+  dried included. Pull them from a lot.
 - **Scams & buyer issues** — category-typical scams + the protection.
 - **Authenticity Guarantee** — covered at this value tier?
 - **Disclosure** — what to state up front to head off returns.
