@@ -837,3 +837,33 @@ def test_a_buyout_is_paid_under_min_payout_and_the_sales_carry(shop, capsys):
     assert consign.main(through) == 0                       # the sale still waits
     assert "carried forward, nothing written" in capsys.readouterr().out
     assert len(consign.read_settlements("K99")) == 1
+
+
+def test_client_report_and_lot_account_are_plain_ascii(shop, capsys, monkeypatch):
+    # The R2 share link serves text/plain with no charset and the lists also go
+    # to lp, so the report is ASCII even when the ledger text is not.
+    import report_lot as RL
+    d = _intake(shop, [
+        {"item_id": "C001", "description": "Petit Modèle hen — 7.3° “boxed”", "qty": "—",
+         "est_low": "10.00", "est_high": "20.00"},
+        {"item_id": "C002", "state": "EXCLUDED", "buyout_price": "5.00", "bin": "—",
+         "description": "Stapler · gray"},
+        {"item_id": "C003", "state": "PREP", "state_note": f"{consign.FLAG} check it"},
+    ])
+    assert consign.main(["report", "--csv"]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii(), [c for c in out if not c.isascii()]
+    assert "by state: INTAKE 1 | PREP 1 | EXCLUDED 1" in out
+    assert "est $10.00-$20.00" in out
+    export = next((shop / "reports").rglob("K99-*.csv")).read_bytes()
+    assert export.isascii() and b"Petit Modele hen -- 7.3 deg" in export
+
+    monkeypatch.setattr(RL, "OUT_DIR", shop / "reports" / "lots")
+    text, rows = RL.consign_account(d, "K99", TODAY)
+    txt, csv_path = RL.write(d, text, rows, TODAY)
+    body = txt.read_bytes()
+    assert body.isascii() and csv_path.read_bytes().isascii()
+    assert b"-- see `consign sync`" in body
+    line = next(ln for ln in body.decode().splitlines() if ln.startswith("K99-C001"))
+    header = next(ln for ln in body.decode().splitlines() if ln.startswith("#"))
+    assert line.index("$10.00-20.00") == header.index("EST / ASK")   # columns still line up

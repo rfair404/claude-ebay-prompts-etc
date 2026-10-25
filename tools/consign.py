@@ -91,6 +91,7 @@ sys.path.insert(0, str(REPO / "lib"))
 import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
+from report import ascii_text  # noqa: E402  report text is plain ASCII
 
 INVENTORY = REPO / "inventory"
 LEDGER_NAME = "client_ledger.csv"
@@ -1359,7 +1360,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     mates = lot_plan(rows)
     units = [r for r in rows if r["item_id"] not in mates]   # a lot counts once
     by_state = Counter(r["state"] or "INTAKE" for r in rows)
-    out = ["  by state: " + " · ".join(f"{s} {by_state[s]}" for s in STATES if by_state[s])]
+    out = ["  by state: " + " | ".join(f"{s} {by_state[s]}" for s in STATES if by_state[s])]
     if mates:
         out.append(f"  lots: {len({lot for lot, _ in mates.values()})}, "
                    f"{len(mates)} lot-mate(s) valued with their lead row")
@@ -1390,7 +1391,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
                + (f"  (unpriced {sum(a is None for a in listed_ask)})"
                   if any(a is None for a in listed_ask) else ""))
     out.append(f"    on hand  {sum(r['item_id'] not in mates for r in hand):>3} unit(s), "
-               f"{len(hand)} item(s)  est ${money(_sum(lows))}–${money(_sum(highs))}"
+               f"{len(hand)} item(s)  est ${money(_sum(lows))}-${money(_sum(highs))}"
                + (f"  (unpriced {unpriced})" if unpriced else ""))
     if excluded:
         out.append(f"    excluded {len(excluded):>3}  Russell buys at "
@@ -1416,7 +1417,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     open_settlements = [s for s in settlements if not s["paid_date"]]
     out.append("  totals:")
     out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
-               f"  ·  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
+               f"  |  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
     out.append(f"    handling kept         ${money(_sum(dec(r['handling']) for r in sold))}"
                f"  ({sum(bool(dec(r['handling'])) for r in sold)} sale(s), taken before "
                f"the split)")
@@ -1439,7 +1440,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append(f"    paid to date          ${money(_sum(paid_amount(s) for s in paid))}")
     flagged = [r["item_id"] for r in rows if FLAG in r["state_note"]]
     if flagged:
-        out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  — see `consign sync`")
+        out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  -- see `consign sync`")
     return out
 
 
@@ -1452,7 +1453,7 @@ def export_rows(code: str, items: list[tuple[str, dict]]) -> list[dict]:
             if k in rec:
                 continue
             v = r.get(k, "")
-            rec[k] = money(dec(v)) if k in MONEY else v
+            rec[k] = money(dec(v)) if k in MONEY else ascii_text(v or "")
         rec["state"] = rec["state"] or "INTAKE"
         out.append(rec)
     return out
@@ -1482,10 +1483,10 @@ def report(intakes: list[Path], client: Optional[str], write_csv: bool,
         split = terms["split"]
         items = groups[code]
         print(f"\n=== {code}  {reg.get('name') or '(not in the registry)'}  "
-              f"split {split * 100:.0f}% to client  ·  {len(items)} item(s) in "
+              f"split {split * 100:.0f}% to client  |  {len(items)} item(s) in "
               f"{', '.join(names[code])}")
-        print(f"  terms: agreement {terms['agreement_signed'] or 'not signed'}  ·  "
-              f"W-9 {terms['w9_on_file'] or 'not recorded'}  ·  loss rule "
+        print(f"  terms: agreement {terms['agreement_signed'] or 'not signed'}  |  "
+              f"W-9 {terms['w9_on_file'] or 'not recorded'}  |  loss rule "
               f"{terms['loss_rule']}")
         settlements = read_settlements(code) if code != "UNASSIGNED" else []
         for line in client_summary(items, split, settlements, terms["loss_rule"], today):

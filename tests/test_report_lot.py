@@ -115,3 +115,24 @@ def test_failed_lp_is_reported_and_exits_nonzero(estate, monkeypatch, capsys):
     out = capsys.readouterr()
     assert "PRINTED" not in out.out
     assert "FAILED print on CannonBW: lp exited 1" in out.err
+
+
+def test_written_account_is_plain_ascii(estate, monkeypatch):
+    # Ledger titles carry accents and degree signs; the .txt prints on lp and
+    # the R2 link serves it with no charset, so both files are ASCII.
+    listings = [{"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md",
+                 "price": "127", "published_at": "2026-10-23", "listing_id": "206",
+                 "title": "Heidi Caillard La Poule Petit Modèle 7.3° Hen — France"}]
+    monkeypatch.setattr(RL, "_all_listings", lambda: listings)
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    monkeypatch.setattr(RL, "OUT_DIR", estate.parent.parent.parent / "reports" / "lots")
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 10, 26))
+    txt, csv_path = RL.write(estate, text, items, date(2026, 10, 26))
+    body, sheet = txt.read_text(encoding="ascii"), csv_path.read_bytes()
+    assert sheet.isascii() and b"Petit Modele 7.3 deg Hen -- France" in sheet
+    lines = body.splitlines()
+    header = next(ln for ln in lines if ln.startswith("#"))
+    row = next(ln for ln in lines if "Petit Modele" in ln)
+    assert row.index("LIVE") == header.index("STATUS")
