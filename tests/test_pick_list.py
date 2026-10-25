@@ -307,7 +307,6 @@ def test_poll_prints_each_held_order_with_buyer_and_release_time():
                        (pick_list, "load_listings_ledger"): lambda *_a: [],
                        (pick_list, "STATE_FILE"): state_file,
                        (pick_list, "OUT_DIR"): out_dir,
-                       (pick_list, "SHIP_QUEUE"): out_dir / "ship_queue.json",
                        (pick_list, "poll_and_print"): lambda **k: real_poll(
                            **k, fetch=lambda: [a, b], live_windows=[win])}), \
                 contextlib.redirect_stdout(buf):
@@ -1053,17 +1052,19 @@ def test_box_form_is_blank_when_the_draft_has_no_estimate(tmp_path):
     assert "Estimated" not in h and "Weigh and measure the box" in h
 
 
-def test_box_form_fields_match_the_ship_station_in_order_and_limits(tmp_path):
-    """Same names and order as /ship/box (webapp/ship.py HEADS), so the station
-    and the sheet read alike, and a labelled Copy button for each."""
+def test_box_form_fields_come_from_one_list_in_order_and_limits(tmp_path):
+    """BOX_FIELDS is the one field list: the prefill's keys, BOX_JS's checks
+    and the rendered inputs all follow it in Seller Hub's order, with a
+    labelled Copy button for each."""
     import pick_list_html
-    pytest.importorskip("fastapi")
-    import webapp.ship as ship
-    assert [(f, s) for f, _l, s in pick_list_html.BOX_FIELDS] == \
-        [(f, s) for f, _l, s in ship.HEADS]
+    order = [f for f, _l, _s in pick_list_html.BOX_FIELDS]
+    assert order == ["length_in", "width_in", "depth_in", "weight_lb", "weight_oz"]
+    assert list(pick_list._box_prefill([], [], [])) == order
+    js_fields = re.search(r"for\(var k of \[([^\]]*)\]\)", pick_list_html.BOX_JS).group(1)
+    assert re.findall(r"'(\w+)'", js_fields) == order
     h = _sheet_with_draft(tmp_path, _DRAFT)
     names = re.findall(r'<input type="number" id="box_(\w+)"', h)
-    assert names == [f for f, _l, _s in ship.HEADS]
+    assert names == order
     for f, label, _s in pick_list_html.BOX_FIELDS:
         assert f'<label for="box_{f}">{label}</label>' in h
         assert f'data-f="{f}" data-l="{label}" onclick="boxCopy(this)">Copy</button>' in h
@@ -1405,7 +1406,6 @@ def _multi(cfg=THREE):
     try:
         with _Patched({(pick_list, "STATE_FILE"): tmp / ".pick_list_state.json",
                        (pick_list, "OUT_DIR"): tmp / "pick_lists",
-                       (pick_list, "SHIP_QUEUE"): tmp / "ship_queue.json",
                        (pick_list, "scan_drafts"): lambda *_a: [],
                        (pick_list, "load_listings_ledger"): lambda *_a: []}):
             yield tmp
