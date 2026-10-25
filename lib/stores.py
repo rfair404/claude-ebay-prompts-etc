@@ -34,8 +34,10 @@ terms stay in config.get_storefront(). Both now resolve the name here.
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -107,6 +109,40 @@ def store_label(store: Optional[str]) -> str:
     The default store stays unlabelled so single-store output is unchanged.
     """
     return "" if is_default(store) else f"[{store}]"
+
+
+# ---------------------------------------------------------------------------
+# Reading data files from a worktree
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=None)
+def main_checkout(start: Path) -> Path:
+    """The main checkout `start` belongs to (the parent of git's common dir),
+    or `start` itself outside git. A linked worktree's answer is the main
+    checkout, where the gitignored ledgers live."""
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(start), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return start
+    return Path(common).resolve().parent if common else start
+
+
+def readable(path: Path) -> Path:
+    """For READING a gitignored data file: `path` if it exists, else the same
+    file in the main checkout. The ledgers live only there, and
+    tools/worktree_link.py links inventory/ and reports/ but not them, so a
+    worktree session otherwise reads no ledger at all. Writes keep `path`
+    (ledger tools still run from the main checkout)."""
+    if path.exists():
+        return path
+    try:
+        rel = path.relative_to(REPO)
+    except ValueError:
+        return path
+    alt = main_checkout(REPO) / rel
+    return alt if alt.exists() else path
 
 
 # ---------------------------------------------------------------------------

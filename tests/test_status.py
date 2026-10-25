@@ -9,6 +9,7 @@ lookup, and assembling the one-line next_action).
 """
 import csv
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +27,18 @@ def _point_stores_at(monkeypatch, root: Path) -> None:
     monkeypatch.setattr(stores, "REPO", root)
     monkeypatch.delenv("EBAYBIZ_LISTINGS_LEDGER", raising=False)
     monkeypatch.delenv("EBAYBIZ_LISTINGS_LOG", raising=False)
+
+
+def make_worktree(tmp_path: Path) -> tuple[Path, Path]:
+    """(main checkout, linked worktree) — a real `git worktree`, so the
+    main-checkout lookup runs the same git command it does in production."""
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    main.mkdir()
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(main)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    subprocess.run([*git, "worktree", "add", "-q", "--detach", str(wt)], check=True)
+    return main.resolve(), wt.resolve()
 
 
 def _write_ledger(path: Path, rows) -> None:
@@ -148,16 +161,53 @@ def test_named_store_draft_reads_its_own_ledger(tmp_path, monkeypatch):
     assert "store " not in st.summary(main)
 
 
-def test_preloaded_ledger_is_only_used_for_its_own_store(tmp_path, monkeypatch):
-    """The dashboard preloads the default ledger; a junk shoot must not be
-    looked up in it (#156)."""
+def test_preloaded_ledgers_are_looked_up_by_the_drafts_store(tmp_path, monkeypatch):
+    """The dashboard preloads every store's ledger; each shoot is looked up in
+    its own draft store's map first (#156)."""
     _point_stores_at(monkeypatch, tmp_path)
-    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "SOLD", "9"]])
-    preload = {"abc12345": {"sku": "abc12345", "status": "ENDED", "listing_id": "1"}}
+    ledgers = {"default": {"abc12345": {"sku": "abc12345", "status": "ENDED"}},
+               "junk": {"abc12345": {"sku": "abc12345", "status": "SOLD"}}}
     junk = _clean_shoot(tmp_path, sku="abc12345", store="junk", name="j")
-    assert st.gather(junk, ledger_by_sku=preload)["ledger_status"] == "SOLD"
+    assert st.gather(junk, ledgers=ledgers)["ledger_status"] == "SOLD"
     main = _clean_shoot(tmp_path, sku="abc12345", name="m")
-    assert st.gather(main, ledger_by_sku=preload)["ledger_status"] == "ENDED"
+    assert st.gather(main, ledgers=ledgers)["ledger_status"] == "ENDED"
+
+
+def test_a_voided_row_does_not_mask_another_stores_live_row(tmp_path, monkeypatch):
+    """2026-10-25: a VOIDED row in the junk ledger hid the item SOLD in the
+    default store, and the dashboard called it ready for review."""
+    _point_stores_at(monkeypatch, tmp_path)
+    _write_ledger(tmp_path / "listings_ledger.csv", [["abc12345", "SOLD", "111"]])
+    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "VOIDED", "222"]])
+    state = st.gather(_clean_shoot(tmp_path, sku="abc12345", store="junk"))
+    assert (state["ledger_status"], state["listing_id"]) == ("SOLD", "111")
+
+
+def test_a_voided_row_is_kept_when_no_store_has_anything_better(tmp_path, monkeypatch):
+    _point_stores_at(monkeypatch, tmp_path)
+    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "VOIDED", "222"]])
+    state = st.gather(_clean_shoot(tmp_path, sku="abc12345", store="junk"))
+    assert state["ledger_status"] == "VOIDED"
+
+
+def test_a_sku_missing_from_its_drafts_store_is_found_in_another(tmp_path, monkeypatch):
+    _point_stores_at(monkeypatch, tmp_path)
+    _write_ledger(tmp_path / "listings_ledger-junk.csv", [["abc12345", "PUBLISHED", "222"]])
+    state = st.gather(_clean_shoot(tmp_path, sku="abc12345"))   # draft says default
+    assert state["ledger_status"] == "PUBLISHED"
+
+
+def test_a_worktree_reads_the_main_checkouts_ledgers(tmp_path, monkeypatch):
+    """Ledgers are gitignored and live only in the main checkout; a session
+    in a linked worktree must still see them."""
+    main, wt = make_worktree(tmp_path)
+    _point_stores_at(monkeypatch, wt)
+    _write_ledger(main / "listings_ledger.csv", [["abc12345", "PUBLISHED", "111"]])
+    _write_ledger(main / "listings_ledger-junk.csv", [["def67890", "SOLD", "222"]])
+    a = st.gather(_clean_shoot(wt, sku="abc12345", name="a"))
+    b = st.gather(_clean_shoot(wt, sku="def67890", store="junk", name="b"))
+    assert (a["ledger_status"], b["ledger_status"]) == ("PUBLISHED", "SOLD")
+    assert not (wt / "listings_ledger.csv").exists()     # nothing written in the worktree
 
 
 def test_three_stores_each_resolve_their_own_ledger(tmp_path, monkeypatch):
