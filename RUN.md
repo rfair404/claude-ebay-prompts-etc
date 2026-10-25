@@ -1,5 +1,5 @@
 ---
-version: 3.2.0
+version: 3.3.0
 updated: 2026-10-25
 ---
 
@@ -106,7 +106,9 @@ In `listings_ledger*.csv`, `DRAFTED` and `SYNCED` (an eBay draft offer, not
 live) are REVIEW, `PUBLISHED` is LIVE, `SOLD`/`SHIPPED` is SOLD and `ENDED`
 is ENDED. On `client_ledger.csv`, `DRAFTED` means `draft.md` exists, `LISTED`
 is LIVE (on eBay, or on the mall floor once `placed_at` is typed), and a hand-entered `PREP` is an on-hand label that `consign sync`
-keeps until the item is LISTED.
+keeps until the item is LISTED. A hand-entered `HOLD` (its `state_note` says
+why) is an on-hand hold that `sync` keeps past an ended listing, flags if a
+live listing matches, and gives up only on a sale.
 
 **Waiting is not a state.** An item waiting on Russell's card, a reshoot or
 another agent stays in its state with the same owner. A `NEEDS_REVIEW.md`
