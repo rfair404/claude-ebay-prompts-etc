@@ -192,8 +192,9 @@ def _patched_or(const: Path, original: Path, store: Optional[str], field: str) -
 
 
 def _ledger_path(store: Optional[str] = None) -> Path:
-    """`store`'s listings ledger, resolved now (#156)."""
-    return _patched_or(LEDGER, _LEDGER_AT_IMPORT, store, "listings_ledger")
+    """`store`'s listings ledger, resolved now (#156). Read-only here, so a
+    worktree reads the main checkout's (stores.readable)."""
+    return stores.readable(_patched_or(LEDGER, _LEDGER_AT_IMPORT, store, "listings_ledger"))
 
 
 def _frontmatter(text: str) -> str:

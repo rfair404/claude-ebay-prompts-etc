@@ -99,9 +99,13 @@ def store_files(store: Optional[str]) -> tuple[Path, Path]:
     filenames, and what tests repoint); a named store reads its own
     `listings_ledger-<store>.csv` / `inventory_sheet-<store>.csv`."""
     if _stores.is_default(store):
-        return LEDGER, LIVE_SHEET
-    p = _stores.paths(store)
-    return p.listings_ledger, p.inventory_sheet_csv
+        ledger, live = LEDGER, LIVE_SHEET
+    else:
+        p = _stores.paths(store)
+        ledger, live = p.listings_ledger, p.inventory_sheet_csv
+    # Both are gitignored and live only in the main checkout; from a
+    # worktree, read them there.
+    return _stores.readable(ledger), _stores.readable(live)
 
 
 # ---------------------------------------------------------------------------
@@ -158,17 +162,25 @@ def iter_shoot_dirs():
 # canned "not written yet" text), never file-sourced free text — safe as-is.
 _ASK_SOURCED_STAGES = frozenset({"identify", "investigate", "draft"})
 
+# Ledger statuses past REVIEW: a shoot in one of these is listed, not waiting.
+_LISTED = frozenset({"PUBLISHED", "SOLD", "ENDED"})
+
 
 def gather_backlog() -> dict:
     """One row per shoot, via `lib.status.gather()` — untouched per-shoot
     state logic, just assembled across the whole tree and bucketed by which
     stage is currently blocking each one."""
-    # Preloaded once so lib.status.gather() doesn't re-scan
-    # listings_ledger.csv from scratch for every shoot in the tree.
-    ledger_by_sku = {r["sku"]: r for r in _rows(LEDGER) if r.get("sku")}
+    # Every store's ledger, read once, so lib.status.gather() doesn't re-scan
+    # them for every shoot in the tree.
+    ledgers, missing = {}, []
+    for name in _status.ledger_stores(_store_names()):
+        path = store_files(name)[0]
+        if not path.exists():
+            missing.append(path.name)
+        ledgers[name] = {r["sku"]: r for r in _rows(path) if r.get("sku")}
     rows = []
     for shoot in iter_shoot_dirs():
-        state = _status.gather(shoot, ledger_by_sku=ledger_by_sku)
+        state = _status.gather(shoot, ledgers=ledgers)
         try:
             state["dir"] = shoot.relative_to(REPO).as_posix()
         except ValueError:
@@ -179,6 +191,12 @@ def gather_backlog() -> dict:
         # build that string, just not tied to its exact display phrasing.
         state["blocked_stage"] = next(
             (stage for stage in STAGE_ORDER if state["stages"][stage]["pending"]), None)
+        # All stages clear is "ready for review" only until it is listed.
+        state["bucket"] = state["blocked_stage"] or (
+            state["ledger_status"].lower() if state["ledger_status"] in _LISTED
+            else "ready for review")
+        if state["bucket"] != (state["blocked_stage"] or "ready for review"):
+            state["next_action"] = f"listed — ledger {state['ledger_status']}"
         if state["blocked_stage"] in _ASK_SOURCED_STAGES:
             state["next_action"] = (
                 f"{state['blocked_stage']}: pending — run `python -m lib.cli "
@@ -190,8 +208,9 @@ def gather_backlog() -> dict:
             else len(STAGE_ORDER)
 
     rows.sort(key=lambda r: (_rank(r), r["dir"]))
-    stage_counts = Counter(r["blocked_stage"] or "ready for review" for r in rows)
-    return {"rows": rows, "stage_counts": stage_counts, "count": len(rows)}
+    stage_counts = Counter(r["bucket"] for r in rows)
+    return {"rows": rows, "stage_counts": stage_counts, "count": len(rows),
+            "missing_ledgers": missing}
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +426,17 @@ def _backlog_section(d: dict) -> str:
     rows = "".join(
         f'<tr><td>{_e(r["dir"])}</td>'
         f'<td class="num">{r["frames"]}</td>'
-        f'<td>{_e(r["blocked_stage"] or "ready for review")}</td>'
+        f'<td>{_e(r["bucket"])}</td>'
         f'<td class="dim">{_e(r["next_action"])}</td>'
         f'<td>{_e(r["sku"] or "—")}</td>'
         f'<td>{_e(r["ledger_status"] or "—")}</td></tr>'
         for r in d["rows"][:200])
     return (
         '<div class="card"><div class="pad"><h2>Backlog by stage</h2>'
-        f'<p class="note" style="margin:0 0 14px;padding:0;border:0">{d["count"]} shoot(s) '
+        + (f'<p class="note"><b>No ledger found: {_e(", ".join(d["missing_ledgers"]))}.</b> '
+           'Ledger status is unknown, so "ready for review" may include listed '
+           'items.</p>' if d.get("missing_ledgers") else '')
+        +         f'<p class="note" style="margin:0 0 14px;padding:0;border:0">{d["count"]} shoot(s) '
         f'in <code>inventory/</code>. By blocking stage: {_e(counts) or "—"}</p>'
         '<div class="scroll"><table><tr><th>Shoot</th><th class="num">Frames</th>'
         '<th>Blocked at</th><th>Next action</th><th>SKU</th><th>Ledger</th></tr>'
@@ -604,6 +626,9 @@ def main() -> int:
           f"review · {sum(x['count'] for x in d['drift_by_store'].values())} "
           f"live/ledger disagreement(s)"
           + (f" across {len(names)} stores" if len(names) > 1 else ""))
+    if d["backlog"]["missing_ledgers"]:
+        print(f"[WARN] no ledger found: {', '.join(d['backlog']['missing_ledgers'])} "
+              f"— backlog ledger status is unknown", file=sys.stderr)
     print(f"[OK] {out}")
     return 0
 

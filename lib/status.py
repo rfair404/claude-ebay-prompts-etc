@@ -65,44 +65,81 @@ def _store_from_draft(shoot: Path) -> str:
     return stores.draft_store_from_text(_draft_text(shoot))
 
 
-def _ledger_row(sku: str, ledger_by_sku: Optional[dict] = None,
-                store: str = stores.DEFAULT_STORE) -> Optional[dict]:
+# A row in one of these states is not this item's listing any more; another
+# store's live or sold row for the same SKU outranks it.
+_SUPERSEDED = frozenset({"VOIDED"})
+
+
+def load_ledger(store: str) -> dict:
+    """`{sku: row}` from `store`'s listings ledger — read from the main
+    checkout when run from a worktree (stores.readable). {} when there is no
+    such file or `store` is not a valid name."""
+    try:
+        path = stores.readable(stores.paths(store).listings_ledger)
+    except ValueError:
+        return {}
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        return {r["sku"]: r for r in csv.DictReader(f) if r.get("sku")}
+
+
+def ledger_stores(names: Optional[list] = None) -> list[str]:
+    """Every store with a ledger: `names` (default: the configured stores)
+    plus any `listings_ledger-<store>.csv` on disk. A worktree has no
+    config.yaml, so config alone names only "default"."""
+    if names is None:
+        try:
+            names = stores.configured_stores()
+        except Exception:                     # noqa: BLE001 — unreadable config
+            names = [stores.DEFAULT_STORE]
+    names = list(names)
+    for root in {stores.REPO, stores.main_checkout(stores.REPO)}:
+        for p in sorted(root.glob("listings_ledger-*.csv")):
+            name = p.stem[len("listings_ledger-"):]
+            if stores.STORE_NAME_RE.match(name) and name not in names:
+                names.append(name)
+    return names
+
+
+def _ledger_row(sku: str, store: str = stores.DEFAULT_STORE,
+                ledgers: Optional[dict] = None) -> Optional[dict]:
+    """`sku`'s row, from `store`'s ledger first. When that ledger has no row,
+    or only a superseded (VOIDED) one, another store's live row wins: a
+    VOIDED junk row must not hide the item SOLD in the default store.
+    `ledgers` is `{store: {sku: row}}`, preloaded; stores missing from it are
+    read here."""
     if not sku:
         return None
-    if ledger_by_sku is not None:
-        return ledger_by_sku.get(sku)
-    try:
-        ledger = stores.paths(store).listings_ledger
-    except ValueError:                        # not a valid store name
-        return None
-    if not ledger.exists():
-        return None
-    with ledger.open(encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            if row.get("sku") == sku:
-                return row
-    return None
+    ledgers = dict(ledgers or {})
+
+    def _get(name: str) -> Optional[dict]:
+        if name not in ledgers:
+            ledgers[name] = load_ledger(name)
+        return ledgers[name].get(sku)
+
+    own = _get(store)
+    if own and own.get("status") not in _SUPERSEDED:
+        return own
+    others = [n for n in dict.fromkeys([*ledgers, *ledger_stores()]) if n != store]
+    rows = [r for r in map(_get, others) if r]
+    return next((r for r in rows if r.get("status") not in _SUPERSEDED), own or
+                (rows[0] if rows else None))
 
 
-def gather(shoot: Path, ledger_by_sku: Optional[dict] = None,
-           store: Optional[str] = None,
-           ledger_store: str = stores.DEFAULT_STORE) -> dict:
+def gather(shoot: Path, ledgers: Optional[dict] = None,
+           store: Optional[str] = None) -> dict:
     """The whole state of one shoot dir, one read pass. Each stage's
     'pending' list is empty iff that stage is fully done — STAGE_CHECK
     itself is the single source of truth for that (unwritten file, an
     interactive gate's own HARD stop, everything).
 
-    `ledger_by_sku` lets a caller looking at many shoots in one run (e.g.
-    the dashboard's backlog view) preload `listings_ledger.csv` once —
-    `{sku: row}` — instead of this function re-scanning the whole file per
-    shoot. Omitted (the default), it reads the file itself exactly as
-    before; every existing single-shoot caller is unaffected.
+    `ledgers` (`{store: {sku: row}}`, see load_ledger) lets a caller looking
+    at many shoots in one run (the dashboard's backlog) read each ledger once
+    instead of once per shoot. Omitted, they are read here.
 
-    Per store (#156): the ledger consulted is the one for the shoot's store —
-    `store` if given, else the draft's own `store:` field. `ledger_by_sku`
-    is `ledger_store`'s preload (the default store's, as it always was), so
-    it is used only for shoots of that store; any other store's shoot reads
-    its own ledger file instead of silently missing in the wrong map."""
+    Per store (#156): the shoot's store is `store` if given, else the draft's
+    own `store:` field, and that store's ledger row wins (_ledger_row)."""
     stages: dict = {}
     next_action = None
     for stage in STAGE_ORDER:
@@ -120,8 +157,7 @@ def gather(shoot: Path, ledger_by_sku: Optional[dict] = None,
 
     sku = _sku_from_draft(shoot)
     shoot_store = store or _store_from_draft(shoot)
-    preload = ledger_by_sku if shoot_store == ledger_store else None
-    ledger = _ledger_row(sku, preload, shoot_store)
+    ledger = _ledger_row(sku, shoot_store, ledgers)
 
     return {
         "shoot": str(shoot),
