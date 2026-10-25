@@ -8,17 +8,10 @@ name: tests
 # API or a logged-in browser belongs in a manual smoke check, not here.
 
 on:
-  # ci/** is any branch, on demand: `tools/ci_test.sh [branch]` pushes the
-  # branch's commit to ci/<branch>. Since 2026-10-24 the full suite runs here
-  # and not on a LAN machine, because local full runs beside the desktop app,
-  # Firefox and OBS got the app OOM-killed. A push trigger, not
-  # workflow_dispatch from the script, because dispatching needs a token that
-  # can write Actions and pushing needs only push access.
+  # ci/**: any branch on demand, pushed there by tools/ci_test.sh.
   push:
     branches: [main, 'ci/**']
   pull_request:
-  # The "Run workflow" button in the Actions tab, for a signed-in browser.
-  workflow_dispatch:
 
 jobs:
   pytest:

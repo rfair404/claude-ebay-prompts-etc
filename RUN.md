@@ -214,15 +214,17 @@ one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
 
-**Run the full suite in CI, not here.** Commit, then run
-`tools/ci_test.sh [branch]` (backgrounded; the current branch by default). It
-force-pushes the branch's commit to `ci/<branch>`, a throwaway ref it owns
-(never `main`, which it refuses). `.github/workflows/tests.yml` runs on every
-push to `ci/**`. The script watches the run of that exact commit and exits
-non-zero with the failed jobs' log tail if it fails. It refuses uncommitted
-changes, because CI only tests the commit. Both OS legs take about 5–8 minutes. A full local run peaks near 900 MB, and
-sessions running it side by side beside the app, Firefox and OBS got the
-desktop app OOM-killed (2026-10-24). CI runs on GitHub, so the on-air hold
+**Run the full suite in CI, not here.** For a commit not yet on a PR, commit,
+then run `tools/ci_test.sh [branch]` (backgrounded; the current branch by
+default). A PR already runs the suite on every push. The script force-pushes
+the branch's commit to `ci/<branch>`, a throwaway ref it owns and deletes on
+exit (never `main`, which it refuses). `.github/workflows/tests.yml` runs on
+every push to `ci/**`. The script watches the new run of that exact commit and
+exits non-zero with the failed jobs' log tail if it fails. It refuses
+uncommitted changes, because CI only tests the commit. `ci/` is reserved for
+`ci_test.sh`; never name a working branch `ci/…`. A full local run peaks near
+900 MB, and sessions running it side by side beside the app, Firefox and OBS
+got the desktop app OOM-killed (2026-10-24). CI runs on GitHub, so the on-air hold
 below does not stop `ci_test.sh`. Local `python -m pytest <one test file>`
 stays. Green is print-only now: `tools/green_test.sh` is deprecated, use
 `tools/ci_test.sh`.
