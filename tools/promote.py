@@ -247,7 +247,16 @@ def ensure_ad_group(campaign_id: str, bid: float, confirm: bool, creds=None) -> 
 
 def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
             ad_group_id: str = "", creds=None) -> dict:
-    """Bulk-create ads by listing id. Up to 500 per call; we send far fewer."""
+    """Bulk-create ads by listing id. Up to 500 per call; we send far fewer.
+    A listing from an excluded consignment lot (auto_promote's
+    `exclude_consignment`) is dropped and printed, never sent."""
+    from auto_promote import excluded_listings
+    skip = excluded_listings(listing_ids, getattr(creds, "store", None))
+    for lid, why in skip.items():
+        print(f"  skip {lid}: not promoted: {why}")
+    listing_ids = [l for l in listing_ids if str(l) not in skip]
+    if not listing_ids:
+        return {}
     api_send = _api(creds)
 
     body = {"requests": [
