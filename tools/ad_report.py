@@ -27,6 +27,11 @@ a file. It changes no campaign, ad, bid or budget and costs nothing. Every
 recommendation printed here is advice: changing a campaign stays with
 `tools/promote.py` and its `--confirm`, or with a person in Seller Hub.
 
+A pull also reads every RUNNING campaign's ads and lists any consignment
+listing that auto_promote excludes (K01) but a campaign still promotes, with
+the Seller Hub step to stop it. Read-only: eBay refuses to remove an ad from a
+rule-based campaign through the API.
+
 THE RULES EBAY ONLY STATES IN ONE GUIDE (pl-reports.html)
 
 Every rule below was learned from a refusal on the live account (2026-10-05).
@@ -88,6 +93,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "lib"))
 
 import stores                                                    # noqa: E402
+import auto_promote                                              # noqa: E402
 
 API = "/sell/marketing/v1"
 
@@ -322,11 +328,91 @@ def pull(days: int, store: Optional[str] = None, *, now: Optional[datetime] = No
         out["billed"] = billed_ad_fees(days, store)
     except Exception as e:                                       # noqa: BLE001
         out["errors"]["billed"] = str(e)[:300]
+    try:
+        out["consignment"] = consignment_check(camps, store, api_send, creds)
+    except Exception as e:                                       # noqa: BLE001
+        out["errors"]["consignment"] = str(e)[:300]
 
     path = stores.paths(store).ad_report_json
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=1), encoding="utf-8")
     return out
+
+
+NOT_LIVE = {"DRAFTED", "SOLD", "ENDED", "VOIDED"}
+
+
+def promoted_consignment(camps: list[dict], ads_of: dict, ledger: list[dict],
+                         excluded: dict) -> dict:
+    """Which excluded consignment listings a RUNNING campaign still promotes.
+
+    `ads_of` is {campaignId: [listing ids with an ACTIVE ad]}, or None for a
+    campaign whose ads the API won't list (OFF_SITE). `excluded` is
+    auto_promote.excluded_listings() over those ids plus the live ledger.
+    A rule-based campaign is also checked by its price band, because
+    find_campaign_by_ad_reference misses some of its ads (C055, 2026-10-25).
+    Returns {"hits": [{listing_id, sku, why, campaign, how}], "unchecked": [names]}."""
+    live = {str(r.get("listing_id")): r for r in ledger
+            if r.get("listing_id") and r.get("status") not in NOT_LIVE
+            and not r.get("ended_at")}
+    hits, unchecked = [], []
+    for c in camps:
+        if c.get("campaignStatus") != "RUNNING":
+            continue
+        name, cid = c.get("campaignName") or "", str(c.get("campaignId"))
+        ids = ads_of.get(cid)
+        if ids is None:
+            unchecked.append(name)
+            ids = []
+        seen = set()
+        for lid in map(str, ids):
+            if lid in excluded:
+                seen.add(lid)
+                hits.append({"listing_id": lid, "campaign": name, "how": "has an ad"})
+        crit = c.get("campaignCriterion") or {}
+        # a SMART campaign with no criterion is key-based: it holds only its ads
+        if crit and (c.get("campaignTargetingType") == "SMART"
+                     or crit.get("autoSelectFutureInventory")):
+            rules = crit.get("selectionRules") or [{}]
+            for lid, r in live.items():
+                if (lid in excluded and lid not in seen
+                        and any(auto_promote._covers(x, auto_promote._price(r.get("price")))
+                                for x in rules)):
+                    hits.append({"listing_id": lid, "campaign": name,
+                                 "how": "auto-selects at its price"})
+    for h in hits:
+        h["sku"] = (live.get(h["listing_id"]) or {}).get("sku", "")
+        h["why"] = excluded[h["listing_id"]]
+    return {"hits": hits, "unchecked": unchecked}
+
+
+def consignment_check(camps: list[dict], store: Optional[str], api_send, creds) -> dict:
+    """Read every RUNNING campaign's ACTIVE ads, then promoted_consignment()."""
+    import sync_actuals
+    ads_of: dict[str, Optional[list[str]]] = {}
+    for c in camps:
+        if c.get("campaignStatus") != "RUNNING":
+            continue
+        cid, ids, offset = str(c["campaignId"]), [], 0
+        if campaign_group(c) == "OFFSITE":
+            ads_of[cid] = None           # no per-listing ads in the API
+            continue
+        while True:
+            page = api_send("GET", f"{API}/ad_campaign/{cid}/ad?limit=500&offset={offset}",
+                            creds=creds) or {}
+            got = page.get("ads") or []
+            ids += [str(a["listingId"]) for a in got
+                    if a.get("adStatus") == "ACTIVE" and a.get("listingId")]
+            offset += len(got)
+            if not got or offset >= int(page.get("total") or 0):
+                break
+        ads_of[cid] = ids
+    ledger = sync_actuals.load_listings_ledger(store)
+    candidates = {i for ids in ads_of.values() for i in ids or []}
+    candidates |= {str(r["listing_id"]) for r in ledger if r.get("listing_id")
+                   and r.get("status") not in NOT_LIVE and not r.get("ended_at")}
+    excluded = auto_promote.excluded_listings(candidates, store)
+    return promoted_consignment(camps, ads_of, ledger, excluded)
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +682,18 @@ def render(data: dict, findings: list[dict]) -> str:
                  f"{(t['status'] or '')[:8]:8} {t['impressions']:>8.0f} {t['clicks']:>6.0f} "
                  f"{t['sold']:>4.0f} {t['sales']:>9.2f} {t['ad_fees']:>8.2f} "
                  + (f"{t['roas']:>5.1f}" if t["roas"] is not None else f"{'—':>5}"))
+    cons = data.get("consignment")
+    if cons is not None:
+        L += ["", "PROMOTED CONSIGNMENT LISTINGS"]
+        for h in cons["hits"]:
+            L.append(f"  {h['listing_id']} {h['sku'] or '—'} ({h['why']}): "
+                     f"'{h['campaign']}' {h['how']}")
+        if cons["hits"]:
+            L.append(f"  Stop each by hand: {auto_promote.SELLER_HUB_STOP}")
+        else:
+            L.append("  none.")
+        for name in cons["unchecked"]:
+            L.append(f"  '{name}' has no per-listing ads in the API; check it in Seller Hub.")
     L += ["", "WHAT TO DO"]
     for f in findings:
         L.append(f"  [{f['level']:5}] {f['campaign']}: {f['text']}")

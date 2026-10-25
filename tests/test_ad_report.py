@@ -247,3 +247,35 @@ def test_findings_sorted_most_urgent_first():
     levels = [f["level"] for f in A.advise(_data(), gross_sales=1000.0)]
     order = {"ACT": 0, "WATCH": 1, "KEEP": 2, "INFO": 3}
     assert levels == sorted(levels, key=order.get)
+
+
+# --- consignment listings a running campaign still promotes (K01) -----------
+
+def test_promoted_consignment_finds_ads_rule_coverage_and_offsite():
+    keyed = {"campaignId": "1", "campaignName": "Keyed", "campaignStatus": "RUNNING",
+             "campaignTargetingType": "SMART"}
+    rule = {"campaignId": "2", "campaignName": "Rule", "campaignStatus": "RUNNING",
+            "campaignTargetingType": "SMART",
+            "campaignCriterion": {"autoSelectFutureInventory": True, "selectionRules": [
+                {"minPrice": {"value": "25"}, "maxPrice": {"value": "5000"}}]}}
+    offsite = {"campaignId": "3", "campaignName": "Offsite", "campaignStatus": "RUNNING"}
+    ended = {"campaignId": "4", "campaignName": "Old", "campaignStatus": "ENDED"}
+    ledger = [{"listing_id": "10", "sku": "K01-C087", "status": "PUBLISHED", "price": "40"},
+              {"listing_id": "11", "sku": "K01-C088", "status": "PUBLISHED", "price": "12"},
+              {"listing_id": "12", "sku": "K01-C089", "status": "SOLD", "price": "90"},
+              {"listing_id": "20", "sku": "OWN-1", "status": "PUBLISHED", "price": "40"}]
+    excluded = {"10": "consignment K01 excluded", "11": "consignment K01 excluded",
+                "12": "consignment K01 excluded"}
+    ads_of = {"1": ["11", "20"], "2": [], "3": None, "4": ["10"]}
+
+    out = A.promoted_consignment([keyed, rule, offsite, ended], ads_of, ledger, excluded)
+
+    got = {(h["listing_id"], h["campaign"], h["how"], h["sku"]) for h in out["hits"]}
+    assert got == {
+        ("11", "Keyed", "has an ad", "K01-C088"),           # a key-based ad
+        ("10", "Rule", "auto-selects at its price", "K01-C087"),  # $40 in band
+    }                    # $12 is under the rule's floor; sold and ended skipped
+    assert out["unchecked"] == ["Offsite"]
+    text = A.render({"date_from": "2026-10-01", "date_to": "2026-10-25", "days": 25,
+                     "pulled_at": "x", "campaigns": [], "rows": [], "consignment": out}, [])
+    assert "PROMOTED CONSIGNMENT LISTINGS" in text and "Seller Hub" in text
