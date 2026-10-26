@@ -1,262 +1,234 @@
-# Web app / backend-service architecture plan (#31)
+---
+version: 1.0.0
+updated: 2026-10-26
+---
 
-Scopes issue #31 ("Claude becomes a backend service, not the UI") as a
-sequenced, risk-ordered plan, following the doc-first pattern this repo
-already uses for large ideas (PR #60 scoped #59's background dispatch, PR
-#64 scoped #62's conductor/workers model — both landed a planning doc plus
-at most one small, safe, concrete piece, not the whole architecture). This
-document is that first piece for #31: no server, no job queue, and no
-secrets/network change ships with it.
+# Web app architecture
 
-## The problem, as it actually shows up in this codebase
+The Fair Hand app is a local web interface over the pipeline. It covers every
+core function of the business in the browser, so Russell's work is clicks
+instead of chat turns and typing. Claude is one service the app calls for the
+judgment stages; it is no longer the UI.
 
-The pipeline already runs headless end-to-end (`RUN.md`) and already has a
-real command surface (`lib/cli.py`, the `ebz` dispatcher) — but every stage
-still executes *inside* a Claude Code conversation, including the parts
-that need no judgment at all:
+**The build plan is
+[#311](https://github.com/rfair404/claude-ebay-prompts-etc/issues/311).** It
+supersedes #31, which this doc used to scope as four phases. This doc records
+the decisions and what is built; #311 has the full slice table, the per-team
+requirements and the acceptance checks.
 
-- **PREP's `--auto` crop/orientation pass**, `lib/price_stats.py`'s tier
-  math, `lib/list_edit.py`'s offer/draft building, and the ledger CSV
-  read-modify-write are plain deterministic code today. None of them need
-  a model in the loop, but all of them currently only run when a chat
-  session invokes them.
-- **The UI is one-shot and ephemeral.** `tools/review_card_html.py` and
-  `tools/prep_sheet_html.py` already generate real HTML review surfaces —
-  `review_card.html`, `.prep/review.html` — but each is a one-off file
-  published once per run, not a live page someone can return to. There is
-  no standing view of "what's in the backlog right now."
-- **`tools/sales_report.py` already proves the read-only-dashboard pattern
-  works.** Its `sync()`/`gather()` split — sync from the API, then draw
-  `reports/sales_dashboard.html` from local CSVs only, with `--no-sync`
-  skipping the network entirely — is exactly the shape a Phase 1 dashboard
-  needs, just not generalized past sales.
+Russell's requirements (2026-10-24): every core function works end to end from
+the browser and is secure; sign-in uses OAuth and every connection (eBay, R2,
+Google Drive, the other keys) is authorized and stored properly; store
+switching works for any number of stores.
 
-So the gap #31 identifies is real, and closer to being closed than the
-issue's "architecture sketch" implies: the API surface (`lib/cli.py`), the
-structured-output convention (Phase 2 of V4_PLAN, "terse to stdout, detail
-to JSON"), and a working static-HTML dashboard pattern already exist. What
-does not exist yet is (a) a live/standing web view instead of one-shot
-files, (b) a job queue so uploads/approvals don't require a chat turn, and
-(c) any story for running credentials outside a single operator's local
-shell.
+## On main today
 
-### Status of the stated prerequisite (#30)
+| Piece | What it is |
+|---|---|
+| Phase 1 (#127) | `tools/dashboard.py` (`ebz dashboard`): backlog by stage, drafts awaiting review, live vs. ledger drift. Reads only what is on disk. |
+| Part of Phase 2 | `webapp/` (`ebz serve`, `http://127.0.0.1:8770`): FastAPI, bound to `127.0.0.1` only. Routes: `/`, `/review/{shoot}`, `/live/{show}*`, `/pick/{token}`, `/pager`, `/freight`, `/api/jobs*`, `/healthz`. |
+| Job queue | `webapp/queue.py`, a SQLite job table in `reports/jobs.db`. Job kinds in `webapp/jobs.py` are the secret-free ones only: `prep-auto` and `price-stats`. |
+| `/pick/{token}` | Pick sheets with buyer PII (#151): 256-bit tokens, expiry enforced on read, `no-store` / `noindex` / `no-referrer`, no route that lists the store. |
+| `/freight` | The one route on main that uses a stored provider key. Booking is a dry run, then a confirm. `freight.web_booking: false` turns booking off. |
 
-Issue #31 says this work is "downstream of #30, not parallel to it."
-`docs/V4_PLAN.md` checks off four of #30's five phases as landed: prompt
-diet (Phase 1), the `ebz` CLI (Phase 3), the on-disk comp cache +
-single-pass mode (Phase 4), and the session observer (Phase 5). Phase 2
-("terse tool output") is written as a convention, not a checklist item,
-and checking the code directly: none of its five named targets
-(`lib/photo_prep/prep.py`, `lib/list_edit.py`, `tools/sales_report.py`,
-`tools/ledger_reconcile.py`, `tools/live_audit.py`) print the
-`OK n/m, k flagged → <file>.json` shape the convention describes in this
-branch. So #30 is landed for four of its five phases, Phase 2 is not. It
-still doesn't block this plan: Phase 2 is about making a tool's *terse
-stdout* readable by a human or an LLM reading a transcript: this plan's
-Phase 2 already calls `gather()` and friends as Python functions
-directly (see the module-mapping table below), never by parsing a CLI's
-printed text, so the "skinny prompts + structured records + one CLI"
-precondition #31 actually needs is in place regardless.
+Until slices 4 and 8 of #311 land, the boundary on main holds: no web job
+calls `lib/ebay_client.py` or Apify, and eBay writes stay in chat sessions and
+the CLI.
 
-## Phased plan
+## Decisions
 
-Each phase is scoped so its risk matches what it's allowed to touch. Later
-phases build on earlier ones' code, not around it.
+These are the technical director's, from #311. Status: **planned** unless a
+row in "On main today" says otherwise.
 
-### Phase 1 — read-only local dashboard (no server, no new network surface)
+- **Extend `webapp/`; no rewrite.** Business logic stays in `lib/` and
+  `tools/` as functions. The app is a thin shell over them and never
+  re-implements tool logic.
+- **Server-rendered pages with plain JS.** Reuse the Python renderers
+  (`dashboard.draw`, `review_card_html.render`, `prep_sheet_html.build`,
+  `live_show.render_host`, the freight pages) plus `fetch()` JS the way
+  `pager.py` does it. Job status is polled from `GET /api/jobs/{id}`. No SPA,
+  npm, Jinja, HTMX or WebSockets, and no new Python dependencies.
+- **One action table.** New `webapp/actions.py`:
+  `ACTIONS = {name: Action(argv_template, slots, writes_ebay, needs_confirm)}`.
+  Slots are typed and validated (shoot, store, order id, stage, frame=deg). One
+  handler runs `python -m lib.cli <argv>` from the repo.
+- **Claude stages run through `claude -p`**, following `tools/tg7_import.sh`:
+  `claude -p "<stage> <shoot>" --output-format json --allowedTools <per stage>`,
+  30-minute timeout, at most 4 stage jobs at once, one per item. A job succeeds
+  when its stage file (`identify.txt`, `price.txt`, `investigate.txt`,
+  `draft.md`) exists and is newer than the job start. The job stores
+  `session_id` so the long tail continues with `claude --resume`. No Agent SDK
+  and no Anthropic API key. A Claude job gets no `Bash` beyond the PRICE
+  stage's browse tool, so a stage can't publish.
+- **Agents use the CLI, not HTTP.** Agents (the art director included) keep
+  using `ebz` and read `.prep/card.jpg` from disk. The app issues no API
+  tokens.
+- **Ledger writes are serialized** with a lockfile around
+  `list_edit.upsert_listing`, because chat sessions and web jobs both write
+  it. They run from the main checkout.
 
-**What:** Extend the existing static-HTML-generator pattern —
-`tools/sales_report.py`'s `gather()` → `reports/sales_dashboard.html` — to
-cover the views #31 asks for beyond sales: backlog by stage (one row per
-`inventory/<shoot>/` via `lib/status.py`'s existing per-shoot state logic),
-drafts awaiting review, and live-listing vs. ledger drift. Still a `python
--m lib.cli <new-command>` invocation that writes an HTML file to open
-locally — not a running server, not a background job, not a phone-reachable
-page.
+### eBay writes: store, dry run, confirm
 
-**Why first:** it needs nothing this repo doesn't already have. No secrets
-beyond what `sales_report.py` already reads (none for the CSV-only path;
-`--no-sync` mode touches zero credentials). No new dependency. No network
-listener at all — "hosting" is moot because there's no process staying up.
-It directly replaces the "review cards live in chat scrollback" complaint
-with a page that persists on disk, at essentially the cost of one more
-report script.
+- Every eBay write takes a validated `store` (#156), never the env default.
+- Every eBay write is two steps: a dry-run job, then
+  `POST /api/actions/{name}/confirm` with the dry-run job id. The confirm is
+  refused if the input changed since the dry run. A confirm id is single-use
+  (`UNIQUE confirm_of`), so a second POST returns the first result and never
+  writes twice. `reports/jobs.db` is the audit trail.
+- **Approvals are hash-bound.** `card_hash` is the sha256 of `draft.md` +
+  `review_card.md` + the PREP approval digests in `.prep/prep.json`. An
+  `approvals` table in `reports/jobs.db` holds sku, store, card_hash, who and
+  when; it is not a ledger column. Publish refuses when the current hash
+  doesn't match the approved one.
 
-**Why not more yet:** a live/served page implies a process that stays
-running, which is the first real step toward "network-reachable" — worth
-keeping separate from "can I see my backlog as a page" so that capability
-lands with zero new attack surface.
+### Hosting
 
-### Phase 2 — local job queue + non-secret writes (still localhost-only)
+Localhost only, login required anyway. The app keeps binding `127.0.0.1`
+(`tests/test_webapp_server.py` enforces it). No LAN, phone, port-forwarding,
+Tailscale or public host in this build. Russell skipped phone access for now
+(2026-10-24); a mobile intake app is proposed separately in #314.
 
-**What:** A FastAPI app + a small worker, running only on the operator's
-own machine (`127.0.0.1`, no bind to `0.0.0.0`), that:
+### Login
 
-- Turns Phase 1's dashboard from a generated file into a live page backed
-  by the same read functions.
-- Wraps the **secret-free** half of the pipeline as background jobs:
-  `lib/photo_prep/prep.py`'s `--auto` pass on upload, `lib/price_stats.py`
-  tier math over an already-saved comp JSON, `lib/list_edit.py`'s local-only
-  functions (`record_draft`, `validate_draft_for_sync`, `upsert_listing` —
-  all local file/CSV operations, no eBay call). `build_review_card()` is
-  NOT in this set — it calls `preflight_listing()`, which loads credentials
-  and hits eBay's category/policy endpoints; it stays Phase-3 alongside the
-  other eBay-backed functions (see the module-mapping table below).
-- Lets the review queue accept **local writes**: approving a PREP stage
-  (writes `.prep/prep.json`), editing a draft field, approving/declining a
-  review card *locally* (still nothing published — see Phase 3).
+- **Google OIDC** (authorization code with PKCE, `state` and `nonce`) in a new
+  `webapp/auth.py`, stdlib `urllib`, no JWT dependency. The ID token comes
+  straight from Google's token endpoint over TLS. Redirect URI
+  `http://localhost:8770/auth/callback`.
+- Only verified emails in `webapp.auth.allowed_emails` can sign in. That list
+  lives in `config.yaml`, never in this repo.
+- **Sessions:** a random 256-bit id, stored only as a hash in a `sessions`
+  table in `reports/jobs.db`. Cookie `HttpOnly; SameSite=Strict; Path=/`.
+  7-day sliding expiry, 30-day absolute. Logout is a POST that deletes the
+  row.
+- **CSRF / Origin rule:** SameSite=Strict, and every non-GET must carry a
+  loopback `Origin`. Today `_local_only` lets a request with no `Origin`
+  through; slice 1 closes that.
+- **Exempt from login:** `/healthz`, `/live/{show}/overlay` and
+  `GET /live/{show}/state`. OBS can't sign in, and none of them carry PII.
+- Internet is needed only at sign-in; a live show keeps running offline, with
+  `show_flow.py` as the fallback. `uvicorn.run(..., access_log=False)` keeps
+  the OAuth `code=` out of the logs.
 
-**Why here:** this is the actual "deterministic 80%" #31 names, and none
-of it needs eBay or Apify credentials — it's local image processing, pure
-math, and CSV/file writes the pipeline already performs today from inside
-a chat session. Moving it behind a local job queue removes the
-conversational round-trip for routine approvals without moving a single
-credential anywhere new. `listings_ledger.csv`'s single-writer constraint
-(RUN.md's "the ledger is the one hard constraint") carries over unchanged:
-the job worker serializes ledger writes exactly the way the conductor
-model already does for concurrent chat workers.
+### Connections and secrets
 
-**Explicitly not in Phase 2:** PRICE's Apify comp pull (needs the Apify
-token), anything in `lib/ebay_client.py` (publish, offers, policy sweep,
-Fulfillment sync) — those stay chat-only until Phase 3's secrets story
-lands.
+- **One secrets file:** `~/.ebaybiz/secrets.yaml` (or `$EBAYBIZ_SECRETS`),
+  mode 0600, outside the repo. `lib/config.load_config()` deep-merges it over
+  `config.yaml` and refuses it if group or other can read it. Env-var
+  overrides keep working; policy ids and location keys stay in `config.yaml`.
+  Not the OS keyring (a locked wallet breaks unattended jobs) and not an
+  encrypted file (its key would need storing too).
+- **Migration:** `tools/secrets_migrate.py`, dry run by default, `--apply`
+  takes a backup. It moves the eBay keys and refresh tokens (per environment
+  and store), the R2, Apify, Gemini and freight keys, and the Google OAuth
+  client secret. A store with no `app_id` falls back to one shared eBay keyset.
+- **`/connections`:** one row per eBay store, R2, Drive, freight, Gemini,
+  Apify and the Claude CLI, showing status and dates only (connected,
+  expiring, expired, last checked), never any characters of a value. eBay
+  reconnect is the OAuth consent per store, written through
+  `ebay_reauth.set_refresh_token` as the one writer. Drive reconnects by job
+  (`rclone config reconnect gdrive:`). Provider-issued API keys go in a
+  write-only field.
+- **Redaction:** `config.secret_values()` + `redact()` run on every job result,
+  error and HTTP error detail. A test greps every response and job row for
+  each secret.
+- Decided (Russell, 2026-10-24): Claude sessions and stage jobs can't read the
+  secrets directory (#318).
 
-**`/pick/{token}` — the one route that serves PII (#151).** The pack step
-needs a pick sheet the operator can open and print, and a path inside
-`pick_lists/` isn't that. So a rendered sheet is published to
-`lib/pick_store.py`'s short-lived store and served here by an unguessable
-token. This is the first route whose content is not secret-free — it
-carries buyer name and street address — so it carries rules the others
-don't need: 256 bits of token entropy, self-deleting expiry enforced on
-read (default 48h), `no-store` + `noindex` + `no-referrer`, and no route
-anywhere that enumerates the store. Localhost-only is currently doing real
-work here rather than just being a phase boundary: the link opens on this
-machine and nowhere else. Phase 3 changing that is the point at which this
-route's fencing has to be re-argued, not quietly inherited — reachability
-plus buyer addresses is a different question from reachability plus a
-dashboard, and the answer may be that a pick sheet needs auth in front of
-it, or a remote object store with signed URLs instead of this one.
+**Open: what session-run tools do after slice 4.** The Bash sandbox denies any
+read of `~/.ebaybiz`, so once the migration moves the credentials, tools a
+Claude session runs through Bash that load them (`pick-list/links.sh`,
+`list_edit.py`, `lib.cli offsite share`, the `ebay_client` calls) will fail.
+Options raised: run them only through the web job runner, a narrow broker that
+hands out short-lived tokens, or list them as "Russell runs these" on operator
+cards. Slice 4 needs one picked, with an acceptance check, before it merges.
+See [the #311 comment](https://github.com/rfair404/claude-ebay-prompts-etc/issues/311#issuecomment-6386287565).
+#327 (mail) depends on the answer.
 
-### Phase 3 — network reachability + the secrets story + live eBay/Apify writes
+### Stores
 
-**What:** Only once Phases 1–2 exist and a human has reviewed a written
-secrets plan:
+- The code already handles any number of stores (`lib/stores.py`,
+  `ebay_client.load_credentials`); each store has its own ledgers and
+  policies. Two gaps get fixed with an optional
+  `storefronts.<name>.ebay_username` key: `tools/live_marquee.py` and
+  `tools/live_prep.py` assume or require a typed `--seller`.
+- **Store switcher in every page header.** The current store is in the URL
+  (`?store=`), never in the session, so two tabs can't publish to each
+  other's store. Item writes use the draft's own store
+  (`stores.draft_store`); account-level actions use the URL's store. "All
+  stores" is a view only, one panel per store, never pooled totals.
+- **Add a store** (`/stores/new`): name it and run the eBay consent; run the
+  store-policy, pickup-policy and setup-check commands, each a dry run then
+  confirm; then `stores.add_store_config()` takes a backup and appends the
+  policy ids to `config.yaml` after Russell confirms the diff. That is the
+  only config write the web is allowed. The store's buyer-facing identity
+  stays empty until Russell picks it.
+- Per-store rules hold: `auto_promote` stays off for a named store until its
+  block names a campaign.
 
-- eBay + Apify tokens move from `config.yaml`/env into backend-managed
-  storage, scoped to the backend process, never sent to the frontend.
-- The app becomes reachable from somewhere other than the same machine —
-  phone-based review, per the issue's own framing.
-- PRICE's Apify pull and every `lib/ebay_client.py`/`lib/list_edit.py`
-  network call (publish, withdraw, policy sweep, Fulfillment sync) become
-  backend jobs, replacing the equivalent `ebz`/chat invocation.
-- Scheduled jobs (`lib/sync_actuals.py`, `tools/ledger_reconcile.py`)
-  move from "run when a session remembers to" to an actual cron/worker
-  schedule.
+## Gates that stay human
 
-**Gate:** this phase does not start until a human has reviewed and signed
-off a secrets document (see Risks below) — this plan does not authorize
-that move, only describes what it will look like when someone decides to
-do it.
+| Action | Gate |
+|---|---|
+| PREP stages | The art director (an agent) approves each stage through `ebz prep`. No job approves a stage by itself. |
+| Connect or reconnect an account, add a store | Russell signs in to the provider himself. Adding a store writes `config.yaml` only after he confirms the diff. |
+| Publish | Russell taps **Approve** on each card, which records a hash-bound approval. "Publish N approved" carries them out one at a time, for one store, re-checking each hash. No job chains past REVIEW. |
+| Price, markdown, Best Offer floor, end, relist | Dry run, then confirm. |
+| Ads, consignment settle, freight booking, tracking upload | Dry run, then confirm, one per click. Tracking is never batched. |
+| Go live | A second tap or press-and-hold. |
+| Not in the app | Buying labels (link to Seller Hub), messaging buyers, cancels and refunds, hand-editing `config.yaml` or ledgers, bank logins. |
 
-### Phase 4 — Claude as an invoked backend service
+REVIEW's one-explicit-approval rule and PREP's three-stage gate (`RUN.md`)
+carry over unchanged: the app lets them be answered from a page, not
+inferred, batched or defaulted.
 
-**What:** IDENTIFY, DRAFT copywriting, and PRICE's judgment calls (median
-vs. push-high, rarity checks) move from chat turns to Agent SDK/API calls
-the backend makes per-stage, with the skinny structured prompts #30 already
-produced as input and a structured stage record as output — no
-conversation. Chat stays the escape hatch for the long tail #31 names:
-novel categories, marble deep-dives, forum research, new specializations,
-pipeline debugging.
+## UX rules
 
-**Why last:** it's the piece that actually matches the issue's title
-("Claude becomes a backend service"), but it depends on Phase 3's backend
-existing and adds its own secret (an Anthropic API key, held server-side)
-on top of eBay/Apify — no reason to design it before the infrastructure
-it runs inside is real.
+Adopted by Russell, 2026-10-24.
 
-## Module mapping: what wraps as-is vs. what needs work
+- **Nothing is typed** that the app can look up: show names, folder names,
+  order ids, SKUs, titles, buyer-paid, tracking numbers, store, spot price.
+  Pickers instead, and no free-text "why" fields.
+- **Questions are yes/no or pick-one**, recommendation pre-selected.
+- **No copy-paste into chat.** Every command a page hands over today becomes a
+  button.
+- No file paths, `127.0.0.1` links or terminal reports shown as answers.
+- Desk only for this build, with big tap targets.
+- PREP calls (art director) and code or process calls (TD) are never shown to
+  Russell.
+- Look: the Pop's Games palette (`brand/pops-games/README.md`), and no Google
+  Fonts or other third-party calls.
 
-| Module | Role in the web app | Ready as-is? |
+## Slices
+
+Each slice is one PR, merged in order. Acceptance checks, files and
+prerequisites (P1, P2, #307, #308 before slice 8) are in
+[#311](https://github.com/rfair404/claude-ebay-prompts-etc/issues/311).
+
+| # | Slice | Status |
 |---|---|---|
-| `lib/cli.py` | Command registry — already close to an API surface; each `COMMANDS` entry is a candidate job type | Ready for Phase 2 (shell out per job); the registry pattern (name → module, one-line purpose) maps directly to a job-type table |
-| `lib/status.py` (`python -m lib.cli status <shoot-dir>`) | Backlog-by-shoot data for the dashboard | Ready as-is — already has a `--json` structured-output mode |
-| `tools/sales_report.py` (`_rows`, `gather`) | Sales/drift dashboard data layer | Ready as-is — `gather()` is already a pure function returning the dict a template needs, separate from the HTML-writing step; no extraction needed, just `from tools.sales_report import gather` (`lib/cli.py` puts the repo root, not `tools/`, on `sys.path` and dispatches to this module as `tools.sales_report`) |
-| `lib/price_stats.py` | PRICE tier math | Ready as-is — stdlib-only, already a pure function (`price_from_runs`), no secrets |
-| `lib/photo_prep/prep.py` | PREP pipeline (orientation/crop/colour) | Ready as-is for background jobs — already stage-gated with flags (`--auto`, `--check`, `--approve-stage`) that map directly to job endpoints; needs a queue wrapper, not a rewrite |
-| `tools/review_card_html.py`, `tools/prep_sheet_html.py` | Review/prep HTML rendering | These already prototype the front-end — Phase 1/2 can serve their output live instead of publishing one-off files; the rendering logic itself doesn't need to change |
-| `lib/list_edit.py` | Draft build, ledger CSV read/write, eBay publish/withdraw | **Split needed.** Local-only functions (`record_draft`, `validate_draft_for_sync`, `upsert_listing`) are secret-free and Phase-2-safe. `preflight_listing()` loads credentials and calls eBay category/policy endpoints (allowed-condition metadata, shipping policy lookup) — it is NOT secret-free despite being local-file-triggered. `build_review_card()` calls `preflight_listing()` internally, so it inherits the same eBay dependency. Both stay Phase-3-only alongside `create_or_update_listing`, `publish_offer`, `withdraw_offer_by_id`, `delete_offer_by_id` — a Phase-2 review queue needs either a cached/precomputed preflight result or to defer the review card's preflight section until Phase 3 |
-| `lib/ebay_client.py` | All eBay Sell/Trading API calls | Entirely Phase 3+ — every function needs live credentials; needs an auth-gated internal layer, token never reaches the frontend |
-| `lib/config.py` | Config/secrets loader | The thing that needs the secrets-story rework before Phase 3 — today it assumes a single local operator's env/file; a backend process needs a different trust model (see Risks) |
-| `lib/sync_actuals.py`, `tools/ledger_reconcile.py`, `tools/policy_sweep.py` | Scheduled sync/reconcile | Phase 3+: becomes a real cron/worker job once eBay creds live server-side; logic itself is unchanged |
+| 1 | Groundwork: app-wide loopback guard and PII headers, Origin required on writes, restart marks jobs interrupted, `StreamRequest` needs `confirm` | planned |
+| 2 | Login (`feat!:`; needs the Google OAuth client and a `webapp.auth` block) | planned |
+| 3 | Shell, action table (local actions only), brand, store switcher | planned |
+| 4 | Secrets file, migration, `/connections` | planned; blocked on the open question above |
+| 5 | Stores, `/stores/new` | planned |
+| 6 | Item, prep and review pages | planned |
+| 7 | Claude stages | planned |
+| 8 | Approvals and eBay writes | planned |
+| 9 | `/today` and `/intake` | planned |
+| 10 | `/ship` and freight pickers | planned |
+| 11 | Live screen (one screen, works offline) | planned |
+| 12 | `/reports`, `/consign`, backups | planned |
+| 13 | Listings, aging and markdowns | planned |
 
-## The four open questions from the issue
+"Fully functional" means: when slice 13 merges, every core function works from
+the browser with no chat turn and no typed command, apart from the human gates
+above.
 
-**Hosting.** Local-only through Phase 2 — there is no process listening on
-a network interface until Phase 3 by design. When Phase 3 is reached,
-recommend a private-network overlay (e.g. Tailscale) over port-forwarding
-or public hosting: phone reachability doesn't require public exposure, and
-a small resale business has no reason to accept that risk for a
-convenience feature. Public hosting is out of scope for this plan
-entirely.
+## Not in scope
 
-**Job runner.** Agree with the issue's instinct — something boring. For
-Phase 2's actual volume (one operator, a handful of items in flight at
-once), recommend FastAPI + a plain worker pool (`concurrent.futures` or a
-subprocess per job, shelling out through `lib/cli.py` exactly as a human
-would) backed by a SQLite job table for state — no Celery, no Redis, no
-message broker. That infrastructure is sized for a load this pipeline
-doesn't have; add it later only if Phase 2 usage actually justifies it.
-
-**Auth/secrets.** No phase in this plan moves eBay or Apify credentials
-into a network-reachable process without a separate, human-reviewed
-secrets document first. This plan's default recommendation for when that
-document is written: secrets load from OS-level protected storage (a
-keychain or a file with restricted permissions) rather than process env
-vars in a long-running web server; the backend process is the only thing
-that ever holds a token — the frontend and phone client never receive one,
-only session auth to the backend itself; and the network layer (Tailscale
-or equivalent) is the perimeter, not the app's own auth alone. This is a
-recommendation for that future document to start from, not a decision this
-PR makes.
-
-**Phone review scope.** Recommend a two-tier split rather than forcing
-everything phone-first: PREP crop/orientation approval and the REVIEW
-card's routine decision (title, price ladder, ⚠ warning lines) are
-thumbnail/summary-sized and fit a phone screen fine — most of the daily
-approval volume. Full-resolution defect inspection (hairline cracks,
-maker's-mark reading, fine wear) stays a desktop task until a phone-side
-pinch-zoom full-res viewer is specifically built, which this plan defers
-to Phase 3/4 rather than blocking Phase 1/2 on.
-
-## Non-goals and risks
-
-- **This document does not build the FastAPI server, the frontend, or any
-  job queue.** No runtime code ships with this PR beyond, at most, the
-  small groundwork noted below.
-- **No phase in this plan is authorized to move eBay or Apify credentials
-  into a network-reachable service without a human-reviewed secrets story
-  first.** Phase 3 names what that review needs to cover; it does not
-  perform it. Nothing here should be read as that review having already
-  happened or as pre-approval to skip it.
-- **No phase weakens an existing gate.** REVIEW's one-explicit-approval
-  rule and PREP's three-stage photo gate (RUN.md) carry over unchanged —
-  Phase 2 lets them be answered from a web page instead of a chat card,
-  it does not let them be inferred, batched, or defaulted.
-- **Frontend framework choice is deliberately left open.** This plan does
-  not commit to React vs. server-rendered HTML vs. htmx — that's a Phase 2
-  implementation decision, not an architecture decision this doc needs to
-  make.
-- **Job-runner and hosting choices favor boring over scalable**, matching
-  this repo's actual load (one operator, single-digit concurrent items) —
-  revisit only if Phase 2 usage data says otherwise, not preemptively.
-
-## Precedent this plan follows
-
-PR #60 (`docs: plan background dispatch for local-state-independent
-stages`, #59) and PR #64 (`docs+tool: conductor/workers concurrency
-shape`, #62) both scoped a large execution-model idea into a planning doc
-plus one small, safe, concrete piece — not the full build. This document
-follows the same shape for #31: the doc is the deliverable; Phase 1 (the
-extended static dashboard) is the natural next PR-sized unit once this
-plan is reviewed, not something this PR builds unasked.
+An SPA or build step, passwords or our own accounts, Celery or Redis, the Agent
+SDK or an Anthropic key, public hosting, phone or LAN access, a second job
+runner, logic copied out of `lib/` or `tools/`, bulk writes across stores,
+buying labels, messaging buyers, other channels (#166, #182), the stream box
+(#249), general config editing from the web, agent access over HTTP, and
+payouts, monthly close and the tax calendar (a follow-up issue).

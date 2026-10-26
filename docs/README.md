@@ -18,6 +18,7 @@ prompt, not the archive.
 | [live-streaming-setup.md](live-streaming-setup.md) | The new-machine checklist for eBay Live streaming: OBS (Flatpak) + the eBay WHIP profile, v4l2loopback, the Nikon D5100 feed, and what the OM System TG-7 can and can't do (`tools/live/`). |
 | [local-pickup-fragile.md](local-pickup-fragile.md) | IMPLEMENTED — how ship-risky items route to the local-pickup fulfillment policy, and the freight fallback for distant buyers. |
 | [price-strategy-v2.md](price-strategy-v2.md) | IMPLEMENTED — the distribution-based PRICE strategy (`lib/price_stats.py`) and the policy defaults it ships with. |
+| [webapp-architecture.md](webapp-architecture.md) | The local web app (`webapp/`, `ebz serve`): what is on main, the decisions from the #311 build plan (login, secrets, stores, dry run then confirm, human gates, UX rules) and the slice status. |
 | [ebay-live.md](ebay-live.md) | MVP — eBay Live show lineup (`tools/live_lineup.py`), the host page + OBS overlay (`/live/<show>`), and the show's promo image (`tools/live_marquee.py`). What eBay documents for Live, what's built, and the open questions in the eBay UI that gate the next step. |
 | [top-rated-plus.md](top-rated-plus.md) | What eBay's seller-standards policy requires a *listing* to carry, separated from the behavioral requirements a listing cannot encode. |
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
