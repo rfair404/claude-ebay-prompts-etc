@@ -45,6 +45,15 @@ For the AD:
 
 Leave out any section that's empty. If the whole card is empty, say "Nothing for Russell."
 
+## Give the steps once
+
+A card's steps are given once (Russell's rule, 2026-10-26).
+
+- After Russell does a step, reply with that step's result and, only if something changed, the single next action.
+- Never re-list the remaining steps, re-paste a card or command he already has, or add "still standing" or "reminder" lines for pending items.
+- A pending card comes back only if its content changed or he asks "what's left".
+- A background agent's status update is one line, or nothing when nothing needs him.
+
 ## Hard limits
 
 - Never answer a question for Russell, approve something in his name, or claim he said something.
