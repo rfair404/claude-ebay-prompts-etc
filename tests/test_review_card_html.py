@@ -384,3 +384,31 @@ def test_a_resolved_line_never_hides_a_flag_that_is_still_open(tmp_path):
     flagged = re.search(r"<h2>Flagged for a human</h2>\s*<ul class=\"flags\">(.*?)</ul>", page, re.S).group(1)
     assert "weight is a guess; price the label" in flagged
     assert '<details class="settled">' not in page
+
+
+# price.txt as the price researcher writes a re-price: the new block on top,
+# closed by an END line, the prior record below (C087, 2026-10-25).
+TWO_BLOCK_PRICE = """=== PRICE RE-PRICE 2026-10-25 — STORE DEFAULT ===
+Tiers:
+  Push-high     $45.99  WORKING PRICE.
+  Recommended   $29.99  at the delivered p75.
+  Conservative  $25.99  at the delivered median.
+=== END PRICE RE-PRICE 2026-10-25 STORE DEFAULT (prior record below) ===
+
+=== PRICE RE-RUN 2026-10-25 (polished re-shoot) ===
+  Push-high     $36.99  (~$41.99 delivered)  old working price.
+  Recommended   $24.99  (~$29.99 delivered)
+  Conservative  $20.99  (~$25.99 delivered)
+=== END PRICE RE-RUN 2026-10-25 (prior record below) ===
+  Push-high    $31.99 (~$36.99 delivered)  older still.
+"""
+
+
+def test_price_tiers_read_only_the_current_block(tmp_path):
+    s = _shoot(tmp_path)
+    (s / "price.txt").write_text(TWO_BLOCK_PRICE, encoding="utf-8")
+    assert [(t, v) for t, v, _n in R._price_tiers(s)] == [
+        ("Push-high", "45.99"), ("Recommended", "29.99"), ("Conservative", "25.99")]
+    page = R.render(s)
+    assert "45.99" in page
+    assert "36.99" not in page and "31.99" not in page
