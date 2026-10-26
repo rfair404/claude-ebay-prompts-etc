@@ -14,7 +14,8 @@ Each run:
   3. draft     inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/draft.md plus
                listing/D5_0001.jpg. N = highest existing + 1, claimed with an
                atomic mkdir, so two runs at once get two numbers.
-  4. record    list_edit.record_draft (`list_edit.py --record`): SKU stamped,
+  4. record    `list_edit.py --record`, run in the main checkout (where the
+               ledger and config.yaml live, from a worktree too): SKU stamped,
                ledger row DRAFTED. Earlier lots in the sale that were never
                recorded (tool-lot-1, made by hand) are recorded here too.
   5. sync      the offline sync gates first (list_edit.validate_draft_for_sync).
@@ -68,7 +69,6 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "lib"))
 import show_flow  # noqa: E402  (the feed's frame paths)
 
-INVENTORY = REPO / "inventory"
 LOT_PREFIX = "tool-lot-"
 LOT_RE = re.compile(rf"^{LOT_PREFIX}(\d+)$")
 PHOTO = "listing/D5_0001.jpg"
@@ -129,7 +129,7 @@ def _log(stage: str, secs: float, what: str) -> None:
 def sale_dir(arg: str | None) -> Path:
     if arg:
         return Path(arg).resolve()
-    return INVENTORY / f"tool-sale-{datetime.now():%Y-%m}"
+    return main_dir() / "inventory" / f"tool-sale-{datetime.now():%Y-%m}"
 
 
 def settings(sale: Path, overrides: dict) -> dict:
@@ -296,7 +296,7 @@ def _q(v) -> str:
 
 def _rel(p: Path) -> str:
     try:
-        return p.resolve().relative_to(REPO).as_posix()
+        return p.resolve().relative_to(main_dir()).as_posix()
     except ValueError:
         return p.as_posix()
 
@@ -430,10 +430,46 @@ class _SaleLock:
         self.fh.close()
 
 
-def record(sale: Path, lot_dir: Path, store: str) -> tuple[str, list[str]]:
-    """Record this lot (SKU + DRAFTED row) and any earlier lot in the sale
-    that has a draft but was never recorded. Returns (sku, adopted names)."""
-    import list_edit
+def main_dir(start: Path = REPO) -> Path:
+    """The main checkout, where config.yaml and the ledgers live (GH #103).
+    From a linked worktree that is the parent of git's common dir."""
+    from stores import main_checkout
+    return main_checkout(start)
+
+
+def list_edit(args: list[str], run=None):
+    """`python lib/list_edit.py <args>` run in the main checkout, whatever
+    directory this was started from: a worktree's own copy would write a
+    stray ledger and read no config."""
+    main = main_dir()
+    return (run or subprocess.run)([sys.executable, str(main / "lib" / "list_edit.py"), *args],
+                                   capture_output=True, text=True, cwd=main)
+
+
+def _lines(r) -> list[str]:
+    return [ln.strip() for ln in ((r.stdout or "") + "\n" + (r.stderr or "")).splitlines()
+            if ln.strip()]
+
+
+def _fail_line(r) -> str:
+    lines = _lines(r)
+    return next((ln for ln in reversed(lines)
+                 if ln.startswith(("[X]", "[FAIL]", "[ERR", "Error", "error"))),
+                lines[-1] if lines else f"exit {r.returncode}")[:200]
+
+
+def _record_one(d: Path, run=None) -> str:
+    r = list_edit(["--record", str(d)], run=run)
+    if r.returncode:
+        raise LotError(f"--record {d.name}: {_fail_line(r)}")
+    m = re.search(r"sku ([0-9a-f]{8})", r.stdout or "")
+    return m.group(1) if m else "?"
+
+
+def record(sale: Path, lot_dir: Path, run=None) -> tuple[str, list[str]]:
+    """`list_edit.py --record` this lot (SKU + DRAFTED row, in the store its
+    draft names) and any earlier lot in the sale that has a draft but was
+    never recorded. Returns (sku, adopted names)."""
     from draft_io import parse_draft
     adopted = []
     with _SaleLock(sale):
@@ -446,9 +482,9 @@ def record(sale: Path, lot_dir: Path, store: str) -> tuple[str, list[str]]:
             except Exception:  # noqa: BLE001 — a broken draft is left for a person
                 continue
             if not stamped:
-                list_edit.record_draft(d, store=store)
+                _record_one(d, run=run)
                 adopted.append(d.name)
-        sku, _ = list_edit.record_draft(lot_dir, store=store)
+        sku = _record_one(lot_dir, run=run)
     return sku, adopted
 
 
@@ -457,24 +493,18 @@ def record(sale: Path, lot_dir: Path, store: str) -> tuple[str, list[str]]:
 def sync(lot_dir: Path, run=None) -> tuple[bool, str]:
     """Run the offline sync gates; if they pass, `list_edit.py --sync` (an
     UNPUBLISHED offer). Returns (synced, one line)."""
-    import list_edit
-    run = run or subprocess.run
-    issues = list_edit.validate_draft_for_sync(lot_dir / "draft.md")
+    import list_edit as le
+    issues = le.validate_draft_for_sync(lot_dir / "draft.md")
     if issues:
         price = [i for i in issues if i.startswith("price:")]
         first = price[0] if price else issues[0]
         more = f" (+{len(issues) - 1} more)" if len(issues) > 1 else ""
         why = "waiting on PRICE" if price else "blocked"
         return False, f"eBay draft not created, {why}: {first[:160]}{more}"
-    r = run([sys.executable, str(REPO / "lib" / "list_edit.py"), "--sync", str(lot_dir)],
-            capture_output=True, text=True, cwd=REPO)
-    lines = [ln.strip() for ln in (r.stdout + "\n" + r.stderr).splitlines() if ln.strip()]
+    r = list_edit(["--sync", str(lot_dir)], run=run)
     if r.returncode == 0:
-        ok = next((ln for ln in lines if ln.startswith("[OK]")), "synced")
-        return True, ok
-    fail = next((ln for ln in reversed(lines) if ln.startswith(("[FAIL]", "[ERR", "Error", "error"))),
-                lines[-1] if lines else f"exit {r.returncode}")
-    return False, f"eBay sync failed: {fail[:200]}"
+        return True, next((ln for ln in _lines(r) if ln.startswith("[OK]")), "synced")
+    return False, f"eBay sync failed: {_fail_line(r)}"
 
 
 # --------------------------------------------------------------- main
@@ -525,7 +555,7 @@ def main(argv=None) -> int:
 
     t = time.monotonic()
     try:
-        sku, adopted = record(sale, lot_dir, s["store"])
+        sku, adopted = record(sale, lot_dir)
     except Exception as e:  # noqa: BLE001 — the draft is on disk; say what didn't happen
         _log("record", time.monotonic() - t, f"FAILED: {e}")
         print(f"[FAIL] TOOL LOT #{n} drafted at {_rel(lot_dir)} but not recorded: "

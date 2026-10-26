@@ -36,11 +36,17 @@ def frame(path: Path, size=(640, 426)) -> Path:
     return path
 
 
+REAL_RUN = subprocess.run
+
+
 def fake_claude(reply: str, rc=0, calls=None):
-    """A subprocess.run stand-in for the claude CLI: stream-json out."""
+    """A subprocess.run stand-in for the claude CLI: stream-json out. The
+    tool's list_edit.py calls (--record) run for real, on the temp ledger."""
     def run(cmd, **kw):
         if calls is not None:
             calls.append((cmd, kw))
+        if any(str(c).endswith("list_edit.py") for c in cmd):
+            return REAL_RUN(cmd, **kw)
         out = json.dumps({"type": "result", "is_error": False, "result": reply})
         return SimpleNamespace(returncode=rc, stdout=out + "\n", stderr="")
     return run
@@ -50,6 +56,7 @@ def fake_claude(reply: str, rc=0, calls=None):
 def sale(tmp_path, monkeypatch):
     monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(tmp_path / "ledger.csv"))
     monkeypatch.setattr(T, "claude_bin", lambda: "/bin/claude")
+    monkeypatch.setattr(T, "main_dir", lambda start=ROOT: ROOT)  # this checkout's list_edit.py
     snap = frame(tmp_path / "d5100_latest.jpg")
     monkeypatch.setattr(T, "feed_frames", lambda: [snap])
     return tmp_path / "tool-sale-2026-10"
@@ -147,20 +154,50 @@ def test_sync_step_reports_the_price_gate_without_calling_ebay(sale, monkeypatch
         monkeypatch.setattr(T.subprocess, "run", real)
     out = capsys.readouterr().out
     assert "waiting on PRICE" in out
-    assert all("list_edit.py" not in " ".join(c[0]) for c in calls)  # only the claude call ran
+    assert not [c for c in calls if "--sync" in c[0]]  # the gate held it: no eBay call
 
 
-def test_sync_runs_list_edit_sync_once_the_gates_pass(tmp_path, monkeypatch):
+def test_sync_runs_list_edit_sync_in_the_main_checkout(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    monkeypatch.setattr(T, "main_dir", lambda start=ROOT: main)
     monkeypatch.setattr(L, "validate_draft_for_sync", lambda p: [])
     seen = []
 
     def run(cmd, **kw):
-        seen.append(cmd)
+        seen.append((cmd, kw))
         return SimpleNamespace(returncode=0, stdout="[OK] created eBay DRAFT offer 123\n", stderr="")
     ok, line = T.sync(tmp_path, run=run)
     assert ok and line.startswith("[OK]")
-    assert seen[0][-2:] == ["--sync", str(tmp_path)]
-    assert not {"--publish", "--list", "--confirm"} & set(seen[0])
+    cmd, kw = seen[0]
+    assert cmd[1] == str(main / "lib" / "list_edit.py") and kw["cwd"] == main
+    assert cmd[-2:] == ["--sync", str(tmp_path)]
+    assert not {"--publish", "--list", "--confirm"} & set(cmd)
+
+
+def test_record_runs_in_the_main_checkout(tmp_path, monkeypatch):
+    main = tmp_path / "main"
+    monkeypatch.setattr(T, "main_dir", lambda start=ROOT: main)
+    lot = tmp_path / "sale" / "tool-lot-1"
+    lot.mkdir(parents=True)
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append((cmd, kw))
+        return SimpleNamespace(returncode=0, stdout="[OK] recorded DRAFTED — sku 0123abcd\n", stderr="")
+    assert T.record(lot.parent, lot, run=run) == ("0123abcd", [])
+    cmd, kw = seen[0]
+    assert cmd[1] == str(main / "lib" / "list_edit.py") and kw["cwd"] == main
+    assert cmd[-2:] == ["--record", str(lot)]
+
+
+def test_main_dir_from_a_worktree_is_the_main_checkout(tmp_path):
+    main, wt = tmp_path / "repo", tmp_path / "wt"
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(main)]
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
+    assert T.main_dir(wt) == main.resolve()
+    assert T.main_dir(main) == main.resolve()
 
 
 def test_sync_failure_is_one_line(tmp_path, monkeypatch):
