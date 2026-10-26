@@ -1,11 +1,11 @@
 ---
-name: review
-description: The listing manager steps Russell through the review card of every ready-to-list item, one at a time - the item's photo and card link first, then one publish yes/no - and publishes each yes. Items the art director has signed through PREP but that have no card yet are brought to review first. Use when Russell types /review, or asks to "go through the review cards", "what's ready to list" or "let's approve listings".
+name: cards
+description: The listing manager steps Russell through the review card of every ready-to-list item, one at a time - the item's photo and card link first, then one publish yes/no - and publishes each yes. Items the art director has signed through PREP but that have no card yet are brought to review first. Use when Russell types /cards, or asks to "go through the review cards", "what's ready to list" or "let's approve listings".
 ---
 
-# /review: every ready-to-list card, one at a time
+# /cards: every ready-to-list card, one at a time
 
-Typing `/review` is the ask, so start without confirming first. You run the
+Typing `/cards` is the ask, so start without confirming first. You run the
 listing manager's REVIEW desk (`.claude/agents/listing-manager.md`, RUN.md
 "Item states and handoffs"). The listing manager owns REVIEW; you show the
 cards in its place, because only this session can ask Russell a question.
