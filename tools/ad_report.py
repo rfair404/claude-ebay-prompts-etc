@@ -342,6 +342,13 @@ def pull(days: int, store: Optional[str] = None, *, now: Optional[datetime] = No
 NOT_LIVE = {"DRAFTED", "SOLD", "ENDED", "VOIDED"}
 
 
+def _live(ledger: list[dict]) -> dict[str, dict]:
+    """{listing_id: ledger row} for every row still live on eBay."""
+    return {str(r["listing_id"]): r for r in ledger
+            if r.get("listing_id") and r.get("status") not in NOT_LIVE
+            and not r.get("ended_at")}
+
+
 def promoted_consignment(camps: list[dict], ads_of: dict, ledger: list[dict],
                          excluded: dict) -> dict:
     """Which excluded consignment listings a RUNNING campaign still promotes.
@@ -352,9 +359,7 @@ def promoted_consignment(camps: list[dict], ads_of: dict, ledger: list[dict],
     A rule-based campaign is also checked by its price band, because
     find_campaign_by_ad_reference misses some of its ads (C055, 2026-10-25).
     Returns {"hits": [{listing_id, sku, why, campaign, how}], "unchecked": [names]}."""
-    live = {str(r.get("listing_id")): r for r in ledger
-            if r.get("listing_id") and r.get("status") not in NOT_LIVE
-            and not r.get("ended_at")}
+    live = _live(ledger)
     hits, unchecked = [], []
     for c in camps:
         if c.get("campaignStatus") != "RUNNING":
@@ -369,11 +374,8 @@ def promoted_consignment(camps: list[dict], ads_of: dict, ledger: list[dict],
             if lid in excluded:
                 seen.add(lid)
                 hits.append({"listing_id": lid, "campaign": name, "how": "has an ad"})
-        crit = c.get("campaignCriterion") or {}
-        # a SMART campaign with no criterion is key-based: it holds only its ads
-        if crit and (c.get("campaignTargetingType") == "SMART"
-                     or crit.get("autoSelectFutureInventory")):
-            rules = crit.get("selectionRules") or [{}]
+        rules = auto_promote.selection_rules(c)
+        if rules:
             for lid, r in live.items():
                 if (lid in excluded and lid not in seen
                         and any(auto_promote._covers(x, auto_promote._price(r.get("price")))
@@ -409,8 +411,7 @@ def consignment_check(camps: list[dict], store: Optional[str], api_send, creds) 
         ads_of[cid] = ids
     ledger = sync_actuals.load_listings_ledger(store)
     candidates = {i for ids in ads_of.values() for i in ids or []}
-    candidates |= {str(r["listing_id"]) for r in ledger if r.get("listing_id")
-                   and r.get("status") not in NOT_LIVE and not r.get("ended_at")}
+    candidates |= set(_live(ledger))
     excluded = auto_promote.excluded_listings(candidates, store)
     return promoted_consignment(camps, ads_of, ledger, excluded)
 
