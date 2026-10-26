@@ -523,6 +523,20 @@ def test_refocus_fails_fast_when_the_camera_is_off(monkeypatch):
     assert calls == [["gphoto2", "--auto-detect"]]
 
 
+def test_refocus_with_only_the_tg7_on_usb_says_the_d5100_is_missing(monkeypatch):
+    """A TG-7 on USB isn't a D5100: gphoto2 would talk to it and fail."""
+    def run(cmd, **kw):
+        assert cmd == ["gphoto2", "--auto-detect"]
+        return SF.subprocess.CompletedProcess(cmd, 0, stdout="Model  Port\n------\n" + TG7_USB
+                                              + "Olympus TG-7 (MTP)  usb:001,040\n", stderr="")
+    monkeypatch.setattr(SF, "feed_pids", lambda: [])
+    monkeypatch.setattr(SF, "feed_stop", lambda: None)
+    monkeypatch.setattr(SF.subprocess, "run", run)
+    monkeypatch.setattr(SF, "feed_start", lambda: pytest.fail("started the feed with no camera"))
+    with pytest.raises(obsctl.ObsError, match="D5100 not found on USB"):
+        SF.refocus_d5(FakeObs())
+
+
 def test_preview_is_a_jpeg_of_the_program_scene(client, obs):
     obs.scene = "eBay Main (camera 1)"
     r = client.get("/api/pager/preview.jpg")
@@ -980,6 +994,9 @@ class CamObs(FakeObs):
         return super().call(req, data)
 
 
+TG7_USB = "Mass Storage Camera            disk:/media/russ/OM SYSTEM\n"  # listed before the D5100
+
+
 class Camera:
     """The feed loop and gphoto2, stubbed; `log` is what was done to them."""
 
@@ -1008,12 +1025,21 @@ class Camera:
             os.utime(self.snap, (later, later))
         return started
 
+    @staticmethod
+    def on_d5(cmd):
+        """cmd without its --port, which must name the D5100 (not the TG-7 listed first)."""
+        if cmd[1] == "--auto-detect":
+            return cmd
+        assert cmd[1:3] == ["--port", "usb:001,005"], cmd
+        return [cmd[0], *cmd[3:]]
+
     def run(self, cmd, **kw):
         assert cmd[0] == "gphoto2" and kw["timeout"] == SF.GPHOTO_TIMEOUT
+        cmd = self.on_d5(cmd)
         self.log.append(cmd[1])
         if cmd[1] == "--auto-detect":
             port = "Nikon DSC D5100 (PTP mode)  usb:001,005\n" if self.on_usb else ""
-            return SF.subprocess.CompletedProcess(cmd, 0, stdout="Model  Port\n------\n" + port)
+            return SF.subprocess.CompletedProcess(cmd, 0, stdout="Model  Port\n------\n" + TG7_USB + port)
         if self.af_hangs:
             raise SF.subprocess.TimeoutExpired(cmd, kw["timeout"])
         return SF.subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
@@ -1604,6 +1630,7 @@ class WbCamera(Camera):
         self.wb, self.refuses = "Automatic", False
 
     def run(self, cmd, **kw):
+        cmd = self.on_d5(cmd)
         if cmd[1:] == ["--get-config", "whitebalance"]:
             self.log.append(cmd[1])
             out = ("Label: WhiteBalance\nReadonly: 0\nType: RADIO\nCurrent: " + self.wb + "\n"

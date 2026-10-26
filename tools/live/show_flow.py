@@ -674,10 +674,22 @@ def wait_d5_frames(c, frozen: str | None, since: float, snaps: list[Path], wait:
         time.sleep(0.1)
 
 
+D5_DETECT = re.compile(r"Nikon DSC D5100.*?\b(usb:\d+,\d+)", re.I)
+
+
+def d5_port(found: str) -> str | None:
+    """The D5100's port in `gphoto2 --auto-detect` output, or None. Every
+    D5 gphoto2 call names it: with no --port gphoto2 takes the first camera
+    listed, and a TG-7 on USB ("Mass Storage Camera  disk:/media/...") comes
+    first (2026-10-25)."""
+    m = D5_DETECT.search(found)
+    return m.group(1) if m else None
+
+
 def d5_usb(c, fn):
-    """Stop live view, run fn() (gphoto2 calls: the camera takes one USB
-    connection), restart; returns (fn's result, seconds until OBS shows
-    moving D5 frames again).
+    """Stop live view, run fn(gp) (gp runs gphoto2 on the D5100's port: the
+    camera takes one USB connection), restart; returns (fn's result, seconds
+    until OBS shows moving D5 frames again).
 
     Whatever fails, this never leaves the feed stopped: it's restarted if it
     was running before or the camera answered on USB (the feed loop then
@@ -687,11 +699,11 @@ def d5_usb(c, fn):
     started = False
     try:
         feed_stop()
-        found = _gphoto2("--auto-detect", text=True).stdout
-        if "usb:" not in found:  # fail now, not after the wait for frames below
+        port = d5_port(_gphoto2("--auto-detect", text=True).stdout)
+        if not port:  # fail now, not after the wait for frames below
             raise obsctl.ObsError("D5100 not found on USB; is it switched on and plugged in?")
         restart = True
-        r = fn()
+        r = fn(lambda *args, **kw: _gphoto2("--port", port, *args, **kw))
         time.sleep(0.2)
         frozen = d5_hash(c)
         since = time.time()
@@ -710,7 +722,7 @@ def refocus_d5(c) -> tuple[bool, float]:
     moving D5 frames again). The D5100 refuses autofocus ("Unspecified
     error") when its AF point sees nothing with contrast, e.g. an empty podium;
     focus then stays where it was."""
-    af, secs = d5_usb(c, lambda: _gphoto2("--set-config", "autofocusdrive=1"))
+    af, secs = d5_usb(c, lambda gp: gp("--set-config", "autofocusdrive=1"))
     return af.returncode == 0, secs
 
 
@@ -735,8 +747,8 @@ def wb_d5(c, preset: str | None = None) -> dict:
     """Read the D5100's white balance and, with `preset`, set it, behind
     d5_usb. An unknown preset or one the camera refuses is raised once the
     feed is back, so a cover never lifts on a stopped D5."""
-    def usb():
-        r = _gphoto2("--get-config", WB_CONFIG, text=True)
+    def usb(gp):
+        r = gp("--get-config", WB_CONFIG, text=True)
         current, choices = wb_parse(r.stdout)
         if not choices:
             raise obsctl.ObsError(f"the D5100 reported no white balance choices: "
@@ -744,7 +756,7 @@ def wb_d5(c, preset: str | None = None) -> dict:
         label = wb_choice(preset, choices) if preset else None
         put = None
         if label and label != current:
-            put = _gphoto2("--set-config", f"{WB_CONFIG}={label}", text=True)
+            put = gp("--set-config", f"{WB_CONFIG}={label}", text=True)
         return current, choices, label, put
 
     (current, choices, label, put), secs = d5_usb(c, usb)
@@ -2004,7 +2016,7 @@ def still_d5(c, dest: Path) -> dict:
     as d5_covered says. RAW+JPEG gives two files.
     Returns {"camera": "d5", "files": [...], "still_s": seconds}."""
     dest.mkdir(parents=True, exist_ok=True)
-    r, secs = d5_covered(c, "still", lambda c: d5_usb(c, lambda: _gphoto2(
+    r, secs = d5_covered(c, "still", lambda c: d5_usb(c, lambda gp: gp(
         "--capture-image-and-download", "--force-overwrite",
         "--filename", str(dest / "D5_%Y%m%d_%H%M%S.%C"), timeout=STILL_TIMEOUT, text=True)))
     files = [Path(f.strip()) for f in SAVED.findall(r.stdout or "")]
