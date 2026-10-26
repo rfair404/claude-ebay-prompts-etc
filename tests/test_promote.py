@@ -116,4 +116,4 @@ def test_smart_create_carries_max_cpc(capsys):
     b = _body(capsys, smart=True, max_cpc=0.4)
     assert b["campaignTargetingType"] == "SMART"
     assert b["fundingStrategy"]["bidPreferences"] == [
-        {"maxCpc": {"value": "0.40", "currency": "USD"}}]
+        {"maxCpc": {"amount": {"value": "0.40", "currency": "USD"}}}]

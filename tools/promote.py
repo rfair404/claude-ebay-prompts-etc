@@ -202,7 +202,7 @@ def create_campaign(name: str, budget: float, confirm: bool,
         if smart:
             body["campaignTargetingType"] = "SMART"
             body["fundingStrategy"]["bidPreferences"] = [
-                {"maxCpc": {"value": f"{max_cpc:.2f}", "currency": "USD"}}]
+                {"maxCpc": {"amount": {"value": f"{max_cpc:.2f}", "currency": "USD"}}}]
     if min_price is not None:
         body["campaignCriterion"] = {
             "criterionType": "INVENTORY_PARTITION",
