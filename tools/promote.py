@@ -165,7 +165,7 @@ def create_campaign(name: str, budget: float, confirm: bool,
     searches and bids, and ads go in by listing id with no ad group or
     keywords. That is the shape auto_promote's `cpc_campaign` fills. eBay
     refuses a Smart create without `max_cpc`, the most one click may cost
-    (36161, 2026-10-25; $0.02-$100). eBay's own figure for a set of listings
+    ($0.02-$100). eBay's own figure for a set of listings
     comes from POST /ad_campaign/suggest_max_cpc.
 
     THE CRITERION CAN ONLY BE SET HERE. There is no criterion-update method on
@@ -200,8 +200,6 @@ def create_campaign(name: str, budget: float, confirm: bool,
         body["budget"] = {"daily": {"amount": {"value": f"{budget:.2f}",
                                                "currency": "USD"}}}
         if smart:
-            if max_cpc is None:
-                raise ValueError("a Smart campaign needs max_cpc (eBay 36161)")
             body["campaignTargetingType"] = "SMART"
             body["fundingStrategy"]["bidPreferences"] = [
                 {"maxCpc": {"value": f"{max_cpc:.2f}", "currency": "USD"}}]

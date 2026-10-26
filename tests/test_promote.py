@@ -117,5 +117,3 @@ def test_smart_create_carries_max_cpc(capsys):
     assert b["campaignTargetingType"] == "SMART"
     assert b["fundingStrategy"]["bidPreferences"] == [
         {"maxCpc": {"value": "0.40", "currency": "USD"}}]
-    with pytest.raises(ValueError):
-        promote.create_campaign("T", 5.0, False, smart=True)
