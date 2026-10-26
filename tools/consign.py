@@ -35,9 +35,10 @@ eBay sale whose fee lines are missing or don't add up to its ebay_fee and
 ad_fee is held back from settle until they do.
 
 States. Hand-entered: INTAKE (the default), PREP (in hand, being prepped,
-not listed), RETURNED, DISPOSED (needs a state_note) and EXCLUDED (Russell
-buys it; needs a buyout_price, which is the client's share, no split; a
-0.00 buyout is closed with nothing owed).
+not listed), HOLD (in hand, held back on purpose), RETURNED, DISPOSED
+(needs a state_note) and EXCLUDED (Russell buys it; needs a buyout_price,
+which is the client's share, no split; a 0.00 buyout is closed with nothing
+owed).
 Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
 DRAFTED (draft.md exists), LISTED (live on eBay: the SKU or listing id has
 a listings-ledger row PUBLISHED, OUT_OF_STOCK, SOLD or SHIPPED; DRAFTED and
@@ -48,7 +49,9 @@ mall floor), SOLD (a sales_ledger row), CLEARED
 delivered_at + 30 days), SETTLED (paid_to_client_date set, copied from a
 paid settlement). RETURNED, DISPOSED and EXCLUDED win over anything
 derived; PREP stands in for SHOT and DRAFTED but gives way to LISTED and
-later. Two cases are flagged in state_note rather than given a state: a
+later. HOLD (needs a state_note) stands in like PREP, ignores an ENDED
+listing, stays HOLD with a flag if a live listing matches, and gives way only
+to a sale. Two cases are flagged in state_note rather than given a state: a
 listing that ended without a sale, and a sale that has left the sales ledger
 (refund or cancel). Once
 paid_to_client_date is set the row's client_share is frozen; a
@@ -179,10 +182,10 @@ TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
 # that mean the item has been live on eBay. DRAFTED and SYNCED never were.
 # DELETED counts only with a published_at, and then as ENDED (listing_status).
 LIVE_LISTING = ("PUBLISHED", "OUT_OF_STOCK", "SOLD", "SHIPPED", "ENDED")
-STATES = ("INTAKE", "PREP", "SHOT", "DRAFTED", "LISTED", "SOLD", "CLEARED",
-          "SETTLED") + TERMINAL
+STATES = ("INTAKE", "PREP", "HOLD", "SHOT", "DRAFTED", "LISTED", "SOLD",
+          "CLEARED", "SETTLED") + TERMINAL
 SOLD_STATES = ("SOLD", "CLEARED", "SETTLED")
-ON_HAND = ("INTAKE", "PREP", "SHOT", "DRAFTED")
+ON_HAND = ("INTAKE", "PREP", "HOLD", "SHOT", "DRAFTED")
 CUTS = ("", "LIST", "LOT", "RETURN")
 # A sale clears at the later of RETURN_WINDOW_DAYS after it sold and
 # DELIVERY_WINDOW_DAYS after delivery (eBay's 30-day return window runs from
@@ -753,6 +756,8 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
             errs.append(f"{tag}: state {r['state']!r} is not one of {', '.join(STATES)}")
         if st == "DISPOSED" and not hand_note(r["state_note"]):
             errs.append(f"{tag}: DISPOSED needs a state_note saying how and why")
+        if st == "HOLD" and not hand_note(r["state_note"]):
+            errs.append(f"{tag}: HOLD needs a state_note saying why")
         if st == "EXCLUDED" and not r["buyout_price"]:
             errs.append(f"{tag}: EXCLUDED needs a buyout_price (0.00 is allowed)")
         if r["cut"].upper() not in CUTS:
@@ -1102,7 +1107,7 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             _freeze_paid(r, paid_share, Decimal(0), adjusted, flags, gone=True)
         r["state_note"] = NOTE_SEP.join(([note] if note else []) + [FLAG + f for f in flags])
         return flags
-    was_prep = r["state"] == "PREP"
+    hand = r["state"] if r["state"] in ("PREP", "HOLD") else ""
     # Off eBay, listing_id is the channel's own id (the mall's GAM SKU): the
     # eBay ledgers are never searched for it, and never write an eBay id over it.
     off = off_ebay(r)
@@ -1128,6 +1133,8 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             if not r["store"] and d.get("store"):
                 r["store"] = d["store"]
     listing = books.listing_for(r["sku"], ebay_id)
+    if hand == "HOLD" and listing and listing_status(listing[1]) == "ENDED":
+        listing = None                           # held: an ended listing is history
     if listing:
         lstore, lrow = listing
         if listing_status(lrow) != "ENDED":      # an ended listing keeps its on-hand state
@@ -1235,8 +1242,12 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             r["cleared_on"] = window_end.isoformat()
     if sold and r["paid_to_client_date"]:
         state = "SETTLED"
-    if was_prep and state in ("INTAKE", "SHOT", "DRAFTED"):
-        state = "PREP"                           # PREP is the on-hand label until listed
+    if hand and state in ("INTAKE", "SHOT", "DRAFTED"):
+        state = hand                             # the on-hand label until listed
+    if hand == "HOLD" and state == "LISTED":     # live on eBay, or placed off it
+        state = "HOLD"
+        flags.append(f"on hold but listing {r['listing_id'] or r['sku']} is live: "
+                     f"end it, or clear the hold")
 
     # Exhibit A floors: the client's price protection, on the ask and the sale.
     ask, price = _amount(r["ask"]), _amount(r["item_price"])
