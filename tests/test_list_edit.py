@@ -1212,6 +1212,58 @@ def test_review_card_intl_block_reports_the_policys_own_reach():
     assert "not enabled" not in card
 
 
+def test_review_card_maker_named_perfume_co_is_not_a_fragrance():
+    """2026-10-25, K01-C055 (206653565514): "California Perfume Co" in a
+    souvenir spoon's title made the card say "CANNOT SHIP INTERNATIONALLY:
+    alcohol-based fragrance" and "correctly domestic-only" on a policy that
+    ships worldwide. A maker name is not a fragrance; the card reports the
+    policy's own reach."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        draft_path.write_text(draft_path.read_text(encoding="utf-8").replace(
+            "Vintage Widget MPN-100",
+            "Antique 1915 Panama Pacific Exposition Souvenir Spoon "
+            "California Perfume Co PPIE"), encoding="utf-8")
+
+        def _pf(*a, policy_out=None, **kw):
+            policy_out.update({"name": "Free USPS Ground + eBay International "
+                                       "Shipping", "shipToLocations": {}})
+            return ["category: 12345"]
+        with _patched(L, preflight_listing=_pf,
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""},
+                     _ebay_extra=lambda field, store="default": None), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+    assert "CANNOT SHIP INTERNATIONALLY" not in card
+    assert "fragrance" not in card
+    assert "correctly domestic-only" not in card
+    assert "✓ ON through policy 'Free USPS Ground + eBay International Shipping'" in card
+
+
+@pytest.mark.parametrize("title, blocked", [
+    ("Antique Souvenir Spoon California Perfume Co", False),
+    ("Perfume Company Advertising Tin", False),
+    ("Sterling Souvenir Spoon Cologne Germany Cathedral", False),
+    ("Vintage Chanel No 5 Perfume 1 oz Sealed", True),
+    ("Avon Cologne Decanter Full", True),
+    ("4711 Eau de Cologne Glass Bottle", True),
+])
+def test_fragrance_blocker_needs_a_fragrance_not_a_maker_name(title, blocked):
+    d = Draft(Path("draft.md"), {"title": title,
+                                   "item_specifics": {"type": "Collectible"}}, "")
+    hit = "alcohol-based fragrance (flammable)" in L._international_blockers(d)
+    assert hit is blocked
+
+
+def test_fragrance_blocker_still_reads_the_item_type():
+    """A California Perfume Co bottle typed as a perfume bottle is still a
+    fragrance: the maker exemption is for the title wording only."""
+    d = Draft(Path("draft.md"), {"title": "California Perfume Co Bottle",
+                                 "item_specifics": {"type": "Perfume Bottle"}}, "")
+    assert "alcohol-based fragrance (flammable)" in L._international_blockers(d)
+
+
 def test_review_card_intl_block_names_a_policys_exclusions():
     with tempfile.TemporaryDirectory() as td:
         card = _card_on_policy(Path(td), {

@@ -1359,7 +1359,13 @@ _DANGEROUS_GOODS_PATTERNS = (
     (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
     (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",
      "aerosol / compressed gas"),
-    (r"\bperfume\b|\bcologne\b|\beau de (toilette|parfum)\b",
+    # "Perfume" and "Cologne" also turn up in maker names and places: K01-C055
+    # "Souvenir Spoon California Perfume Co" (Avon's old name) hard-blocked
+    # eIS on 2026-10-25, and Cologne is a city on souvenir spoons. A maker or
+    # place name doesn't count; type "Perfume Bottle" still matches.
+    (r"\bperfume\b(?!\s+(co|company|corp|corporation|inc|mfg)\b)"
+     r"|\bcologne\b(?!\s+(co|company|corp|inc|germany|cathedral)\b)"
+     r"|\beau de (toilette|parfum|cologne)\b",
      "alcohol-based fragrance (flammable)"),
     (r"\bgunpowder\b|\bammunition\b|\bammo\b|\bprimers\b|\bblack powder\b|\bflare\b",
      "explosives / ammunition components"),
