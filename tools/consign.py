@@ -100,6 +100,7 @@ sys.path.insert(0, str(REPO / "lib"))
 import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
+import dupe_guard  # noqa: E402  one object, one row
 from report import ascii_text  # noqa: E402  report text is plain ASCII
 
 INVENTORY = REPO / "inventory"
@@ -1338,8 +1339,13 @@ def next_id(rows: list[dict]) -> int:
 
 
 def import_rows(d: Path, incoming: list[dict], client: Optional[str],
-                intake: Optional[str] = None) -> tuple[int, int]:
-    """Append `incoming` to the folder's ledger. Returns (added, skipped)."""
+                intake: Optional[str] = None, force_new: str = "") -> dict:
+    """Append `incoming` to the folder's ledger, unless a row is an object one
+    of the client's ledgers already holds (lib/dupe_guard.py). Then its frames
+    go onto that row (attached), or, when it could be more than one row, it
+    waits in dupe_queue.csv for the inventory manager (queued). `force_new`
+    adds every row anyway and puts the reason in its `why`. Returns the counts
+    added, skipped, attached and queued."""
     if client:
         if not CODE_RE.match(client):
             raise SystemExit(f"[X] client code {client!r}: letters, digits, - and _ only")
@@ -1357,27 +1363,59 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     migrate(rows, d, code)
     received = intake or default_intake(d) or date.today().isoformat()
     seen = {(r["intake"], r["bin"], r["description"]) for r in rows}
-    others = [r for o in client_dirs(code) if o.resolve() != d.resolve()
-              for r in read_ledger(o / LEDGER_NAME)[0]]
-    n = next_id(rows + others)
-    added = skipped = 0
+    ledgers = {path: rows}
+    for o in client_dirs(code):
+        if o.resolve() != d.resolve():
+            ledgers[o / LEDGER_NAME] = read_ledger(o / LEDGER_NAME)[0]
+            migrate(ledgers[o / LEDGER_NAME], o, code)
+    n = next_id([r for rs in ledgers.values() for r in rs])
+    # Only rows already on record: one catalog's own rows are distinct objects.
+    on_record = [dupe_guard.Row(p, r) for p, rs in ledgers.items() for r in rs]
+    today = date.today().isoformat()
+    count = dict(added=0, skipped=0, attached=0, queued=0)
+    touched = set()
     for rec in incoming:
         rec["intake"] = rec["intake"] or received
         key = (rec["intake"], rec["bin"], rec["description"])
         if key in seen:
-            skipped += 1
+            count["skipped"] += 1
             continue
         seen.add(key)
+        hit = dupe_guard.decide(rec, on_record)
+        if force_new:
+            note = f"new row forced (--new {today}): {force_new}"
+            rec["why"] = NOTE_SEP.join(p for p in (rec["why"], note) if p)
+            if hit.matches:
+                dupe_guard.queue(d, "FORCED_NEW", f"{code}-C{n:03d}", rec, hit.matches,
+                                 force_new, today)
+        elif hit.action == "attach":
+            row = hit.best.row
+            if dupe_guard.attach(row, rec, today):
+                touched.add(row.source)
+                dupe_guard.queue(d, "ATTACHED", row.key, rec, hit.matches,
+                                 "re-run IDENTIFY on this row", today)
+                count["attached"] += 1
+            else:
+                count["skipped"] += 1
+            continue
+        elif hit.action == "review":
+            dupe_guard.queue(d, "REVIEW", d.name, rec, hit.matches,
+                             "inventory manager: import it alone with --new, or put "
+                             "its frames on the matching row", today)
+            count["queued"] += 1
+            continue
         rec["item_id"] = f"{code}-C{n:03d}"
         rec["client_code"] = code
         rec["state"] = rec["state"] or "INTAKE"
         rec["inventory_folder"] = norm_folder(rec["inventory_folder"])
         rows.append(rec)
         n += 1
-        added += 1
-    if added:
-        write_ledger(path, rows)
-    return added, skipped
+        count["added"] += 1
+    if count["added"]:
+        touched.add(path)
+    for p in touched:
+        write_ledger(p, ledgers[p])
+    return count
 
 
 # --------------------------------------------------------------------------- #
@@ -1924,6 +1962,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--intake", dest="received", metavar="YYYY-MM-DD",
                    help="date the items were received (default: context.txt "
                         "`acquired:`, the folder's date, or today)")
+    p.add_argument("--new", default="", metavar="REASON",
+                   help="add every row even when one looks like a row already on "
+                        "record; the reason goes in its `why`")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
@@ -1948,8 +1989,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         text = (sys.stdin.read() if args.source == "-"
                 else Path(args.source).read_text(encoding="utf-8-sig"))
         d = intake_dir(args.intake)
-        added, skipped = import_rows(d, parse_table(text), args.client, args.received)
-        print(f"{d.name}: added {added} row(s), skipped {skipped} duplicate(s)")
+        c = import_rows(d, parse_table(text), args.client, args.received, args.new)
+        print(f"{d.name}: added {c['added']} row(s), skipped {c['skipped']} duplicate(s)"
+              + (f", attached {c['attached']} to a row already on record (re-run "
+                 f"IDENTIFY)" if c["attached"] else "")
+              + (f", queued {c['queued']} for review in {dupe_guard.QUEUE}"
+                 if c["queued"] else ""))
         if args.client and args.client not in load_registry():
             print(f"  ! {args.client} is not in {SA._rel(registry_path())} yet: add a row "
                   f"(split defaults to 0.5 until then)")
