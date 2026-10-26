@@ -515,8 +515,7 @@ The steps after that:
   reaches the Live event only once it is published, which is a separate step
   that needs Russell's yes. `--no-sync` stops before eBay.
 
-Each stage prints its time. On 2026-10-26 a run on the live frame took about
-11 s: identify 4.4 s and PREP 6.2 s.
+Each stage prints its time, and the PREP line names its slowest step.
 
 `<sale>/sale.json` holds the sale's settings, written on the first run: the
 store (`default`, for this sale only), the rotation (`90`), the start price,

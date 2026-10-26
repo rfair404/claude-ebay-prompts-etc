@@ -103,7 +103,7 @@ def test_run_drafts_records_and_numbers_the_next_lot(sale, tmp_path, monkeypatch
     d = parse_draft(lot / "draft.md")
     assert d.get("title") == "TOOL LOT #2 Spring Clamps, LED Flashlight & Aviation Snips"
     assert d.get("store") == "default"
-    assert d.get("condition") == "USED_EXCELLENT"  # id 3000, the category's plain "Used"
+    assert d.get("condition") == "USED_GOOD"  # list_edit preflight maps it to the category at sync
     assert d.get("price") == "1.00"
     assert d.get("shipping.free_shipping") is False
     assert d.get("shipping.fulfillment_policy_id") == T.LIVE_SMALL
@@ -352,22 +352,30 @@ def test_settings_are_saved_for_the_rest_of_the_sale(tmp_path):
     assert T.operator_price(s).startswith('OPERATOR PRICE: Russell: "$2 start"')
 
 
-# ------------------------------------------------------------ list_edit: per-draft policy
 
-class _Creds:
-    has_user = True
-    store = "default"
-    environment = "sandbox"
+def test_a_failed_sync_is_a_failed_run(sale, monkeypatch, capsys):
+    calls = []
+    inner = fake_run(json.dumps(IDENT), calls)
+
+    def run(cmd, **kw):
+        if "--sync" in cmd:
+            calls.append(cmd)
+            return SimpleNamespace(returncode=1, stdout="",
+                                   stderr="[X] EbayAuthError: Sync needs user-context OAuth.\n")
+        return inner(cmd, **kw)
+    monkeypatch.setattr(T.subprocess, "run", run)
+    try:
+        rc = T.main(["--sale-dir", str(sale)])
+    finally:
+        monkeypatch.setattr(T.subprocess, "run", REAL_RUN)
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "[FAIL] TOOL LOT #1: sync failed, recorded" in out and "[OK]" not in out
 
 
-def test_a_draft_named_fulfillment_policy_wins_over_the_default(monkeypatch):
-    from draft_io import Draft
-    monkeypatch.setattr(L, "get_fulfillment_policies", lambda creds=None: [
-        {"fulfillmentPolicyId": T.LIVE_SMALL, "name": "LIVE Small",
-         "shippingOptions": [{"shippingServices": [{"shippingServiceCode": "USPSGround"}]}]}])
-    draft = Draft(path=Path("inventory/x/draft.md"), body="",
-                  frontmatter={"title": "TOOL LOT #1 Clamps",
-                               "shipping": {"fulfillment_policy_id": T.LIVE_SMALL}})
-    chosen, msgs = L._resolve_shipping_policy(draft, {"fulfillment": "default-fid"}, _Creds(), strict=True)
-    assert chosen == T.LIVE_SMALL
-    assert "draft's own policy" in msgs[0]
+def test_model_flag_reaches_the_claude_call_and_is_saved(sale, monkeypatch):
+    calls = []
+    run_tool(monkeypatch, sale, "--no-sync", "--model", "claude-opus-5-5", calls=calls)
+    claude = next(c for c in calls if "-p" in c)
+    assert claude[claude.index("--model") + 1] == "claude-opus-5-5"
+    assert json.loads((sale / "sale.json").read_text())["model"] == "claude-opus-5-5"

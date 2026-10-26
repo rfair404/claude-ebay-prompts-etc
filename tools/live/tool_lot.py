@@ -77,6 +77,7 @@ REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "lib"))
 import show_flow  # noqa: E402  (the feed's frame paths)
+from ebay_schema import CONDITION_ENUM  # noqa: E402
 
 LOT_PREFIX = "tool-lot-"
 LOT_RE = re.compile(rf"^{LOT_PREFIX}(\d+)$")
@@ -109,13 +110,6 @@ SIZES = {
     "large": (8, (18, 14, 8), "policy_large"),
     "heavy": (20, (20, 16, 10), "policy_large"),
 }
-CONDITIONS = ("USED_EXCELLENT", "USED_GOOD", "USED_ACCEPTABLE", "FOR_PARTS_OR_NOT_WORKING")
-# What the draft's condition becomes. The tool-lot category (Other Hand Tools)
-# accepts ids 1000/1500/3000/7000 (seen on the tool-lot-1 sync, 2026-10-25), so
-# every used grade is id 3000, eBay's plain "Used", whose API name is
-# USED_EXCELLENT. The grade itself goes in the condition description.
-CATEGORY_CONDITION = {"FOR_PARTS_OR_NOT_WORKING": "FOR_PARTS_OR_NOT_WORKING"}
-USED = "USED_EXCELLENT"
 
 PROMPT = """You catalog a lot for an eBay tool sale from one photo. The plywood
 board, the easel, the cloth behind it and the small black scale ruler are the
@@ -348,7 +342,10 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
     size = size if size in SIZES else "medium"
     lb, (ln, wd, dp), pol = SIZES[size]
     cond = str(ident.get("condition") or "").strip().upper()
-    cond = CATEGORY_CONDITION.get(cond, USED)
+    # The identify's grade as is. At sync, list_edit's preflight maps it to a
+    # condition the category accepts and says so (82251 takes only id 3000
+    # for used goods, eBay's plain "Used").
+    cond = cond if cond in CONDITION_ENUM else "USED_GOOD"
     items = [str(i).strip() for i in (ident.get("items") or []) if str(i).strip()]
     disclosures = " ".join(str(d).strip() for d in (ident.get("disclosures") or []) if str(d).strip())
     wear = str(ident.get("condition_notes") or "Used, with normal wear.").strip()
@@ -533,7 +530,8 @@ def record(sale: Path, lot_dir: Path, run=None) -> tuple[str, list[str]]:
                 continue
             try:
                 stamped = parse_draft(d / "draft.md").get("meta.ebay_inventory_sku")
-            except Exception:  # noqa: BLE001 — a broken draft is left for a person
+            except Exception as e:  # noqa: BLE001 — a broken draft is left for a person
+                print(f"  record   skipped {d.name}: its draft.md doesn't parse ({e})")
                 continue
             if not stamped:
                 _record_one(d, run=run)
@@ -577,13 +575,17 @@ def prep(lot_dir: Path, rotate: float, approve: bool, run=None) -> tuple[bool, s
     steps += [["--repoint-draft", "--apply-repoint"]]
     if approve:
         steps += [["--approve"]]
+    slowest = (0.0, "")
     for args in steps:
+        t = time.monotonic()
         r = photo_prep([str(lot_dir), *args], run=run)
+        slowest = max(slowest, (time.monotonic() - t, " ".join(args)))
         if r.returncode:
             return False, f"prep {' '.join(args)} failed: {_fail_line(r)}"
+    slow = f" (slowest step: {slowest[1]} {slowest[0]:.1f}s)"
     if approve:
-        return True, "listing/D5_0001.jpg rendered, approved (art director's tool-sale rule)"
-    return False, "listing/D5_0001.jpg rendered, not approved"
+        return True, "listing/D5_0001.jpg rendered, approved (art director's tool-sale rule)" + slow
+    return False, "listing/D5_0001.jpg rendered, not approved" + slow
 
 
 # --------------------------------------------------------------- 6. sync
@@ -685,15 +687,20 @@ def main(argv=None) -> int:
         _log("sync", time.monotonic() - t, line)
 
     print(f"  total    {time.monotonic() - t0:5.1f}s")
+    ok = approved and not err and (synced or args.no_sync)
     if synced:
         state = "eBay draft (unpublished offer)"
     elif held:
         state = "HELD for the art director, recorded"
+    elif not approved:
+        state = "PREP failed, recorded"
+    elif args.no_sync:
+        state = "local draft, recorded"
     else:
-        state = "local draft, recorded" if approved else "PREP failed, recorded"
-    tag = "[OK]" if approved else "[HOLD]" if held else "[FAIL]"
+        state = "sync failed, recorded"
+    tag = "[OK]" if ok else "[HOLD]" if held else "[FAIL]"
     print(f"{tag} TOOL LOT #{n}: {state} at ${s['start_price']}. Not published.")
-    return 0 if (approved and not err) else 1
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
