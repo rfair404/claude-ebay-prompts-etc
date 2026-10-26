@@ -1,5 +1,5 @@
 ---
-version: 1.2.0
+version: 2.0.0
 updated: 2026-10-26
 ---
 
@@ -35,8 +35,8 @@ command runs from a worktree.
 or `.prep/review.html` (they carry every photo inline, ~6 MB for a quilt),
 and not `price.txt`, comps, `investigate.txt`, `NEEDS_REVIEW.md`,
 `review_card.md` or `.prep/`. Those are rebuilt from `draft.md` and
-`identify.txt` or by re-running their phase. Review pages are served by the
-local app instead; see below.
+`identify.txt` or by re-running their phase. A review page is shared from a
+copy under `reports/`; see below.
 
 These are also **not** copied: `config.yaml` (it holds eBay tokens and this
 bucket's keys, so back it up separately, e.g. in a password manager),
@@ -99,14 +99,15 @@ Nightly, via crontab (`crontab -e`):
 30 2 * * * cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli offsite push --apply >> .offsite.log 2>&1
 ```
 
-## Review pages: served by the local app, not uploaded
+## Review pages: shared from `reports/review_cards/`
 
-`tools/review_card_html.py` writes `review_card.html` and prints
-`review: http://127.0.0.1:8770/review/<shoot>`, the local app's live render of
-the same page (`python -m lib.cli serve`, `webapp/server.py`). That is the
-review link the operator gets (see `prompts/review.md`). Nothing is
-uploaded, and `offsite share` refuses a review page. The link opens on this
-machine only.
+The operator gets each review page as an R2 link. `offsite share` refuses
+`review_card.html` inside a shoot folder, so copy it to
+`reports/review_cards/<today>/<n>-<plain-name>.html` and share that copy
+(`prompts/review.md`, the `/cards` skill). `reports/**` is in the include
+list, so the nightly push also backs these copies up. The local app's
+`http://127.0.0.1:8770/review/<shoot>` opens on this machine only and is not
+the link to send.
 
 ## Sharing one file: pick sheets
 
