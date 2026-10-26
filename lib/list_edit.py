@@ -1510,13 +1510,16 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
        body armor, night vision, anything marked ITAR — see lib/us_only.py),
        use the US-only policy. This OUTRANKS an international request: a legal
        restriction beats reach, and beats the media rate too.
-    3. Else if `shipping.international: true` AND the item clears the
+    3. Else if the draft names its own `shipping.fulfillment_policy_id`, use
+       it (an eBay Live lot on the buyer-paid LIVE policy, say; the same key
+       list_edit_group reads).
+    4. Else if `shipping.international: true` AND the item clears the
        dangerous-goods / weight gate, use the international (eIS) policy.
-    4. Else if `primary_service` is Media Mail (DRAFT sets this for books /
+    5. Else if `primary_service` is Media Mail (DRAFT sets this for books /
        sheet music / recordings / computer media — NOT magazines, catalogs, or
        anything carrying advertising, which are excluded from Media Mail by
        DMM 173.4.2) AND a media policy is configured, use it.
-    5. Else use the default (USPS Ground) policy.
+    6. Else use the default (USPS Ground) policy.
     Returns (chosen_fulfillment_id, messages).
 
     International is OPT-IN per item, never global. eBay International Shipping
@@ -1541,6 +1544,7 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     pickup_fid = str(policies.get("fulfillment_local_pickup") or "")
     intl_fid = str(policies.get("fulfillment_international") or "")
     usonly_fid = str(policies.get("fulfillment_us_only") or "")
+    draft_fid = str(draft.get("shipping.fulfillment_policy_id") or "").strip()
     us_reasons = us_only_reasons(draft)
     mode = str(draft.get("shipping.fulfillment_mode") or "SHIP").strip().upper()
     want = str(draft.get("shipping.primary_service") or "").strip()
@@ -1581,6 +1585,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             msgs.append("shipping: item wanted Media Mail but is US-export-"
                         "restricted — the US-only policy carries Ground "
                         "Advantage. Legal routing wins over the media rate.")
+    elif draft_fid:
+        chosen, label = draft_fid, "the draft's own policy (shipping.fulfillment_policy_id)"
     elif wants_intl:
         chosen, label = intl_fid, "international (eIS-enabled policy)"
         for w in _international_warnings(draft):
