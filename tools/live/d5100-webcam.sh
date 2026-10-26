@@ -10,8 +10,11 @@ DEV="${1:-/dev/video10}"
 
 # GNOME/KDE automount (gvfs) can grab the camera before gphoto2 does.
 pkill -f gvfs-gphoto2-volume-monitor 2>/dev/null || true
-gphoto2 --auto-detect | grep -qi nikon || { echo "no Nikon found over USB - is it on and in M or A mode?"; exit 1; }
+# Name the D5100's port: with no --port gphoto2 takes the first camera listed,
+# which is the TG-7 when it is plugged in too. PORT=usb:001,036 overrides.
+PORT="${PORT:-$(gphoto2 --auto-detect | grep -i 'Nikon DSC D5100' | grep -oE 'usb:[0-9]+,[0-9]+' | head -n 1 || true)}"
+[ -n "$PORT" ] || { echo "no D5100 found over USB - is it on and in M or A mode?"; exit 1; }
 
-gphoto2 --stdout --capture-movie |
+gphoto2 --port "$PORT" --stdout --capture-movie |
   ffmpeg -hide_banner -loglevel warning -i - \
     -vcodec rawvideo -pix_fmt yuv420p -threads 0 -f v4l2 "$DEV"
