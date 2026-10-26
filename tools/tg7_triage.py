@@ -13,6 +13,16 @@ lot's triage.csv (frame, kind, dest, note).
         P1010004.JPG P1010005.JPG --kind item --note "bin-07/catalog.csv#03"
     python tools/tg7_triage.py keep inventory/tg7-20261024-1412 P1010001.JPG --kind overview
     python tools/tg7_triage.py summary inventory/tg7-20261024-1412
+    python tools/tg7_triage.py add inventory/tg7-20261024-1412/catalog.csv \
+        --description "tin toy car, red" --photos "P1010004 P1010005" \
+        --hint "possible duplicate of K01-C042"
+
+`add` is the one way a new catalog row is made (lib/dupe_guard.py). When one
+row on record has the same item folder, or a frame no other row has, the
+object is that row: its frames go onto it and no row is made. Otherwise the
+row (and its folder with intake.txt) is made, with a POSSIBLE_DUPE line in
+dupe_queue.csv when a row reads alike. `--new "<reason>"` never attaches;
+`--attach <key>` attaches to the row named.
 
 It never deletes or overwrites a file, and it moves only within inventory/.
 """
@@ -127,6 +137,35 @@ def summary(lot: Path) -> str:
     return line
 
 
+def add(a: argparse.Namespace) -> None:
+    # Imported here so move/keep/summary need nothing beyond this file.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+    import dupe_guard  # one object, one record
+
+    cat = Path(a.catalog).resolve()
+    if cat.name != dupe_guard.CATALOG or "inventory" not in cat.parts[:-1]:
+        sys.exit(f"not a catalog.csv under inventory/: {a.catalog}")
+    inv = Path(*cat.parts[:len(cat.parts) - cat.parts[::-1].index("inventory")])
+    scope = dupe_guard.scope_files(inv, cat)
+    cand = {k: v for k, v in {
+        "description": a.description, "bin": a.bin, "qty": a.qty, "marks": a.marks,
+        "condition": a.condition, "photos": a.photos, "inventory_folder": a.folder,
+        "why": a.why, "hint": a.hint}.items() if v}
+    out = dupe_guard.add_catalog_row(cat, cand, scope, force_new=a.new,
+                                     attach_to=a.attach, make_folder=not a.no_folder)
+    best = out.decision.best
+    if out.action in ("attached", "unchanged"):
+        print(f"ATTACH {out.key}" + (" (nothing new)" if out.action == "unchanged" else
+                                     ": frames added, re-run IDENTIFY")
+              + (f" · {best.label()}" if best else ""))
+    else:
+        print(f"NEW {out.key}" + (f" -> {dupe_guard.rel(out.path)}/" if out.path else "")
+              + (" (--new)" if a.new else ""))
+        if out.decision.action == "possible" and not a.new:
+            print(f"POSSIBLE_DUPE in {cat.parent.name}/{dupe_guard.QUEUE}: "
+                  + "; ".join(m.label() for m in out.decision.matches[:3]))
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -141,8 +180,26 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--note", default="")
     s = sub.add_parser("summary", help="print the finish pop-up line")
     s.add_argument("lot")
+    n = sub.add_parser("add", help="add a catalog row, unless the object is already "
+                                   "on record (then its frames go onto that row)")
+    n.add_argument("catalog", help="the bin's catalog.csv (made if missing)")
+    n.add_argument("--description", required=True)
+    for f in ("bin", "qty", "marks", "condition", "photos", "why"):
+        n.add_argument(f"--{f}", default="")
+    n.add_argument("--folder", default="", help="its item folder, when it has one")
+    n.add_argument("--hint", default="", help="triage's 'possible duplicate of ...' note")
+    g = n.add_mutually_exclusive_group()
+    g.add_argument("--new", default="", metavar="REASON",
+                   help="add the row anyway; the reason goes in its `why`")
+    g.add_argument("--attach", default="", metavar="KEY",
+                   help="attach to this row (K01-C008, <lot>/catalog.csv#03)")
+    n.add_argument("--no-folder", action="store_true",
+                   help="no item folder (a consigned bin: folders come at the shoot)")
     a = ap.parse_args(argv)
 
+    if a.cmd == "add":
+        add(a)
+        return 0
     lot = _lot(a.lot)
     if a.cmd == "summary":
         print(summary(lot))

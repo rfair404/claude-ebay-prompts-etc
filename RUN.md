@@ -1,5 +1,5 @@
 ---
-version: 3.3.0
+version: 3.4.0
 updated: 2026-10-25
 ---
 
@@ -498,6 +498,19 @@ loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
 client's next id (`K01-C048`, numbered across all of that client's ledgers),
 stamps `intake` (`--intake`, else `acquired:` in `context.txt`, the folder's
 date, or today) and skips a row with the same intake, bin and description.
+It also guards against the same object coming in twice (a bin frame, then its
+own shoot; a second import). Each new row is checked against every row in the
+client's ledgers (`lib/dupe_guard.py`). When exactly one row has the same item
+folder (not a lot-mate's shared folder), or a frame filed in that row's own
+item folder and on no other row, the new row is that object: its frames go
+onto the row with `re-run IDENTIFY` in its `why`, and no row is made. Anything
+else is added as before. If a row reads alike (shared description words, plus
+0.1 for the same bin and 0.25 for a triage `possible duplicate of` note naming
+it, 0.35 or more), the added row gets a `POSSIBLE_DUPE` line in
+`dupe_queue.csv` in the intake folder for the inventory manager. A shared bin
+walk-through frame is never proof: every item in the bin shares it.
+`--new "<reason>"` never attaches and writes the reason in each row's `why`. New catalog rows from camera triage
+and `/intake` go through the same check (`python tools/tg7_triage.py add`).
 Run `consign sync` from the main checkout; from a worktree it refuses. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED and SETTLED. A row clears once
