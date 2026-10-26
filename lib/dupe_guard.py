@@ -357,8 +357,8 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
             src = loaded[row.source]
             write_rows(row.source, row.fields, [r.data for r in src],
                        backup=row.is_ledger)
-            queue(catalog.parent, "ATTACHED", row.key, cand, decision.matches,
-                  "re-run IDENTIFY on this row", today)
+        queue(catalog.parent, "ATTACHED", row.key, cand, decision.matches,
+              "re-run IDENTIFY on this row", today)
         return Outcome("attached" if changed else "unchanged", row.key, decision)
 
     own = loaded[catalog]

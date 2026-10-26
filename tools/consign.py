@@ -1427,10 +1427,10 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
                                  force_new, today)
         elif hit.action == "attach":
             row = hit.best.row
+            dupe_guard.queue(d, "ATTACHED", row.key, rec, hit.matches,
+                             "re-run IDENTIFY on this row", today)
             if dupe_guard.attach(row, rec, today):
                 touched.add(row.source)
-                dupe_guard.queue(d, "ATTACHED", row.key, rec, hit.matches,
-                                 "re-run IDENTIFY on this row", today)
                 count["attached"] += 1
             else:
                 count["skipped"] += 1
