@@ -62,11 +62,12 @@ false`, since the reply is its list) with this brief:
   --description "..." --qty .. --marks ".." --condition ".." --photos ".."
   --why ".."`, never by writing the file by hand. It first checks the object
   against the rows already on record (this bin, the camera lots, the
-  consignment ledgers). `NEW` makes the row; `ATTACH <key>` means the object
-  is already on record and only its frames were added to that row; `REVIEW`
-  leaves it in `<bin folder>/dupe_queue.csv`. Settle each REVIEW yourself
-  with `--attach <key>` or `--new "<how it differs>"`, never by asking
-  Russell.
+  consignment ledgers). `ATTACH <key>` means a row has the same item folder
+  or one of its own shoot frames, so only the frames were added to that row.
+  Otherwise `NEW` makes the row, with a `POSSIBLE_DUPE` line in
+  `<bin folder>/dupe_queue.csv` when a row reads alike; settle those against
+  the frames yourself, never by asking Russell. `--attach <key>` and
+  `--new "<how it differs>"` decide it up front.
 - **Owned:** `add` makes one folder per object inside the bin,
   `<bin folder>/<no>-<slug>/` (e.g. `03-tin-toy-car/`), holding an
   `intake.txt` with its catalog row, and puts that path in
@@ -75,7 +76,7 @@ false`, since the reply is its list) with this brief:
 - **Consigned:** pass `--no-folder`, so `inventory_folder` stays blank. Item
   folders are made at the shoot; the catalog is the import file.
 - Return the object count, the catalog path, the flagged rows and any
-  ATTACH or REVIEW lines. Nothing else.
+  ATTACH or POSSIBLE_DUPE lines. Nothing else.
 
 ## After
 
@@ -86,7 +87,7 @@ false`, since the reply is its list) with this brief:
       python -m lib.cli consign import CONSIGN-K01 inventory/CONSIGN-K01/<bin>/catalog.csv --client K01
 
   A row that is an object the client's ledgers already hold is attached to
-  that row instead of added, and an unclear one is queued in
+  that row instead of added, and a look-alike is added and flagged in
   `inventory/CONSIGN-K01/dupe_queue.csv`; the inventory manager settles
   those.
 
