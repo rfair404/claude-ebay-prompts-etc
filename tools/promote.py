@@ -38,7 +38,7 @@ stay a deliberate keystroke — the same shape as the PREP gate and list_edit's
     python tools/promote.py --create "NAME" --auto-add-min 25 --confirm
     python tools/promote.py --campaign ID --top 20 --add-ads --confirm
     python tools/promote.py --campaign ID --bidding DYNAMIC --confirm
-    python tools/promote.py --create "NAME" --smart --budget 5 \
+    python tools/promote.py --create "NAME" --smart --budget 5 --max-cpc 0.40 \
         --copy-ads-from OLD_ID --end OLD_ID --confirm
 
 AUTO-ADD AND A CURATED LIST ARE MUTUALLY EXCLUSIVE
@@ -54,6 +54,7 @@ import csv
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -153,7 +154,7 @@ def suggestions(campaign_id: str, creds=None) -> dict:
 
 def create_campaign(name: str, budget: float, confirm: bool,
                     min_price=None, ad_rate: float = 10.0, creds=None,
-                    smart: bool = False) -> str:
+                    smart: bool = False, max_cpc: Optional[float] = None) -> str:
     """Create a CPC (Priority) campaign. Returns its id.
 
     `min_price` switches on `campaignCriterion`: eBay then re-checks the
@@ -162,7 +163,10 @@ def create_campaign(name: str, budget: float, confirm: bool,
 
     `smart` makes a cost-per-click campaign Smart-targeted: eBay picks the
     searches and bids, and ads go in by listing id with no ad group or
-    keywords. That is the shape auto_promote's `cpc_campaign` fills.
+    keywords. That is the shape auto_promote's `cpc_campaign` fills. eBay
+    refuses a Smart create without `max_cpc`, the most one click may cost
+    ($0.02-$100). eBay's own figure for a set of listings
+    comes from POST /ad_campaign/suggest_max_cpc.
 
     THE CRITERION CAN ONLY BE SET HERE. There is no criterion-update method on
     the campaign resource, so a campaign created without it can never learn the
@@ -197,6 +201,8 @@ def create_campaign(name: str, budget: float, confirm: bool,
                                                "currency": "USD"}}}
         if smart:
             body["campaignTargetingType"] = "SMART"
+            body["fundingStrategy"]["bidPreferences"] = [
+                {"maxCpc": {"value": f"{max_cpc:.2f}", "currency": "USD"}}]
     if min_price is not None:
         body["campaignCriterion"] = {
             "criterionType": "INVENTORY_PARTITION",
@@ -377,7 +383,10 @@ def main() -> int:
                          "(default 10)")
     ap.add_argument("--delete", metavar="ID", help="delete a campaign (needs --confirm)")
     ap.add_argument("--smart", action="store_true",
-                    help="on --create: Smart targeting (ads by listing id, no keywords)")
+                    help="on --create: Smart targeting (ads by listing id, no keywords); "
+                         "needs --max-cpc")
+    ap.add_argument("--max-cpc", type=float,
+                    help="with --smart: the most one click may cost, USD")
     ap.add_argument("--copy-ads-from", metavar="ID",
                     help="add that campaign's active ads to --campaign/--create, "
                          "excluded consignment lots dropped (needs --confirm)")
@@ -392,6 +401,8 @@ def main() -> int:
         ap, help_extra="With --confirm and more than one store configured, "
                        "--store must be given explicitly.")
     a = ap.parse_args()
+    if a.create and a.smart and a.max_cpc is None:
+        ap.error("--smart needs --max-cpc (eBay refuses a Smart campaign without it)")
 
     # A --confirm run spends money on one account. With 2+ stores configured,
     # ambient state ($EBAYBIZ_STORE / ebay.active_store) must not pick which
@@ -410,7 +421,8 @@ def main() -> int:
 
     if a.create:
         cid = create_campaign(a.create, a.budget, a.confirm,
-                              a.auto_add_min, a.ad_rate, creds=creds, smart=a.smart)
+                              a.auto_add_min, a.ad_rate, creds=creds, smart=a.smart,
+                              max_cpc=a.max_cpc)
         print(f"campaign: {cid or '(dry run)'}")
         if cid:
             a.campaign = cid
