@@ -1,6 +1,6 @@
 ---
 version: 1.0.0
-updated: 2026-10-25
+updated: 2026-10-26
 ---
 
 # Live-streaming machine setup (eBay Live + OBS)
@@ -483,35 +483,49 @@ means the camera went to sleep: half-press the shutter.
 
 ### Tool sale lots: one command per lot
 
-With the D5 feed running (`show_flow.py feed start`) and a lot in view, run
-this from the main checkout:
+With the D5 feed running (`show_flow.py feed start`) and a lot in view, run:
 
 ```bash
 python tools/live/tool_lot.py
 ```
 
-It copies the feed's latest frame (never gphoto2; a frame over 5 s old means
-the feed is down, and it stops), turns it upright, asks Claude what's in it,
-and writes `inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/` (draft.md and
-`listing/D5_0001.jpg`) titled `TOOL LOT #<N> <what's in it>`. Then it records
-the lot (SKU and a DRAFTED ledger row, as `list_edit.py --record` does) and
-prints each stage's time. N is the highest lot in the folder plus one, so a
-lot made by hand keeps its number and is recorded on the next run.
+It copies the feed's latest frame. It never calls gphoto2. A frame more than
+5 s old means the feed is down, and the tool stops there. Claude names
+what's in the frame, and the tool writes
+`inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/`: draft.md titled
+`TOOL LOT #<N> <what's in it>`, price.txt and the frame as shot. N is the
+highest lot number in the folder plus one, so a lot made by hand keeps its
+number and is recorded on the next run. Every `list_edit` and PREP call runs
+in the main checkout with its `.venv` python, wherever the tool was started.
+The steps after that:
 
-A new lot is not priced: it carries a placeholder price and "PLACEHOLDER -
-needs PRICE before publish" in `meta.notes`. The price gate
-(`lib/price_gate.py`) refuses sync and publish until PRICE has run, so the
-sync step says "waiting on PRICE". Once a lot is priced, the same step
-creates its unpublished eBay draft. Nothing here publishes. `--no-sync` skips
-the eBay step.
+- **Price.** Every lot starts at the sale's start price, `$1` (Russell,
+  2026-10-25). price.txt carries his `OPERATOR PRICE:` line, which the price
+  gate accepts.
+- **Record.** `list_edit.py --record` writes the SKU and a DRAFTED ledger
+  row.
+- **PREP.** The art director's standing rule for tool-sale lots: turn the
+  frame upright (`--set-rotate D5_0001.jpg=90`), crisp, no crop. The tool
+  approves when the identify says every titled item shows, the frame is
+  sharp and lit, and the rig is in frame. If any of those checks fails, the
+  lot is **HELD** for the art director, `meta.notes` says why, and nothing
+  syncs.
+- **Sync.** `list_edit.py --validate`, then `--sync`, which creates an
+  unpublished offer. API offers don't show in Seller Hub's Drafts. A lot
+  reaches the Live event only once it is published, which is a separate step
+  that needs Russell's yes. `--no-sync` stops before eBay.
+
+Each stage prints its time. On 2026-10-26 a run on the live frame took about
+11 s: identify 4.4 s and PREP 6.2 s.
 
 `<sale>/sale.json` holds the sale's settings, written on the first run: the
-store (`default`), the frame rotation (`-90`), the identify model, and the
-two shipping policies. Small and medium lots get LIVE Small and large or
-heavy ones get LIVE Large (buyer-paid calculated, from the draft's
-`shipping.fulfillment_policy_id`). `--store`, `--rotate` and `--model` change
-them for the rest of the sale. Weight and box size are guesses from the
-size class, and `meta.notes` says so.
+store (`default`, for this sale only), the rotation (`90`), the start price,
+the identify model, and the two shipping policies. Small and medium lots use
+LIVE Small; large and heavy lots use LIVE Large. Both are buyer-paid
+calculated, set through the draft's `shipping.fulfillment_policy_id`.
+`--store`, `--rotate`, `--start-price` and `--model` change a setting for
+the rest of the sale. Weight and box size are guesses from the size class,
+and `meta.notes` says so.
 
 ## 7. Background music (CC0, no cost)
 
