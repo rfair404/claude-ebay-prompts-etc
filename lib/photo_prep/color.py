@@ -71,6 +71,39 @@ MAX_BACKOFF = 5          # strength reductions before giving up and shipping 0
 BACKOFF_FACTOR = 0.65
 CLIP_TOLERANCE = 0.0005  # new clipped subject pixels allowed, as a fraction
 
+# THE IMPROVEMENT GATE: a look ships only if it beats the frame as shot.
+#
+# The rail guard above only protects pixels the mask calls "item". On the
+# K01-C033 Serenity sterling set (2026-10-25, live at $5,995) the mask found 5%
+# of a frame that was mostly silver; `crisp` then lifted the "backdrop" to
+# white and blurred it, flatware included, and the rail guard saw nothing
+# wrong. The same check across seven other shoots found the identical smear on
+# dark cloth: sterling lids, a scrimshaw handle, a bowl rim.
+#
+# So every corrected frame is measured against its own as-shot pixels, at a
+# coarse scale where lint and cloth weave average away and only real object
+# edges remain:
+#   * harm: the frame's object edges -- and separately those the mask missed --
+#     must keep VERIFY_MIN_RETENTION of their strength. Blurring an item or
+#     lifting it into a white backdrop both fail here.
+#   * gain: the clean backdrop must measurably improve (cast off, texture off,
+#     or tone moved toward its target). A look that changes nothing worth
+#     having is not worth the risk.
+# Fail either and the frame ships as shot.
+VERIFY_WIDTH = 320            # px, long side of the coarse comparison copy
+VERIFY_EDGE_MIN = 48.0        # Sobel magnitude; a ~12-luma step at that scale
+VERIFY_COMPONENT_MIN = 40     # px; smaller edge blobs are lint, not objects
+VERIFY_MIN_RETENTION = 0.90   # measured: every damaged render scored <= 0.82
+VERIFY_MIN_CHROMA_DROP = 1.5  # Lab a*b* units off the backdrop's cast
+VERIFY_MIN_TEXTURE_DROP = 0.15  # fraction of backdrop fine texture removed
+VERIFY_MIN_TONE_MOVE = 4.0    # luma toward WHITE_TARGET / BLACK_TARGET
+# The mask has to describe the item before anything may treat the rest as
+# backdrop. On the C033 hero 73% of the object edges lay outside it; sharpening
+# the 5% it did find then outscored the blur on the rest at the coarse scale,
+# so the edge check alone passed a washed-out frame. A mask that misses this
+# much of the item is not a mask to correct from.
+VERIFY_MAX_MISSED_EDGES = 0.25
+
 # Subject pass. `scurve` is the strength of a contrast curve that PINS 0 and
 # 255 — not a linear expansion about mid-grey. The linear version was measured
 # doing real damage on the first shoot: 68k clipped and 419k crushed subject
@@ -782,6 +815,102 @@ def _damage(before: np.ndarray, after: np.ndarray, subj: np.ndarray) -> tuple[in
     return int((a_hi & ~b_hi).sum()), int((a_lo & ~b_lo).sum())
 
 
+def verify_improvement(before_bgr: np.ndarray, after_bgr: np.ndarray,
+                       mask: np.ndarray) -> dict:
+    """Does `after` beat `before` (the frame as shot)? See VERIFY_* above.
+
+    Returns {passed, reasons, ...metrics}. `reasons` is empty when it passed.
+    """
+    import cv2
+
+    def small(x, interp=cv2.INTER_AREA):
+        s = VERIFY_WIDTH / max(x.shape[:2])
+        return cv2.resize(x, (max(1, round(x.shape[1] * s)), max(1, round(x.shape[0] * s))),
+                          interpolation=interp)
+
+    def grad(bgr):
+        g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        return np.hypot(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3),
+                        cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))
+
+    b, a = small(before_bgr), small(after_bgr)
+    m = small((mask > 0).astype(np.uint8), cv2.INTER_NEAREST) > 0
+    gb, ga = grad(b), grad(a)
+
+    # Object edges: strong AND part of a sizeable connected run.
+    def objects(strong):
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(strong.astype(np.uint8),
+                                                            connectivity=8)
+        keep = np.zeros(n, bool)
+        keep[1:] = stats[1:, cv2.CC_STAT_AREA] >= VERIFY_COMPONENT_MIN
+        return keep[lab]
+
+    strong = gb >= VERIFY_EDGE_MIN
+    edges = objects(strong)
+    near_item = cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    # Labelled on their own: a lint speck touching the item's outline would
+    # otherwise join the outline's component and pass as a missed object.
+    missed = objects(strong & ~near_item)
+
+    def kept(sel):
+        return float(ga[sel].mean() / max(gb[sel].mean(), 1e-6)) if sel.sum() >= 20 else 1.0
+
+    retention, retention_missed = kept(edges), kept(missed)
+
+    # Clean backdrop: away from the item and from every edge, measured on a
+    # finer copy so texture (lint, weave) is still visible.
+    fine_w = VERIFY_WIDTH * 2
+    sf = fine_w / max(before_bgr.shape[:2])
+    fsize = (max(1, round(before_bgr.shape[1] * sf)), max(1, round(before_bgr.shape[0] * sf)))
+    fb = cv2.resize(before_bgr, fsize, interpolation=cv2.INTER_AREA)
+    fa = cv2.resize(after_bgr, fsize, interpolation=cv2.INTER_AREA)
+    clean = cv2.resize((~near_item & ~(cv2.dilate(edges.astype(np.uint8),
+                                                 np.ones((5, 5), np.uint8)) > 0)
+                        ).astype(np.uint8), fsize, interpolation=cv2.INTER_NEAREST) > 0
+    gains = dict(chroma_drop=0.0, texture_drop=0.0, tone_move=0.0)
+    if clean.sum() >= 200:
+        lb = cv2.cvtColor(fb, cv2.COLOR_BGR2LAB).astype(np.float32)
+        la = cv2.cvtColor(fa, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+        def chroma(lab_img):
+            return float(np.hypot(lab_img[..., 1] - 128, lab_img[..., 2] - 128)[clean].mean())
+
+        def texture(lab_img):
+            lum = lab_img[..., 0]
+            return float(np.abs(lum - cv2.GaussianBlur(lum, (0, 0), 3))[clean].mean())
+
+        # Tone in sRGB luma, the same scale as WHITE_TARGET / BLACK_TARGET.
+        lum_b = float(cv2.cvtColor(fb, cv2.COLOR_BGR2GRAY)[clean].mean())
+        lum_a = float(cv2.cvtColor(fa, cv2.COLOR_BGR2GRAY)[clean].mean())
+        target = WHITE_TARGET if lum_b >= 128 else BLACK_TARGET
+        tb = texture(lb)
+        gains = dict(
+            chroma_drop=round(chroma(lb) - chroma(la), 2),
+            texture_drop=round((tb - texture(la)) / tb, 3) if tb > 0.5 else 0.0,
+            tone_move=round(abs(target - lum_b) - abs(target - lum_a), 1),
+        )
+
+    missed_frac = float(missed.sum() / max(edges.sum(), 1))
+    reasons = []
+    if missed_frac > VERIFY_MAX_MISSED_EDGES:
+        reasons.append(f"{missed_frac:.0%} of the object edges lie outside the mask "
+                       f"(> {VERIFY_MAX_MISSED_EDGES:.0%}): it does not cover the item")
+    if retention < VERIFY_MIN_RETENTION:
+        reasons.append(f"item edges kept {retention:.0%} (< {VERIFY_MIN_RETENTION:.0%})")
+    if retention_missed < VERIFY_MIN_RETENTION:
+        reasons.append(f"edges outside the mask kept {retention_missed:.0%} "
+                       f"(< {VERIFY_MIN_RETENTION:.0%}): the mask missed part of the item")
+    if not (gains["chroma_drop"] >= VERIFY_MIN_CHROMA_DROP
+            or gains["texture_drop"] >= VERIFY_MIN_TEXTURE_DROP
+            or gains["tone_move"] >= VERIFY_MIN_TONE_MOVE):
+        reasons.append("backdrop not measurably better (cast, texture and tone all unchanged)")
+    return dict(passed=not reasons, reasons=reasons,
+                edge_retention=round(retention, 3),
+                missed_edge_retention=round(retention_missed, 3),
+                missed_edge_frac=round(missed_frac, 3),
+                **gains)
+
+
 def correct(bgr: np.ndarray,
             mask: np.ndarray,
             pop: str = "gentle",
@@ -934,6 +1063,16 @@ def correct(bgr: np.ndarray,
         out_u8 = bgr[:, :, ::-1].copy()
     else:
         out_u8 = np.clip(out, 0, 255).astype(np.uint8)
+
+    # The improvement gate (VERIFY_* above): a look that does not beat the
+    # frame as shot does not ship. It falls back to as-shot, the same pixels
+    # `asshot` would hand over, and the report says why.
+    verify = None
+    if strength > 0.0:
+        verify = verify_improvement(bgr, out_u8[:, :, ::-1], mask)
+        if not verify["passed"]:
+            out_u8 = bgr[:, :, ::-1].copy()
+            strength, new_clip, new_crush = 0.0, 0, 0
     after = analyze(out_u8[:, :, ::-1], mask)
 
     report = dict(
@@ -959,5 +1098,7 @@ def correct(bgr: np.ndarray,
         subject_newly_crushed=new_crush,
         backoffs=len(attempts) - 1,
         attempts=attempts,
+        verify=verify,
+        fell_back_to_asshot=bool(verify and not verify["passed"]),
     )
     return out_u8[:, :, ::-1], report
