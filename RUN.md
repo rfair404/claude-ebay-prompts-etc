@@ -1,6 +1,6 @@
 ---
-version: 1.9.0
-updated: 2026-10-24
+version: 3.4.0
+updated: 2026-10-25
 ---
 
 # RUN — v4 headless runbook
@@ -105,8 +105,10 @@ means.
 In `listings_ledger*.csv`, `DRAFTED` and `SYNCED` (an eBay draft offer, not
 live) are REVIEW, `PUBLISHED` is LIVE, `SOLD`/`SHIPPED` is SOLD and `ENDED`
 is ENDED. On `client_ledger.csv`, `DRAFTED` means `draft.md` exists, `LISTED`
-is LIVE, and a hand-entered `PREP` is an on-hand label that `consign sync`
-keeps until the item is LISTED.
+is LIVE (on eBay, or on the mall floor once `placed_at` is typed), and a hand-entered `PREP` is an on-hand label that `consign sync`
+keeps until the item is LISTED. A hand-entered `HOLD` (its `state_note` says
+why) is an on-hand hold that `sync` keeps past an ended listing, flags if a
+live listing matches, and gives up only on a sale.
 
 **Waiting is not a state.** An item waiting on Russell's card, a reshoot or
 another agent stays in its state with the same owner. A `NEEDS_REVIEW.md`
@@ -189,7 +191,8 @@ forms used throughout `prompts/`, not bare names):
 `python -m lib.photo_prep.prep`, `python -m lib.cli prep`,
 `python -m lib.cli single-pass`, `python -m lib.cli observe`,
 `python -m pytest`,
-`python tests/run_all.py`, `tools/green_test.sh`, `python tools/ledger_reconcile.py`,
+`python tests/run_all.py`, `tools/ci_test.sh`, `tools/green_test.sh`,
+`python tools/ledger_reconcile.py`,
 `python tools/prep_sheet_html.py`, `python tools/review_card_html.py`,
 the comp-hunt call
 (`python lib/ebay_sold_browse.py` — Apify is retired, see
@@ -213,12 +216,89 @@ one of them. A genuinely instant invocation of a listed tool (`--status`,
 `--check`) opts out with a leading `# fg-ok: <reason>` comment — stated on
 the command line, never silent.
 
-**Run the full suite on green, not here.** `tools/green_test.sh [pytest args]`
-copies the checkout to green (the second machine, `ssh green`) and runs pytest
-there. A full run peaks near 900 MB, and sessions running it side by side beside
-the app, Firefox and OBS got the desktop app OOM-killed (2026-10-24). It runs on
-green, so the on-air hold below does not stop it. Local `python -m pytest` stays
-for one test file. `tools/green_test.sh --setup` builds green's venv once.
+**Run the full suite in CI, not here.** For a commit not yet on a PR, commit,
+then run `tools/ci_test.sh [branch]` (backgrounded; the current branch by
+default). A PR already runs the suite on every push. The script force-pushes
+the branch's commit to `ci/<branch>`, a throwaway ref it owns and deletes on
+exit (never `main`, which it refuses). `.github/workflows/tests.yml` runs on
+every push to `ci/**`. The script watches the new run of that exact commit and
+exits non-zero with the failed jobs' log tail if it fails. It refuses
+uncommitted changes, because CI only tests the commit. `ci/` is reserved for
+`ci_test.sh`; never name a working branch `ci/…`. A full local run peaks near
+900 MB, and sessions running it side by side beside the app, Firefox and OBS
+got the desktop app OOM-killed (2026-10-24). CI runs on GitHub, so the on-air hold
+below does not stop `ci_test.sh`. Local `python -m pytest <one test file>`
+stays. Green is print-only now: `tools/green_test.sh` is deprecated, use
+`tools/ci_test.sh`.
+
+### Green: the print server
+
+Green is a print server and nothing else (Russell, 2026-10-24): its CUPS
+spools the Brother QL-1100 for the LAN. It runs no desktop, no browser, no
+tests and no shipping screen. Each box's size and weight form is on its pick
+sheet, and heavy jobs are going to a cloud service rather than to
+green. The eBay API keys and refresh tokens, the R2 keys, `config.yaml` and
+the ledgers stay on the laptop, and green holds no login. Every connection
+opens from the laptop over `ssh green` (host `green.lan`, key
+`~/.ssh/green`, in `~/.ssh/config`), so green has no way back in. Green is
+optional: if it is down, label jobs wait in the laptop's queue, and
+`--laptop usb` puts the printer back on the laptop.
+
+    python tools/green_setup.py --dry-run         # read green, print every step; change nothing
+    python tools/green_setup.py                   # apply: sudo here, then sudo on green
+    python tools/green_setup.py --close-others    # also switch ufw on over green's other listeners
+    python tools/green_setup.py --laptop skip     # green only; the laptop's queue stays as it is
+    python tools/green_setup.py --laptop usb      # cable back on the laptop
+    python tools/green_setup.py --remove-desktop  # purge the desktop an earlier run installed
+
+It reads green first: OS, the printer on USB, the listening ports and ufw.
+Then it does only what is missing:
+
+- **Driver on the laptop.** The laptop's queue keeps its name `QL-1100` and
+  the Brother PPD (`ql1100pdrv` 2.1.4), so browser print dialogs and
+  `tools/print_label.sh` see `103x164` and the other label sizes. With the
+  cable on green it forwards the filtered job to
+  `ipp://green.lan:631/printers/QL-1100`, and jobs retry while green is
+  down. After the repoint the tool checks that `lpoptions -p QL-1100 -l`
+  lists `103x164` and fails loud if it doesn't. A raw forward (the first
+  version) had no PPD, so dialogs showed no label sizes. An `-m everywhere`
+  queue was not used: it needs green up to be created, and its size names
+  are not the PPD's `103x164` that `print_label.sh` asks for.
+- **Laptop, first.** With the cable on green, the laptop's queue points at
+  nothing until it is repointed, so this step runs before green's. The
+  repoint is refused while the printer is still on the laptop's USB.
+  `print_label.sh` also checks the far queue and says if green's is paused.
+- **Green's queue.** CUPS and ufw only, then a raw `QL-1100` queue on
+  green's USB, shared. CUPS 2.4 warns that raw queues are deprecated; they
+  still work, and green needs no driver.
+- **Sharing, LAN only.** `cupsctl --share-printers --no-remote-any
+  --no-remote-admin` limits CUPS to the local subnet. ufw opens 631/tcp and
+  SSH to green's own /24 and nothing else. ufw is not switched on over other
+  listening ports unless `--close-others` says so.
+
+Nothing is applied while `inventory/_live/ON_AIR` exists.
+
+**The desktop is opt-in, off for now.** `--desktop` (with `--autologin
+yes|no`) still adds XFCE with LightDM (LXQt under 2 GB of RAM) and Firefox,
+last, after the printer. `--remove-desktop` undoes a
+desktop run. It reads green's apt history for the desktop installs this
+script ran (`apt-get install -y -q` with only desktop packages named) and
+purges those of `xfce4`, `xfce4-terminal`, `lightdm`, `lightdm-gtk-greeter`,
+`xorg` and `firefox`/`firefox-esr` that are still installed, plus what only
+they pulled in (`apt-get purge --autoremove`). It also removes
+`50-pops-autologin.conf` and the Ship launcher an older run wrote, and sets
+`multi-user.target`. If apt would remove a package the script didn't
+install, the cleanup marks it manual and keeps it, or stops before changing
+anything. The dry run shows the list.
+
+**Next on green: MicroK8s off, then the firewall.** Green also runs
+MicroK8s (snap) and LXD. Russell's user has no MicroK8s access, and it
+listens to the LAN on 10250, 10257, 10259, 16443 and 25000 with ufw off. A
+print server needs none of it. `sudo snap disable microk8s` stops it and
+keeps its data (`snap enable microk8s` brings it back). Then
+`green_setup.py --laptop skip --close-others` switches ufw on, so only SSH
+and CUPS answer from the /24. LXD's bridge (`lxdbr0`) loses DHCP under
+ufw's default deny, which only matters if a container is in use there.
 
 **While a live show is on air, batch jobs wait, backgrounded or not.**
 `show_flow.py golive` writes `inventory/_live/ON_AIR` and `stop` removes
@@ -469,6 +549,14 @@ works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
 (agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
 no postage. Handling applies on every channel.
 
+**On the mall floor.** When an item goes into the booth, type the mall's own
+SKU (the GAM SKU from SimpleConsign) in `listing_id` and the date it went out
+in `placed_at`. `sync` then keeps the row `LISTED`, the report counts it
+under listed at its `ask` (the booth tag), and the listing-window flag counts
+from `placed_at`. Off eBay, `listing_id` is never looked up in the eBay
+ledgers. `sync` refuses `placed_at` on an eBay row, or without a
+`listing_id`. A row with no `placed_at` stays on hand (`PREP`).
+
 **Floors and time limits.** These only raise flags. A row's `floor` (from
 Exhibit A; a lot's floor is the total of its rows) is checked against the ask
 while listed and against the price once sold. A listing live longer than the
@@ -504,9 +592,11 @@ lot-mate that already has an order, a share, a settlement or a paid date
 `order_id` on two active rows. Across ledgers it also
 refuses a folder claimed from two ledgers (unless it is one client's lot), a
 lot on two folders, and one id in two of a client's ledgers. A listing that
-ended unsold, a sale that left the sales ledger (the finance sync drops
-refunded and cancelled orders) and an auction-format listing (consigned items
-stay fixed-price for now) are flagged in `state_note`, not given a state. Net
+ended (the row goes back to its on-hand state, `DRAFTED`, `SHOT` or `PREP`,
+flagged `listing <id> ended <date>: relist, return or dispose`), a sale that
+left the sales ledger (the finance sync drops refunded and cancelled orders)
+and an auction-format listing (consigned items stay fixed-price for now) are
+flagged in `state_note`, not given a state. Net
 is eBay's net before postage minus ad fee, postage and other costs; a blank ad
 fee or postage is unknown, not zero, so the row can't clear. Once
 `paid_to_client_date` is set, the row's `client_share` is frozen at what was

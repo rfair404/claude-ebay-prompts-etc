@@ -71,6 +71,11 @@ class _Creds:
     environment = "sandbox"
 
 
+def _not_held(listing_id, creds=None):
+    """Stand-in for the Trading GetItem hold check: the listing is not on hold."""
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Shared fakes / helpers
 # ---------------------------------------------------------------------------
@@ -137,6 +142,17 @@ _BODY = ("A well-loved vintage widget from our collection, kept in a "
          "climate-controlled space and gently cared for over the years.")
 
 
+def _write_passing_price(shoot: Path) -> None:
+    """price.txt + Stage B save that pass lib/price_gate.py, so a fixture
+    that reaches validate_draft_for_sync / publish_offer isn't refused for a
+    missing sold pull. Tests of the gate itself overwrite price.txt."""
+    (shoot / "price.txt").write_text(
+        "  B · Browser   : RAN — query \"widget\" — best_match n=9 + price_high n=9"
+        " — saved 2 JSONs — price_stats n_kept=8, conf=good\n", encoding="utf-8")
+    (shoot / "apify_run_20261024T000000Z_browse-best_match-p1-20261023T200000.json"
+     ).write_text("{}", encoding="utf-8")
+
+
 def _write_single_draft(tmp: Path, *, sku="", offer_id="") -> Path:
     """A minimal, sync-ready single-item draft.md with one real (empty) photo
     file on disk, so validate_draft_for_sync passes."""
@@ -145,6 +161,7 @@ def _write_single_draft(tmp: Path, *, sku="", offer_id="") -> Path:
     (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff")  # jpeg magic, content irrelevant
     meta_sku_line = f'  ebay_inventory_sku: "{sku}"\n' if sku else ""
     meta_offer_line = f'  ebay_offer_id: "{offer_id}"\n' if offer_id else ""
+    _write_passing_price(shoot)
     draft_path = shoot / "draft.md"
     draft_path.write_text(
         "---\n"
@@ -416,12 +433,44 @@ def test_publish_offer_dry_run_makes_no_publish_call():
     }})
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=False)
 
     assert res.dry_run is True
     assert res.price == "24.99"
     assert not [c for c in calls if c[0] == "POST"], "dry run must never publish"
+
+
+_UNAVAILABLE_PRICE = ("  B · Browser   : UNAVAILABLE — no claude-in-chrome (logged-in "
+                      "browser) in this session\n")
+
+
+def test_validate_refuses_a_price_set_without_a_sold_pull():
+    """2026-10-24 comp audit: ~30 prices were set from asks while Stage B
+    was UNAVAILABLE. Such a draft must not pass --validate/--sync/--list."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        assert L.validate_draft_for_sync(draft_path) == []
+        (draft_path.parent / "price.txt").write_text(_UNAVAILABLE_PRICE, encoding="utf-8")
+        issues = L.validate_draft_for_sync(draft_path)
+    assert [i for i in issues if "without a sold pull" in i], issues
+
+
+def test_publish_offer_refuses_a_price_set_without_a_sold_pull():
+    """--publish skips validate, so publish_offer itself refuses: no
+    publishOffer POST, nothing in the ledger."""
+    send, calls = _fake_api({"/offer/OFFER-1": {
+        "status": "UNPUBLISHED", "sku": "abc12300",
+        "pricingSummary": {"price": {"value": "24.99"}},
+    }})
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
+        (draft_path.parent / "price.txt").write_text(_UNAVAILABLE_PRICE, encoding="utf-8")
+        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+            with pytest.raises(ValueError, match="without a sold pull"):
+                L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+            assert not _ledger_rows(ledger)
+    assert not [c for c in calls if c[0] == "POST"], "refused publish must never POST"
 
 
 def test_publish_offer_golden_publish_body_is_empty_and_updates_ledger():
@@ -437,7 +486,7 @@ def test_publish_offer_golden_publish_body_is_empty_and_updates_ledger():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
 
             assert res.dry_run is False
@@ -467,11 +516,42 @@ def test_publish_offer_promotes_the_new_listing():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
     adds = [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
     assert adds and adds[0][2] == {"requests": [{"listingId": "999888777"}]}
     assert res.promotion and res.promotion.startswith("promoted")
+
+
+def test_publish_offer_never_promotes_a_k01_consignment_listing(tmp_path, monkeypatch):
+    """Russell's rule (2026-10-25): nothing from the K01 consignment lot is
+    promoted. publish_offer hands the offer's SKU to auto_promote, which finds
+    it in K01's client ledger and sends no ad."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import consign
+    lot = tmp_path / "inventory" / "CONSIGN-20261022"
+    lot.mkdir(parents=True)
+    with (lot / consign.LEDGER_NAME).open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=consign.COLUMNS)
+        w.writeheader()
+        w.writerow({**{c: "" for c in consign.COLUMNS}, "item_id": "K01-C001",
+                    "client_code": "K01", "sku": "decd0001"})
+    monkeypatch.setattr(consign, "INVENTORY", tmp_path / "inventory")
+    send, calls = _fake_api({
+        "/offer/OFFER-1/publish": {"listingId": "999888777"},
+        "/offer/OFFER-1": {"status": "UNPUBLISHED", "sku": "decd0001",
+                           "pricingSummary": {"price": {"value": "49.99"}}},
+        "get_campaign_by_name": {"campaignId": "C1", "campaignStatus": "RUNNING",
+                                 "fundingStrategy": {"fundingModel": "COST_PER_SALE"}},
+        "bulk_create_ads_by_listing_id": {"responses": [{"statusCode": 201}]},
+    })
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="decd0001", offer_id="OFFER-1")
+        with _patched(L, api_send=send), _ledger_at(Path(td)):
+            res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+    assert res.listing_id == "999888777"
+    assert res.promotion.startswith("not promoted: consignment K01 excluded")
+    assert not [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
 
 
 def test_publish_succeeds_when_promotion_fails():
@@ -485,7 +565,7 @@ def test_publish_succeeds_when_promotion_fails():
     })
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
             assert _ledger_rows(ledger)[0]["status"] == "PUBLISHED"
     assert res.listing_id == "999888777"
@@ -517,7 +597,7 @@ def test_publish_offer_is_idempotent_second_call_does_not_republish():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
-        with _patched(L, api_send=counting_send), _ledger_at(Path(td)) as ledger:
+        with _patched(L, get_listing_hold=_not_held, api_send=counting_send), _ledger_at(Path(td)) as ledger:
             first = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
             second = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
 
@@ -713,7 +793,7 @@ def test_create_or_update_listing_idempotent_second_call_updates_not_creates():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td))
-        with _patch_sync_collaborators(), _patched(L, api_send=send), _ledger_at(Path(td)) as ledger:
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)) as ledger:
             first = L.create_or_update_listing(draft_path, creds=_Creds())
             assert first.operation == "created"
             sku = first.inventory_sku
@@ -743,7 +823,7 @@ def _run_sync_cli(draft_path, send):
     real_argv = sys.argv
     sys.argv = ["list_edit.py", "--sync", str(draft_path)]
     try:
-        with _patch_sync_collaborators(), _patched(L, api_send=send,
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send,
                                                     load_credentials=lambda store=None: _Creds()), \
              _ledger_at(draft_path.parent), contextlib.redirect_stdout(out):
             L._cli()
@@ -766,7 +846,7 @@ def test_sync_of_a_published_offer_reports_the_live_listing_not_a_draft():
 
     with tempfile.TemporaryDirectory() as td:
         draft_path = _write_single_draft(Path(td))
-        with _patch_sync_collaborators(), _patched(L, api_send=send), _ledger_at(Path(td)):
+        with _patch_sync_collaborators(), _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
             res = L.create_or_update_listing(draft_path, creds=_Creds())
         assert (res.offer_status, res.listing_id, res.listing_status) == \
             ("PUBLISHED", "880009332259", "ACTIVE")
@@ -1100,6 +1180,100 @@ def test_review_card_intl_block_says_enabled_when_policy_is_configured():
     assert "domestic-only" not in card
 
 
+def _card_on_policy(td: Path, policy: dict) -> str:
+    """Card for a clean draft (no `shipping.international`) whose preflight
+    resolved to `policy`."""
+    draft_path = _write_single_draft(td)
+
+    def _pf(*a, policy_out=None, **kw):
+        if policy_out is not None:
+            policy_out.update(policy)
+        return ["category: 12345"]
+    with _patched(L, preflight_listing=_pf,
+                 resolve_draft_state=lambda *a, **kw:
+                     {"stale": False, "offer_id": "", "meta_offer_id": ""},
+                 _ebay_extra=lambda field, store="default": None), \
+         _ledger_at(td):
+        card, _path = L.build_review_card(draft_path, creds=_Creds())
+    return card
+
+
+def test_review_card_intl_block_reports_the_policys_own_reach():
+    """2026-10-25, C087/C088 on the default store: the card said "eligible,
+    not enabled (shipping.international: false)" while the item's policy was
+    'Free USPS Ground + eBay International Shipping'. The draft flag only
+    picks the separate international policy; the resolved policy decides."""
+    with tempfile.TemporaryDirectory() as td:
+        card = _card_on_policy(Path(td), {
+            "name": "Free USPS Ground + eBay International Shipping",
+            "shipToLocations": {}})
+    assert ("✓ ON through policy 'Free USPS Ground + eBay International "
+            "Shipping'") in card
+    assert "not enabled" not in card
+
+
+def test_review_card_maker_named_perfume_co_is_not_a_fragrance():
+    """2026-10-25, K01-C055 (206653565514): "California Perfume Co" in a
+    souvenir spoon's title made the card say "CANNOT SHIP INTERNATIONALLY:
+    alcohol-based fragrance" and "correctly domestic-only" on a policy that
+    ships worldwide. A maker name is not a fragrance; the card reports the
+    policy's own reach."""
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td))
+        draft_path.write_text(draft_path.read_text(encoding="utf-8").replace(
+            "Vintage Widget MPN-100",
+            "Antique 1915 Panama Pacific Exposition Souvenir Spoon "
+            "California Perfume Co PPIE"), encoding="utf-8")
+
+        def _pf(*a, policy_out=None, **kw):
+            policy_out.update({"name": "Free USPS Ground + eBay International "
+                                       "Shipping", "shipToLocations": {}})
+            return ["category: 12345"]
+        with _patched(L, preflight_listing=_pf,
+                     resolve_draft_state=lambda *a, **kw:
+                         {"stale": False, "offer_id": "", "meta_offer_id": ""},
+                     _ebay_extra=lambda field, store="default": None), \
+             _ledger_at(Path(td)):
+            card, _path = L.build_review_card(draft_path, creds=_Creds())
+    assert "CANNOT SHIP INTERNATIONALLY" not in card
+    assert "fragrance" not in card
+    assert "correctly domestic-only" not in card
+    assert "✓ ON through policy 'Free USPS Ground + eBay International Shipping'" in card
+
+
+@pytest.mark.parametrize("title, blocked", [
+    ("Antique Souvenir Spoon California Perfume Co", False),
+    ("Perfume Company Advertising Tin", False),
+    ("Sterling Souvenir Spoon Cologne Germany Cathedral", False),
+    ("Vintage Chanel No 5 Perfume 1 oz Sealed", True),
+    ("Avon Cologne Decanter Full", True),
+    ("4711 Eau de Cologne Glass Bottle", True),
+])
+def test_fragrance_blocker_needs_a_fragrance_not_a_maker_name(title, blocked):
+    d = Draft(Path("draft.md"), {"title": title,
+                                   "item_specifics": {"type": "Collectible"}}, "")
+    hit = "alcohol-based fragrance (flammable)" in L._international_blockers(d)
+    assert hit is blocked
+
+
+def test_fragrance_blocker_still_reads_the_item_type():
+    """A California Perfume Co bottle typed as a perfume bottle is still a
+    fragrance: the maker exemption is for the title wording only."""
+    d = Draft(Path("draft.md"), {"title": "California Perfume Co Bottle",
+                                 "item_specifics": {"type": "Perfume Bottle"}}, "")
+    assert "alcohol-based fragrance (flammable)" in L._international_blockers(d)
+
+
+def test_review_card_intl_block_names_a_policys_exclusions():
+    with tempfile.TemporaryDirectory() as td:
+        card = _card_on_policy(Path(td), {
+            "name": "US only",
+            "shipToLocations": {"regionExcluded": [{"regionName": "Africa"},
+                                                   {"regionName": "Asia"}]}})
+    assert "• off: policy 'US only' excludes Africa, Asia." in card
+    assert "✓ ON" not in card
+
+
 # ---------------------------------------------------------------------------
 # Best Offer gate cross-field checks (#140)
 # ---------------------------------------------------------------------------
@@ -1145,6 +1319,7 @@ def _write_bo_draft(tmp: Path, *, price="199.00", enabled=True, decline=None,
     if melt is not None:
         lines.append(f'  melt_value: "{melt}"')
     lines += ["---", _BODY, ""]
+    _write_passing_price(shoot)
     draft_path = shoot / "draft.md"
     draft_path.write_text("\n".join(lines), encoding="utf-8")
     return draft_path
@@ -1227,6 +1402,7 @@ def test_edit_bestoffer_refuses_floor_at_or_above_the_live_price():
                                   "listingPolicies": {"fulfillmentPolicyId": "F-1"}},
     })
     L.api_send = send
+    L.get_listing_hold = _not_held
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / "s"
         tmp.mkdir()
@@ -1288,7 +1464,7 @@ def _update(tmp, fields, *, api=None, dry_run=False):
     import io
     err = io.StringIO()
     draft_path = _write_single_draft(tmp, sku=_UPD_SKU, offer_id="9")
-    with _patched(L, api_send=api or _live_listing_api()), contextlib.redirect_stderr(err):
+    with _patched(L, get_listing_hold=_not_held, api_send=api or _live_listing_api()), contextlib.redirect_stderr(err):
         L.update_listing_fields(draft_path, fields, creds=_Creds(), dry_run=dry_run)
     return err.getvalue()
 
@@ -1341,7 +1517,7 @@ def test_update_cli_exits_1_when_the_ledger_write_fails():
         draft_path = _write_single_draft(Path(td), sku=_UPD_SKU, offer_id="9")
         sys.argv = ["list_edit.py", "--update", str(draft_path), "--fields", "price"]
         try:
-            with _patched(L, api_send=_live_listing_api(),
+            with _patched(L, get_listing_hold=_not_held, api_send=_live_listing_api(),
                           load_credentials=lambda store=None: _Creds()), \
                  contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 L._cli()

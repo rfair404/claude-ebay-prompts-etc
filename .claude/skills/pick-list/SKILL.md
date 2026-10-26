@@ -1,6 +1,6 @@
 ---
 name: pick-list
-description: Today's pick lists as links. Polls every store for orders awaiting shipment, uploads one sheet per box to R2 and replies with one link per box. Use when Russell asks for the pick list, the packing list, what ships today or what to pack, unless he asks to print them on paper (that is /pl).
+description: Today's pick lists as links. Polls every store for orders awaiting shipment, uploads one sheet per box to R2 and replies with one link per box. Use when Russell asks for the pick list, the packing list, what ships today or what to pack. With "print" in the arguments it also prints every sheet on CannonBW; to print only, use /pl.
 ---
 
 # /pick-list — today's pick lists as R2 links
@@ -8,6 +8,12 @@ description: Today's pick lists as links. Polls every store for orders awaiting 
 Asking for the pick list means "give me the sheets", not "summarise the
 queue". Run the script without confirming first. To print on paper instead,
 use `/pl`.
+
+**`/pick-list print`:** `print` in the arguments is the ask for paper too.
+Run `links.sh` as below, then `.claude/skills/pl/print.sh` with the Bash
+sandbox off (see the `pl` skill), and reply with the links followed by the
+`/pl` printed lines. Printing happens only on this run. Never print when an
+order arrives or on a schedule.
 
 ## Run
 

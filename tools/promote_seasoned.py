@@ -232,6 +232,13 @@ def main() -> int:
 
     already = campaign_listing_ids(api_send, cid) if cid else set()
     adds = to_add(seasoned, already)
+    # Excluded consignment lots never get an ad (lib/auto_promote); dropped
+    # here so the plan and the "added" count match what is sent.
+    from auto_promote import excluded_listings
+    skip = excluded_listings(adds, store)
+    for lid, why in skip.items():
+        print(f"  skip {lid}: not promoted: {why}")
+    adds = [l for l in adds if l not in skip]
     print(f"already in campaign: {len(already)} · to add: {len(adds)}")
     for lid in adds[:10]:
         v = listings[lid]

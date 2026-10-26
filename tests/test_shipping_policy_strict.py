@@ -110,6 +110,34 @@ def test_non_strict_falls_back_with_blocker_message():
     assert any("BLOCKER" in m for m in msgs)
 
 
+# --------------------------------------------------------- who pays, on the preflight line
+def _policy(free, cost):
+    return [{"fulfillmentPolicyId": _BASE_POLICIES["fulfillment"], "name": "P",
+             "shippingOptions": [{"optionType": "DOMESTIC", "costType": cost,
+                                  "shippingServices": [{"sortOrder": 1, "freeShipping": free,
+                                                        "shippingServiceCode": "USPSParcel"}]}]}]
+
+
+def _using_line(pols):
+    orig = L.get_fulfillment_policies
+    L.get_fulfillment_policies = lambda creds=None: pols
+    try:
+        _chosen, msgs = L._resolve_shipping_policy(
+            _draft({"title": ORDINARY_TITLE}), dict(_BASE_POLICIES), _Creds())
+    finally:
+        L.get_fulfillment_policies = orig
+    return next(m for m in msgs if m.startswith("shipping: using"))
+
+
+def test_preflight_says_the_buyer_pays_calculated():
+    # The review page reads this to state the money fact (tools/review_card_html.py).
+    assert _using_line(_policy(False, "CALCULATED")).endswith("· buyer pays calculated")
+
+
+def test_preflight_says_the_seller_pays_on_a_free_shipping_policy():
+    assert _using_line(_policy(True, "CALCULATED")).endswith("· seller pays (free shipping)")
+
+
 if __name__ == "__main__":
     import traceback
     fns = [(n, f) for n, f in sorted(globals().items())

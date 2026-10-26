@@ -1008,6 +1008,92 @@ def test_buy_label_has_one_link_per_order_when_grouped():
     assert 'href="https://www.ebay.com/lbr/go?t=12-3456-99999"' in h
 
 
+# --------------------------------------------------------------------------- #
+# Box form — the box's size and weight beside the Buy label link, prefilled
+# from the drafts, one Copy button per Seller Hub field. eBay's label link
+# takes the order id only (no size/weight parameter is documented or has been
+# seen in use), so the link stays plain and the numbers are copied by hand.
+# --------------------------------------------------------------------------- #
+def _sheet_with_draft(tmp_path, draft: str | None):
+    import pick_list_html
+    order = _buyer_order()
+    drafts = []
+    if draft is not None:
+        item = tmp_path / "item"
+        item.mkdir()
+        (item / "draft.md").write_text(draft, encoding="utf-8")
+        drafts = [{"dir": str(item), "sku": "MB-0142", "listing_id": "206448267270",
+                   "title": "", "price": ""}]
+    return pick_list_html.render_html([order], drafts, [])
+
+
+def _field(h: str, name: str) -> str:
+    return re.search(rf'<input type="number" id="box_{name}" name="{name}"[^>]*>', h).group(0)
+
+
+_DRAFT = ("---\nshipping:\n  package_in: {length: 8, width: 6, depth: 6}\n"
+          "  weight: {major_lb: 2, minor_oz: 8}\n---\nbody\n")
+
+
+def test_box_form_is_prefilled_from_the_draft(tmp_path):
+    h = _sheet_with_draft(tmp_path, _DRAFT)
+    assert 'value="8"' in _field(h, "length_in")
+    assert 'value="6"' in _field(h, "width_in")
+    assert 'value="6"' in _field(h, "depth_in")
+    assert 'value="2"' in _field(h, "weight_lb")
+    assert 'value="8"' in _field(h, "weight_oz")
+    assert "Estimated from the drafts" in h
+
+
+def test_box_form_is_blank_when_the_draft_has_no_estimate(tmp_path):
+    h = _sheet_with_draft(tmp_path, None)
+    for f in ("length_in", "width_in", "depth_in", "weight_lb", "weight_oz"):
+        assert 'value=""' in _field(h, f)
+    assert "Estimated" not in h and "Weigh and measure the box" in h
+
+
+def test_box_form_fields_come_from_one_list_in_order_and_limits(tmp_path):
+    """BOX_FIELDS is the one field list: the prefill's keys, BOX_JS's checks
+    and the rendered inputs all follow it in Seller Hub's order, with a
+    labelled Copy button for each."""
+    import pick_list_html
+    order = [f for f, _l, _s in pick_list_html.BOX_FIELDS]
+    assert order == ["length_in", "width_in", "depth_in", "weight_lb", "weight_oz"]
+    assert list(pick_list._box_prefill([], [], [])) == order
+    js_fields = re.search(r"for\(var k of \[([^\]]*)\]\)", pick_list_html.BOX_JS).group(1)
+    assert re.findall(r"'(\w+)'", js_fields) == order
+    h = _sheet_with_draft(tmp_path, _DRAFT)
+    names = re.findall(r'<input type="number" id="box_(\w+)"', h)
+    assert names == order
+    for f, label, _s in pick_list_html.BOX_FIELDS:
+        assert f'<label for="box_{f}">{label}</label>' in h
+        assert f'data-f="{f}" data-l="{label}" onclick="boxCopy(this)">Copy</button>' in h
+    js = pick_list_html.BOX_JS
+    assert "15.99" in js and "Number.isInteger(v.weight_lb)" in js
+
+
+def test_buy_label_link_stays_the_plain_order_link(tmp_path):
+    """No made-up query parameters ride on eBay's label link."""
+    h = _sheet_with_draft(tmp_path, _DRAFT)
+    assert re.findall(r'href="(https://www\.ebay\.com/lbr/[^"]*)"', h) == \
+        ["https://www.ebay.com/lbr/go?t=12-3456-78901"]
+
+
+def test_box_form_is_hidden_in_print_and_works_at_phone_width(tmp_path):
+    h = _sheet_with_draft(tmp_path, _DRAFT)
+    print_css = re.search(r"@media print \{(.*?)\n  \}", h, re.S).group(1)
+    assert ".box { display: none; }" in print_css
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in h
+    assert "repeat(auto-fill, minmax(6.5em, 1fr))" in h
+
+
+def test_box_form_adds_nothing_buyer_identifying(tmp_path):
+    h = _sheet_with_draft(tmp_path, _DRAFT)
+    form = re.search(r'<form class="box".*?</form>', h, re.S).group(0)
+    for leaked in ("123 Main St", "Apt 4", "27401", "Hein", "Greensboro"):
+        assert leaked not in form
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 

@@ -1,3 +1,8 @@
+---
+version: 1.1.0
+updated: 2026-10-25
+---
+
 # DRAFT — v4, Function 5
 
 Obeys [`_shared.md`](_shared.md). Read it first.
@@ -158,6 +163,12 @@ that's a bug in the gate below, not a judgement call.
   5. A1 and A2 apply on top of B, not instead of it — a candidate that
      passes the headroom test can still be blocked by A1 (sub-$100) or
      raised by A2 (gold).
+- **C — one-off** (price.txt has a `ONE-OFF:` line, see price.md): `price`
+  = its `push-high` and Best Offer **on**, floor at the judgment value; or
+  `format: AUCTION` if price.txt says so, or if the storefront sets
+  `best_offer: false`. Under $100, say "best offer
+  (one-off)" in `meta.notes` (A1). The sold-pull gate refuses a one-off
+  priced below Push-high or without Best Offer.
 - Log the gate decision + computed auto-decline in `meta.notes`.
 
 **Net-floor check (MANDATORY — the floor is a price we AGREE to, not a
@@ -222,6 +233,12 @@ Shipping eligible, which makes eBay refuse the publish outright — errorId 2501
 firearms policy plus ITAR Part 121. eIS is an account-level enrollment, so a
 US-only `shipToLocations` is the only lever. Measured on a Ruger Mini-14
 magazine, 2026-08-27.
+
+errorId 25019 also covers items eBay bans outright, which no policy fixes: a
+dried seahorse on the US-only policy was refused by filter
+`PI_Global_APW_SeaHorses` (2026-10-25), which cited the Live animals policy
+even though the seahorse wasn't alive. The listing manager treats that
+as a compliance block, not a routing problem.
 
 Two consequences worth stating: the US-only route **outranks an international
 request** (a legal restriction beats reach) and it **outranks Media Mail** (it

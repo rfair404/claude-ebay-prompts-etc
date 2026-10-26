@@ -25,22 +25,35 @@ Files
   inventory/_consign/<client>/settlements.csv    one row per payout
   reports/consign/<client>/<settlement_id>.csv   a payout's statement, written once
   reports/consign/<client>/<client>-<date>.csv   `report --csv`, no buyer data
+  reports/fee_lines*.csv                         per-line eBay fees (sync_actuals),
+                                                 read for the fee breakdown
+
+Fee breakdown. The statement, the report and tools/report_lot.py show each
+sale's fees line by line, every % marked SOURCED (eBay's campaign bid, or the
+agreement's mall terms), DERIVED (fee / base, worked out here) or FLAT. An
+eBay sale whose fee lines are missing or don't add up to its ebay_fee and
+ad_fee is held back from settle until they do.
 
 States. Hand-entered: INTAKE (the default), PREP (in hand, being prepped,
-not listed), RETURNED, DISPOSED (needs a state_note) and EXCLUDED (Russell
-buys it; needs a buyout_price, which is the client's share, no split; a
-0.00 buyout is closed with nothing owed).
+not listed), HOLD (in hand, held back on purpose), RETURNED, DISPOSED
+(needs a state_note) and EXCLUDED (Russell buys it; needs a buyout_price,
+which is the client's share, no split; a 0.00 buyout is closed with nothing
+owed).
 Derived by `sync`, each one upgrading the last: SHOT (the folder exists),
 DRAFTED (draft.md exists), LISTED (live on eBay: the SKU or listing id has
-a listings-ledger row PUBLISHED or later, OUT_OF_STOCK included; DRAFTED and
-SYNCED are not live, and DELETED counts as ENDED only if it was published),
-SOLD (a sales_ledger row), CLEARED (sold, ad fee and postage known, and
-past the later of sold_at + 40 days and delivered_at + 30 days), SETTLED
-(paid_to_client_date set, copied from a paid settlement). RETURNED,
-DISPOSED and EXCLUDED win over anything derived; PREP stands in for SHOT
-and DRAFTED but gives way to LISTED and later. Two cases are flagged in
-state_note rather than given a state: a listing that ended unsold, and a
-sale that has left the sales ledger (refund or cancel). Once
+a listings-ledger row PUBLISHED, OUT_OF_STOCK, SOLD or SHIPPED; DRAFTED and
+SYNCED are not live, and an ENDED row, or a DELETED one that was published,
+leaves the item in its on-hand state; off eBay, placed_at is typed: on the
+mall floor), SOLD (a sales_ledger row), CLEARED
+(sold, ad fee and postage known, and past the later of sold_at + 40 days and
+delivered_at + 30 days), SETTLED (paid_to_client_date set, copied from a
+paid settlement). RETURNED, DISPOSED and EXCLUDED win over anything
+derived; PREP stands in for SHOT and DRAFTED but gives way to LISTED and
+later. HOLD (needs a state_note) stands in like PREP, ignores an ENDED
+listing, stays HOLD with a flag if a live listing matches, and gives way only
+to a sale. Two cases are flagged in state_note rather than given a state: a
+listing that ended without a sale, and a sale that has left the sales ledger
+(refund or cancel). Once
 paid_to_client_date is set the row's client_share is frozen; a
 recalculation that differs is flagged and settled as an adjustment.
 
@@ -58,7 +71,9 @@ it clears at the end of the month it sold, once funds_received (typed when
 the money reaches us) is set, and never before. channel `mall` is the antique-mall booth:
 type sold_at, item_price and card_paid, and sync works out the fee (10% plus
 3% of card_paid), with no postage. Every sold row pays handling, whatever
-the channel.
+the channel. Off eBay, listing_id is the channel's own item id (the mall's
+GAM SKU) and is never looked up in the eBay ledgers; type it with placed_at
+(the date it went on the floor) and the row is LISTED until it sells.
 
 Set B flags (no state change): an ask or sale below the client's floor (a
 lot's floor is its rows' total), a listing live longer than listing_days
@@ -91,6 +106,7 @@ sys.path.insert(0, str(REPO / "lib"))
 import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
+from report import ascii_text  # noqa: E402  report text is plain ASCII
 
 INVENTORY = REPO / "inventory"
 LEDGER_NAME = "client_ledger.csv"
@@ -118,6 +134,9 @@ COLUMNS = [
     # card_paid: on a mall sale, the part the buyer paid by card.
     # funds_received: off eBay, the date the channel's money reached us.
     "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
+    # placed_at: off eBay, the date the item went on the channel's floor (the
+    # mall booth), with that channel's own item id (the GAM SKU) in listing_id.
+    "placed_at",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
@@ -128,7 +147,7 @@ MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded
 SALE_MONEY = tuple(k for k in MONEY
                    if k not in ("est_low", "est_high", "buyout_price", "floor"))
 DATES = ("sold_at", "cleared_on", "paid_to_client_date", "intake", "delivered_at",
-         "return_notice_sent", "funds_received")
+         "return_notice_sent", "funds_received", "placed_at")
 # Copied from the sales ledger row on every sync. ad_fee / actual_postage are
 # copied only when the sales ledger knows them: a blank there means "not read
 # yet", and a figure typed into the client ledger by hand is kept instead.
@@ -136,7 +155,8 @@ SALE_FIELDS = ("order_id", "sold_at", "item_price", "buyer_shipping", "refunded"
                "ebay_fee", "net_before_postage")
 SALE_OPTIONAL = ("ad_fee", "actual_postage")
 # What a lot-mate copies from its lead, besides the state.
-LOT_COPY = ("store", "sku", "listing_id", "sold_at", "cleared_on", "channel")
+LOT_COPY = ("store", "sku", "listing_id", "sold_at", "cleared_on", "channel",
+            "placed_at")
 # A row's channel: blank is eBay, matched against the sales ledgers. Any other
 # channel (booth, dealer, another marketplace) is a sale typed by hand:
 # channel, sold_at, item_price, ebay_fee (that channel's fee), actual_postage
@@ -150,19 +170,22 @@ CHANNEL_RE = re.compile(r"^[a-z0-9_-]+$")
 # postage; the handling fee still applies (labels and data entry, Russell
 # 2026-10-23). These must match the consignment agreement
 # §4.2(b) (docs/client-onboarding/consignment-agreement.md): change both together.
+# The fee breakdown labels a mall % from these, citing AGREEMENT_CITE;
+# tests/test_consign.py reads the agreement and fails if the two drift apart.
 MALL = "mall"
 MALL_COMMISSION = Decimal("0.10")
 MALL_CARD_RATE = Decimal("0.03")
+AGREEMENT_CITE = "consignment agreement sec. 4.2(b)"
 
 TERMINAL = ("RETURNED", "DISPOSED", "EXCLUDED")
 # Listings-ledger statuses (lib/list_edit.upsert_listing, lib/sync_actuals)
 # that mean the item has been live on eBay. DRAFTED and SYNCED never were.
 # DELETED counts only with a published_at, and then as ENDED (listing_status).
 LIVE_LISTING = ("PUBLISHED", "OUT_OF_STOCK", "SOLD", "SHIPPED", "ENDED")
-STATES = ("INTAKE", "PREP", "SHOT", "DRAFTED", "LISTED", "SOLD", "CLEARED",
-          "SETTLED") + TERMINAL
+STATES = ("INTAKE", "PREP", "HOLD", "SHOT", "DRAFTED", "LISTED", "SOLD",
+          "CLEARED", "SETTLED") + TERMINAL
 SOLD_STATES = ("SOLD", "CLEARED", "SETTLED")
-ON_HAND = ("INTAKE", "PREP", "SHOT", "DRAFTED")
+ON_HAND = ("INTAKE", "PREP", "HOLD", "SHOT", "DRAFTED")
 CUTS = ("", "LIST", "LOT", "RETURN")
 # A sale clears at the later of RETURN_WINDOW_DAYS after it sold and
 # DELIVERY_WINDOW_DAYS after delivery (eBay's 30-day return window runs from
@@ -214,11 +237,17 @@ SETTLEMENT_COLUMNS = [
     "adjustments", "amount_paid", "paid_date", "method", "receipt_ref", "client_ack",
     "handling",
 ]
+# A line=fee row's own fields. Its amount goes in fee_amount, never in
+# ebay_fee or ad_fee: those are the sale row's totals, and a fee row there
+# would count the fee twice when the column is summed.
+FEE_COLUMNS = ["fee_type", "fee_amount", "fee_base", "fee_rate", "rate_source"]
 STATEMENT_COLUMNS = [
     "settlement_id", "client_code", "line", "item_id", "intake", "description",
     "lot_id", "sold_at", "delivered_at", "cleared_on", "item_price", "buyer_shipping",
     "refunded", "gross", "ebay_fee", "ad_fee", "actual_postage", "handling",
     "other_costs", "net", "split", "client_share", "amount", "note", "channel",
+    # line=fee rows: the per-item fee breakdown (fee_breakdown)
+    *FEE_COLUMNS,
 ]
 
 # What `import` accepts beyond the ledger's own column names (roster.csv).
@@ -232,6 +261,9 @@ EXPORT_COLUMNS = [
     "other_costs_note", "buyout_price", "net", "split_locked", "client_share",
     "actuals_complete", "cleared_on", "settlement_id", "paid_to_client_date",
     "channel", "floor", "return_notice_sent", "card_paid", "funds_received",
+    "placed_at",
+    # line is "item", or "fee" for a row of the item's fee breakdown
+    "line", *FEE_COLUMNS,
 ]
 
 
@@ -352,6 +384,26 @@ def all_intakes() -> list[Path]:
 
 def client_dirs(code: str) -> list[Path]:
     return [d for d in all_intakes() if intake_client(d) == code]
+
+
+def find_item(*, sku: str = "", listing_id: str = "",
+              folder: str = "") -> Optional[tuple[str, str]]:
+    """(client code, intake folder name) of the consignment item with this
+    SKU, listing id or inventory folder, or None when it is not consignment.
+    A folder inside a CONSIGN-* intake counts before it has a ledger row, and
+    the folder catches a fresh publish whose SKU `sync` hasn't copied yet.
+    Read-only; lib/auto_promote and tools/promote ask it before adding an ad."""
+    folder = norm_folder(folder)
+    for d in all_intakes():
+        rows, _ = read_ledger(d / LEDGER_NAME)
+        for r in rows:
+            if ((sku and r["sku"] == sku)
+                    or (listing_id and r["listing_id"] == listing_id)
+                    or (folder and norm_folder(r["inventory_folder"]) == folder)):
+                return r["client_code"] or intake_client(d), d.name
+        if folder.startswith(norm_folder(d.name) + "/"):
+            return intake_client(d), d.name
+    return None
 
 
 def registry_path() -> Path:
@@ -704,6 +756,8 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
             errs.append(f"{tag}: state {r['state']!r} is not one of {', '.join(STATES)}")
         if st == "DISPOSED" and not hand_note(r["state_note"]):
             errs.append(f"{tag}: DISPOSED needs a state_note saying how and why")
+        if st == "HOLD" and not hand_note(r["state_note"]):
+            errs.append(f"{tag}: HOLD needs a state_note saying why")
         if st == "EXCLUDED" and not r["buyout_price"]:
             errs.append(f"{tag}: EXCLUDED needs a buyout_price (0.00 is allowed)")
         if r["cut"].upper() not in CUTS:
@@ -711,6 +765,12 @@ def validate(rows: list[dict], unknown_columns: list[str], code: str = "") -> li
         if r["channel"] and not CHANNEL_RE.match(r["channel"].lower()):
             errs.append(f"{tag}: channel {r['channel']!r} is not one word of letters, "
                         f"digits, - and _ (blank is ebay)")
+        if r["placed_at"] and not off_ebay(r):
+            errs.append(f"{tag}: placed_at is for an off-eBay channel (the {MALL} booth); "
+                        f"an eBay listing's date comes from the listings ledger")
+        elif r["placed_at"] and not r["listing_id"]:
+            errs.append(f"{tag}: placed_at needs the {channel_of(r)} item id in listing_id "
+                        f"(the mall's GAM SKU)")
         if r["card_paid"] and channel_of(r) != MALL:
             errs.append(f"{tag}: card_paid is for a {MALL} sale only (channel is "
                         f"{channel_of(r)})")
@@ -1047,7 +1107,11 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             _freeze_paid(r, paid_share, Decimal(0), adjusted, flags, gone=True)
         r["state_note"] = NOTE_SEP.join(([note] if note else []) + [FLAG + f for f in flags])
         return flags
-    was_prep = r["state"] == "PREP"
+    hand = r["state"] if r["state"] in ("PREP", "HOLD") else ""
+    # Off eBay, listing_id is the channel's own id (the mall's GAM SKU): the
+    # eBay ledgers are never searched for it, and never write an eBay id over it.
+    off = off_ebay(r)
+    ebay_id = "" if off else r["listing_id"]
     folder = r["inventory_folder"] = norm_folder(r["inventory_folder"])
     state = "INTAKE"
     fmt = ""
@@ -1063,19 +1127,27 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         d = books.drafts.get(folder)
         if d:
             r["sku"] = r["sku"] or d.get("sku", "")
-            r["listing_id"] = r["listing_id"] or d.get("listing_id", "")
+            if not off:
+                r["listing_id"] = r["listing_id"] or d.get("listing_id", "")
             r["ask"] = r["ask"] or d.get("price", "")
             if not r["store"] and d.get("store"):
                 r["store"] = d["store"]
-    listing = books.listing_for(r["sku"], r["listing_id"])
+    listing = books.listing_for(r["sku"], ebay_id)
+    if hand == "HOLD" and listing and listing_status(listing[1]) == "ENDED":
+        listing = None                           # held: an ended listing is history
     if listing:
-        state = "LISTED"
         lstore, lrow = listing
+        if listing_status(lrow) != "ENDED":      # an ended listing keeps its on-hand state
+            state = "LISTED"
         r["store"] = lstore
-        r["listing_id"] = r["listing_id"] or lrow.get("listing_id", "")
+        if not off:
+            r["listing_id"] = r["listing_id"] or lrow.get("listing_id", "")
         r["ask"] = lrow.get("price") or r["ask"]
+    placed = off and bool(r["placed_at"])        # on the channel's floor (validated)
+    if placed:
+        state = "LISTED"
 
-    sales = books.sales_for(folder, r["sku"], r["listing_id"])
+    sales = books.sales_for(folder, r["sku"], ebay_id)
     channel = channel_of(r)
     hand_sold = False
     vanished = False
@@ -1125,8 +1197,9 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         if not r["handling"] and not r["paid_to_client_date"]:  # every channel pays it
             r["handling"] = money(handling)
     elif listing and listing_status(listing[1]) == "ENDED":
-        flags.append(f"listing {r['listing_id'] or r['sku']} ended unsold: "
-                     f"relist, return or dispose")
+        ended = (listing[1].get("ended_at") or "").strip()[:10]
+        flags.append(f"listing {r['listing_id'] or r['sku']} ended"
+                     f"{' ' + ended if ended else ''}: relist, return or dispose")
     elif listing and listing_status(listing[1]) == "SOLD" and not vanished:
         flags.append("the listings ledger says SOLD but no sales ledger row matches: "
                      "run the finance sync (lib/sync_actuals.py --all-stores --apply)")
@@ -1169,8 +1242,12 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             r["cleared_on"] = window_end.isoformat()
     if sold and r["paid_to_client_date"]:
         state = "SETTLED"
-    if was_prep and state in ("INTAKE", "SHOT", "DRAFTED"):
-        state = "PREP"                           # PREP is the on-hand label until listed
+    if hand and state in ("INTAKE", "SHOT", "DRAFTED"):
+        state = hand                             # the on-hand label until listed
+    if hand == "HOLD" and state == "LISTED":     # live on eBay, or placed off it
+        state = "HOLD"
+        flags.append(f"on hold but listing {r['listing_id'] or r['sku']} is live: "
+                     f"end it, or clear the hold")
 
     # Exhibit A floors: the client's price protection, on the ask and the sale.
     ask, price = _amount(r["ask"]), _amount(r["item_price"])
@@ -1181,15 +1258,18 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
         flags.append(f"sold at ${money(price)}, below the client's floor "
                      f"${money(floor)}: needs the client's written OK")
     # 180 days listed, then the client is told and has 30 days to pick it up.
-    if state == "LISTED" and listing and listing_status(listing[1]) != "ENDED":
-        first = books.first_published(r["sku"], r["listing_id"])
+    first = None
+    if state == "LISTED" and placed:
+        first = iso(r["placed_at"])
+    elif state == "LISTED" and listing and listing_status(listing[1]) != "ENDED":
+        first = books.first_published(r["sku"], ebay_id)
         if first is None:
             flags.append("listing window not checked: no published_at for this "
                          "listing in the listings ledger")
-        elif (today - first).days > listing_days:
-            flags.append(f"listing window over: end it and notify client (live since "
-                         f"{first}, {(today - first).days} days; the limit is "
-                         f"{listing_days})")
+    if first is not None and (today - first).days > listing_days:
+        flags.append(f"listing window over: end it and notify client (live since "
+                     f"{first}, {(today - first).days} days; the limit is "
+                     f"{listing_days})")
     notice = iso(r["return_notice_sent"])
     if notice and state not in SOLD_STATES:
         deadline = notice + timedelta(days=pickup_days)
@@ -1344,6 +1424,168 @@ def _sum(vals) -> Decimal:
     return sum((v for v in vals if v is not None), Decimal(0))
 
 
+# --------------------------------------------------------------------------- #
+# fee breakdown: one renderer for the settle statement, the report and
+# tools/report_lot.py. Every % is marked by where it came from:
+#   SOURCED  a rate eBay or the contract states (the listing's campaign bid
+#            from reports/ebay_ads.json; the mall terms, MALL_COMMISSION and
+#            MALL_CARD_RATE, citing the agreement)
+#   DERIVED  fee / base, worked out here and never stored; never "eBay's rate"
+#   FLAT     a fixed fee: the amount only
+# The ad fee is a selling fee and comes off gross before the split (Russell):
+# net = net_before_postage - ad_fee - ... already takes it there.
+# --------------------------------------------------------------------------- #
+FEES_MISSING = "FEE LINES MISSING"
+FEES_DONT_TIE = "DON'T TIE"
+AD_GAP = Decimal("0.1")          # SOURCED vs DERIVED ad %, in points, before a flag
+AD_NOTE = "selling fee, taken off gross before the split"
+
+
+def load_fee_lines() -> list[dict]:
+    """Every store's fee_lines file (lib/sync_actuals.py writes them). An
+    order id is unique across accounts, so one list is safe to match on."""
+    out: list[dict] = []
+    for s in stores.configured_stores():
+        p = stores.paths(s).fee_lines
+        if p.exists():
+            with p.open(encoding="utf-8-sig", newline="") as f:
+                out += list(csv.DictReader(f))
+    return out
+
+
+def _pct(d: Decimal) -> str:
+    return f"{(d * 100).quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)}%"
+
+
+def _fee(fee_type: str, amount: Decimal, base: Optional[Decimal] = None, rate: str = "",
+         source: str = "", note: str = "", flag: bool = False) -> dict:
+    return {"fee_type": fee_type, "amount": amount, "base": base, "rate": rate,
+            "source": source, "note": note, "flag": flag}
+
+
+def _derived(amount: Decimal, base: Optional[Decimal], what: str = "") -> tuple[str, str]:
+    if not base:
+        return "", "no base from eBay: amount only"
+    return _pct(amount / base), f"DERIVED (fee / ${money(base)} {what}base)"
+
+
+def _ad_fee(x: dict, amount: Decimal, base: Optional[Decimal], what: str) -> dict:
+    bid = dec(x.get("bid_pct") or "")
+    d_rate, d_src = _derived(amount, base, what)
+    if bid is None:
+        return _fee("AD", amount, base, d_rate, d_src, AD_NOTE)
+    s_rate = f"{bid.quantize(Decimal('0.1'))}%"
+    s_src = f"SOURCED (eBay campaign bid, read {(x.get('bid_pct_as_of') or '?')[:10]})"
+    if base and abs(amount / base * 100 - bid) > AD_GAP:
+        return _fee("AD", amount, base, f"{s_rate} / {d_rate}", f"{s_src} / {d_src}",
+                    AD_NOTE, flag=True)
+    return _fee("AD", amount, None, s_rate, s_src, AD_NOTE)
+
+
+def _same_item(x: dict, r: dict) -> bool:
+    for k in ("listing_id", "sku"):
+        if x.get(k) and r.get(k):
+            return x[k] == r[k]
+    return True
+
+
+def _mall_breakdown(r: dict) -> dict:
+    fee, price, card = dec(r["ebay_fee"]), dec(r["item_price"]), dec(r["card_paid"])
+    if fee is None:
+        return {"status": "OK", "detail": "", "lines": []}
+    if card is None:
+        return {"status": "OK", "detail": "", "lines": [_fee(
+            "MALL_FEE", fee, source="card_paid not recorded: amount only")]}
+    src = f"SOURCED ({AGREEMENT_CITE})"
+    lines = [_fee("MALL_COMMISSION", (MALL_COMMISSION * price).quantize(CENT), price,
+                  _pct(MALL_COMMISSION), src),
+             _fee("MALL_CARD_FEE", (MALL_CARD_RATE * card).quantize(CENT), card,
+                  _pct(MALL_CARD_RATE), src)]
+    total = _sum(ln["amount"] for ln in lines)
+    if abs(total - fee) > CENT:
+        return {"status": FEES_DONT_TIE, "lines": lines,
+                "detail": f"agreement rates give ${money(total)}, ebay_fee is ${money(fee)}"}
+    return {"status": "OK", "detail": "", "lines": lines}
+
+
+def fee_breakdown(r: dict, fee_lines: list[dict]) -> Optional[dict]:
+    """A sold row's fees, one entry per fee line, each % labelled SOURCED,
+    DERIVED or FLAT. None for a row with no sale of its own (unsold, or a
+    lot-mate). `status` is OK, FEES_MISSING (no fee lines for an eBay sale)
+    or FEES_DONT_TIE (the non-AD lines don't add up to ebay_fee, or the AD
+    lines to ad_fee, within $0.01); settle holds back anything not OK."""
+    if r["state"] not in SOLD_STATES or dec(r["item_price"]) is None:
+        return None
+    channel = channel_of(r)
+    if channel == MALL:
+        return _mall_breakdown(r)
+    if channel != EBAY:
+        fee = dec(r["ebay_fee"])
+        return {"status": "OK", "detail": "", "lines": [] if fee is None else [
+            _fee(f"{channel.upper()}_FEE", fee, source=f"typed by hand ({channel})")]}
+    mine = [x for x in fee_lines
+            if r["order_id"] and x.get("order_id") == r["order_id"] and _same_item(x, r)]
+    if not mine:
+        return {"status": FEES_MISSING, "detail": "run the finance sync", "lines": []}
+    fvf_base = {x.get("line_item_id"): dec(x.get("basis") or "") for x in mine
+                if x.get("fee_type") != "AD" and dec(x.get("basis") or "")}
+    lines = []
+    for x in mine:
+        amount, base = dec(x.get("amount") or "") or Decimal(0), dec(x.get("basis") or "")
+        ftype = x.get("fee_type") or ""
+        if ftype == "AD":
+            own = base is not None
+            lines.append(_ad_fee(x, amount, base if own else fvf_base.get(x.get("line_item_id")),
+                                 "" if own else "FVF "))
+        elif "FIXED" in ftype:
+            lines.append(_fee(ftype, amount, None, "", "FLAT (fixed fee: amount only)"))
+        else:
+            lines.append(_fee(ftype, amount, base, *_derived(amount, base)))
+    non_ad = _sum(ln["amount"] for ln in lines if ln["fee_type"] != "AD")
+    ad = _sum(ln["amount"] for ln in lines if ln["fee_type"] == "AD")
+    want_fee, want_ad = dec(r["ebay_fee"]) or Decimal(0), dec(r["ad_fee"]) or Decimal(0)
+    if abs(non_ad - want_fee) > CENT or abs(ad - want_ad) > CENT:
+        return {"status": FEES_DONT_TIE, "lines": lines,
+                "detail": f"lines ${money(non_ad)} + ad ${money(ad)}; ledger ebay_fee "
+                          f"${money(want_fee)} + ad_fee ${money(want_ad)}"}
+    return {"status": "OK", "detail": "", "lines": lines}
+
+
+def fee_text(bd: Optional[dict], indent: str = "      ") -> list[str]:
+    """The breakdown as plain-text lines, for the report and report_lot."""
+    if not bd:
+        return []
+    out = []
+    for ln in bd["lines"]:
+        rate = f"{ln['rate']} " if ln["rate"] else ""
+        out.append(f"{indent}fee {ln['fee_type']:<32} {'$' + money(ln['amount']):>9}  "
+                   f"{rate}{ln['source']}"
+                   + (f"  ({ln['note']})" if ln["note"] else "")
+                   + ("  FLAG: SOURCED and DERIVED differ" if ln["flag"] else ""))
+    if bd["status"] != "OK":
+        out.append(f"{indent}{bd['status']}" + (f": {bd['detail']}" if bd["detail"] else ""))
+    return out
+
+
+def fee_rows(bd: Optional[dict]) -> list[dict]:
+    """The breakdown as CSV fields (FEE_COLUMNS and a note), for the
+    statement, the report --csv and report_lot. ebay_fee and ad_fee stay
+    blank: the sale's own row already totals them. A sale that is not OK gets
+    one more row naming why."""
+    if not bd:
+        return []
+    out = []
+    for ln in bd["lines"]:
+        out.append({"fee_type": ln["fee_type"], "fee_amount": money(ln["amount"]),
+                    "fee_base": money(ln["base"]), "fee_rate": ln["rate"],
+                    "rate_source": ln["source"] + (" FLAG: SOURCED and DERIVED differ"
+                                                   if ln["flag"] else ""),
+                    "note": ln["note"]})
+    if bd["status"] != "OK":
+        out.append({"rate_source": bd["status"], "note": bd["detail"]})
+    return out
+
+
 def buyout_owed(r: dict) -> bool:
     """An unpaid EXCLUDED buyout. A 0.00 buyout is closed: nothing is owed."""
     return (r["state"] == "EXCLUDED" and not r["paid_to_client_date"]
@@ -1359,7 +1601,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     mates = lot_plan(rows)
     units = [r for r in rows if r["item_id"] not in mates]   # a lot counts once
     by_state = Counter(r["state"] or "INTAKE" for r in rows)
-    out = ["  by state: " + " · ".join(f"{s} {by_state[s]}" for s in STATES if by_state[s])]
+    out = ["  by state: " + " | ".join(f"{s} {by_state[s]}" for s in STATES if by_state[s])]
     if mates:
         out.append(f"  lots: {len({lot for lot, _ in mates.values()})}, "
                    f"{len(mates)} lot-mate(s) valued with their lead row")
@@ -1390,7 +1632,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
                + (f"  (unpriced {sum(a is None for a in listed_ask)})"
                   if any(a is None for a in listed_ask) else ""))
     out.append(f"    on hand  {sum(r['item_id'] not in mates for r in hand):>3} unit(s), "
-               f"{len(hand)} item(s)  est ${money(_sum(lows))}–${money(_sum(highs))}"
+               f"{len(hand)} item(s)  est ${money(_sum(lows))}-${money(_sum(highs))}"
                + (f"  (unpriced {unpriced})" if unpriced else ""))
     if excluded:
         out.append(f"    excluded {len(excluded):>3}  Russell buys at "
@@ -1416,7 +1658,7 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     open_settlements = [s for s in settlements if not s["paid_date"]]
     out.append("  totals:")
     out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
-               f"  ·  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
+               f"  |  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
     out.append(f"    handling kept         ${money(_sum(dec(r['handling']) for r in sold))}"
                f"  ({sum(bool(dec(r['handling'])) for r in sold)} sale(s), taken before "
                f"the split)")
@@ -1439,23 +1681,45 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append(f"    paid to date          ${money(_sum(paid_amount(s) for s in paid))}")
     flagged = [r["item_id"] for r in rows if FLAG in r["state_note"]]
     if flagged:
-        out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  — see `consign sync`")
+        out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  -- see `consign sync`")
     return out
 
 
-def export_rows(code: str, items: list[tuple[str, dict]]) -> list[dict]:
+def export_rows(code: str, items: list[tuple[str, dict]],
+                breakdowns: Optional[dict] = None) -> list[dict]:
+    """One line=item row per item, each sold one followed by its line=fee
+    rows from `breakdowns` ({item_id: fee_breakdown})."""
     out = []
     for intake, r in items:
         rec = {"client_code": code, "intake": r["intake"] or intake,
-               "note": hand_note(r["state_note"])}
+               "note": hand_note(r["state_note"]), "line": "item"}
         for k in EXPORT_COLUMNS:
             if k in rec:
                 continue
             v = r.get(k, "")
-            rec[k] = money(dec(v)) if k in MONEY else v
+            rec[k] = money(dec(v)) if k in MONEY else ascii_text(v or "")
         rec["state"] = rec["state"] or "INTAKE"
         out.append(rec)
+        for f in fee_rows((breakdowns or {}).get(r["item_id"])):
+            out.append({**{k: "" for k in EXPORT_COLUMNS}, "client_code": code,
+                        "intake": rec["intake"], "item_id": r["item_id"],
+                        "lot_id": r["lot_id"], "line": "fee", **f})
     return out
+
+
+def fee_section(items: list[tuple[str, dict]], breakdowns: dict) -> list[str]:
+    """The report's per-item fee breakdown, one block per sale."""
+    out = []
+    for _, r in items:
+        bd = breakdowns.get(r["item_id"])
+        if not bd:
+            continue
+        out.append(f"    {r['item_id']}  sold {r['sold_at'] or '?'}  gross "
+                   f"${r['gross'] or '?'}  fees ${r['ebay_fee'] or '?'}  ad "
+                   f"${r['ad_fee'] or '?'}  net ${r['net'] or '?'}")
+        out += fee_text(bd)
+    return ["  fee breakdown (each % SOURCED, DERIVED or FLAT; ad fees come off "
+            "gross before the split):"] + out if out else []
 
 
 def report(intakes: list[Path], client: Optional[str], write_csv: bool,
@@ -1476,27 +1740,31 @@ def report(intakes: list[Path], client: Optional[str], write_csv: bool,
         print("no consignment intakes match" + (f" client {client}" if client else ""))
         return 1
     print("States are as of the last `consign sync --apply`.")
+    fee_lines = load_fee_lines()
     for code in sorted(groups):
         reg = registry.get(code) or {}
         terms = client_terms(registry, code)
         split = terms["split"]
         items = groups[code]
         print(f"\n=== {code}  {reg.get('name') or '(not in the registry)'}  "
-              f"split {split * 100:.0f}% to client  ·  {len(items)} item(s) in "
+              f"split {split * 100:.0f}% to client  |  {len(items)} item(s) in "
               f"{', '.join(names[code])}")
-        print(f"  terms: agreement {terms['agreement_signed'] or 'not signed'}  ·  "
-              f"W-9 {terms['w9_on_file'] or 'not recorded'}  ·  loss rule "
+        print(f"  terms: agreement {terms['agreement_signed'] or 'not signed'}  |  "
+              f"W-9 {terms['w9_on_file'] or 'not recorded'}  |  loss rule "
               f"{terms['loss_rule']}")
         settlements = read_settlements(code) if code != "UNASSIGNED" else []
         for line in client_summary(items, split, settlements, terms["loss_rule"], today):
             print(line)
+        breakdowns = {r["item_id"]: fee_breakdown(r, fee_lines) for _, r in items}
+        for line in fee_section(items, breakdowns):
+            print(ascii_text(line))
         if write_csv:
             out = reports_dir(code) / f"{code}-{today.isoformat()}.csv"
             out.parent.mkdir(parents=True, exist_ok=True)
             with out.open("w", newline="", encoding="utf-8") as f:
                 w = csv.DictWriter(f, fieldnames=EXPORT_COLUMNS)
                 w.writeheader()
-                w.writerows(export_rows(code, items))
+                w.writerows(export_rows(code, items, breakdowns))
             print(f"  [OK] wrote {SA._rel(out)}")
     return 0
 
@@ -1552,6 +1820,17 @@ def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int
     cleared = [r for r in rows if r["state"] == "CLEARED" and not r["paid_to_client_date"]
                and r["item_id"] not in held and r["item_id"] not in mates
                and r["cleared_on"] and iso(r["cleared_on"]) <= through]
+    # A sale whose fee lines are missing or don't tie to its ledger fees waits:
+    # the client's statement shows every fee, so it can't go out unexplained.
+    fee_lines = load_fee_lines()
+    breakdown = {r["item_id"]: fee_breakdown(r, fee_lines) for r in cleared}
+    for r in cleared:
+        bd = breakdown[r["item_id"]]
+        if bd and bd["status"] != "OK":
+            print(f"  held {r['item_id']}: {bd['status']} ({bd['detail']}); "
+                  f"not settled until its fee lines tie")
+    cleared = [r for r in cleared if not breakdown[r["item_id"]]
+               or breakdown[r["item_id"]]["status"] == "OK"]
     buyouts = [r for r in rows if buyout_owed(r) and r["item_id"] not in held]
     adjustments = pending_adjustments(rows, settlements, split, loss_rule)
     if not (cleared or buyouts or adjustments):
@@ -1604,6 +1883,8 @@ def settle(code: str, through: date, *, apply: bool, final: bool = False) -> int
                 "actual_postage", "handling", "other_costs", "net", "client_share")},
             split=str(row_split(r, split)), amount=money(dec(r["client_share"])),
             note=r["other_costs_note"]))
+        lines += [_statement_line(sid, code, "fee", r, **f)
+                  for f in fee_rows(breakdown[r["item_id"]])]
         for mid, (lot, lead) in mates.items():
             if lead is r:
                 lines.append(_statement_line(sid, code, "lot item", by_id[mid],

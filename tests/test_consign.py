@@ -94,7 +94,9 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C010", {"inventory_folder": f("b/refunded", sku="aaaa0010"), "order_id": "9-9-9",
                   "client_share": "8.10", "paid_to_client_date": "2026-11-02"},
          "LISTED", "needs a negative adjustment"),
-        ("C011", {"inventory_folder": f("b/ended", sku="aaaa0011")}, "LISTED", "ended unsold"),
+        # an ended listing is not LISTED: the row keeps its on-hand state, flagged
+        ("C011", {"inventory_folder": f("b/ended", sku="aaaa0011")}, "DRAFTED",
+         "listing aaaa0011 ended 2026-11-20: relist, return or dispose"),
         ("C012", {"state": "EXCLUDED", "buyout_price": "5.00"}, "EXCLUDED", ""),
         # PREP holds through SHOT/DRAFTED and gives way to LISTED
         ("C013", {"state": "PREP"}, "PREP", ""),
@@ -109,22 +111,32 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         ("C019", {"sku": "aaaa0019"}, "INTAKE", ""),
         ("C020", {"inventory_folder": f("b/shipped", sku="aaaa0020")}, "LISTED", ""),
         # DELETED after it was published is an ended listing; never published, never live
-        ("C021", {"inventory_folder": f("b/deleted-live", sku="aaaa0021")}, "LISTED",
-         "ended unsold"),
+        ("C021", {"inventory_folder": f("b/deleted-live", sku="aaaa0021")}, "DRAFTED",
+         "ended"),
         ("C022", {"inventory_folder": f("b/deleted-draft", sku="aaaa0022")}, "DRAFTED", ""),
         ("C023", {"inventory_folder": f("b/out-of-stock", sku="aaaa0023")}, "LISTED", ""),
+        ("C024", {"state": "PREP", "inventory_folder": f("b/prep-ended", sku="aaaa0024")},
+         "PREP", "ended"),
+        # ended on junk, relisted on default: the live row wins
+        ("C025", {"inventory_folder": f("b/relisted", sku="aaaa0025")}, "LISTED", ""),
     ]
-    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id", "published_at"],
+    _csv(shop / "listings_ledger.csv",
+         ["sku", "status", "price", "listing_id", "published_at", "ended_at", "updated_at"],
          [{"sku": f"aaaa{n:04d}", "status": "PUBLISHED", "price": "24.00"}
           for n in (4, 5, 6, 7, 8, 9, 15)]
-         + [{"sku": "aaaa0010", "status": "SOLD"}, {"sku": "aaaa0011", "status": "ENDED"},
+         + [{"sku": "aaaa0010", "status": "SOLD"},
+            {"sku": "aaaa0011", "status": "ENDED", "ended_at": "2026-11-20T18:00:00Z"},
             {"sku": "aaaa0016", "status": "DRAFTED", "price": "30.00"},
             {"sku": "aaaa0017", "status": "SYNCED", "price": "30.00"},
             {"sku": "aaaa0018", "status": "SYNCED"}, {"sku": "aaaa0019", "status": "DRAFTED"},
             {"sku": "aaaa0020", "status": "SHIPPED"},
             {"sku": "aaaa0021", "status": "DELETED", "published_at": "2026-10-01"},
             {"sku": "aaaa0022", "status": "DELETED"},
-            {"sku": "aaaa0023", "status": "OUT_OF_STOCK"}])
+            {"sku": "aaaa0023", "status": "OUT_OF_STOCK"},
+            {"sku": "aaaa0024", "status": "ENDED"},
+            {"sku": "aaaa0025", "status": "PUBLISHED", "updated_at": "2026-11-01"}])
+    _csv(shop / "listings_ledger-junk.csv", ["sku", "status", "updated_at"],
+         [{"sku": "aaaa0025", "status": "ENDED", "updated_at": "2026-11-15"}])
     _csv(shop / "sales_ledger.csv", SALES_HEADER,
          [_sale("1-1-5", "aaaa0005", NEW), _sale("1-1-7", "aaaa0007", OLD, actual_postage=""),
           _sale("1-1-8", "aaaa0008", OLD)])
@@ -142,6 +154,8 @@ def test_sync_derives_each_state_and_flags_a_vanished_sale(shop):
         assert got[item_id]["state"] == state, item_id
         assert note in got[item_id]["state_note"], item_id
     assert got["C006"]["store"] == "junk"
+    assert got["C025"]["store"] == "default"
+    assert "ended" not in got["C025"]["state_note"]
     assert got["C006"]["cleared_on"] == (TODAY - timedelta(days=10)).isoformat()
     assert got["C008"]["client_share"] == "9.00"
     assert got["C012"]["client_share"] == "5.00"
@@ -274,7 +288,24 @@ def _sold_item(shop, rel, sku, sold_at, order, **sale):
         p = shop / name
         rows = list(csv.DictReader(p.open(encoding="utf-8"))) if p.exists() else []
         _csv(p, header, rows + [row])
+    # its eBay fee lines, tying to the sale's ebay_fee and ad_fee
+    fee, ad = Decimal(sale.get("ebay_fee", "3.30")), Decimal(sale.get("ad_fee", "1.00"))
+    _fee_lines(shop, [_fl(order, sku, "FINAL_VALUE_FEE", fee - Decimal("0.40"), "25.00"),
+                      _fl(order, sku, "FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40", "25.00")]
+               + ([_fl(order, sku, "AD", ad)] if ad else []))
     return folder
+
+
+def _fl(order, sku, fee_type, amount, basis="", **kw):
+    return {"order_id": order, "line_item_id": f"L-{order}", "sku": sku, "date": OLD,
+            "fee_type": fee_type, "amount": str(amount), "basis": basis, **kw}
+
+
+def _fee_lines(shop, rows, name="fee_lines.csv"):
+    p = shop / "reports" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    old = list(csv.DictReader(p.open(encoding="utf-8"))) if p.exists() else []
+    _csv(p, SA.FEE_LINE_FIELDS, old + rows)
 
 
 F, G = "inventory/b/one", "inventory/b/two"
@@ -319,6 +350,7 @@ F, G = "inventory/b/one", "inventory/b/two"
      "C001, C002 all carry order 1-1-5"),
     ([dict(item_id="C001", order_id="1-1-5"),
       dict(item_id="C002", order_id="1-1-5", state="RETURNED")], None),
+    ([dict(item_id="C001", state="HOLD")], "C001: HOLD needs a state_note saying why"),
 ])
 def test_validate_lots_and_ids(rows, want):
     errs = consign.validate([_row(**r) for r in rows], [], "K99")
@@ -446,7 +478,7 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
     assert consign.sync_intake(d, consign.Books(), fee, apply=True, today=TODAY) == 0
     through = ["settle", "K99", "--through", TODAY.isoformat()]
     assert consign.main(through) == 0                       # dry run writes nothing
-    assert not (shop / "reports").exists() and not consign.read_settlements("K99")
+    assert not (shop / "reports" / "consign").exists() and not consign.read_settlements("K99")
 
     assert consign.main(through + ["--apply"]) == 0
     stmt = shop / "reports" / "consign" / "K99" / "K99-S001.csv"
@@ -456,8 +488,21 @@ def test_settle_writes_once_and_a_paid_settlement_settles_the_rows(shop, capsys)
     assert s[0]["handling"] == "2.00"
     lines = list(csv.DictReader(stmt.open(encoding="utf-8")))
     assert [(x["line"], x["item_id"], x["handling"], x["amount"]) for x in lines] == [
-        ("sale", "K99-C001", "2.00", "7.10"), ("buyout", "K99-C002", "", "12.50"),
-        ("total", "", "2.00", "19.60")]
+        ("sale", "K99-C001", "2.00", "7.10"), ("fee", "K99-C001", "", ""),
+        ("fee", "K99-C001", "", ""), ("fee", "K99-C001", "", ""),
+        ("buyout", "K99-C002", "", "12.50"), ("total", "", "2.00", "19.60")]
+    assert [(x["fee_type"], x["fee_amount"], x["fee_rate"], x["rate_source"])
+            for x in lines if x["line"] == "fee"] == [
+        ("FINAL_VALUE_FEE", "2.90", "11.6%", "DERIVED (fee / $25.00 base)"),
+        ("FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40", "", "FLAT (fixed fee: amount only)"),
+        ("AD", "1.00", "4.0%", "DERIVED (fee / $25.00 FVF base)")]
+    # A fee row leaves ebay_fee and ad_fee blank, so summing either column
+    # over the statement's lines gives the sale's own totals, counted once.
+    total = next(x for x in lines if x["line"] == "total")
+    for col, want in (("ebay_fee", "3.30"), ("ad_fee", "1.00")):
+        summed = sum((Decimal(x[col]) for x in lines if x["line"] != "total" and x[col]),
+                     Decimal(0))
+        assert summed == Decimal(want) == Decimal(total[col])
     first = stmt.read_bytes()
 
     # Everything owed is on the open settlement now.
@@ -723,12 +768,99 @@ def test_an_ebay_sale_on_a_channel_row_is_flagged_not_taken(shop):
     assert "eBay sale 7-7-1 matches this item: one item sells once" in r["state_note"]
 
 
+def test_a_mall_placement_is_listed_and_its_gam_sku_never_matched_on_ebay(shop, capsys):
+    placed = (TODAY - timedelta(days=10)).isoformat()
+    long_ago = (TODAY - timedelta(days=200)).isoformat()
+    # eBay ledger rows that carry the GAM SKU as a listing id: matching them
+    # would flag an ended listing and an eBay sale on a mall row.
+    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id", "ended_at"],
+         [{"sku": "zzzz0001", "status": "ENDED", "price": "99.00", "listing_id": "TW963H",
+           "ended_at": OLD}])
+    _csv(shop / "sales_ledger.csv", SALES_HEADER, [_sale("5-5-1", "zzzz0001", OLD,
+                                                         listing_id="TW963H")])
+    d = _intake(shop, [
+        {"item_id": "C001", "state": "PREP", "channel": "mall", "ask": "12.00",
+         "listing_id": "TW963H", "placed_at": placed, "split_locked": "0.625"},
+        # tagged but not yet on the floor: stays PREP
+        {"item_id": "C002", "state": "PREP", "channel": "mall", "ask": "9.99"},
+        # on the floor past listing_days
+        {"item_id": "C003", "state": "PREP", "channel": "mall", "ask": "20.00",
+         "listing_id": "4Q9BEV", "placed_at": long_ago},
+        # placed, then sold at the booth
+        {"item_id": "C004", "channel": "mall", "ask": "30.00", "listing_id": "38AKZ8",
+         "placed_at": long_ago, "sold_at": NEW, "item_price": "30.00", "card_paid": "0.00"}])
+    for _ in range(2):                           # a second sync keeps it on the floor
+        assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+        got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+        on_floor = got["K99-C001"]
+        assert (on_floor["state"], on_floor["listing_id"], on_floor["store"],
+                on_floor["ask"], on_floor["order_id"], on_floor["state_note"]) == (
+            "LISTED", "TW963H", "", "12.00", "", "")
+        assert got["K99-C002"]["state"] == "PREP"
+        assert got["K99-C003"]["state"] == "LISTED"
+        assert (f"listing window over: end it and notify client (live since {long_ago}"
+                in got["K99-C003"]["state_note"])
+        assert (got["K99-C004"]["state"], got["K99-C004"]["listing_id"]) == ("SOLD", "38AKZ8")
+        assert "listing window" not in got["K99-C004"]["state_note"]
+
+    capsys.readouterr()
+    assert consign.main(["report", "--client", "K99"]) == 0
+    out = capsys.readouterr().out
+    assert "listed     2  at ask $32.00" in out       # C001 + C003, the booth tags
+    assert "on hand    1 unit(s)" in out              # C002 only
+
+
+@pytest.mark.parametrize("row, state, flag", [
+    # its listing ended: no ended flag, and the ended row fills in nothing
+    (dict(sku="hhhh0001", store="", listing_id="", ask="18.00"), "HOLD", None),
+    # a live listing matches: still HOLD, flagged
+    (dict(sku="hhhh0002"), "HOLD", "on hold but listing 222 is live: end it, or "
+                                   "clear the hold"),
+    (dict(channel="mall", listing_id="TW963H", placed_at=NEW), "HOLD",
+     "on hold but listing TW963H is live"),
+    # a sale ends the hold
+    (dict(sku="hhhh0004"), "SOLD", None),
+    # a folder and a draft don't move it
+    (dict(inventory_folder="draft"), "HOLD", None),
+])
+def test_hold_stays_on_hand_until_a_sale(shop, row, state, flag):
+    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id"],
+         [{"sku": "hhhh0002", "status": "PUBLISHED", "price": "30.00", "listing_id": "222"},
+          {"sku": "hhhh0004", "status": "SOLD", "price": "30.00", "listing_id": "444"}])
+    _csv(shop / "listings_ledger-junk.csv",
+         ["sku", "status", "price", "listing_id", "ended_at"],
+         [{"sku": "hhhh0001", "status": "ENDED", "price": "9.99", "listing_id": "111",
+           "ended_at": OLD}])
+    _csv(shop / "sales_ledger.csv", SALES_HEADER, [_sale("4-4-4", "hhhh0004", NEW)])
+    if row.get("inventory_folder"):
+        row["inventory_folder"] = _folder(shop, "b/held", sku="hhhh0005")
+    r = _row(item_id="K99-C001", state="HOLD", state_note="re-photograph first", **row)
+    typed = {k: r[k] for k in ("store", "listing_id", "ask")}
+
+    flags = consign.sync_row(r, consign.Books(), Decimal("0.5"), TODAY)
+
+    assert r["state"] == state
+    held = [f for f in flags if "on hold" in f or "ended" in f]
+    if flag is None:
+        assert held == [], flags
+    else:
+        assert len(held) == 1 and flag in held[0], flags
+    if state == "HOLD":
+        assert r["state_note"].startswith("re-photograph first")
+    if row.get("sku") == "hhhh0001":
+        assert (flags, {k: r[k] for k in typed}) == ([], typed)
+
+
 @pytest.mark.parametrize("row, want", [
     (dict(card_paid="5.00", item_price="20.00"), "card_paid is for a mall sale only"),
     (dict(channel="mall", card_paid="25.00", item_price="20.00"), "between 0.00 and item_price"),
     (dict(channel="mall", card_paid="-1.00", item_price="20.00"), "between 0.00 and item_price"),
     (dict(channel="the mall"), "is not one word"),
     (dict(channel="mall", card_paid="20.00", item_price="20.00"), None),
+    (dict(placed_at="2026-10-25", listing_id="206653314165"), "placed_at is for an off-eBay"),
+    (dict(channel="mall", placed_at="2026-10-25"), "placed_at needs the mall item id"),
+    (dict(channel="mall", placed_at="Oct 25", listing_id="TW963H"), "not a YYYY-MM-DD"),
+    (dict(channel="mall", placed_at="2026-10-25", listing_id="TW963H"), None),
 ])
 def test_validate_channel_and_card_paid(row, want):
     errs = consign.validate([_row(item_id="K99-C001", **row)], [], "K99")
@@ -811,7 +943,7 @@ def test_settle_holds_a_balance_under_min_payout_until_final(shop, capsys):
     through = ["settle", "K99", "--through", TODAY.isoformat(), "--apply"]
     assert consign.main(through) == 0
     assert "under the $500.00 minimum payout" in capsys.readouterr().out
-    assert not consign.read_settlements("K99") and not (shop / "reports").exists()
+    assert not consign.read_settlements("K99") and not (shop / "reports" / "consign").exists()
 
     assert consign.main(through + ["--final"]) == 0       # the agreement has ended
     assert "FINAL" in capsys.readouterr().out
@@ -837,3 +969,135 @@ def test_a_buyout_is_paid_under_min_payout_and_the_sales_carry(shop, capsys):
     assert consign.main(through) == 0                       # the sale still waits
     assert "carried forward, nothing written" in capsys.readouterr().out
     assert len(consign.read_settlements("K99")) == 1
+
+
+def test_client_report_and_lot_account_are_plain_ascii(shop, capsys, monkeypatch):
+    # The R2 share link serves text/plain with no charset and the lists also go
+    # to lp, so the report is ASCII even when the ledger text is not.
+    import report_lot as RL
+    d = _intake(shop, [
+        {"item_id": "C001", "description": "Petit Modèle hen — 7.3° “boxed”", "qty": "—",
+         "est_low": "10.00", "est_high": "20.00"},
+        {"item_id": "C002", "state": "EXCLUDED", "buyout_price": "5.00", "bin": "—",
+         "description": "Stapler · gray"},
+        {"item_id": "C003", "state": "PREP", "state_note": f"{consign.FLAG} check it"},
+    ])
+    assert consign.main(["report", "--csv"]) == 0
+    out = capsys.readouterr().out
+    assert out.isascii(), [c for c in out if not c.isascii()]
+    assert "by state: INTAKE 1 | PREP 1 | EXCLUDED 1" in out
+    assert "est $10.00-$20.00" in out
+    export = next((shop / "reports").rglob("K99-*.csv")).read_bytes()
+    assert export.isascii() and b"Petit Modele hen -- 7.3 deg" in export
+
+    monkeypatch.setattr(RL, "OUT_DIR", shop / "reports" / "lots")
+    text, rows = RL.consign_account(d, "K99", TODAY)
+    txt, csv_path = RL.write(d, text, rows, TODAY)
+    body = txt.read_bytes()
+    assert body.isascii() and csv_path.read_bytes().isascii()
+    assert b"-- see `consign sync`" in body
+    line = next(ln for ln in body.decode().splitlines() if ln.startswith("K99-C001"))
+    header = next(ln for ln in body.decode().splitlines() if ln.startswith("#"))
+    assert line.index("$10.00-20.00") == header.index("EST / ASK")   # columns still line up
+
+
+# --------------------------------------------------------------------------
+# fee breakdown: fee_breakdown is the one renderer behind all three outputs
+# --------------------------------------------------------------------------
+AS_OF = "2026-10-25T19:12:31+00:00"
+SOURCED_BID = "SOURCED (eBay campaign bid, read 2026-10-25)"
+DERIVED_AD = "DERIVED (fee / $40.00 FVF base)"
+
+
+@pytest.mark.parametrize("bid, rate, source, flagged", [
+    ("", "8.0%", DERIVED_AD, False),                 # no bid on file: derived only
+    ("8.0", "8.0%", SOURCED_BID, False),
+    ("8.1", "8.1%", SOURCED_BID, False),             # 0.1 points apart: not flagged
+    ("7.5", "7.5% / 8.0%", f"{SOURCED_BID} / {DERIVED_AD}", True),
+])
+def test_fee_breakdown_labels_each_rate_by_its_source(bid, rate, source, flagged):
+    lines = [_fl("7-7-1", "kkkk0001", "FINAL_VALUE_FEE", "5.00", "40.00"),
+             _fl("7-7-1", "kkkk0001", "FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40", "40.00"),
+             _fl("7-7-1", "kkkk0001", "AD", "3.20", bid_pct=bid,
+                 bid_pct_as_of=AS_OF if bid else ""),
+             _fl("8-8-8", "other001", "FINAL_VALUE_FEE", "9.99", "50.00")]   # another sale
+    r = _row(state="CLEARED", order_id="7-7-1", sku="kkkk0001", item_price="40.00",
+             ebay_fee="5.40", ad_fee="3.20")
+    bd = consign.fee_breakdown(r, lines)
+    assert bd["status"] == "OK"
+    fvf, fixed, ad = bd["lines"]
+    assert (fvf["rate"], fvf["source"]) == ("12.5%", "DERIVED (fee / $40.00 base)")
+    assert (fixed["rate"], fixed["source"]) == ("", "FLAT (fixed fee: amount only)")
+    assert (ad["rate"], ad["source"], ad["flag"]) == (rate, source, flagged)
+    text = "\n".join(consign.fee_text(bd))
+    assert "eBay's rate" not in text
+    assert "AD" in text and "selling fee, taken off gross before the split" in text
+    assert ("FLAG: SOURCED and DERIVED differ" in text) == flagged
+
+
+@pytest.mark.parametrize("fees, status", [
+    ([], consign.FEES_MISSING),
+    ([("FINAL_VALUE_FEE", "2.90"), ("FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40")],
+     consign.FEES_DONT_TIE),                         # the $1.00 ad fee has no line
+    ([("FINAL_VALUE_FEE", "2.80"), ("FINAL_VALUE_FEE_FIXED_PER_ORDER", "0.40"),
+      ("AD", "1.00")], consign.FEES_DONT_TIE),       # 10 cents short of ebay_fee
+])
+def test_settle_holds_a_sale_whose_fee_lines_are_missing_or_dont_tie(shop, capsys,
+                                                                     fees, status):
+    folder = _sold_item(shop, "b/sold", "llll0001", OLD, "11-11-1")
+    (shop / "reports" / "fee_lines.csv").unlink()
+    _fee_lines(shop, [_fl("11-11-1", "llll0001", t, a, "25.00") for t, a in fees])
+    d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder}])
+    assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+    assert consign.main(["settle", "K99", "--through", TODAY.isoformat(), "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert f"held K99-C001: {status}" in out and "nothing to settle" in out
+    assert not consign.read_settlements("K99")
+    assert consign.main(["report", "--csv"]) == 0
+    assert status in capsys.readouterr().out
+    export = list(csv.DictReader(next((shop / "reports" / "consign").rglob("K99-*.csv"))
+                                 .open(encoding="utf-8")))
+    assert [x["rate_source"] for x in export if x["line"] == "fee"][-1] == status
+
+
+def test_mall_fee_rates_are_the_constants_cited_to_the_agreement():
+    r = _row(state="CLEARED", channel="mall", item_price="100.00", card_paid="40.00",
+             ebay_fee="11.20")
+    bd = consign.fee_breakdown(r, [])
+    cite = "SOURCED (consignment agreement sec. 4.2(b))"
+    assert bd["status"] == "OK"
+    assert [(x["fee_type"], _amt(x), _base(x), x["rate"], x["source"])
+            for x in bd["lines"]] == [
+        ("MALL_COMMISSION", "10.00", "100.00", "10.0%", cite),
+        ("MALL_CARD_FEE", "1.20", "40.00", "3.0%", cite)]
+    # a ledger fee worked out at other rates doesn't tie, and settle holds it
+    assert consign.fee_breakdown(dict(r, ebay_fee="13.00"), [])["status"] == \
+        consign.FEES_DONT_TIE
+    # card_paid unknown: the fee as an amount, no %
+    bd = consign.fee_breakdown(dict(r, card_paid=""), [])
+    assert [(x["fee_type"], _amt(x), x["rate"]) for x in bd["lines"]] == [
+        ("MALL_FEE", "11.20", "")]
+
+
+def test_agreement_states_the_mall_rates_the_constants_hold():
+    # The breakdown labels the mall % from MALL_COMMISSION / MALL_CARD_RATE.
+    # If the agreement is reworded or its rates change, this fails, so the
+    # constants and the contract are changed together.
+    import re
+    text = (Path(__file__).resolve().parents[1] / "docs" / "client-onboarding"
+            / "consignment-agreement.md").read_text(encoding="utf-8")
+    para = re.search(r"^\(b\) for a sale at our antique-mall booth.*$", text, re.M)
+    assert para, "agreement sec. 4.2(b) mall paragraph not found"
+    com = re.search(r"commission of (\d+(?:\.\d+)?)%", para.group(0))
+    card = re.search(r"card fee of (\d+(?:\.\d+)?)%", para.group(0))
+    assert com and card, "sec. 4.2(b) no longer states a commission % and a card fee %"
+    assert Decimal(com.group(1)) / 100 == consign.MALL_COMMISSION
+    assert Decimal(card.group(1)) / 100 == consign.MALL_CARD_RATE
+
+
+def _amt(x):
+    return consign.money(x["amount"])
+
+
+def _base(x):
+    return consign.money(x["base"])

@@ -72,6 +72,13 @@ store's internal name never goes in the box), which eBay account it expects:
 the "Buy label" links resolve against whichever account the BROWSER is signed
 into, not the one the order came from. `--store NAME` picks the account the
 order is looked up in; a group of orders from two stores is refused.
+
+Box form. Also screen only: the box's length, width, height, lb and oz,
+prefilled from the drafts' estimates (pick_list._box_prefill), each with a
+Copy button. eBay's label link takes the order id and nothing else: no size or
+weight parameter is documented or has been seen in use, so the numbers are
+copied into Seller Hub by hand, in its field order, rather than guessed onto
+the URL.
 """
 from __future__ import annotations
 
@@ -94,7 +101,7 @@ from PIL import Image                                              # noqa: E402
 import pick_store                                                  # noqa: E402
 import stores                                                      # noqa: E402
 from config import get_store                                       # noqa: E402
-from pick_list import (_money, drafts_for, fetch_recent,            # noqa: E402
+from pick_list import (_box_prefill, _money, drafts_for, fetch_recent,  # noqa: E402
                        hand_locations_for, ledger_for, order_store, ship_to,
                        shipment_key as _shipment_key)
 from sync_actuals import match_sale                                 # noqa: E402
@@ -327,6 +334,67 @@ def _label_url(order_id: str) -> str:
     return f"https://www.ebay.com/lbr/go?t={order_id}"
 
 
+# Seller Hub's package fields for the box form, in Seller Hub's order. The
+# names are _box_prefill's keys and BOX_JS's field list; the limits are BOX_JS's:
+# sizes above 0, lb a whole number, oz 0-15.99, and a weight above 0 lb 0 oz.
+BOX_FIELDS = [("length_in", "Length (in)", "0.1"), ("width_in", "Width (in)", "0.1"),
+              ("depth_in", "Height (in)", "0.1"), ("weight_lb", "lb", "1"),
+              ("weight_oz", "oz", "0.01")]
+
+BOX_JS = """
+function boxBad(f){
+  var v={};
+  for(var k of ['length_in','width_in','depth_in','weight_lb','weight_oz']){
+    var n=f.elements[k].value; v[k]=n===''?NaN:Number(n); }
+  if(!(v.length_in>0&&v.width_in>0&&v.depth_in>0)) return 'Length, width and height go above 0.';
+  if(!(Number.isInteger(v.weight_lb)&&v.weight_lb>=0)) return 'lb is a whole number, 0 or more.';
+  if(!(v.weight_oz>=0&&v.weight_oz<=15.99)) return 'oz goes from 0 to 15.99.';
+  if(v.weight_lb===0&&v.weight_oz===0) return 'Weight goes above 0 lb 0 oz.';
+  return '';
+}
+function boxCheck(f){ f.querySelector('.boxmsg').textContent=boxBad(f); }
+function boxCopy(b){
+  var f=b.form, i=f.elements[b.dataset.f], m=f.querySelector('.boxmsg'), e=boxBad(f);
+  if(e){ m.textContent=e; return; }
+  var said=function(){ m.textContent='Copied '+b.dataset.l+': '+i.value; };
+  // Off HTTPS (a local file) there is no clipboard API, and a number field
+  // can't be selected, so copy through a throwaway textarea.
+  var old=function(){
+    var t=document.createElement('textarea'); t.value=i.value; document.body.appendChild(t);
+    t.select(); var done=false; try{ done=document.execCommand('copy'); }catch(_){}
+    t.remove(); if(done){ said(); } else { m.textContent='Copy failed: select it and copy by hand.'; }
+  };
+  if(navigator.clipboard&&window.isSecureContext){
+    navigator.clipboard.writeText(i.value).then(said, old); } else { old(); }
+}
+"""
+
+
+def _box_form(prefill: dict) -> str:
+    """The screen-only box form: one labelled number field and Copy button per
+    Seller Hub field, blank where the drafts carry no estimate."""
+    def val(f: str) -> str:
+        v = prefill.get(f)
+        return "" if v is None else f"{v:g}"
+    cells = "".join(
+        f'<div class="boxc"><label for="box_{f}">{html.escape(label)}</label>'
+        f'<input type="number" id="box_{f}" name="{f}" min="0" step="{step}" '
+        f'inputmode="decimal" value="{val(f)}" oninput="boxCheck(this.form)">'
+        f'<button type="button" data-f="{f}" data-l="{html.escape(label)}" '
+        f'onclick="boxCopy(this)">Copy</button></div>'
+        for f, label, step in BOX_FIELDS)
+    known = all(prefill.get(f) is not None for f, _l, _s in BOX_FIELDS)
+    note = ("Estimated from the drafts. Weigh and measure, correct the numbers, "
+            "then copy each one into Seller Hub in this order."
+            if known else
+            "Weigh and measure the box, type the numbers here, then copy each "
+            "one into Seller Hub in this order.")
+    return ('<form class="box" onsubmit="return false" '
+            'aria-label="Box size and weight for the label">'
+            f'<div class="boxhd">{note}</div><div class="boxf">{cells}</div>'
+            '<div class="boxmsg" role="status" aria-live="polite"></div></form>')
+
+
 def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
                 store: str | None = None) -> str:
     """One or several orders on one page. Several orders are for the case
@@ -445,6 +513,8 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
     else:
         account = f"the '{store}' store's eBay account"
     labelbtn_html = " &middot; ".join(_label_link(o) for o in orders if o.get("orderId"))
+    # One box per sheet, so one form however many orders share it.
+    box_html = _box_form(_box_prefill(orders, drafts, ledger))
     # Screen-only (hidden in print with the label buttons): the store's
     # internal name is for the packer, not for the buyer who opens the box.
     acct_html = ("" if stores.is_default(store) else
@@ -462,6 +532,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
 
     return f"""<!doctype html>
 <html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow, noarchive">
 <meta name="referrer" content="no-referrer">
 <title>{html.escape(title)}</title>
@@ -507,6 +578,16 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
   .labelbtn {{ font-family: 'Courier New', monospace; font-size: .8rem; }}
   .acct {{ font-family: 'Courier New', monospace; font-size: .78rem; color: var(--red);
            border: 1px dashed var(--red); padding: 6px 8px; margin: 8px 0 12px; }}
+  /* Box form: screen only, like the label links it sits under. */
+  .box {{ font-family: 'Courier New', monospace; font-size: .8rem;
+          border: 1px solid #999; padding: 8px; margin: 8px 0 14px; }}
+  .boxhd {{ color: #333; margin-bottom: 6px; }}
+  .boxf {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(6.5em, 1fr));
+           gap: 8px; }}
+  .boxc label {{ display: block; color: #333; }}
+  .boxc input {{ width: 100%; font: inherit; font-size: 1rem; padding: 4px; }}
+  .boxc button {{ width: 100%; margin-top: 3px; font: inherit; padding: 6px 0; }}
+  .boxmsg {{ min-height: 1.2em; margin-top: 6px; color: var(--red); }}
 
   /* Store letterhead — same mark/order as the identity block on the
      brand/<store> thank-you cards (rule, name, tagline, storefront), reused
@@ -524,12 +605,14 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
 
   @media print {{
     .printbtn {{ display: none; }} .labelbtn {{ display: none; }} .acct {{ display: none; }}
+    .box {{ display: none; }}
     body {{ margin: 0; max-width: none; }}
   }}
 </style></head>
 <body>
   <div class="printbtn"><button onclick="window.print()">Print</button></div>
   <div class="labelbtn">{labelbtn_html}</div>
+  {box_html}
   {acct_html}
   {brand_html}
   <h1>{heading}</h1>
@@ -547,6 +630,7 @@ def render_html(orders: list[dict], drafts: list[dict], ledger: list[dict],
     {via_line}<br>
     {footer_line}
   </div>
+  <script>{BOX_JS}</script>
 </body></html>"""
 
 

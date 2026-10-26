@@ -483,6 +483,10 @@ class PrepGateError(RuntimeError):
     """Photos are not cleared to leave the machine."""
 
 
+class SourceReshapedError(ValueError):
+    """A source frame changed size since --check; only --check can re-plan it."""
+
+
 def assert_approved(shoot: Path) -> dict:
     """Raise unless this shoot's photos were prepped AND explicitly approved.
 
@@ -528,9 +532,15 @@ def assert_approved(shoot: Path) -> dict:
         if not out.exists() or _sha256(out) != rec.get("out_sha256"):
             stale.append(f"{name} (prepped file changed or missing)")
     if stale:
+        # Name the commands, not the idea of them. --apply re-hashes a changed
+        # source as it re-renders it, so this pair really does clear a
+        # "source changed" frame; one whose size changed is refused by
+        # --apply with the --check command instead.
         raise PrepGateError(
             f"{shoot.name}: approval is stale — {'; '.join(stale[:4])}"
-            f"{' …' if len(stale) > 4 else ''}. Re-run --apply and re-approve.")
+            f"{' …' if len(stale) > 4 else ''}. Re-render and re-approve: "
+            f"`python -m lib.photo_prep.prep {shoot} --apply` then "
+            f"`python -m lib.photo_prep.prep {shoot} --approve`.")
     return m
 
 
@@ -1110,7 +1120,25 @@ def _render_frame(shoot: Path, name: str, rec: dict, aspect, pad: float,
                        # anyway, and this keeps both call sites' contract
                        # ("returns the new state") identical.
     src = shoot / name
+    # Hashed BEFORE decoding, so the stamp below describes bytes no newer than
+    # the pixels rendered. A source can legitimately change after --check: the
+    # art director re-redacts `<stem>_REDACTED.jpg` by hand. --apply re-renders
+    # it from the new pixels, but `src_sha256` used to be written only by
+    # --check, so the gate kept reading "source changed" after the very
+    # --apply + --approve it told the operator to run (C009, 2026-10-25).
+    src_hash = _sha256(src)
     before = _load_bgr(src)
+    # Same pixels re-touched is a re-render. A different SIZE is a different
+    # frame: the rotation and any operator crop box were decided on the old
+    # one, so only a fresh --check can answer for it.
+    old_size = rec.get("src_size")
+    new_size = [int(before.shape[1]), int(before.shape[0])]
+    if old_size and list(old_size) != new_size:
+        raise SourceReshapedError(
+            f"{name} is now {new_size[0]}x{new_size[1]}, was "
+            f"{old_size[0]}x{old_size[1]} at --check -- re-run "
+            f"`python -m lib.photo_prep.prep {shoot} --check`")
+    rec["src_sha256"] = src_hash
     img = orientmod.rotate_bgr(before, rec["orientation"]["applied"])
 
     # A legacy warp from before the unskew stage was removed is a decision
@@ -1352,8 +1380,16 @@ def run_apply(shoot: Path, quiet: bool = False, only: tuple = (),
                 _flag_frame(name, rec)
                 continue
 
-            new_rec, before, variants = _render_frame(
-                shoot, name, rec, aspect, pad, smode, only)
+            try:
+                new_rec, before, variants = _render_frame(
+                    shoot, name, rec, aspect, pad, smode, only)
+            except SourceReshapedError as exc:
+                # The --jobs N branch already turns this into ERROR via the
+                # worker; serial must not die on it with a traceback instead.
+                rec["status"] = "ERROR"
+                flags.append((name, f"render failed: {exc}"))
+                save_manifest(shoot, m)
+                continue
             m["photos"][name] = new_rec
             rows.append((name, before, variants, new_rec))
             _flag_frame(name, new_rec)
@@ -2487,6 +2523,13 @@ def _presets_sheet(rows, out_path: Path, cell: int = 340) -> None:
         c = rec["crop"]
         bits = [f"rot {o['applied']}deg ({o['source']})",
                 "crop yes" if c["applied"] else f"crop no ({c['reason'][:38]})"]
+        # A look that failed the improvement gate rendered as shot; say so,
+        # or its tile reads as a look that happens to change nothing.
+        fell = [p for p in names
+                if ((rec.get("presets") or {}).get(p, {}).get("report") or {})
+                .get("fell_back_to_asshot")]
+        if fell:
+            bits.append("as shot, not better: " + ", ".join(fell))
         colour = (120, 200, 255) if o["needs_ask"] else (200, 235, 200)
         strips.append(_label(cell * (len(names) + 1), f"{name}   " + "  |  ".join(bits),
                              colour, 26))
@@ -2516,6 +2559,9 @@ def _review_sheet(rows, out_path: Path, cell: int = 340) -> None:
         if col:
             bits.append(f"bg {col['bg_luma_before']:.0f}->{col['bg_luma_after']:.0f}")
             bits.append(f"str {col['strength']}")
+            if col.get("fell_back_to_asshot"):
+                bits.append("AS SHOT (look not better: "
+                            + "; ".join(col["verify"]["reasons"])[:60] + ")")
             if col["subject_newly_clipped"] or col["subject_newly_crushed"]:
                 bits.append(f"rails +{col['subject_newly_clipped']}/"
                             f"{col['subject_newly_crushed']}")

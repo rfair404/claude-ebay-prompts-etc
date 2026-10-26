@@ -307,7 +307,8 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
     hdr = f"{'#':<4}{'ITEM':<54}{'STATUS':<13}{'STORE':<7}{'ASK':>10}{'SOLD':>10}{'NET KEPT':>11}  {'SKU':<10}{'LISTING':<14}"
     L += [hdr, "-" * len(hdr)]
     for n, i in enumerate(items, 1):
-        t = i["item"] if len(i["item"]) <= 52 else i["item"][:51] + "~"
+        t = _report.ascii_text(i["item"])
+        t = t if len(t) <= 52 else t[:51] + "~"
         kept_s = "pending" if i["actuals_pending"] else _m(i["net_kept"])
         L.append(f"{n:<4}{t:<54}{i['status']:<13}{i['store']:<7}{_m(i['ask']):>10}"
                  f"{_m(i['gross']):>10}{kept_s:>11}  {i['sku']:<10}{i['listing_id']:<14}")
@@ -334,7 +335,10 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     def val(r: dict) -> str:
         if r.get("state") == "EXCLUDED":
             return "kept $" + (r.get("buyout_price") or "0")
-        if r.get("ask"):
+        # The client reads this: an unlisted row shows its estimate, not the
+        # ask it will list at, so a push-high ask is never read as a promise.
+        live = (r.get("state") or "") in ("LISTED",) + C.SOLD_STATES
+        if r.get("ask") and (live or not r.get("est_low")):
             return "ask $" + r["ask"]
         if r.get("est_low"):
             return f"${r['est_low']}-{r.get('est_high') or '?'}"
@@ -348,13 +352,17 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<10}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
     L += [hdr, "-" * len(hdr)]
     out = []
+    fee_lines = C.load_fee_lines()
     for r in rows:
-        d = (r.get("description") or "").split(";")[0].replace("\n", " ")
+        d = _report.ascii_text((r.get("description") or "").split(";")[0].replace("\n", " "))
         d = d if len(d) <= 52 else d[:51] + "~"
-        L.append(f"{r['item_id']:<10}{d:<54}{(r.get('qty') or '')[:11]:<12}"
+        L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:11]:<12}"
                  f"{plan.get(r.get('cut') or '', '-'):<10}{r.get('state') or '':<10}{val(r):<13}"
                  f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
-        out.append({"item_id": r["item_id"], "item": r.get("description") or "",
+        # the shared renderer (tools/consign.py fee_breakdown), under the sale
+        bd = C.fee_breakdown(r, fee_lines)
+        L += C.fee_text(bd, indent=" " * 10)
+        out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
                     "state": r.get("state") or "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
@@ -362,7 +370,11 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
                     "sku": r.get("sku") or "", "listing_id": r.get("listing_id") or "",
                     "sold_at": r.get("sold_at") or "", "item_price": r.get("item_price") or "",
                     "net": r.get("net") or "", "client_share": r.get("client_share") or "",
-                    "folder": r.get("inventory_folder") or ""})
+                    "folder": r.get("inventory_folder") or "",
+                    "ebay_fee": r.get("ebay_fee") or "", "ad_fee": r.get("ad_fee") or "",
+                    **{k: "" for k in C.FEE_COLUMNS}, "note": ""})
+        blank = {k: "" for k in out[-1]}
+        out += [dict(blank, line="fee", item_id=r["item_id"], **f) for f in C.fee_rows(bd)]
     return "\n".join(L) + "\n", out
 
 
@@ -372,12 +384,15 @@ def write(lot: Path, text: str, rows: list[dict], today: date) -> tuple[Path, Pa
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     stem = label(lot).replace("/", "_") + f"-{today.isoformat()}"
     txt, csv_path = OUT_DIR / f"{stem}.txt", OUT_DIR / f"{stem}.csv"
-    txt.write_text(text, encoding="utf-8")
+    # Plain ASCII (lib/report.py ascii_text): it prints on lp and the R2 link
+    # serves it with no charset. Titles were folded before padding.
+    txt.write_text(_report.ascii_text(text), encoding="ascii")
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
         if rows:
             w = csv.DictWriter(fh, fieldnames=list(rows[0]))
             w.writeheader()
-            w.writerows(rows)
+            w.writerows({k: _report.ascii_text(v) if isinstance(v, str) else v
+                         for k, v in r.items()} for r in rows)
     return txt, csv_path
 
 

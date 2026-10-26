@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+import unicodedata
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -84,6 +85,24 @@ INVENTORY = REPO / "inventory"
 # right where a fixed offset would silently misbucket them.
 REPORTING_TZ = ZoneInfo("America/Los_Angeles")
 REPORTING_TZ_LABEL = "Pacific Time"
+
+# Report text is plain ASCII: it prints on lp, and an R2 share link serves it
+# as bare text/plain (lib/offsite.py share), which browsers read as
+# Windows-1252, so UTF-8 shows up as "Â·" and "â€"". NFKD splits accents
+# off ("Modèle" -> "Modele") and spells out "½" and "™"; this table covers
+# what NFKD leaves alone.
+_ASCII = str.maketrans({
+    "·": "|", "–": "-", "—": "--", "‘": "'", "’": "'", "“": '"', "”": '"',
+    "°": " deg", "×": "x", "⁄": "/", "•": "*", "\ufeff": "",
+})
+
+
+def ascii_text(s: str) -> str:
+    """`s` as plain ASCII for a report: accents dropped, dashes and quotes
+    spelled with ASCII, anything else left over as "?"."""
+    s = unicodedata.normalize("NFKD", s).translate(_ASCII)
+    return "".join(c for c in s if not unicodedata.combining(c)).encode(
+        "ascii", "replace").decode("ascii")
 
 
 def _parse_utc(raw: str) -> Optional[datetime]:
@@ -173,8 +192,9 @@ def _patched_or(const: Path, original: Path, store: Optional[str], field: str) -
 
 
 def _ledger_path(store: Optional[str] = None) -> Path:
-    """`store`'s listings ledger, resolved now (#156)."""
-    return _patched_or(LEDGER, _LEDGER_AT_IMPORT, store, "listings_ledger")
+    """`store`'s listings ledger, resolved now (#156). Read-only here, so a
+    worktree reads the main checkout's (stores.readable)."""
+    return stores.readable(_patched_or(LEDGER, _LEDGER_AT_IMPORT, store, "listings_ledger"))
 
 
 def _frontmatter(text: str) -> str:

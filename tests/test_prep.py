@@ -22,6 +22,7 @@ Run:  python tests/test_prep.py
 import argparse
 import contextlib
 import copy
+import io
 import json
 import sys
 import tempfile
@@ -361,6 +362,74 @@ def test_approval_goes_stale_when_a_file_changes():
             assert "stale" in str(e)
 
 
+def _approved_shoot_with_a_redaction(tmp: Path):
+    """A fully approved shoot whose second frame is a `_REDACTED` copy."""
+    shoot = tmp / "s"
+    shoot.mkdir(parents=True)
+    img, _ = _scene(seed=0)
+    cv2.imwrite(str(shoot / "IMG_0.jpg"), img)
+    img, _ = _scene(seed=1)
+    cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img)
+    with contextlib.redirect_stdout(None):
+        P.run_auto(shoot, "1:1", P.DEFAULT_PAD, "gentle", quiet=True)
+        P.run_approve_auto(shoot)
+        P.run_apply(shoot, quiet=True)
+        P.run_approve_stage(shoot, "color")
+        P.run_approve(shoot)
+    P.assert_approved(shoot)
+    return shoot, img
+
+
+def test_a_re_redacted_source_clears_with_the_command_the_gate_names():
+    """The art director re-redacts `<stem>_REDACTED.jpg` after analysis. The
+    gate must refuse, name the commands that clear it, and those commands must
+    actually clear it -- --apply used to re-render without re-hashing the
+    source, so the same "source changed" refusal came back forever."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot, img = _approved_shoot_with_a_redaction(Path(td))
+        img[320:360, 450:600] = 0                      # a wider black bar
+        cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img)
+
+        try:
+            P.assert_approved(shoot)
+            raise AssertionError("a re-redacted source must void the approval")
+        except P.PrepGateError as e:
+            msg = str(e)
+        assert "label_REDACTED.jpg (source changed)" in msg, msg
+        assert f"python -m lib.photo_prep.prep {shoot} --apply" in msg, msg
+        assert f"python -m lib.photo_prep.prep {shoot} --approve" in msg, msg
+
+        with contextlib.redirect_stdout(None):
+            P.run_apply(shoot, quiet=True)
+            P.run_approve(shoot)
+        m = P.assert_approved(shoot)
+        rec = m["photos"]["label_REDACTED.jpg"]
+        assert rec["src_sha256"] == P._sha256(shoot / "label_REDACTED.jpg")
+        # What ships is the new redaction, not a copy of the old render.
+        shipped = P._load_bgr(shoot / rec["output"])
+        assert shipped.min() < 40, "the re-redacted bar did not reach listing/"
+
+
+def test_a_resized_source_is_sent_back_to_check():
+    """A different-size source is a different frame: its rotation and crop
+    were decided on the old one. --apply must refuse it by name and point at
+    --check, not quietly re-stamp the hash and let the gate pass."""
+    with tempfile.TemporaryDirectory() as td:
+        shoot, img = _approved_shoot_with_a_redaction(Path(td))
+        cv2.imwrite(str(shoot / "label_REDACTED.jpg"), img[:, :-40])
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            m = P.run_apply(shoot)
+        assert m["apply_run"]["failed"] == ["label_REDACTED.jpg"], m["apply_run"]
+        assert f"python -m lib.photo_prep.prep {shoot} --check" in out.getvalue()
+        try:
+            P.assert_approved(shoot)
+            raise AssertionError("a resized source must not clear the gate")
+        except P.PrepGateError:
+            pass
+
+
 def test_cannot_approve_while_a_frame_is_unresolved():
     with tempfile.TemporaryDirectory() as td:
         shoot = _shoot(Path(td) / "s", n=1)
@@ -611,6 +680,60 @@ def test_a_weaker_preset_moves_the_backdrop_less():
     assert moved["studio"] <= moved["punch"] + 1e-6, moved
 
 
+# ---------------------------------------------------------------------------
+# the improvement gate: a look ships only if it beats the frame as shot
+# ---------------------------------------------------------------------------
+
+def _assert_shipped_as_shot(img, out, rep, why):
+    assert np.array_equal(out, img), "a look that failed the gate still moved pixels"
+    assert rep["fell_back_to_asshot"] is True
+    assert rep["strength"] == 0.0 and rep["bg_diffuse"] == 0.0
+    assert any(why in r for r in rep["verify"]["reasons"]), rep["verify"]["reasons"]
+
+
+def test_a_look_that_lifts_a_light_item_into_a_white_backdrop_ships_as_shot():
+    """The washout: a near-white item on a sweep the curve lifts to white.
+
+    The rail guard is satisfied (nothing on the item is newly clipped), but
+    the item's outline is gone. That is what happened to the silver.
+    """
+    img, mask = _scene(bg=180, subject=250, noise=6)
+    for look in ("crisp", "studio", "punch"):
+        out, rep = C.correct(img, mask, preset=look)
+        _assert_shipped_as_shot(img, out, rep, "item edges kept")
+
+
+def test_a_look_ships_as_shot_when_the_mask_misses_most_of_the_item():
+    """K01-C033: the mask found 5% of a frame of flatware, so the rest of the
+    set was treated as backdrop, lifted to white and blurred."""
+    rng = np.random.default_rng(0)
+    img = np.clip(np.full((H, W, 3), 200.0) + rng.normal(0, 6, (H, W, 3)), 0, 255).astype(np.uint8)
+    mask = np.zeros((H, W), np.uint8)
+    for i, x in enumerate(range(150, 1050, 150)):      # six knives, one masked
+        img[150:750, x:x + 40] = 120
+        if i == 0:
+            mask[150:750, x:x + 40] = 255
+    out, rep = C.correct(img, mask, sweep=True, bg_class="light", preset="crisp")
+    _assert_shipped_as_shot(img, out, rep, "outside the mask")
+
+
+def test_a_look_that_improves_nothing_ships_as_shot():
+    """A clean white sweep with no cast and no texture has nothing to gain."""
+    img, mask = _scene(bg=250, subject=90, noise=0)
+    out, rep = C.correct(img, mask, preset="crisp")
+    _assert_shipped_as_shot(img, out, rep, "not measurably better")
+
+
+def test_a_look_that_beats_the_frame_as_shot_still_ships():
+    """The gate must not turn every look into as-shot: navy cast and lint off
+    the cloth, item untouched, is a real improvement."""
+    img, mask = _fuzzy_scene()
+    out, rep = C.correct(img, mask, preset="crisp")
+    assert rep["fell_back_to_asshot"] is False, rep["verify"]["reasons"]
+    assert rep["verify"]["passed"] is True
+    assert not np.array_equal(out, img)
+
+
 def test_a_new_item_defaults_to_crisp_whatever_the_backdrop():
     """`crisp` is the only look that cannot misrepresent the goods.
 
@@ -670,13 +793,19 @@ def test_a_ruler_in_the_backdrop_is_not_blurred_away():
     outside the mask and was treated as cloth: desaturated to grey and blurred.
     Ruler shots are a standing convention here — that is measurement evidence
     being destroyed to tidy a backdrop.
+
+    The improvement gate now goes further: a ruler is an object the mask does
+    not cover, and the gate cannot tell it from a missed spoon, so the frame
+    ships as shot. The ruler checks below must hold either way. The cloth
+    check is in `test_protect_objects_still_diffuses_the_cloth_round_a_ruler`.
     """
     img, mask = _fuzzy_scene()
     cv2.rectangle(img, (150, 700), (1050, 790), (150, 200, 225), -1)   # wooden rule
     for x in range(170, 1040, 30):
         cv2.line(img, (x, 700), (x, 740), (40, 40, 40), 2)             # tick marks
 
-    out, _rep = C.correct(img, mask, preset="studio")
+    out, rep = C.correct(img, mask, preset="studio")
+    assert rep["fell_back_to_asshot"] is True, "a ruler outside the mask must stop the look"
 
     def stats(im, y0, y1, x0, x1):
         r = im[y0:y1, x0:x1].reshape(-1, 3).astype(float)
@@ -687,9 +816,26 @@ def test_a_ruler_in_the_backdrop_is_not_blurred_away():
     assert abs(float(r_out[0] - r_in[0])) < 12, "the ruler was recoloured"
     assert rd_out > rd_in * 0.75, f"the ruler's tick marks were blurred: {rd_in:.0f} -> {rd_out:.0f}"
 
-    _c_in, cd_in = stats(img, 50, 200, 50, 250)
-    _c_out, cd_out = stats(out, 50, 200, 50, 250)
-    assert cd_out < cd_in / 3, "the actual cloth should still have been diffused"
+
+
+def test_protect_objects_still_diffuses_the_cloth_round_a_ruler(monkeypatch):
+    """Below the gate, `_protect_objects` must still keep a ruler sharp while
+    the cloth round it is diffused, for the day a frame passes the gate."""
+    img, mask = _fuzzy_scene()
+    cv2.rectangle(img, (150, 700), (1050, 790), (150, 200, 225), -1)
+    for x in range(170, 1040, 30):
+        cv2.line(img, (x, 700), (x, 740), (40, 40, 40), 2)
+    monkeypatch.setattr(C, "verify_improvement",
+                        lambda b, a, m: dict(passed=True, reasons=[]))
+    out, _rep = C.correct(img, mask, preset="studio")
+
+    def spread(im, y0, y1, x0, x1):
+        return float(im[y0:y1, x0:x1].reshape(-1, 3).astype(float).std())
+
+    assert spread(out, 700, 790, 150, 1050) > spread(img, 700, 790, 150, 1050) * 0.75, \
+        "the ruler's tick marks were blurred"
+    assert spread(out, 50, 200, 50, 250) < spread(img, 50, 200, 50, 250) / 3, \
+        "the actual cloth should still have been diffused"
 
 
 def test_a_failed_mask_disables_every_backdrop_operation():

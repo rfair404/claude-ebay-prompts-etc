@@ -422,6 +422,42 @@ def publish_sheet(orders: dict | list[dict], drafts: list[dict], ledger: list[di
         return None
 
 
+def _box_prefill(group: list[dict], drafts: list[dict], ledger: list[dict]) -> dict:
+    """Seller Hub's package fields for one box, estimated from the drafts:
+    the largest item's `shipping.package_in` and the summed packed weights.
+    All None unless every line item has a draft carrying both, because a box
+    that is only half known is measured, not guessed."""
+    from draft_io import DraftParseError, parse_draft            # noqa: PLC0415
+    empty = dict.fromkeys(("length_in", "width_in", "depth_in",
+                           "weight_lb", "weight_oz"))
+    boxes, total_oz = [], 0.0
+    for o in group:
+        for li in o.get("lineItems") or []:
+            row = {"sku": li.get("sku") or "", "listing_id": li.get("legacyItemId", ""),
+                   "title": li.get("title", "")}
+            folder, _ask, _how = match_sale(row, drafts, ledger)
+            if not folder:
+                return empty
+            try:
+                d = parse_draft(ROOT / folder / "draft.md")
+                box = [float(d.get(f"shipping.package_in.{k}") or 0)
+                       for k in ("length", "width", "depth")]
+                oz = (float(d.get("shipping.weight.major_lb") or 0) * 16
+                      + float(d.get("shipping.weight.minor_oz") or 0))
+            except (OSError, DraftParseError, TypeError, ValueError):
+                return empty
+            if min(box) <= 0 or oz <= 0:
+                return empty
+            boxes.append(box)
+            total_oz += oz * int(li.get("quantity") or 1)
+    if not boxes:
+        return empty
+    length, width, depth = max(boxes, key=lambda b: b[0] * b[1] * b[2])
+    lb, oz = divmod(round(total_oz, 2), 16)
+    return {"length_in": length, "width_in": width, "depth_in": depth,
+            "weight_lb": int(lb), "weight_oz": round(oz, 2)}
+
+
 def _record_link(entry: dict, sheet) -> None:
     """Remember a published sheet's link on its state entry — the one place a
     link is written down, and a gitignored one (STATE_FILE). A sheet that

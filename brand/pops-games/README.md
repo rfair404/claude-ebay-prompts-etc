@@ -67,6 +67,34 @@ The type is on the card's own 16-unit grid, so it scales with the card; the
 script warns when the store line falls under 6pt, which is where the URL
 stops being comfortable to read.
 
+## Listing photography
+
+The cards above use no photography. Listings do, and these are the standing
+rules for them. The art director owns them; PREP and REVIEW apply them.
+
+### Hero rules
+
+Photo one is eBay's gallery image. Most buyers see only that frame in search
+and decide from it whether to click.
+
+- **A scale or weighing shot is never the hero.** The hero shows the item
+  itself. Scale frames are supporting proof of a weight claim, so they go
+  after the item and detail shots, near the end of the order. *Why:* C085,
+  the set of four salt spoons (junk store 880049733327), went live on
+  2026-10-25 with the spoons on the scale as photo one. In search a buyer saw
+  a kitchen scale and a blue readout, not the spoons.
+- **Show the whole item, every piece of a set.** A set's hero shows every
+  piece in it, clean and uncropped. A partial view (two spoons of four) is a
+  detail shot, not a hero.
+- **Show only what the buyer gets.** A frame that also shows other items
+  (a group or intake shot) is never the hero, and it stays out of the
+  listing, because a buyer reads everything in frame as included.
+- **The default order:** hero, then marks and stamps, then condition
+  details, then measurement and weight proof (ruler and scale frames).
+- **Every number in a frame has to match the copy.** When a scale or ruler
+  frame reads differently from the title or description, fix the text. Never
+  swap the photo to suit the text.
+
 ## Regenerating
 
 To change the eBay URL, the tagline, or the shop name:

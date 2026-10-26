@@ -103,7 +103,8 @@ from draft_io import (Draft, ebay_block_reason, iter_drafts, parse_draft, resolv
                        set_photo_order, update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
-from us_only import us_only_reasons
+from price_gate import sold_pull_issues
+from us_only import ship_to_warning, us_only_reasons
 from dir_context import load as load_dir_context
 from ebay_schema import CONDITION_ENUM
 from ebay_client import (
@@ -122,6 +123,7 @@ from ebay_client import (
     delete_inventory_item,
     delete_offer,
     get_allowed_condition_ids,
+    get_listing_hold,
     get_condition_names,
     get_category_suggestions,
     get_fulfillment_policies,
@@ -750,6 +752,10 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
     # sync. Warns are advisory — see `python lib/voice_check.py`.
     issues += [f for f in check_voice(draft) if f.startswith("voice (block)")]
 
+    # A price set without a sold pull (asks or judgment only) does not go
+    # live — see lib/price_gate.py. Not-yet-live drafts only.
+    issues += sold_pull_issues(draft)
+
     return issues
 
 
@@ -1377,7 +1383,13 @@ _DANGEROUS_GOODS_PATTERNS = (
     (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
     (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",
      "aerosol / compressed gas"),
-    (r"\bperfume\b|\bcologne\b|\beau de (toilette|parfum)\b",
+    # "Perfume" and "Cologne" also turn up in maker names and places: K01-C055
+    # "Souvenir Spoon California Perfume Co" (Avon's old name) hard-blocked
+    # eIS on 2026-10-25, and Cologne is a city on souvenir spoons. A maker or
+    # place name doesn't count; type "Perfume Bottle" still matches.
+    (r"\bperfume\b(?!\s+(co|company|corp|corporation|inc|mfg)\b)"
+     r"|\bcologne\b(?!\s+(co|company|corp|inc|germany|cathedral)\b)"
+     r"|\beau de (toilette|parfum|cologne)\b",
      "alcohol-based fragrance (flammable)"),
     (r"\bgunpowder\b|\bammunition\b|\bammo\b|\bprimers\b|\bblack powder\b|\bflare\b",
      "explosives / ammunition components"),
@@ -1510,7 +1522,8 @@ def _international_routing(draft: Draft, intl_fid: str) -> tuple[bool, str, list
 
 def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials,
-                             strict: bool = False) -> tuple[str, list[str]]:
+                             strict: bool = False,
+                             resolved: Optional[dict] = None) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
 
     Routing, in order:
@@ -1543,6 +1556,9 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     because writing that default is exactly the publish-time failure (or,
     if eBay ever stopped catching it, the export) this function exists to
     prevent.
+
+    `resolved`, when given, is filled with the chosen policy as eBay returned
+    it, so the review card can report what that policy itself does.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
@@ -1578,8 +1594,9 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                        "; ".join(us_reasons) + ") but "
                        "ebay.fulfillment_policy_id_us_only is unset. The default "
                        "policy ships Worldwide, so eBay will refuse this publish. "
-                       "Create a US-only fulfillment policy (shipToLocations = US) "
-                       "and set that key before listing this item.")
+                       "Create a US-only fulfillment policy (shipToLocations = "
+                       "us_only.US_ONLY_SHIP_TO) and set that key before listing "
+                       "this item.")
             if strict:
                 raise ValueError(blocker)
             chosen, label = default_fid, "default ground (NO US-only policy configured)"
@@ -1614,6 +1631,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     try:
         pols = get_fulfillment_policies(creds=creds)
         pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == chosen), None)
+        if pol and usonly_fid and chosen == usonly_fid and ship_to_warning(pol):
+            msgs.append(ship_to_warning(pol))
         if not pol:
             msgs.append(f"shipping: chosen fulfillment_policy_id {chosen} not found on this account")
         else:
@@ -1628,10 +1647,50 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
             else:
                 desc = ", ".join(offered) if offered else (
                     "local pickup" if pol.get("localPickup") else "freight")
-                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})")
+                who = policy_who_pays(pol)
+                msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})"
+                               + (f" · {who}" if who else ""))
+                if resolved is not None:
+                    resolved.update(pol)
     except (EbayAPIError, EbayAuthError) as e:
         msgs.append(f"shipping: could not verify fulfillment policy ({e})")
     return chosen, msgs
+
+
+def policy_who_pays(pol: dict) -> str:
+    """Who pays domestic postage under a fulfillment policy, in the words the
+    review card prints: "seller pays (free shipping)", "buyer pays
+    calculated", "buyer pays flat rate", "local pickup", or "" when the policy
+    doesn't say.
+
+    The policy, not the draft, decides this: nothing reads the draft's
+    `shipping.free_shipping` at publish. eBay's free-shipping flag lives on
+    the first domestic service, so that is the one checked.
+    """
+    dom = [o for o in (pol.get("shippingOptions") or [])
+           if str(o.get("optionType") or "DOMESTIC").upper() == "DOMESTIC"]
+    services = sorted((s for o in dom for s in (o.get("shippingServices") or [])),
+                      key=lambda s: s.get("sortOrder") or 0)
+    if not services:
+        return "local pickup" if pol.get("localPickup") else ""
+    if services[0].get("freeShipping"):
+        return "seller pays (free shipping)"
+    cost = str(dom[0].get("costType") or "").upper()
+    return {"CALCULATED": "buyer pays calculated",
+            "FLAT_RATE": "buyer pays flat rate"}.get(cost, "")
+
+
+def policy_excluded_regions(pol: dict) -> list[str]:
+    """The regions a fulfillment policy keeps its listings out of. Empty means
+    eBay International Shipping offers the listing abroad: eIS is enrolled at
+    the account, and a policy with no exclusions (shipToLocations `{}`
+    included) was offered to GB, CA and DE buyers when measured on 2026-10-25.
+    A policy that names its own international services ships abroad too."""
+    if any(str(o.get("optionType") or "").upper() == "INTERNATIONAL"
+           for o in (pol.get("shippingOptions") or [])):
+        return []
+    return [str(r.get("regionName") or r.get("regionType") or "?")
+            for r in ((pol.get("shipToLocations") or {}).get("regionExcluded") or [])]
 
 
 def _insurance_notes(draft: Draft) -> list[str]:
@@ -1653,10 +1712,13 @@ def _insurance_notes(draft: Draft) -> list[str]:
 
 
 def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
-                      apply: bool = True) -> list[str]:
+                      apply: bool = True,
+                      policy_out: Optional[dict] = None) -> list[str]:
     """Check (and, if apply=True, auto-correct) a draft against its eBay
     category BEFORE sync/publish: condition validity + shipping. Returns a
-    list of human-readable messages. Safe to run repeatedly (idempotent)."""
+    list of human-readable messages. Safe to run repeatedly (idempotent).
+    `policy_out`, when given, receives the fulfillment policy the item
+    resolved to (see _resolve_shipping_policy)."""
     creds = creds or load_credentials()
     draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
@@ -1690,7 +1752,8 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
             msgs.append(f"condition: {cur} OK for category")
 
     # Shipping policy selection (media vs ground) + validation
-    _chosen, ship = _resolve_shipping_policy(draft, policies, creds)
+    _chosen, ship = _resolve_shipping_policy(draft, policies, creds,
+                                             resolved=policy_out)
     msgs.extend(ship)
     # Payment policy: auctions and pickup-only listings need no-immediate-pay
     _pay_block = _payment_policy_blocker(draft, policies)
@@ -1732,7 +1795,9 @@ def build_review_card(draft_path: Path,
     shoot = draft_path.parent
 
     sku, _ = record_draft(draft_path, store=creds.store)  # ensure SKU + DRAFTED
-    pf = preflight_listing(draft_path, creds=creds)    # remap + shipping
+    ship_pol: dict = {}
+    pf = preflight_listing(draft_path, creds=creds,    # remap + shipping
+                           policy_out=ship_pol)
     draft = parse_draft(draft_path)                    # re-read (condition may have changed)
 
     title = str(draft.get("title") or "")
@@ -1791,6 +1856,10 @@ def build_review_card(draft_path: Path,
         if intl_requested:
             intl_lines.append("  ✖ draft asks for international but it will be "
                               "REFUSED and listed domestic-only — fix the draft.")
+        elif ship_pol and not policy_excluded_regions(ship_pol):
+            intl_lines.append(f"  ⚠ but policy '{ship_pol.get('name')}' excludes no "
+                              "regions, so eIS offers it abroad anyway and an "
+                              "overseas order will be refused at the hub.")
         else:
             intl_lines.append("  • correctly domestic-only. Do NOT set "
                               "shipping.international true on this item.")
@@ -1801,9 +1870,19 @@ def build_review_card(draft_path: Path,
         intl_lines = ["  ✓ ENABLED — ships worldwide via eBay International Shipping.",
                       "  • delivered-price basis no longer holds: an overseas buyer "
                       "pays eIS freight + duties on top of this price."]
+    elif ship_pol and not policy_excluded_regions(ship_pol):
+        # The draft flag only picks the separate international policy; the
+        # policy this item resolved to may reach eIS on its own.
+        intl_lines = [f"  ✓ ON through policy '{ship_pol.get('name')}' — eBay "
+                      "International Shipping offers it worldwide.",
+                      "  • delivered-price basis no longer holds: an overseas buyer "
+                      "pays eIS freight + duties on top of this price."]
+    elif ship_pol:
+        intl_lines = [f"  • off: policy '{ship_pol.get('name')}' excludes "
+                      f"{', '.join(policy_excluded_regions(ship_pol))}."]
     else:
-        intl_lines = ["  • eligible, not enabled (shipping.international: false). "
-                      "Set true to offer it worldwide."]
+        intl_lines = ["  • not requested (shipping.international: false); the "
+                      "shipping policy could not be read, so eIS reach is unchecked."]
 
     # Estate context (GH #46) — which context.txt file(s) applied, what they
     # supply, and what they forbid, so a reviewer can see the estate was
@@ -2163,6 +2242,15 @@ class ListingNotSellable(RuntimeError):
     """The SKU's offer is not live — updating it could resurrect a sold item."""
 
 
+class ListingOnHold(RuntimeError):
+    """eBay has the listing on a policy hold; the Inventory API refuses revisions."""
+
+
+def _revise_url(listing_id: str) -> str:
+    """Seller Hub's revise page, where eBay's "fix it" flow for a held listing runs."""
+    return f"https://www.ebay.com/sl/list?mode=ReviseItem&itemId={listing_id}"
+
+
 def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
     """Ask eBay — not the local ledger — whether this SKU is still on sale.
 
@@ -2171,7 +2259,7 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
     that sees every sale. So a sold item can sit in the ledger as PUBLISHED for
     hours, and a batch update will happily write to it.
 
-    Returns {sellable, status, quantity, offer_id, listing_id, reason}.
+    Returns {sellable, status, quantity, offer_id, listing_id, on_hold, reason}.
     """
     try:
         d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}",
@@ -2201,7 +2289,8 @@ def offer_sellable_state(sku: str, creds: EbayCredentials) -> dict:
         reason = "availableQuantity is 0 — the item has sold out"
     return dict(sellable=not reason, status=status or lstatus or "unknown",
                 quantity=qty, offer_id=o.get("offerId"),
-                listing_id=listing.get("listingId"), reason=reason)
+                listing_id=listing.get("listingId"),
+                on_hold=bool(listing.get("listingOnHold")), reason=reason)
 
 
 def resolve_draft_state(draft_path: Path,
@@ -2296,6 +2385,9 @@ def update_listing_fields(draft_path: Path, fields,
     hand eBay a positive quantity for an item that had already sold and get the
     listing resurrected as a new one. That happened on a real SKU. Checking the
     ledger is not sufficient — an accepted Best Offer never writes back to it.
+
+    REFUSES a listing eBay has on a policy hold (ListingOnHold), with the
+    Seller Hub revise link. A dry run warns and still builds the plan.
     """
     draft_path = _resolve_draft_path(draft_path)
     _refuse_off_ebay(draft_path)
@@ -2317,6 +2409,20 @@ def update_listing_fields(draft_path: Path, fields,
             f"writing to a sold item can relist it as a new listing. "
             f"(offer {state['offer_id']}, listing {state['listing_id']}) "
             f"Pass --allow-not-sellable only if you know the offer is live.")
+
+    # A held listing answers every revision with a bare HTTP 500 (25001), and
+    # the hold shows in GetItem, not always on the offer. Ask before writing.
+    listing_id = state.get("listing_id")
+    hold = get_listing_hold(str(listing_id), creds=creds) if listing_id else None
+    if not hold and state.get("on_hold"):
+        hold = "the offer reports listingOnHold"
+    if hold:
+        msg = (f"listing {listing_id} (SKU {sku}) is on hold by eBay ({hold}). "
+               f"The Inventory API refuses revisions to a held listing. "
+               f"Fix it in Seller Hub: {_revise_url(listing_id)}")
+        if not dry_run:
+            raise ListingOnHold(msg + " Nothing was sent.")
+        print(f"[HOLD] {msg}", file=sys.stderr)
 
     if item_fields:
         try:
@@ -2524,6 +2630,12 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
                              status_before=status, listing_id=lid or None,
                              listing_url=(f"https://www.ebay.com/itm/{lid}" if lid else None))
 
+    # --publish skips validate_draft_for_sync, so the sold-pull gate runs here
+    # too: the offer may have been synced before the price was checked.
+    gate = sold_pull_issues(draft)
+    if gate:
+        raise ValueError("refusing to publish:\n  - " + "\n  - ".join(gate))
+
     if not confirm:
         return PublishResult(dry_run=True, offer_id=offer_id, title=title,
                              price=price, status_before=status)
@@ -2543,6 +2655,10 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
                 time.sleep(2.0 * (attempt + 1)); continue
             raise
     listing_id = str(resp.get("listingId") or "")
+    if not listing_id:
+        # Not a success: the CLI would print "[LIVE] ... listing None" and exit 0.
+        raise EbayAPIError(0, f"publish of offer {offer_id} returned no listingId; "
+                              f"check Seller Hub before running it again", json.dumps(resp))
     ledger_error = None
     if listing_id:
         update_meta(draft_path, {
@@ -2565,7 +2681,8 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     if listing_id:
         from auto_promote import promote_new_listing
         # this module's api_send, so a test that fakes publish fakes this too
-        promotion = promote_new_listing(listing_id, price, creds, api_send=api_send)
+        promotion = promote_new_listing(listing_id, price, creds, api_send=api_send,
+                                        sku=sku, folder=draft_path.parent)
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
                          listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None),
@@ -2584,6 +2701,40 @@ class EndResult:
     status_before: str
     ended: bool = False
     listing_id: Optional[str] = None
+
+
+def _record_end(sku: str, status: str, *, store: Optional[str], offer_id: str = "",
+                listing_ids: list[str] | tuple[str, ...] = (), title: str = "",
+                draft_path: Optional[Path] = None, offer_gone: bool = False) -> list[Path]:
+    """Record a listing end (status ENDED or DELETED) locally. Every end path
+    calls this after its eBay call, and nothing else records an end.
+
+    Writes `store`'s listings-ledger row (upsert_listing), then the drafts:
+    `draft_path` when the caller has one, otherwise every draft whose own
+    ebay_listing_id is in `listing_ids` (sync_actuals.scan_drafts). Each gets
+    ebay_listing_id cleared and ended_at set; `offer_gone` (the offer was
+    deleted) clears ebay_offer_id too. A draft that only shares the SKU is a
+    re-shoot or a copy and is left alone. client_ledger.csv is not written
+    here: `consign sync --apply` derives it from the listings ledger.
+    Returns the drafts it updated."""
+    ids = [str(i) for i in listing_ids if i]
+    drafts: list[Path] = []
+    if draft_path is not None:
+        drafts = [Path(draft_path)]
+    elif ids:
+        import sync_actuals
+        found = [d for d in sync_actuals.scan_drafts() if d.get("listing_id") in ids]
+        drafts = [sync_actuals.REPO / d["dir"] / "draft.md" for d in found]
+        title = title or next((d["title"] for d in found if d.get("title")), "")
+    upsert_listing(sku, status, title=title, offer_id=offer_id,
+                   listing_id=ids[0] if ids else "", store=store)
+    meta = {"ebay_listing_id": "",
+            "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+    if offer_gone:
+        meta["ebay_offer_id"] = ""
+    for dp in drafts:
+        update_meta(dp, meta)
+    return drafts
 
 
 def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
@@ -2617,12 +2768,9 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
                          status_before=status, listing_id=listing_id or None)
 
     api_send("POST", f"/sell/inventory/v1/offer/{offer_id}/withdraw", {}, creds=creds)
-    update_meta(draft_path, {
-        "ebay_listing_id": "",
-        "ended_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
-    upsert_listing(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED",
-                   title=title, offer_id=offer_id, store=creds.store)
+    _record_end(str(draft.get("meta.ebay_inventory_sku") or ""), "ENDED", store=creds.store,
+                offer_id=offer_id, listing_ids=[listing_id], title=title,
+                draft_path=draft_path)
     return EndResult(dry_run=False, offer_id=offer_id, title=title,
                      status_before=status, ended=True, listing_id=listing_id or None)
 
@@ -2703,7 +2851,8 @@ def withdraw_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("withdraw", True, False, offer_id, status, listing_id=listing_id)
     withdraw_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "ENDED", offer_id=offer_id, store=creds.store)
+    _record_end(str(off.get("sku") or ""), "ENDED", store=creds.store, offer_id=offer_id,
+                listing_ids=[listing_id or ""])
     return OfferActionResult("withdraw", False, True, offer_id, status,
                              detail="ended; offer is now UNPUBLISHED", listing_id=listing_id)
 
@@ -2721,7 +2870,8 @@ def delete_offer_by_id(offer_id: str, creds: Optional[EbayCredentials] = None,
         return OfferActionResult("delete-offer", True, False, offer_id, status,
                                  detail=f"sku={off.get('sku')} price={price}", listing_id=listing_id)
     delete_offer(offer_id, creds=creds)
-    upsert_listing(str(off.get("sku") or ""), "DELETED", offer_id=offer_id, store=creds.store)
+    _record_end(str(off.get("sku") or ""), "DELETED", store=creds.store, offer_id=offer_id,
+                listing_ids=[listing_id or ""], offer_gone=True)
     return OfferActionResult("delete-offer", False, True, offer_id, status,
                              detail="offer deleted (inventory item/SKU kept)", listing_id=listing_id)
 
@@ -2740,7 +2890,9 @@ def delete_item_by_sku(sku: str, creds: Optional[EbayCredentials] = None,
     if not confirm:
         return OfferActionResult("delete-item", True, False, sku, detail=detail)
     delete_inventory_item(sku, creds=creds)
-    upsert_listing(str(sku), "DELETED", store=creds.store)
+    _record_end(str(sku), "DELETED", store=creds.store, offer_gone=True,
+                listing_ids=[str((o.get("listing") or {}).get("listingId") or "")
+                             for o in offers])
     return OfferActionResult("delete-item", False, True, sku,
                              detail=f"inventory item + {len(offers)} offer(s) deleted")
 
@@ -3112,6 +3264,9 @@ def _cli() -> None:
             except ListingNotSellable as e:
                 print(f"[SKIP] {e}")
                 sys.exit(2)
+            except ListingOnHold as e:
+                print(f"[HOLD] {e}", file=sys.stderr)
+                sys.exit(3)
             if args.dry_run:
                 print(f"[DRY RUN] nothing sent. {args.update} would update: {', '.join(changed) or 'nothing'}")
                 for w in plan:
