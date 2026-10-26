@@ -145,11 +145,29 @@ def test_412_retry_table():
 
 
 def test_first_write_seeds_with_if_none_match():
+    # no local file: a genuine first write creates the key
     w = FakeWorker()
     st, root, _ = _store(w)
     st.update("unwound", add("U1"), store="junk")
     assert _ids(w.objects["unwound_orders-junk.csv"][0]) == ["U1"]
     assert (root / "unwound_orders-junk.csv").exists()
+
+
+def test_unseeded_key_with_local_rows_is_refused():
+    w = FakeWorker()
+    local = HEADER + b"A,s,1\r\n"
+    st, root, mirrored = _store(w, {"sales_ledger.csv": local})
+    try:
+        st.update("sales", add("B"), store="default")
+        raise AssertionError("expected Refused")
+    except ls.Refused as e:
+        assert "ledger seed --apply" in str(e)
+    assert w.puts == 0 and "sales_ledger.csv" not in w.objects
+    assert (root / "sales_ledger.csv").read_bytes() == local and mirrored == []
+    # the seed path still works, and the write goes through afterwards
+    st.seed(apply=True)
+    st.update("sales", add("B"), store="default")
+    assert _ids(w.objects["sales_ledger.csv"][0]) == ["A", "B"]
 
 
 # --------------------------------------------------------------------------
@@ -220,12 +238,21 @@ def test_local_mode_writes_csv_with_backup():
     assert not (root / ls.STATE_FILE).exists()
 
 
+def _set_ledger_override(value):
+    """Set (or with None, clear) $EBAYBIZ_LISTINGS_LEDGER; returns the old value."""
+    old = os.environ.pop("EBAYBIZ_LISTINGS_LEDGER", None)
+    if value is not None:
+        os.environ["EBAYBIZ_LISTINGS_LEDGER"] = value
+    return old
+
+
 def test_open_store_modes_table():
     cfg = {"ledger_store": {"url": "https://x.workers.dev", "token": "t"}}
     # (config, state file exists, expect)
     cases = [({}, False, "local"), ({}, True, "refused"),
              (cfg, False, "cloud"), (cfg, True, "cloud")]
     old = os.environ.pop(ls.TOKEN_ENV, None)
+    old_ledger = _set_ledger_override(None)
     try:
         for conf, state, want in cases:
             root = Path(tempfile.mkdtemp())
@@ -239,8 +266,21 @@ def test_open_store_modes_table():
                 assert ls.STATE_FILE in str(e)
             assert got == want, (conf, state, got)
     finally:
+        _set_ledger_override(old_ledger)
         if old is not None:
             os.environ[ls.TOKEN_ENV] = old
+
+
+def test_open_store_is_local_under_listings_ledger_override():
+    cfg = {"ledger_store": {"url": "https://x.workers.dev", "token": "t"}}
+    root = Path(tempfile.mkdtemp())
+    (root / ls.STATE_FILE).write_text("{}")
+    old = _set_ledger_override(str(root / "listings_ledger.csv"))
+    try:
+        for conf in (cfg, {}):
+            assert not ls.open_store(conf, root=root).cloud, conf
+    finally:
+        _set_ledger_override(old)
 
 
 def test_config_missing_token_is_an_error():
@@ -259,11 +299,14 @@ def test_refused_store_writes_nothing():
     root = Path(tempfile.mkdtemp())
     (root / ls.STATE_FILE).write_text("{}")
     (root / "sales_ledger.csv").write_bytes(HEADER)
+    old = _set_ledger_override(None)
     try:
         ls.open_store({}, root=root).update("sales", add("B"), store="default")
         raise AssertionError("expected Refused")
     except ls.Refused:
         pass
+    finally:
+        _set_ledger_override(old)
     assert (root / "sales_ledger.csv").read_bytes() == HEADER
 
 

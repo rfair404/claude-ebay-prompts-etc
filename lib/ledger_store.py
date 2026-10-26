@@ -207,11 +207,8 @@ def _apply(fn: Callable[[list[dict]], list[dict]], rows: list[dict]) -> list[dic
 
 
 def _gdrive_ledger_changed(path: Path) -> None:
-    try:
-        import gdrive_mirror
-        gdrive_mirror.ledger_changed(path)
-    except Exception:          # bookkeeping must not break a write
-        pass
+    import gdrive_mirror
+    gdrive_mirror.ledger_changed(path)
 
 
 def _consign():
@@ -360,6 +357,10 @@ class LedgerStore:
             except Offline:
                 return self._offline(key, path, fn)
             if r.status == 404:
+                if _read(path)[1]:
+                    raise Refused(
+                        f"{key} is not seeded but {path} has rows; nothing written. "
+                        f"Run `python -m lib.cli ledger seed --apply` first.")
                 fields, rows, etag = [], [], None
             elif r.status == 200:
                 (fields, rows), etag = parse_csv(r.body), r.headers.get("etag")
@@ -570,8 +571,11 @@ def _check_key(key: str) -> None:
 def open_store(cfg: Optional[dict] = None, *, root: Optional[Path] = None,
                transport=None) -> LedgerStore:
     """The store config.yaml asks for. Raises Refused when this checkout has
-    cloud state (.ledger_etags.json) but the config lost its ledger_store:."""
+    cloud state (.ledger_etags.json) but the config lost its ledger_store:.
+    Always local mode while $EBAYBIZ_LISTINGS_LEDGER redirects the ledger."""
     root = Path(root) if root else REPO
+    if os.environ.get("EBAYBIZ_LISTINGS_LEDGER"):
+        return LedgerStore(root=root)      # test redirection never touches the cloud
     conf = load_ledger_config(cfg)
     if conf is None:
         if (root / STATE_FILE).exists():
