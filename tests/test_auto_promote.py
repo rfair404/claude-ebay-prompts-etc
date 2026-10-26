@@ -226,6 +226,18 @@ def test_k01_listing_in_a_smart_campaign_gets_the_seller_hub_step(k01_lot):
         "999", "19.00", store="default", api_send=send, config={}, sku=K01_SKU)
 
 
+def test_a_smart_campaign_with_no_criterion_does_not_auto_select():
+    """The keyed CPC campaign is Smart with no criterion: it holds only the ads
+    we add by id, so it never auto-selects a listing at its price."""
+    def send(method, path, body=None, **kw):
+        if "find_campaign_by_ad_reference" in path:
+            raise RuntimeError("HTTP 404")
+        return {"campaigns": [KEYED]} if "campaign_status=RUNNING" in path else {}
+
+    assert AP.selection_rules(KEYED) == []
+    assert AP.auto_campaigns("999", "49.00", send) == []
+
+
 def test_bulk_add_drops_k01_listings(k01_lot, tmp_path, monkeypatch, capsys):
     """tools/promote.add_ads (promote.py and promote_seasoned.py) never sends a
     K01 listing, matched by its listing id or through the listings ledger SKU."""

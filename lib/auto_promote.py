@@ -179,6 +179,16 @@ def _covers(rule: dict, price: Optional[float]) -> bool:
     return price is None or ((lo is None or price >= lo) and (hi is None or price <= hi))
 
 
+def selection_rules(c: dict) -> list[dict]:
+    """A campaign's price rules when it picks listings itself, else [].
+    A Smart campaign with no criterion is key-based: it holds only its ads."""
+    crit = c.get("campaignCriterion") or {}
+    if not crit or not (c.get("campaignTargetingType") == "SMART"
+                        or crit.get("autoSelectFutureInventory")):
+        return []
+    return crit.get("selectionRules") or [{}]
+
+
 def auto_campaigns(listing_id: str, price, api_send, creds=None) -> list[str]:
     """What still promotes `listing_id` without us: each campaign that already
     has an ad for it, and each RUNNING campaign that picks listings by rule
@@ -196,12 +206,10 @@ def auto_campaigns(listing_id: str, price, api_send, creds=None) -> list[str]:
     r = api_send("GET", f"{API}/ad_campaign?campaign_status=RUNNING&limit=100",
                  creds=creds) or {}
     for c in r.get("campaigns") or []:
-        crit = c.get("campaignCriterion") or {}
-        if c.get("campaignName") in named or not (
-                c.get("campaignTargetingType") == "SMART"
-                or crit.get("autoSelectFutureInventory")):
+        rules = selection_rules(c)
+        if c.get("campaignName") in named or not rules:
             continue
-        if any(_covers(x, p) for x in crit.get("selectionRules") or [{}]):
+        if any(_covers(x, p) for x in rules):
             out.append(f"'{c.get('campaignName')}' auto-selects listings at this price")
     return out
 
