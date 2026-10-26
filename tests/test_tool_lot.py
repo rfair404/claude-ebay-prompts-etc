@@ -1,8 +1,9 @@
 """tests/test_tool_lot.py — tools/live/tool_lot.py, one tool-sale lot per run.
 
-The feed frame is a temp JPEG, the claude call is a fake subprocess, the
-ledger is a temp file ($EBAYBIZ_LISTINGS_LEDGER) and the sale folder is a
-temp dir. Nothing here touches a camera, the network or eBay."""
+The feed frame is a temp JPEG, the claude call and PREP are fake subprocesses,
+`list_edit.py --sync` is faked, and `--record` / `--validate` run for real on a
+temp ledger ($EBAYBIZ_LISTINGS_LEDGER) and a temp sale folder. Nothing here
+touches a camera, the network or eBay."""
 import csv
 import json
 import os
@@ -28,7 +29,10 @@ IDENT = {"lot": "Spring Clamps, LED Flashlight & Aviation Snips",
                    "Aviation snips, yellow and black handles"],
          "type": "Tool Lot", "brand": "", "color": "Black", "condition": "USED_GOOD",
          "condition_notes": "Used shop tools with normal wear.",
-         "disclosures": ["Flashlight not tested."], "size": "medium"}
+         "disclosures": ["Flashlight not tested."], "size": "medium",
+         "all_visible": True, "in_focus": True, "well_lit": True, "rig_in_frame": True}
+
+REAL_RUN = subprocess.run
 
 
 def frame(path: Path, size=(640, 426)) -> Path:
@@ -36,19 +40,24 @@ def frame(path: Path, size=(640, 426)) -> Path:
     return path
 
 
-REAL_RUN = subprocess.run
+def ok(stdout=""):
+    return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
 
-def fake_claude(reply: str, rc=0, calls=None):
-    """A subprocess.run stand-in for the claude CLI: stream-json out. The
-    tool's list_edit.py calls (--record) run for real, on the temp ledger."""
+def fake_run(reply: str, calls: list):
+    """subprocess.run for the tool: claude answers `reply`, PREP and
+    `list_edit.py --sync` succeed without doing anything, and the other
+    list_edit.py calls (--record, --validate) run for real."""
     def run(cmd, **kw):
-        if calls is not None:
-            calls.append((cmd, kw))
+        calls.append(cmd)
+        if "lib.photo_prep.prep" in cmd:
+            return ok()
         if any(str(c).endswith("list_edit.py") for c in cmd):
+            if "--sync" in cmd:
+                return ok("[OK] created eBay DRAFT offer 123 (UNPUBLISHED)\n")
             return REAL_RUN(cmd, **kw)
         out = json.dumps({"type": "result", "is_error": False, "result": reply})
-        return SimpleNamespace(returncode=rc, stdout=out + "\n", stderr="")
+        return ok(out + "\n")
     return run
 
 
@@ -67,13 +76,18 @@ def ledger_rows(tmp_path):
         return list(csv.DictReader(f))
 
 
-def run_tool(monkeypatch, sale, *argv, reply=json.dumps(IDENT)):
-    real = subprocess.run
-    monkeypatch.setattr(T.subprocess, "run", fake_claude(reply))
+def run_tool(monkeypatch, sale, *argv, reply=None, calls=None):
+    calls = [] if calls is None else calls
+    reply = json.dumps(IDENT) if reply is None else reply
+    monkeypatch.setattr(T.subprocess, "run", fake_run(reply, calls))
     try:
         return T.main(["--sale-dir", str(sale), *argv])
     finally:
-        monkeypatch.setattr(T.subprocess, "run", real)
+        monkeypatch.setattr(T.subprocess, "run", REAL_RUN)
+
+
+def prep_calls(calls):
+    return [c[c.index("lib.photo_prep.prep") + 2:] for c in calls if "lib.photo_prep.prep" in c]
 
 
 # ------------------------------------------------------------ the whole run
@@ -82,41 +96,69 @@ def test_run_drafts_records_and_numbers_the_next_lot(sale, tmp_path, monkeypatch
     assert run_tool(monkeypatch, sale, "--no-sync") == 0
     assert run_tool(monkeypatch, sale, "--no-sync") == 0
     out = capsys.readouterr().out
-    for stage in ("grab", "identify", "draft", "record", "sync", "total"):
+    for stage in ("grab", "identify", "draft", "record", "prep", "sync", "total"):
         assert stage in out
 
-    d = parse_draft(sale / "tool-lot-2" / "draft.md")
+    lot = sale / "tool-lot-2"
+    d = parse_draft(lot / "draft.md")
     assert d.get("title") == "TOOL LOT #2 Spring Clamps, LED Flashlight & Aviation Snips"
     assert d.get("store") == "default"
-    assert d.get("condition") == "USED_GOOD"
+    assert d.get("condition") == "USED_EXCELLENT"  # id 3000, the category's plain "Used"
+    assert d.get("price") == "1.00"
     assert d.get("shipping.free_shipping") is False
     assert d.get("shipping.fulfillment_policy_id") == T.LIVE_SMALL
-    assert T.PLACEHOLDER_NOTE in d.get("meta.notes")
     assert "Flashlight not tested." in d.get("condition_description")
     assert "- LED flashlight, black" in d.body
-    # the frame came in on its side and was turned upright
-    assert Image.open(sale / "tool-lot-2" / T.PHOTO).size == (426, 640)
+    assert (lot / "price.txt").read_text().startswith(
+        'OPERATOR PRICE: Russell: "$1 start" for tool-sale Live lots (2026-10-25)')
+    # the source frame is kept as shot, at the lot's root, for PREP
+    assert Image.open(lot / T.PHOTO).size == (640, 426)
+    assert not (lot / "listing").exists()
 
     rows = ledger_rows(tmp_path)
     assert [r["status"] for r in rows] == ["DRAFTED", "DRAFTED"]
-    assert {r["title"] for r in rows} == {
-        "TOOL LOT #1 Spring Clamps, LED Flashlight & Aviation Snips",
-        "TOOL LOT #2 Spring Clamps, LED Flashlight & Aviation Snips"}
+    assert {r["price"] for r in rows} == {"1.00"}
     assert d.get("meta.ebay_inventory_sku") in {r["sku"] for r in rows}
-    assert not L.validate_draft_for_sync(d.path) == []  # unpriced: the gates hold it
 
 
-def test_the_draft_passes_every_sync_check_but_the_price_gate(sale, monkeypatch):
+def test_the_draft_passes_every_sync_check(sale, monkeypatch):
+    """Price gate included: price.txt carries Russell's OPERATOR PRICE line."""
     run_tool(monkeypatch, sale, "--no-sync")
-    issues = L.validate_draft_for_sync(sale / "tool-lot-1" / "draft.md")
-    assert issues and all(i.startswith("price:") for i in issues), issues
+    assert L.validate_draft_for_sync(sale / "tool-lot-1" / "draft.md") == []
+
+
+def test_a_clean_lot_is_prepped_approved_and_synced(sale, monkeypatch, capsys):
+    calls = []
+    assert run_tool(monkeypatch, sale, calls=calls) == 0
+    steps = prep_calls(calls)
+    assert steps[:2] == [["--auto"], ["--set-rotate", "D5_0001.jpg=90"]]
+    assert ["--crop", "D5_0001.jpg=off"] in steps and ["--pick", "crisp"] in steps
+    # the stages are signed off, listing/ is rendered again, then the stamp
+    stage_at = steps.index(["--approve-stage", "color"])
+    assert ["--apply"] in steps[stage_at:]
+    assert steps[-1] == ["--approve"]
+    sync = [c for c in calls if "--sync" in c]
+    assert len(sync) == 1 and not {"--publish", "--list", "--confirm"} & set(sync[0])
+    assert "[OK] TOOL LOT #1: eBay draft (unpublished offer) at $1.00" in capsys.readouterr().out
+
+
+def test_a_doubtful_frame_is_held_for_the_art_director(sale, monkeypatch, capsys):
+    calls = []
+    rc = run_tool(monkeypatch, sale, reply=json.dumps({**IDENT, "in_focus": False}), calls=calls)
+    assert rc == 1
+    flat = [a for step in prep_calls(calls) for a in step]
+    assert not [a for a in flat if a.startswith("--approve")]
+    assert not [c for c in calls if "--sync" in c]
+    notes = parse_draft(sale / "tool-lot-1" / "draft.md").get("meta.notes")
+    assert "PREP HOLD for the art director: the frame is out of focus" in notes
+    assert "HELD for the art director" in capsys.readouterr().out
 
 
 def test_a_hand_made_lot_is_adopted_as_its_number_and_recorded(sale, tmp_path, monkeypatch):
     run_tool(monkeypatch, sale, "--no-sync")                 # makes tool-lot-1
     one = sale / "tool-lot-1" / "draft.md"
-    text = one.read_text().replace("    ebay_inventory_sku:", "    x_was_sku:")
-    one.write_text("\n".join(ln for ln in text.splitlines() if "ebay_inventory_sku" not in ln) + "\n")
+    one.write_text("\n".join(ln for ln in one.read_text().splitlines()
+                             if "ebay_inventory_sku" not in ln) + "\n")
     os.remove(tmp_path / "ledger.csv")                        # as if made by hand, never recorded
 
     run_tool(monkeypatch, sale, "--no-sync")
@@ -135,43 +177,58 @@ def test_stale_frame_is_refused_and_makes_no_lot(sale, tmp_path, monkeypatch, ca
     assert T.lot_numbers(sale) == []
 
 
-def test_failed_identify_still_drafts_and_records_the_lot(sale, tmp_path, monkeypatch, capsys):
-    rc = run_tool(monkeypatch, sale, "--no-sync", reply="I can't tell.")
-    assert rc == 1
+def test_failed_identify_still_drafts_records_and_holds_the_lot(sale, tmp_path, monkeypatch):
+    calls = []
+    assert run_tool(monkeypatch, sale, reply="I can't tell.", calls=calls) == 1
     d = parse_draft(sale / "tool-lot-1" / "draft.md")
     assert d.get("title") == "TOOL LOT #1"
     assert "IDENTIFY FAILED" in d.get("meta.notes")
     assert ledger_rows(tmp_path)[0]["status"] == "DRAFTED"
+    assert not [c for c in calls if "--sync" in c]
 
 
-def test_sync_step_reports_the_price_gate_without_calling_ebay(sale, monkeypatch, capsys):
-    calls = []
-    real = subprocess.run
-    monkeypatch.setattr(T.subprocess, "run", fake_claude(json.dumps(IDENT), calls=calls))
-    try:
-        assert T.main(["--sale-dir", str(sale)]) == 0
-    finally:
-        monkeypatch.setattr(T.subprocess, "run", real)
-    out = capsys.readouterr().out
-    assert "waiting on PRICE" in out
-    assert not [c for c in calls if "--sync" in c[0]]  # the gate held it: no eBay call
+# ------------------------------------------------------------ the parts
 
-
-def test_sync_runs_list_edit_sync_in_the_main_checkout(tmp_path, monkeypatch):
+def test_sync_runs_in_the_main_checkout_and_never_publishes(tmp_path, monkeypatch):
     main = tmp_path / "main"
     monkeypatch.setattr(T, "main_dir", lambda start=ROOT: main)
-    monkeypatch.setattr(L, "validate_draft_for_sync", lambda p: [])
     seen = []
 
     def run(cmd, **kw):
         seen.append((cmd, kw))
-        return SimpleNamespace(returncode=0, stdout="[OK] created eBay DRAFT offer 123\n", stderr="")
-    ok, line = T.sync(tmp_path, run=run)
-    assert ok and line.startswith("[OK]")
-    cmd, kw = seen[0]
-    assert cmd[1] == str(main / "lib" / "list_edit.py") and kw["cwd"] == main
-    assert cmd[-2:] == ["--sync", str(tmp_path)]
-    assert not {"--publish", "--list", "--confirm"} & set(cmd)
+        return ok("[OK] created eBay DRAFT offer 123\n")
+    synced, line = T.sync(tmp_path, approved=True, run=run)
+    assert synced and line.startswith("[OK]")
+    assert [c[-2] for c, _ in seen] == ["--validate", "--sync"]
+    for cmd, kw in seen:
+        assert cmd[1] == str(main / "lib" / "list_edit.py") and kw["cwd"] == main
+        assert not {"--publish", "--list", "--confirm"} & set(cmd)
+
+
+def test_sync_waits_for_approved_photos(tmp_path):
+    seen = []
+    synced, line = T.sync(tmp_path, approved=False, run=lambda cmd, **kw: seen.append(cmd) or ok())
+    assert not synced and "held for the art director" in line
+    assert [c[-2] for c in seen] == ["--validate"]
+
+
+def test_sync_failure_is_one_line(tmp_path):
+    err = ("Traceback...\n[X] EbayAuthError: Sync needs user-context OAuth. "
+           "Run `python list_edit.py --setup-check`.\n")
+
+    def run(cmd, **kw):
+        if "--sync" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr=err)
+        return ok("[OK] sync-ready.\n")
+    synced, line = T.sync(tmp_path, approved=True, run=run)
+    assert not synced and "\n" not in line and "user-context OAuth" in line
+
+
+def test_validate_blocker_is_named(tmp_path):
+    out = "[X] draft.md has 2 issue(s):\n  - title: required, empty\n  - photos: none listed\n"
+    synced, line = T.sync(tmp_path, approved=True,
+                          run=lambda cmd, **kw: SimpleNamespace(returncode=1, stdout=out, stderr=""))
+    assert not synced and "title: required, empty (+1 more)" in line
 
 
 def test_record_runs_in_the_main_checkout(tmp_path, monkeypatch):
@@ -183,7 +240,7 @@ def test_record_runs_in_the_main_checkout(tmp_path, monkeypatch):
 
     def run(cmd, **kw):
         seen.append((cmd, kw))
-        return SimpleNamespace(returncode=0, stdout="[OK] recorded DRAFTED — sku 0123abcd\n", stderr="")
+        return ok("[OK] recorded DRAFTED — sku 0123abcd\n")
     assert T.record(lot.parent, lot, run=run) == ("0123abcd", [])
     cmd, kw = seen[0]
     assert cmd[1] == str(main / "lib" / "list_edit.py") and kw["cwd"] == main
@@ -193,22 +250,43 @@ def test_record_runs_in_the_main_checkout(tmp_path, monkeypatch):
 def test_main_dir_from_a_worktree_is_the_main_checkout(tmp_path):
     main, wt = tmp_path / "repo", tmp_path / "wt"
     git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(main)]
-    subprocess.run(["git", "init", "-q", str(main)], check=True)
-    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
-    subprocess.run([*git, "worktree", "add", "-q", str(wt)], check=True)
+    REAL_RUN(["git", "init", "-q", str(main)], check=True)
+    REAL_RUN([*git, "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    REAL_RUN([*git, "worktree", "add", "-q", str(wt)], check=True)
     assert T.main_dir(wt) == main.resolve()
     assert T.main_dir(main) == main.resolve()
 
 
-def test_sync_failure_is_one_line(tmp_path, monkeypatch):
-    monkeypatch.setattr(L, "validate_draft_for_sync", lambda p: [])
-    err = ("Traceback...\n[FAIL] eBay store 'junk' is not configured in config.yaml. "
-           "Configured stores: (none configured)\n")
-    ok, line = T.sync(tmp_path, run=lambda cmd, **kw: SimpleNamespace(returncode=1, stdout="", stderr=err))
-    assert not ok and "\n" not in line and "not configured" in line
+def test_main_python_prefers_the_main_checkouts_venv(tmp_path):
+    assert T.main_python(tmp_path) == sys.executable
+    venv = tmp_path / ".venv" / "bin" / "python"
+    venv.parent.mkdir(parents=True)
+    venv.write_text("")
+    assert T.main_python(tmp_path) == str(venv)
 
 
-# ------------------------------------------------------------ the parts
+def test_prep_stops_on_a_failed_step(tmp_path):
+    def run(cmd, **kw):
+        return SimpleNamespace(returncode=1 if "--apply" in cmd else 0, stdout="",
+                               stderr="[X] segmentation failed\n")
+    approved, line = T.prep(tmp_path, 90, approve=True, run=run)
+    assert not approved and "--apply failed" in line
+
+
+def test_hold_reasons_need_every_check_true():
+    assert T.hold_reasons(IDENT) == []
+    assert T.hold_reasons({**IDENT, "rig_in_frame": False}) == [T.CHECKS["rig_in_frame"]]
+    assert T.hold_reasons({k: v for k, v in IDENT.items() if k != "well_lit"}) == [T.CHECKS["well_lit"]]
+    assert T.hold_reasons(None)
+
+
+def test_upright_turns_the_frame_clockwise():
+    im = Image.new("RGB", (4, 2), "black")
+    im.putpixel((0, 0), (255, 0, 0))                          # top-left
+    up = T.upright(im, 90)
+    assert up.size == (2, 4) and up.getpixel((1, 0)) == (255, 0, 0)  # now top-right
+    assert T.upright(im, 0) is im
+
 
 def test_two_claims_at_once_get_two_numbers(tmp_path):
     sale = tmp_path / "s"
@@ -237,30 +315,41 @@ def test_parse_identify_reads_a_fenced_reply():
 
 def test_identify_sends_the_frame_inline_with_no_tools(monkeypatch):
     monkeypatch.setattr(T, "claude_bin", lambda: "/bin/claude")
-    calls = []
-    got = T.identify(Image.new("RGB", (10, 10)), "m", run=fake_claude(json.dumps(IDENT), calls=calls))
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append((cmd, kw))
+        return ok(json.dumps({"type": "result", "is_error": False, "result": json.dumps(IDENT)}) + "\n")
+    got = T.identify(Image.new("RGB", (10, 10)), "m", run=run)
     assert got["lot"] == IDENT["lot"]
-    cmd, kw = calls[0]
+    cmd, kw = seen[0]
     assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--model") + 1] == "m"
     sent = json.loads(kw["input"])["message"]["content"]
     assert sent[0]["type"] == "image" and sent[0]["source"]["media_type"] == "image/jpeg"
 
 
 def test_large_lots_take_the_large_live_policy(tmp_path):
-    s = dict(T.DEFAULTS)
-    text = T.build_draft(3, tmp_path / "tool-lot-3", {**IDENT, "size": "heavy"}, s)
+    text = T.build_draft(3, tmp_path / "tool-lot-3", {**IDENT, "size": "heavy"}, dict(T.DEFAULTS))
     (tmp_path / "draft.md").write_text(text)
     d = parse_draft(tmp_path / "draft.md")
     assert d.get("shipping.fulfillment_policy_id") == T.LIVE_LARGE
     assert d.get("shipping.weight.major_lb") == 20
 
 
-def test_store_flag_is_saved_for_the_rest_of_the_sale(tmp_path):
+def test_for_parts_stays_for_parts(tmp_path):
+    text = T.build_draft(4, tmp_path / "tool-lot-4",
+                         {**IDENT, "condition": "FOR_PARTS_OR_NOT_WORKING"}, dict(T.DEFAULTS))
+    (tmp_path / "draft.md").write_text(text)
+    assert parse_draft(tmp_path / "draft.md").get("condition") == "FOR_PARTS_OR_NOT_WORKING"
+
+
+def test_settings_are_saved_for_the_rest_of_the_sale(tmp_path):
     sale = tmp_path / "s"
     assert T.settings(sale, {"store": None})["store"] == "default"
-    T.settings(sale, {"store": "junk"})
-    assert T.settings(sale, {"store": None})["store"] == "junk"
-    assert json.loads((sale / "sale.json").read_text())["rotate"] == -90
+    T.settings(sale, {"store": "junk", "start_price": "2"})
+    s = T.settings(sale, {"store": None})
+    assert s["store"] == "junk" and s["start_price"] == "2.00" and s["rotate"] == 90
+    assert T.operator_price(s).startswith('OPERATOR PRICE: Russell: "$2 start"')
 
 
 # ------------------------------------------------------------ list_edit: per-draft policy

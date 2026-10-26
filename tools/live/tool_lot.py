@@ -11,28 +11,36 @@ Each run:
                older than MAX_AGE seconds means the feed is down: refused.
   2. identify  one headless `claude -p` call with the frame inline, no tools,
                returning JSON (what's in it, condition notes, size class).
-  3. draft     inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/draft.md plus
-               listing/D5_0001.jpg. N = highest existing + 1, claimed with an
-               atomic mkdir, so two runs at once get two numbers.
-  4. record    `list_edit.py --record`, run in the main checkout (where the
-               ledger and config.yaml live, from a worktree too): SKU stamped,
-               ledger row DRAFTED. Earlier lots in the sale that were never
-               recorded (tool-lot-1, made by hand) are recorded here too.
-  5. sync      the offline sync gates first (list_edit.validate_draft_for_sync).
-               A fresh lot is unpriced, so the price gate (lib/price_gate.py)
-               holds it and the line says so; once PRICE has run, the same
-               step runs `list_edit.py --sync` (an UNPUBLISHED offer). Never
-               publishes. --no-sync skips this step.
+  3. draft     inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/draft.md, price.txt
+               and the source frame D5_0001.jpg. N = highest existing + 1,
+               claimed with an atomic mkdir, so two runs at once get two numbers.
+  4. record    `list_edit.py --record`: SKU stamped, ledger row DRAFTED.
+               Earlier lots in the sale that were never recorded (tool-lot-1,
+               made by hand) are recorded here too.
+  5. prep      `lib.photo_prep.prep`: upright, crisp, no crop, rendered to
+               listing/D5_0001.jpg, the draft pointed at it. It approves
+               under the art director's standing tool-sale rule when the
+               identify says every titled item shows, the frame is sharp and
+               lit and the rig is in frame; otherwise the lot is HELD for
+               the art director (no approval, no sync).
+  6. sync      `list_edit.py --validate`, then, once the photos are approved,
+               `list_edit.py --sync`: an UNPUBLISHED offer (an eBay draft).
+               Until then the line names what it waits on. Never publishes.
+               --no-sync skips this step.
 
-Every stage prints its time. The price on a new lot is a placeholder
-(PLACEHOLDER_PRICE) and meta.notes says "PLACEHOLDER - needs PRICE before
-publish"; the price gate refuses sync and publish until PRICE has run.
+Every list_edit and prep call runs in the main checkout with its .venv python,
+wherever this was started: config.yaml and the ledgers live only there.
+
+Every stage prints its time. Every lot starts at the sale's start price
+(Russell, 2026-10-25: tool-sale Live lots start at $1). The tool writes it as
+`price:` and puts price.txt beside the draft with Russell's `OPERATOR PRICE:`
+line, which is what lib/price_gate.py accepts for a price he set himself.
 
 Per-sale settings live in <sale>/sale.json, written on the first run: store
-(default "default"), rotate (degrees for PIL .rotate, default -90: the D5
-comes in on its side), the two shipping policy ids (small / large lots) and
-the identify model. A flag (--store, --rotate, --model) changes it for this
-run and saves it for the rest of the sale.
+(default "default"), rotate (clockwise degrees to upright, default 90: the
+rig shoots sideways), the start price, the two shipping policy ids (small /
+large lots) and the identify model. A flag (--store, --rotate, --model,
+--start-price) changes it for this run and saves it for the rest of the sale.
 
     python tools/live/tool_lot.py                  # the normal run
     python tools/live/tool_lot.py --no-sync        # offline: frame, identify, draft, record
@@ -54,6 +62,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 try:
@@ -71,12 +80,11 @@ import show_flow  # noqa: E402  (the feed's frame paths)
 
 LOT_PREFIX = "tool-lot-"
 LOT_RE = re.compile(rf"^{LOT_PREFIX}(\d+)$")
-PHOTO = "listing/D5_0001.jpg"
+PHOTO = "D5_0001.jpg"  # the source frame; PREP renders listing/D5_0001.jpg from it
 MAX_AGE = 5.0  # seconds; the feed writes every 2 s
 TITLE_MAX = 80
-PLACEHOLDER_PRICE = "9.99"
-PLACEHOLDER_NOTE = "PLACEHOLDER - needs PRICE before publish"
 IDENTIFY_TIMEOUT = 90
+DECIDED = "2026-10-25"  # Russell's "$1 start" for this sale's Live lots
 
 # Live shipping (buyer-paid calculated, +$1 handling per extra item) on the
 # default store, created 2026-10-22.
@@ -84,12 +92,14 @@ LIVE_SMALL = "302129021014"
 LIVE_LARGE = "302129111014"
 DEFAULTS = {
     "store": "default",
-    "rotate": -90,
+    "rotate": 90,  # clockwise; the rig shoots sideways (art director, 2026-10-25)
     "policy_small": LIVE_SMALL,
     "policy_large": LIVE_LARGE,
     # Measured 2026-10-25 on the live frame: Sonnet named the lot right in
     # ~4-5 s; Haiku 4.5 took as long or longer and named items that weren't there.
     "model": "claude-sonnet-5-5",
+    "start_price": "1.00",
+    "price_decided": DECIDED,
 }
 # Size class -> (weight lb, package L x W x D in, which policy). Guesses for
 # calculated shipping; meta.notes says so.
@@ -100,6 +110,12 @@ SIZES = {
     "heavy": (20, (20, 16, 10), "policy_large"),
 }
 CONDITIONS = ("USED_EXCELLENT", "USED_GOOD", "USED_ACCEPTABLE", "FOR_PARTS_OR_NOT_WORKING")
+# What the draft's condition becomes. The tool-lot category (Other Hand Tools)
+# accepts ids 1000/1500/3000/7000 (seen on the tool-lot-1 sync, 2026-10-25), so
+# every used grade is id 3000, eBay's plain "Used", whose API name is
+# USED_EXCELLENT. The grade itself goes in the condition description.
+CATEGORY_CONDITION = {"FOR_PARTS_OR_NOT_WORKING": "FOR_PARTS_OR_NOT_WORKING"}
+USED = "USED_EXCELLENT"
 
 PROMPT = """You catalog a lot for an eBay tool sale from one photo. The plywood
 board, the easel, the cloth behind it and the small black scale ruler are the
@@ -112,7 +128,11 @@ set, never part of the lot. Reply with JSON only, no code fence:
  "condition": "USED_GOOD unless clearly better or worse: USED_EXCELLENT, USED_GOOD, USED_ACCEPTABLE or FOR_PARTS_OR_NOT_WORKING",
  "condition_notes": "one sentence on visible wear, said positively, e.g. Used shop tools with normal wear.",
  "disclosures": ["required disclosures only, e.g. Flashlight not tested. for anything powered"],
- "size": "small (fits a bubble mailer), medium (a small box), large (a big box) or heavy (over 15 lb)"}
+ "size": "small (fits a bubble mailer), medium (a small box), large (a big box) or heavy (over 15 lb)",
+ "all_visible": true if every item you named shows at least its identifying part (cut off at the edge is fine),
+ "in_focus": true if the lot is in focus,
+ "well_lit": true if the lot is bright enough to see,
+ "rig_in_frame": true if the plywood board or the sawhorse/easel shows in the frame}
 Name only what you can see. Write about what is there, never about what is absent."""
 
 
@@ -125,6 +145,15 @@ def _log(stage: str, secs: float, what: str) -> None:
 
 
 # --------------------------------------------------------------- settings
+
+def operator_price(s: dict) -> str:
+    """price.txt's line for the sale's start price, in the shape
+    lib/price_gate.py accepts for a price Russell set himself."""
+    p = Decimal(s["start_price"])
+    shown = f"${p:.0f}" if p == p.to_integral_value() else f"${p:.2f}"
+    return (f'OPERATOR PRICE: Russell: "{shown} start" for tool-sale Live lots '
+            f'({s["price_decided"]})')
+
 
 def sale_dir(arg: str | None) -> Path:
     if arg:
@@ -141,6 +170,10 @@ def settings(sale: Path, overrides: dict) -> dict:
     except (OSError, ValueError):
         saved = {}
     s = {**DEFAULTS, **saved, **{k: v for k, v in overrides.items() if v is not None}}
+    if overrides.get("start_price") is not None:
+        s["start_price"] = f"{Decimal(str(overrides['start_price'])):.2f}"
+        if s["start_price"] != {**DEFAULTS, **saved}["start_price"]:
+            s["price_decided"] = f"{datetime.now():%Y-%m-%d}"  # Russell typed it today
     if s != {**DEFAULTS, **saved} or not path.exists():
         sale.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(s, indent=2) + "\n", encoding="utf-8")
@@ -154,10 +187,15 @@ def feed_frames() -> list[Path]:
     return show_flow.feed_snaps(show_flow.feed_pids())
 
 
-def grab(sources: list[Path], rotate: float, max_age: float | None = MAX_AGE,
+def upright(im: Image.Image, rotate: float) -> Image.Image:
+    """The frame turned `rotate` degrees clockwise (PREP's --set-rotate angle)."""
+    return im.rotate(-rotate, expand=True) if rotate % 360 else im
+
+
+def grab(sources: list[Path], max_age: float | None = MAX_AGE,
          now: float | None = None) -> Image.Image:
-    """The newest frame among `sources`, rotated upright. Refuses a frame
-    older than `max_age` seconds (None: any age, for --frame)."""
+    """The newest frame among `sources`, as shot. Refuses a frame older than
+    `max_age` seconds (None: any age, for --frame)."""
     found = []
     for p in sources:
         try:
@@ -182,8 +220,7 @@ def grab(sources: list[Path], rotate: float, max_age: float | None = MAX_AGE,
             if attempt == 2:
                 raise LotError(f"can't read the D5 frame {path}")
             time.sleep(0.3)
-    im = im.convert("RGB")
-    return im.rotate(rotate, expand=True) if rotate % 360 else im
+    return im.convert("RGB")
 
 
 # --------------------------------------------------------------- 2. identify
@@ -302,7 +339,8 @@ def _rel(p: Path) -> str:
 
 
 def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
-                error: str | None = None, now: datetime | None = None) -> str:
+                error: str | None = None, held: list[str] | None = None,
+                now: datetime | None = None) -> str:
     """draft.md text, in the layout of the hand-made tool-lot-1."""
     now = now or datetime.now(timezone.utc)
     ident = ident or {}
@@ -310,7 +348,7 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
     size = size if size in SIZES else "medium"
     lb, (ln, wd, dp), pol = SIZES[size]
     cond = str(ident.get("condition") or "").strip().upper()
-    cond = cond if cond in CONDITIONS else "USED_GOOD"
+    cond = CATEGORY_CONDITION.get(cond, USED)
     items = [str(i).strip() for i in (ident.get("items") or []) if str(i).strip()]
     disclosures = " ".join(str(d).strip() for d in (ident.get("disclosures") or []) if str(d).strip())
     wear = str(ident.get("condition_notes") or "Used, with normal wear.").strip()
@@ -318,11 +356,13 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
 
     notes = [f"TOOL LOT #{n} from one D5 live-view frame, {now.astimezone():%Y-%m-%d} "
              f"(tools/live/tool_lot.py, identify: {s['model']}).",
-             f"price: {PLACEHOLDER_NOTE} (${PLACEHOLDER_PRICE} is not a price).",
+             f"price: ${s['start_price']} start, the sale's start price ({operator_price(s)}).",
              f"weight/dims: guesses from size class '{size}', not measured; "
              "calculated shipping charges by them."]
     if error:
         notes.append(f"IDENTIFY FAILED: {error} -- write the title and items by hand.")
+    if held:
+        notes.append(f"PREP HOLD for the art director: {'; '.join(held)}.")
     notes_yaml = "\n".join(f"    {line}" for line in notes)
 
     body = ["A lot of tools, sold together.", ""]
@@ -372,7 +412,7 @@ item_specifics:
   extra: {{}}
 
 format: "FIXED_PRICE"
-price: {_q(PLACEHOLDER_PRICE)}
+price: {_q(s['start_price'])}
 cost_of_goods: null
 quantity: 1
 best_offer:
@@ -437,12 +477,26 @@ def main_dir(start: Path = REPO) -> Path:
     return main_checkout(start)
 
 
+def main_python(main: Path) -> str:
+    """The main checkout's .venv python (list_edit and prep need numpy and
+    friends the system python lacks), else this one."""
+    venv = main / ".venv" / "bin" / "python"
+    return str(venv) if venv.exists() else sys.executable
+
+
 def list_edit(args: list[str], run=None):
     """`python lib/list_edit.py <args>` run in the main checkout, whatever
     directory this was started from: a worktree's own copy would write a
     stray ledger and read no config."""
     main = main_dir()
-    return (run or subprocess.run)([sys.executable, str(main / "lib" / "list_edit.py"), *args],
+    return (run or subprocess.run)([main_python(main), str(main / "lib" / "list_edit.py"), *args],
+                                   capture_output=True, text=True, cwd=main)
+
+
+def photo_prep(args: list[str], run=None):
+    """`python -m lib.photo_prep.prep <args>` in the main checkout."""
+    main = main_dir()
+    return (run or subprocess.run)([main_python(main), "-m", "lib.photo_prep.prep", *args],
                                    capture_output=True, text=True, cwd=main)
 
 
@@ -488,19 +542,63 @@ def record(sale: Path, lot_dir: Path, run=None) -> tuple[str, list[str]]:
     return sku, adopted
 
 
-# --------------------------------------------------------------- 5. sync
 
-def sync(lot_dir: Path, run=None) -> tuple[bool, str]:
-    """Run the offline sync gates; if they pass, `list_edit.py --sync` (an
-    UNPUBLISHED offer). Returns (synced, one line)."""
-    import list_edit as le
-    issues = le.validate_draft_for_sync(lot_dir / "draft.md")
-    if issues:
-        price = [i for i in issues if i.startswith("price:")]
-        first = price[0] if price else issues[0]
+# --------------------------------------------------------------- 5. prep
+
+# The art director's standing rule for tool-sale lots (2026-10-25): turn the
+# frame upright, crisp, full frame as shot (no crop; the "reads as a detail"
+# flag is expected), and approve when every titled item shows at least its
+# identifying part. Hold for the art director when one doesn't, the frame is
+# soft or dark, or the rig isn't in frame. The identify call answers those.
+CHECKS = {"all_visible": "an item named in the title isn't visible",
+          "in_focus": "the frame is out of focus",
+          "well_lit": "the frame is too dark",
+          "rig_in_frame": "the board or sawhorse isn't in frame (rig moved?)"}
+
+
+def hold_reasons(ident: dict | None) -> list[str]:
+    """Why the photos can't be approved under the art director's rule; [] = approve."""
+    if not ident:
+        return ["identify failed, so nothing checked the frame"]
+    return [why for key, why in CHECKS.items() if ident.get(key) is not True]
+
+
+def prep(lot_dir: Path, rotate: float, approve: bool, run=None) -> tuple[bool, str]:
+    """PREP the lot's one frame and point the draft at listing/. With
+    `approve` (the art director's rule passed), sign every stage off and stamp
+    the approval, re-rendering listing/ after the stages as PREP requires.
+    Returns (approved, one line)."""
+    f = PHOTO
+    steps = [["--auto"], ["--set-rotate", f"{f}={rotate:g}"], ["--crop", f"{f}=off"], ["--apply"],
+             ["--pick", "crisp"]]
+    if approve:
+        steps += [["--approve-stage", st] for st in ("orientation", "crop", "color")]
+        steps += [["--apply"]]
+    steps += [["--repoint-draft", "--apply-repoint"]]
+    if approve:
+        steps += [["--approve"]]
+    for args in steps:
+        r = photo_prep([str(lot_dir), *args], run=run)
+        if r.returncode:
+            return False, f"prep {' '.join(args)} failed: {_fail_line(r)}"
+    if approve:
+        return True, "listing/D5_0001.jpg rendered, approved (art director's tool-sale rule)"
+    return False, "listing/D5_0001.jpg rendered, not approved"
+
+
+# --------------------------------------------------------------- 6. sync
+
+def sync(lot_dir: Path, approved: bool, run=None) -> tuple[bool, str]:
+    """`list_edit.py --validate`; then, with the photos approved,
+    `list_edit.py --sync` (an UNPUBLISHED offer). Returns (synced, one line)."""
+    r = list_edit(["--validate", str(lot_dir)], run=run)
+    if r.returncode:
+        issues = [ln[2:] for ln in _lines(r) if ln.startswith("- ")]
+        first = issues[0] if issues else _fail_line(r)
         more = f" (+{len(issues) - 1} more)" if len(issues) > 1 else ""
-        why = "waiting on PRICE" if price else "blocked"
-        return False, f"eBay draft not created, {why}: {first[:160]}{more}"
+        return False, f"eBay draft not created, blocked: {first[:160]}{more}"
+    if not approved:
+        return False, "eBay draft not created: the photos are held for the art director"
     r = list_edit(["--sync", str(lot_dir)], run=run)
     if r.returncode == 0:
         return True, next((ln for ln in _lines(r) if ln.startswith("[OK]")), "synced")
@@ -513,45 +611,53 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--no-sync", action="store_true", help="skip the eBay step (offline)")
     ap.add_argument("--store", help="eBay store for this sale (saved in sale.json)")
-    ap.add_argument("--rotate", type=float, help="degrees for PIL .rotate (saved; default -90)")
+    ap.add_argument("--rotate", type=float,
+                    help="clockwise degrees that make the frame upright (saved; default 90)")
     ap.add_argument("--model", help="identify model (saved)")
+    ap.add_argument("--start-price", help="every lot's start price (saved; default 1.00)")
     ap.add_argument("--frame", type=Path, help="use this image instead of the feed's frame")
     ap.add_argument("--sale-dir", help="sale folder (default inventory/tool-sale-<yyyy-mm>)")
     args = ap.parse_args(argv)
 
     t0 = time.monotonic()
     sale = sale_dir(args.sale_dir)
-    s = settings(sale, {"store": args.store, "rotate": args.rotate, "model": args.model})
+    try:
+        s = settings(sale, {"store": args.store, "rotate": args.rotate, "model": args.model,
+                            "start_price": args.start_price})
+    except InvalidOperation:
+        print(f"[FAIL] --start-price {args.start_price!r} is not a number", file=sys.stderr)
+        return 2
 
     t = time.monotonic()
     try:
         if args.frame:
-            im = grab([args.frame], s["rotate"], max_age=None)
+            im = grab([args.frame], max_age=None)
         else:
-            im = grab(feed_frames(), s["rotate"])
+            im = grab(feed_frames())
     except LotError as e:
         print(f"[FAIL] {e}", file=sys.stderr)
         return 2
     n, lot_dir = claim_lot(sale)
-    (lot_dir / "listing").mkdir()
-    im.save(lot_dir / PHOTO, "JPEG", quality=92)
+    im.save(lot_dir / PHOTO, "JPEG", quality=92)  # as shot; PREP turns it upright
     _log("grab", time.monotonic() - t, f"{_rel(lot_dir / PHOTO)} {im.width}x{im.height}")
 
     t = time.monotonic()
     ident, err = None, None
     try:
-        ident = identify(im, s["model"])
+        ident = identify(upright(im, s["rotate"]), s["model"])
         _log("identify", time.monotonic() - t, str(ident.get("lot")))
     except LotError as e:
         err = str(e)
         _log("identify", time.monotonic() - t, f"FAILED: {err}")
+    held = hold_reasons(ident)
 
     t = time.monotonic()
     draft = lot_dir / "draft.md"
-    draft.write_text(build_draft(n, lot_dir, ident, s, error=err), encoding="utf-8")
+    draft.write_text(build_draft(n, lot_dir, ident, s, error=err, held=held), encoding="utf-8")
+    (lot_dir / "price.txt").write_text(operator_price(s) + "\n", encoding="utf-8")
     from draft_io import parse_draft
     title = parse_draft(draft).get("title")
-    _log("draft", time.monotonic() - t, title)
+    _log("draft", time.monotonic() - t, f"{title} (${s['start_price']})")
 
     t = time.monotonic()
     try:
@@ -564,18 +670,30 @@ def main(argv=None) -> int:
     extra = f" (also recorded {', '.join(adopted)})" if adopted else ""
     _log("record", time.monotonic() - t, f"sku {sku}, ledger DRAFTED, store {s['store']}{extra}")
 
+    t = time.monotonic()
+    approved, line = prep(lot_dir, s["rotate"], approve=not held)
+    if held:
+        line += f"; HELD for the art director: {'; '.join(held)}"
+    _log("prep", time.monotonic() - t, line)
+
     synced = False
     if args.no_sync:
         _log("sync", 0.0, "skipped (--no-sync)")
     else:
         t = time.monotonic()
-        synced, line = sync(lot_dir)
+        synced, line = sync(lot_dir, approved)
         _log("sync", time.monotonic() - t, line)
 
     print(f"  total    {time.monotonic() - t0:5.1f}s")
-    state = "eBay draft (unpublished)" if synced else "local draft, recorded"
-    print(f"[OK] TOOL LOT #{n}: {state}. Not priced, not published.")
-    return 1 if err else 0
+    if synced:
+        state = "eBay draft (unpublished offer)"
+    elif held:
+        state = "HELD for the art director, recorded"
+    else:
+        state = "local draft, recorded" if approved else "PREP failed, recorded"
+    tag = "[OK]" if approved else "[HOLD]" if held else "[FAIL]"
+    print(f"{tag} TOOL LOT #{n}: {state} at ${s['start_price']}. Not published.")
+    return 0 if (approved and not err) else 1
 
 
 if __name__ == "__main__":
