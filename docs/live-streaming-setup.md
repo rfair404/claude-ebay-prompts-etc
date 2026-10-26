@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-25
+---
+
 # Live-streaming machine setup (eBay Live + OBS)
 
 The checklist for making a fresh Linux laptop ready to stream an eBay Live
@@ -16,6 +21,7 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | OBS remote control, no GUI | `tools/live/obsctl.py` |
 | Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
 | Interactive photo shoot (stills, per-item log) | `tools/live/shoot.py`, skill `.claude/skills/photo-shoot/` |
+| Tool sale: one numbered draft per lot from the D5 frame | `tools/live/tool_lot.py` (section 6, "Tool sale lots") |
 
 ## 1. OBS Studio — Flatpak, not the PPA
 
@@ -474,6 +480,38 @@ USB live view (what OBS shows) follows white balance
 (2026-10-22, static scene: red/blue 1.13 Auto, 1.04 Tungsten, 1.13 Auto again).
 A `wb` call freezes the D5 for about 5–12 s. "D5100 not found on USB" usually
 means the camera went to sleep: half-press the shutter.
+
+### Tool sale lots: one command per lot
+
+With the D5 feed running (`show_flow.py feed start`) and a lot in view, run
+this from the main checkout:
+
+```bash
+python tools/live/tool_lot.py
+```
+
+It copies the feed's latest frame (never gphoto2; a frame over 5 s old means
+the feed is down, and it stops), turns it upright, asks Claude what's in it,
+and writes `inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/` (draft.md and
+`listing/D5_0001.jpg`) titled `TOOL LOT #<N> <what's in it>`. Then it records
+the lot (SKU and a DRAFTED ledger row, as `list_edit.py --record` does) and
+prints each stage's time. N is the highest lot in the folder plus one, so a
+lot made by hand keeps its number and is recorded on the next run.
+
+A new lot is not priced: it carries a placeholder price and "PLACEHOLDER -
+needs PRICE before publish" in `meta.notes`. The price gate
+(`lib/price_gate.py`) refuses sync and publish until PRICE has run, so the
+sync step says "waiting on PRICE". Once a lot is priced, the same step
+creates its unpublished eBay draft. Nothing here publishes. `--no-sync` skips
+the eBay step.
+
+`<sale>/sale.json` holds the sale's settings, written on the first run: the
+store (`default`), the frame rotation (`-90`), the identify model, and the
+two shipping policies. Small and medium lots get LIVE Small and large or
+heavy ones get LIVE Large (buyer-paid calculated, from the draft's
+`shipping.fulfillment_policy_id`). `--store`, `--rotate` and `--model` change
+them for the rest of the sale. Weight and box size are guesses from the
+size class, and `meta.notes` says so.
 
 ## 7. Background music (CC0, no cost)
 
