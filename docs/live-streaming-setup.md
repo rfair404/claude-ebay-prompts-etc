@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-10-26
+---
+
 # Live-streaming machine setup (eBay Live + OBS)
 
 The checklist for making a fresh Linux laptop ready to stream an eBay Live
@@ -16,6 +21,7 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | OBS remote control, no GUI | `tools/live/obsctl.py` |
 | Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
 | Interactive photo shoot (stills, per-item log) | `tools/live/shoot.py`, skill `.claude/skills/photo-shoot/` |
+| Tool sale: one numbered draft per lot from the D5 frame | `tools/live/tool_lot.py` (section 6, "Tool sale lots") |
 
 ## 1. OBS Studio — Flatpak, not the PPA
 
@@ -474,6 +480,70 @@ USB live view (what OBS shows) follows white balance
 (2026-10-22, static scene: red/blue 1.13 Auto, 1.04 Tungsten, 1.13 Auto again).
 A `wb` call freezes the D5 for about 5–12 s. "D5100 not found on USB" usually
 means the camera went to sleep: half-press the shutter.
+
+### Tool sale lots: one command per lot
+
+With the D5 feed running (`show_flow.py feed start`) and a lot in view, run:
+
+```bash
+python tools/live/tool_lot.py
+```
+
+It copies the feed's latest frame. It never calls gphoto2. A frame more than
+5 s old means the feed is down, and the tool stops there. Claude names
+what's in the frame, and the tool writes
+`inventory/tool-sale-<yyyy-mm>/tool-lot-<N>/`: draft.md titled
+`TOOL LOT #<N> <what's in it>`, price.txt and the frame as shot. N is the
+highest lot number in the folder plus one, so a lot made by hand keeps its
+number and is recorded on the next run. Every `list_edit` and PREP call runs
+in the main checkout with its `.venv` python, wherever the tool was started.
+The steps after that:
+
+- **Price.** Every lot starts at the sale's start price, `$1` (Russell,
+  2026-10-25). price.txt carries his `OPERATOR PRICE:` line, which the price
+  gate accepts.
+- **Record.** `list_edit.py --record` writes the SKU and a DRAFTED ledger
+  row.
+- **PREP.** The art director's standing rule for tool-sale lots: turn the
+  frame upright (`--set-rotate D5_0001.jpg=90`), crisp, no crop. The tool
+  approves when the identify says every titled item shows, the frame is
+  sharp and lit, and the rig is in frame. If any of those checks fails, the
+  lot is **HELD** for the art director, `meta.notes` says why, and nothing
+  syncs.
+- **Sync.** `list_edit.py --validate`, then `--sync`, which creates an
+  unpublished offer. API offers don't show in Seller Hub's Drafts. A lot
+  reaches the Live event only once it is published, which is a separate step
+  that needs Russell's yes. `--no-sync` stops before eBay.
+
+Each stage prints its time, and the PREP line names its slowest step.
+Identify puts what looks like workspace clutter (sticky notes, loose paper,
+pens, tape) on a "maybe not for sale" line instead of in the lot.
+
+Identify runs on Opus 5.5 (Russell, 2026-10-26), and `--model` changes it for
+the sale. When Russell argues about what's in a lot's photo, agents re-run
+that lot with his correction:
+
+```bash
+python tools/live/tool_lot.py --reidentify 2 --note "that's a pry bar, not snips"
+```
+
+`--reidentify N` re-runs identify on lot N's own frame and prints the old
+and new title and items. It rewrites the title, items and description in
+place, keeping the same SKU, photos and price, and updates the ledger title.
+It then asks eBay (`list_edit.py --status`, never draft.md) for the lot's
+offer status. It updates the offer only when eBay says UNPUBLISHED, and
+never makes a new one. A published lot, or one whose status can't be read,
+is left for the listing manager. The art director's checks hold it the same
+as a new lot. `--note` is Russell's correction, passed to identify.
+
+`<sale>/sale.json` holds the sale's settings, written on the first run: the
+store (`default`, for this sale only), the rotation (`90`), the start price,
+the identify model, and the two shipping policies. Small and medium lots use
+LIVE Small; large and heavy lots use LIVE Large. Both are buyer-paid
+calculated, set through the draft's `shipping.fulfillment_policy_id`.
+`--store`, `--rotate`, `--start-price` and `--model` change a setting for
+the rest of the sale. Weight and box size are guesses from the size class,
+and `meta.notes` says so.
 
 ## 7. Background music (CC0, no cost)
 
