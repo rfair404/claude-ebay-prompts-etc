@@ -1,6 +1,6 @@
 ---
-version: 1.1.1
-updated: 2026-10-24
+version: 1.2.0
+updated: 2026-10-26
 ---
 
 # Offsite storage for listing data
@@ -139,6 +139,62 @@ An older version of an overwritten file is under
 - When `push` overwrites a changed object, it first copies the old one to `history/`.
 - `pull` never replaces a differing local file without `--overwrite`.
 - Nothing transfers without `--apply`.
+
+## Ledger store (GH #380, Phase 1)
+
+The ledgers' cloud copy that writers lock against, so two sessions writing
+at once can't lose a row. It is separate from the `offsite` bucket above,
+which keeps backing the ledgers up as before.
+
+- **What it is:** an R2 bucket, `ebaybiz-ledgers`, behind a Worker
+  (`cloud/ledger-worker/worker.js`). The Worker is the only door: no S3 token
+  for this bucket exists. It answers only GET and PUT, has no delete, and
+  refuses (403) any key not on its list. Every request needs the
+  `LEDGER_TOKEN` secret.
+- **Allowed keys:** `listings_ledger.csv`, `sales_ledger.csv`,
+  `unwound_orders.csv`, their `-junk` versions, and `client_ledger-K01.csv`.
+  The list is `ALLOWED` in `worker.js` and `LEDGERS` in `lib/ledger_store.py`;
+  `tests/test_ledger_store.py` keeps them equal. `inventory_sheet` (rebuilt
+  from eBay) and `clients.csv` (client names) are deliberately off it.
+- **Writes:** `ledger_store.update()` reads the key, applies the change and
+  writes it back only if nobody else wrote in between (ETag `If-Match`,
+  retried on conflict). The local CSV stays as a cache, so readers don't
+  change. Every PUT keeps the version it replaced as `history/<key>/<stamp>`,
+  kept 90 days.
+- **Offline:** the write lands in the local CSV and is marked pending in
+  `.ledger_etags.json`. `ledger push` uploads it if the cloud hasn't moved;
+  otherwise it stops and names the rebuild from eBay.
+- **Local mode:** with no `ledger_store:` block in `config.yaml`, writes stay
+  local as before. Once `.ledger_etags.json` exists, this checkout has written
+  to the cloud, and removing the block makes ledger writes refuse rather than
+  fork the record.
+- **Cost:** expected to stay within the R2 and Workers free tiers.
+
+### Setup (once)
+
+From the main checkout (the GH #103 rule). The script logs in to Cloudflare,
+creates the bucket and its 90-day `history/` rule, deploys the Worker, sets a
+fresh token, writes the `ledger_store:` block into `config.yaml` (don't type
+it by hand), runs `ledger check` and logs out. Re-running it rotates the token.
+
+```
+bash cloud/ledger-worker/setup.sh --phase 1
+python -m lib.cli ledger seed --apply
+```
+
+### Commands
+
+Each is `python -m lib.cli ledger ...`, run from the main checkout. `seed`
+and `restore` are dry runs without `--apply`.
+
+| Command | Does |
+|---|---|
+| `check` | each key's state, plus the allowlist probe (fails unless an unlisted key gets 403) |
+| `pull [--discard-pending]` | cloud copy to the local CSVs; skips keys with an unpushed offline write unless told to discard it |
+| `push` | uploads pending offline writes |
+| `seed [--apply]` | first upload of each local ledger; never overwrites a seeded key |
+| `history <key>` | that key's saved versions (90 days) |
+| `restore <key> <stamp> [--apply]` | puts a saved version back; the one it replaces goes to `history/`, so a restore can be undone |
 
 ## Second copy: Google Drive
 

@@ -1,6 +1,6 @@
 ---
-version: 3.4.0
-updated: 2026-10-25
+version: 3.5.0
+updated: 2026-10-26
 ---
 
 # RUN — v4 headless runbook
@@ -162,6 +162,13 @@ files — writes its outputs to the shoot dir exactly as a normal run would,
 and returns a **compact verdict only**: item name, proposed title, price +
 tier, the ⚠ list, and the path to `draft.md`. The filesystem is the handoff;
 the conductor never needs a worker's reasoning, only its verdict.
+
+**IDENTIFY runs on Opus 5.5** (Russell, 2026-10-26). Spawn every item worker
+with `model: "opus"` on the `Agent` call, whatever model the session itself
+runs. A lone `identify <name>` goes to one such worker too, unless the session
+is already on Opus. The lighter agents (listing manager and
+presenter) run on Sonnet through their own `model:` line, so the conductor
+never picks a model for them.
 
 **The ledger is the one hard constraint.** `listings_ledger.csv` is a single
 unlocked CSV — `list_edit.py --record` / `--sync` / `--list --confirm` all

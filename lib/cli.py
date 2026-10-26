@@ -91,6 +91,9 @@ COMMANDS = {
                      "second offsite copy to Google Drive via rclone — auto after each "
                      "ledger write + daily timer; never deletes remotely"),
     "consign":      ("tools.consign", "consignment ledger: bulk import, sync, client report"),
+    "ledger":       ("lib.ledger_store",
+                     "ledgers in the cloud (#380): check (403 allowlist probe), pull, "
+                     "push, seed/restore (dry run unless --apply), history"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }
