@@ -519,21 +519,22 @@ Each stage prints its time, and the PREP line names its slowest step.
 Identify puts what looks like workspace clutter (sticky notes, loose paper,
 pens, tape) on a "maybe not for sale" line instead of in the lot.
 
-Identify runs on Sonnet 5.5. `--opus` uses Opus 5.5 for one run and saves
-nothing. When Russell asks for Opus, or argues about what's in a lot's photo,
-agents re-run that lot:
+Identify runs on Opus 5.5 (Russell, 2026-10-26), and `--model` changes it for
+the sale. When Russell argues about what's in a lot's photo, agents re-run
+that lot with his correction:
 
 ```bash
-python tools/live/tool_lot.py --reidentify 2 --opus --note "that's a pry bar, not snips"
+python tools/live/tool_lot.py --reidentify 2 --note "that's a pry bar, not snips"
 ```
 
 `--reidentify N` re-runs identify on lot N's own frame and prints the old
 and new title and items. It rewrites the title, items and description in
 place, keeping the same SKU, photos and price, and updates the ledger title.
-If the lot already has an unpublished offer, it updates that offer and
-never makes a new one. A live listing is left for the listing manager. The
-art director's checks hold it the same as a new lot. `--note` is Russell's
-correction, passed to identify.
+It then asks eBay (`list_edit.py --status`, never draft.md) for the lot's
+offer status. It updates the offer only when eBay says UNPUBLISHED, and
+never makes a new one. A published lot, or one whose status can't be read,
+is left for the listing manager. The art director's checks hold it the same
+as a new lot. `--note` is Russell's correction, passed to identify.
 
 `<sale>/sale.json` holds the sale's settings, written on the first run: the
 store (`default`, for this sale only), the rotation (`90`), the start price,

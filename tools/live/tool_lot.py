@@ -47,8 +47,7 @@ large lots) and the identify model. A flag (--store, --rotate, --model,
     python tools/live/tool_lot.py --store junk     # this sale lists to the junk store from now on
     python tools/live/tool_lot.py --frame X.jpg    # a saved frame instead of the feed's
     python tools/live/tool_lot.py --sale-dir DIR   # another sale folder (a test, a second sale)
-    python tools/live/tool_lot.py --opus           # identify with Opus 5.5, this run only
-    python tools/live/tool_lot.py --reidentify 2 --opus --note "that's a pry bar"
+    python tools/live/tool_lot.py --reidentify 2 --note "that's a pry bar"
                                                    # lot 2 again: copy rewritten, same offer updated
 """
 from __future__ import annotations
@@ -99,13 +98,12 @@ DEFAULTS = {
     "rotate": 90,  # clockwise; the rig shoots sideways (art director, 2026-10-25)
     "policy_small": LIVE_SMALL,
     "policy_large": LIVE_LARGE,
-    # Measured 2026-10-25 on the live frame: Sonnet named the lot right in
-    # ~4-5 s; Haiku 4.5 took as long or longer and named items that weren't there.
-    "model": "claude-sonnet-5-5",
+    # Russell, 2026-10-26: Opus 5.5 identifies (about 6-10 s a lot). On the
+    # live frame Haiku 4.5 named items that weren't there. --model overrides.
+    "model": "claude-opus-5-5",
     "start_price": "1.00",
     "price_decided": DECIDED,
 }
-OPUS = "claude-opus-5-5"  # --opus: the stronger identify, for one run
 # Size class -> (weight lb, package L x W x D in, which policy). Guesses for
 # calculated shipping; meta.notes says so.
 SIZES = {
@@ -678,11 +676,26 @@ def _items(body: str) -> list[str]:
     return [ln[2:].strip() for ln in body.splitlines() if ln.startswith("- ")]
 
 
-def _photos_approved(lot_dir: Path) -> bool:
-    try:
-        return bool(json.loads((lot_dir / ".prep" / "prep.json").read_text()).get("approved"))
-    except (OSError, ValueError):
-        return False
+def _photos_approved(lot_dir: Path, run=None) -> bool:
+    """PREP's own gate (photo_prep.prep.assert_approved, staleness included),
+    asked in the main checkout's venv: the system python has no numpy."""
+    main = main_dir()
+    code = ("import sys; from pathlib import Path; sys.path.insert(0, 'lib'); "
+            "from photo_prep.prep import assert_approved; assert_approved(Path(sys.argv[1]))")
+    r = (run or subprocess.run)([main_python(main), "-c", code, str(lot_dir)],
+                                capture_output=True, text=True, cwd=main)
+    return r.returncode == 0
+
+
+def ebay_status(lot_dir: Path, run=None) -> str | None:
+    """The lot's offer status as eBay reports it (`list_edit.py --status`,
+    resolved by SKU through the Inventory API, GH #40): UNPUBLISHED,
+    PUBLISHED, NO_OFFER, ... None when it can't be read. Never draft meta."""
+    r = list_edit(["--status", str(lot_dir)], run=run)
+    if r.returncode:
+        return None
+    m = re.search(r"^\s*[0-9a-f]{8}\s+(\S+)\s+offer\b", r.stdout or "", re.MULTILINE)
+    return m.group(1).upper() if m else None
 
 
 def reidentify(sale: Path, n: int, s: dict, note: str | None = None, no_sync: bool = False,
@@ -738,22 +751,29 @@ def reidentify(sale: Path, n: int, s: dict, note: str | None = None, no_sync: bo
         return 1
     _log("record", time.monotonic() - t, f"sku {sku} (same lot, ledger title updated)")
 
-    offer = str(after.get("meta.ebay_offer_id") or "").strip()
-    live = str(after.get("meta.ebay_listing_id") or after.get("meta.published_at") or "").strip()
-    synced = False
     if held:
         state, ok = "copy rewritten, HELD for the art director", False
-    elif live:
-        state, ok = "copy rewritten; the listing is live, so its revision is the listing manager's", True
-    elif not offer:
-        state, ok = "copy rewritten (no eBay offer yet)", True
     elif no_sync:
-        state, ok = "copy rewritten; offer not updated (--no-sync)", True
+        state, ok = "copy rewritten; eBay not checked or updated (--no-sync)", True
     else:
+        # Only an offer eBay itself calls UNPUBLISHED is updated. A lot
+        # published from Seller Hub or the Live event can still look like a
+        # draft in draft.md; syncing it would edit a live listing mid-bidding.
         t = time.monotonic()
-        synced, msg = sync(lot_dir, _photos_approved(lot_dir), run=run)
-        _log("sync", time.monotonic() - t, msg)
-        state, ok = ("copy rewritten, offer updated" if synced else "copy rewritten, offer update failed"), synced
+        status = ebay_status(lot_dir, run=run)
+        _log("status", time.monotonic() - t, f"eBay says {status or 'nothing (status read failed)'}")
+        if status == "NO_OFFER":
+            state, ok = "copy rewritten (no eBay offer yet)", True
+        elif status != "UNPUBLISHED":
+            state = (f"copy rewritten; eBay says {status or 'nothing readable'}, so updating "
+                     "the offer is the listing manager's step")
+            ok = status is not None
+        else:
+            t = time.monotonic()
+            synced, msg = sync(lot_dir, _photos_approved(lot_dir, run=run), run=run)
+            _log("sync", time.monotonic() - t, msg)
+            state = "copy rewritten, offer updated" if synced else "copy rewritten, offer update failed"
+            ok = synced
     print(f"  total    {time.monotonic() - t0:5.1f}s")
     tag = "[OK]" if ok else "[HOLD]" if held else "[FAIL]"
     print(f"{tag} TOOL LOT #{n}: {state}. Not published.")
@@ -772,8 +792,6 @@ def main(argv=None) -> int:
     ap.add_argument("--start-price", help="every lot's start price (saved; default 1.00)")
     ap.add_argument("--frame", type=Path, help="use this image instead of the feed's frame")
     ap.add_argument("--sale-dir", help="sale folder (default inventory/tool-sale-<yyyy-mm>)")
-    ap.add_argument("--opus", action="store_true",
-                    help=f"identify with {OPUS} for this run only (not saved)")
     ap.add_argument("--reidentify", type=int, metavar="N",
                     help="re-run identify on lot N's own frame and rewrite its copy")
     ap.add_argument("--note", help="with --reidentify: Russell's correction, given to identify")
@@ -789,8 +807,6 @@ def main(argv=None) -> int:
     except InvalidOperation:
         print(f"[FAIL] --start-price {args.start_price!r} is not a number", file=sys.stderr)
         return 2
-    if args.opus:
-        s = {**s, "model": OPUS}  # this run only: sale.json keeps its model
     if args.reidentify:
         return reidentify(sale, args.reidentify, s, note=args.note, no_sync=args.no_sync)
 

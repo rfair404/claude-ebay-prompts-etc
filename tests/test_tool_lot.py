@@ -44,17 +44,20 @@ def ok(stdout=""):
     return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
 
-def fake_run(reply: str, calls: list):
-    """subprocess.run for the tool: claude answers `reply`, PREP and
-    `list_edit.py --sync` succeed without doing anything, and the other
-    list_edit.py calls (--record, --validate) run for real."""
+def fake_run(reply: str, calls: list, status: str = "UNPUBLISHED"):
+    """subprocess.run for the tool: claude answers `reply`, PREP (and its
+    approval check) and `list_edit.py --sync` succeed without doing anything,
+    `--status` reports `status`, and the other list_edit.py calls (--record,
+    --validate) run for real."""
     def run(cmd, **kw):
         calls.append(cmd)
-        if "lib.photo_prep.prep" in cmd:
+        if "lib.photo_prep.prep" in cmd or "-c" in cmd:
             return ok()
         if any(str(c).endswith("list_edit.py") for c in cmd):
             if "--sync" in cmd:
                 return ok("[OK] created eBay DRAFT offer 123 (UNPUBLISHED)\n")
+            if "--status" in cmd:
+                return ok(f"  0123abcd  {status}  offer 326305813011  listing None\n")
             return REAL_RUN(cmd, **kw)
         out = json.dumps({"type": "result", "is_error": False, "result": reply})
         return ok(out + "\n")
@@ -76,10 +79,10 @@ def ledger_rows(tmp_path):
         return list(csv.DictReader(f))
 
 
-def run_tool(monkeypatch, sale, *argv, reply=None, calls=None):
+def run_tool(monkeypatch, sale, *argv, reply=None, calls=None, status="UNPUBLISHED"):
     calls = [] if calls is None else calls
     reply = json.dumps(IDENT) if reply is None else reply
-    monkeypatch.setattr(T.subprocess, "run", fake_run(reply, calls))
+    monkeypatch.setattr(T.subprocess, "run", fake_run(reply, calls, status))
     try:
         return T.main(["--sale-dir", str(sale), *argv])
     finally:
@@ -375,18 +378,19 @@ def test_a_failed_sync_is_a_failed_run(sale, monkeypatch, capsys):
 
 def test_model_flag_reaches_the_claude_call_and_is_saved(sale, monkeypatch):
     calls = []
-    run_tool(monkeypatch, sale, "--no-sync", "--model", "claude-opus-5-5", calls=calls)
+    run_tool(monkeypatch, sale, "--no-sync", "--model", "claude-sonnet-5-5", calls=calls)
+    claude = next(c for c in calls if "-p" in c)
+    assert claude[claude.index("--model") + 1] == "claude-sonnet-5-5"
+    assert json.loads((sale / "sale.json").read_text())["model"] == "claude-sonnet-5-5"
+
+
+def test_identify_defaults_to_opus(sale, monkeypatch):
+    calls = []
+    run_tool(monkeypatch, sale, "--no-sync", calls=calls)
     claude = next(c for c in calls if "-p" in c)
     assert claude[claude.index("--model") + 1] == "claude-opus-5-5"
-    assert json.loads((sale / "sale.json").read_text())["model"] == "claude-opus-5-5"
-
-
-def test_opus_is_for_one_run_and_not_saved(sale, monkeypatch):
-    calls = []
-    run_tool(monkeypatch, sale, "--no-sync", "--opus", calls=calls)
-    claude = next(c for c in calls if "-p" in c)
-    assert claude[claude.index("--model") + 1] == T.OPUS
-    assert json.loads((sale / "sale.json").read_text())["model"] == T.DEFAULTS["model"]
+    with pytest.raises(SystemExit):
+        T.main(["--sale-dir", str(sale), "--opus"])          # gone: Opus is the default
 
 
 CORRECTED = {**IDENT, "lot": "Spring Clamps, LED Flashlight & Pry Bar",
@@ -399,8 +403,6 @@ def _stamp_offer(lot: Path, offer="326305813011"):
     text = (lot / "draft.md").read_text()
     (lot / "draft.md").write_text(
         text.replace("  notes: |-", f'  ebay_offer_id: "{offer}"\n  notes: |-', 1))
-    (lot / ".prep").mkdir(exist_ok=True)
-    (lot / ".prep" / "prep.json").write_text('{"approved": true}')
 
 
 def test_reidentify_rewrites_the_lot_in_place_and_updates_its_offer(sale, tmp_path, monkeypatch,
@@ -412,7 +414,7 @@ def test_reidentify_rewrites_the_lot_in_place_and_updates_its_offer(sale, tmp_pa
     capsys.readouterr()
 
     calls = []
-    rc = run_tool(monkeypatch, sale, "--reidentify", "1", "--opus",
+    rc = run_tool(monkeypatch, sale, "--reidentify", "1",
                   "--note", "that's a pry bar, not snips", reply=json.dumps(CORRECTED), calls=calls)
     out = capsys.readouterr().out
     assert rc == 0, out
@@ -426,14 +428,39 @@ def test_reidentify_rewrites_the_lot_in_place_and_updates_its_offer(sale, tmp_pa
     assert "re-identified" in d.get("meta.notes") and "pry bar, not snips" in d.get("meta.notes")
     rows = ledger_rows(tmp_path)
     assert len(rows) == 1 and rows[0]["title"] == d.get("title")
-    claude = next(c for c in calls if "-p" in c)
-    assert claude[claude.index("--model") + 1] == T.OPUS
+    assert [c for c in calls if "--status" in c]             # asked eBay first
     sync = [c for c in calls if "--sync" in c]
     assert len(sync) == 1 and not {"--publish", "--list", "--confirm"} & set(sync[0])
     assert "old: TOOL LOT #1 Spring Clamps, LED Flashlight & Aviation Snips" in out
     assert "new: TOOL LOT #1 Spring Clamps, LED Flashlight & Pry Bar" in out
     assert "maybe not for sale, left out: yellow sticky-note pad" in out
-    assert json.loads((sale / "sale.json").read_text())["model"] == T.DEFAULTS["model"]
+
+
+def test_reidentify_never_syncs_what_ebay_calls_published(sale, monkeypatch, capsys):
+    """draft.md has no listing id (published from Seller Hub or the Live
+    event), but eBay says PUBLISHED: the offer is left alone."""
+    run_tool(monkeypatch, sale, "--no-sync")
+    lot = sale / "tool-lot-1"
+    _stamp_offer(lot)
+    assert not parse_draft(lot / "draft.md").get("meta.ebay_listing_id")
+    calls = []
+    rc = run_tool(monkeypatch, sale, "--reidentify", "1", reply=json.dumps(CORRECTED),
+                  calls=calls, status="PUBLISHED")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert not [c for c in calls if "--sync" in c]
+    assert "eBay says PUBLISHED" in out and "listing manager's step" in out
+
+
+def test_reidentify_leaves_the_offer_when_ebay_cant_be_read(sale, monkeypatch, capsys):
+    run_tool(monkeypatch, sale, "--no-sync")
+    _stamp_offer(sale / "tool-lot-1")
+    calls = []
+    rc = run_tool(monkeypatch, sale, "--reidentify", "1", reply=json.dumps(CORRECTED),
+                  calls=calls, status="")
+    assert rc == 1
+    assert not [c for c in calls if "--sync" in c]
+    assert "[FAIL] TOOL LOT #1" in capsys.readouterr().out
 
 
 def test_reidentify_holds_on_a_failed_check_and_leaves_the_offer(sale, monkeypatch, capsys):
