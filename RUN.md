@@ -166,7 +166,7 @@ the conductor never needs a worker's reasoning, only its verdict.
 **IDENTIFY runs on Opus 5.5** (Russell, 2026-10-26). Spawn every item worker
 with `model: "opus"` on the `Agent` call, whatever model the session itself
 runs. A lone `identify <name>` goes to one such worker too, unless the session
-is already on Opus. The lighter agents (listing manager, inventory manager,
+is already on Opus. The lighter agents (listing manager and
 presenter) run on Sonnet through their own `model:` line, so the conductor
 never picks a model for them.
 
