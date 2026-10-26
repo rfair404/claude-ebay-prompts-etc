@@ -109,3 +109,13 @@ def test_nothing_is_sent_without_confirm(capsys):
 @pytest.mark.parametrize("val,want", [("$1,234.50", 1234.5), ("", 0.0), (None, 0.0)])
 def test_price_parsing(val, want):
     assert promote._f(val) == want
+
+
+def test_smart_create_carries_max_cpc(capsys):
+    """36161 Smart targeting campaigns require a 'bidPreferences.maxCpc' value."""
+    b = _body(capsys, smart=True, max_cpc=0.4)
+    assert b["campaignTargetingType"] == "SMART"
+    assert b["fundingStrategy"]["bidPreferences"] == [
+        {"maxCpc": {"value": "0.40", "currency": "USD"}}]
+    with pytest.raises(ValueError):
+        promote.create_campaign("T", 5.0, False, smart=True)
