@@ -58,15 +58,24 @@ false`, since the reply is its list) with this brief:
   Russell called out), `partly hidden` (it needs its own frame), or `check
   count` (a pile whose count is an estimate). A maker, era or material the
   frames don't show stays out.
-- **Owned:** make one folder per object inside the bin,
+- Make every row with `python tools/tg7_triage.py add <bin folder>/catalog.csv
+  --description "..." --qty .. --marks ".." --condition ".." --photos ".."
+  --why ".."`, never by writing the file by hand. It first checks the object
+  against the rows already on record (this bin, the camera lots, the
+  consignment ledgers). `NEW` makes the row; `ATTACH <key>` means the object
+  is already on record and only its frames were added to that row; `REVIEW`
+  leaves it in `<bin folder>/dupe_queue.csv`. Settle each REVIEW yourself
+  with `--attach <key>` or `--new "<how it differs>"`, never by asking
+  Russell.
+- **Owned:** `add` makes one folder per object inside the bin,
   `<bin folder>/<no>-<slug>/` (e.g. `03-tin-toy-car/`), holding an
-  `intake.txt` with its catalog row, and put that path in
+  `intake.txt` with its catalog row, and puts that path in
   `inventory_folder`. Russell's shoot frames for the item go in that folder
   later.
-- **Consigned:** leave `inventory_folder` blank. Item folders are made at
-  the shoot; the catalog is the import file.
-- Return the object count, the catalog path and the flagged rows. Nothing
-  else.
+- **Consigned:** pass `--no-folder`, so `inventory_folder` stays blank. Item
+  folders are made at the shoot; the catalog is the import file.
+- Return the object count, the catalog path, the flagged rows and any
+  ATTACH or REVIEW lines. Nothing else.
 
 ## After
 
@@ -75,6 +84,11 @@ false`, since the reply is its list) with this brief:
   skips a row it already has, so a re-run is safe:
 
       python -m lib.cli consign import CONSIGN-K01 inventory/CONSIGN-K01/<bin>/catalog.csv --client K01
+
+  A row that is an object the client's ledgers already hold is attached to
+  that row instead of added, and an unclear one is queued in
+  `inventory/CONSIGN-K01/dupe_queue.csv`; the inventory manager settles
+  those.
 
 - **`possible value` rows** are held: each gets a closer look and exact
   comps before it has any price, never a placeholder.

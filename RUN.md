@@ -1,5 +1,5 @@
 ---
-version: 3.1.1
+version: 3.2.0
 updated: 2026-10-25
 ---
 
@@ -496,6 +496,16 @@ loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
 client's next id (`K01-C048`, numbered across all of that client's ledgers),
 stamps `intake` (`--intake`, else `acquired:` in `context.txt`, the folder's
 date, or today) and skips a row with the same intake, bin and description.
+It also guards against the same object coming in twice (a bin frame, then its
+own shoot; a second import). Each new row is scored against every row in the
+client's ledgers (`lib/dupe_guard.py`: shared description words, plus a shared
+frame id, the same bin, or a triage `possible duplicate of` note naming the
+row). One clear match (score 0.6 or more) gets the row's frames added and
+`re-run IDENTIFY` in its `why`, and no new row is made. Two close matches, or a
+score from 0.35 to 0.6, go to `dupe_queue.csv` in the intake folder for the
+inventory manager, and no row is made. `--new "<reason>"` adds the rows anyway
+and writes the reason in each one's `why`. New catalog rows from camera triage
+and `/intake` go through the same check (`python tools/tg7_triage.py add`).
 Run `consign sync` from the main checkout; from a worktree it refuses. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED and SETTLED. A row clears once
