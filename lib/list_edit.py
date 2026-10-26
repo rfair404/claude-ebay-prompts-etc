@@ -104,7 +104,7 @@ from draft_io import (Draft, iter_drafts, parse_draft, resolve_photo_paths, set_
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from price_gate import sold_pull_issues
-from us_only import us_only_reasons
+from us_only import ship_to_warning, us_only_reasons
 from dir_context import load as load_dir_context
 from ebay_schema import CONDITION_ENUM
 from ebay_client import (
@@ -1359,7 +1359,13 @@ _DANGEROUS_GOODS_PATTERNS = (
     (r"\blithium\b|\bli-ion\b|\bpower ?bank\b", "lithium battery (UN3480)"),
     (r"\baerosol\b|\bspray paint\b|\bcompressed gas\b|\bpropane\b",
      "aerosol / compressed gas"),
-    (r"\bperfume\b|\bcologne\b|\beau de (toilette|parfum)\b",
+    # "Perfume" and "Cologne" also turn up in maker names and places: K01-C055
+    # "Souvenir Spoon California Perfume Co" (Avon's old name) hard-blocked
+    # eIS on 2026-10-25, and Cologne is a city on souvenir spoons. A maker or
+    # place name doesn't count; type "Perfume Bottle" still matches.
+    (r"\bperfume\b(?!\s+(co|company|corp|corporation|inc|mfg)\b)"
+     r"|\bcologne\b(?!\s+(co|company|corp|inc|germany|cathedral)\b)"
+     r"|\beau de (toilette|parfum|cologne)\b",
      "alcohol-based fragrance (flammable)"),
     (r"\bgunpowder\b|\bammunition\b|\bammo\b|\bprimers\b|\bblack powder\b|\bflare\b",
      "explosives / ammunition components"),
@@ -1492,7 +1498,8 @@ def _international_routing(draft: Draft, intl_fid: str) -> tuple[bool, str, list
 
 def _resolve_shipping_policy(draft: Draft, policies: dict,
                              creds: EbayCredentials,
-                             strict: bool = False) -> tuple[str, list[str]]:
+                             strict: bool = False,
+                             resolved: Optional[dict] = None) -> tuple[str, list[str]]:
     """Choose the fulfillment policy for THIS item and validate it.
 
     Routing, in order:
@@ -1525,6 +1532,9 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     because writing that default is exactly the publish-time failure (or,
     if eBay ever stopped catching it, the export) this function exists to
     prevent.
+
+    `resolved`, when given, is filled with the chosen policy as eBay returned
+    it, so the review card can report what that policy itself does.
     """
     default_fid = str(policies.get("fulfillment") or "")
     media_fid = str(policies.get("fulfillment_media") or "")
@@ -1560,8 +1570,9 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                        "; ".join(us_reasons) + ") but "
                        "ebay.fulfillment_policy_id_us_only is unset. The default "
                        "policy ships Worldwide, so eBay will refuse this publish. "
-                       "Create a US-only fulfillment policy (shipToLocations = US) "
-                       "and set that key before listing this item.")
+                       "Create a US-only fulfillment policy (shipToLocations = "
+                       "us_only.US_ONLY_SHIP_TO) and set that key before listing "
+                       "this item.")
             if strict:
                 raise ValueError(blocker)
             chosen, label = default_fid, "default ground (NO US-only policy configured)"
@@ -1596,6 +1607,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
     try:
         pols = get_fulfillment_policies(creds=creds)
         pol = next((p for p in pols if str(p.get("fulfillmentPolicyId")) == chosen), None)
+        if pol and usonly_fid and chosen == usonly_fid and ship_to_warning(pol):
+            msgs.append(ship_to_warning(pol))
         if not pol:
             msgs.append(f"shipping: chosen fulfillment_policy_id {chosen} not found on this account")
         else:
@@ -1613,6 +1626,8 @@ def _resolve_shipping_policy(draft: Draft, policies: dict,
                 who = policy_who_pays(pol)
                 msgs.insert(0, f"shipping: using {label} -> '{pol.get('name')}' ({desc})"
                                + (f" · {who}" if who else ""))
+                if resolved is not None:
+                    resolved.update(pol)
     except (EbayAPIError, EbayAuthError) as e:
         msgs.append(f"shipping: could not verify fulfillment policy ({e})")
     return chosen, msgs
@@ -1641,6 +1656,19 @@ def policy_who_pays(pol: dict) -> str:
             "FLAT_RATE": "buyer pays flat rate"}.get(cost, "")
 
 
+def policy_excluded_regions(pol: dict) -> list[str]:
+    """The regions a fulfillment policy keeps its listings out of. Empty means
+    eBay International Shipping offers the listing abroad: eIS is enrolled at
+    the account, and a policy with no exclusions (shipToLocations `{}`
+    included) was offered to GB, CA and DE buyers when measured on 2026-10-25.
+    A policy that names its own international services ships abroad too."""
+    if any(str(o.get("optionType") or "").upper() == "INTERNATIONAL"
+           for o in (pol.get("shippingOptions") or [])):
+        return []
+    return [str(r.get("regionName") or r.get("regionType") or "?")
+            for r in ((pol.get("shipToLocations") or {}).get("regionExcluded") or [])]
+
+
 def _insurance_notes(draft: Draft) -> list[str]:
     """RETIRED 2026-08-26 — always returns no notes.
 
@@ -1660,10 +1688,13 @@ def _insurance_notes(draft: Draft) -> list[str]:
 
 
 def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
-                      apply: bool = True) -> list[str]:
+                      apply: bool = True,
+                      policy_out: Optional[dict] = None) -> list[str]:
     """Check (and, if apply=True, auto-correct) a draft against its eBay
     category BEFORE sync/publish: condition validity + shipping. Returns a
-    list of human-readable messages. Safe to run repeatedly (idempotent)."""
+    list of human-readable messages. Safe to run repeatedly (idempotent).
+    `policy_out`, when given, receives the fulfillment policy the item
+    resolved to (see _resolve_shipping_policy)."""
     creds = creds or load_credentials()
     draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
@@ -1697,7 +1728,8 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
             msgs.append(f"condition: {cur} OK for category")
 
     # Shipping policy selection (media vs ground) + validation
-    _chosen, ship = _resolve_shipping_policy(draft, policies, creds)
+    _chosen, ship = _resolve_shipping_policy(draft, policies, creds,
+                                             resolved=policy_out)
     msgs.extend(ship)
     # Payment policy: auctions and pickup-only listings need no-immediate-pay
     _pay_block = _payment_policy_blocker(draft, policies)
@@ -1738,7 +1770,9 @@ def build_review_card(draft_path: Path,
     shoot = draft_path.parent
 
     sku, _ = record_draft(draft_path, store=creds.store)  # ensure SKU + DRAFTED
-    pf = preflight_listing(draft_path, creds=creds)    # remap + shipping
+    ship_pol: dict = {}
+    pf = preflight_listing(draft_path, creds=creds,    # remap + shipping
+                           policy_out=ship_pol)
     draft = parse_draft(draft_path)                    # re-read (condition may have changed)
 
     title = str(draft.get("title") or "")
@@ -1797,6 +1831,10 @@ def build_review_card(draft_path: Path,
         if intl_requested:
             intl_lines.append("  ✖ draft asks for international but it will be "
                               "REFUSED and listed domestic-only — fix the draft.")
+        elif ship_pol and not policy_excluded_regions(ship_pol):
+            intl_lines.append(f"  ⚠ but policy '{ship_pol.get('name')}' excludes no "
+                              "regions, so eIS offers it abroad anyway and an "
+                              "overseas order will be refused at the hub.")
         else:
             intl_lines.append("  • correctly domestic-only. Do NOT set "
                               "shipping.international true on this item.")
@@ -1807,9 +1845,19 @@ def build_review_card(draft_path: Path,
         intl_lines = ["  ✓ ENABLED — ships worldwide via eBay International Shipping.",
                       "  • delivered-price basis no longer holds: an overseas buyer "
                       "pays eIS freight + duties on top of this price."]
+    elif ship_pol and not policy_excluded_regions(ship_pol):
+        # The draft flag only picks the separate international policy; the
+        # policy this item resolved to may reach eIS on its own.
+        intl_lines = [f"  ✓ ON through policy '{ship_pol.get('name')}' — eBay "
+                      "International Shipping offers it worldwide.",
+                      "  • delivered-price basis no longer holds: an overseas buyer "
+                      "pays eIS freight + duties on top of this price."]
+    elif ship_pol:
+        intl_lines = [f"  • off: policy '{ship_pol.get('name')}' excludes "
+                      f"{', '.join(policy_excluded_regions(ship_pol))}."]
     else:
-        intl_lines = ["  • eligible, not enabled (shipping.international: false). "
-                      "Set true to offer it worldwide."]
+        intl_lines = ["  • not requested (shipping.international: false); the "
+                      "shipping policy could not be read, so eIS reach is unchecked."]
 
     # Estate context (GH #46) — which context.txt file(s) applied, what they
     # supply, and what they forbid, so a reviewer can see the estate was

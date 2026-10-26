@@ -350,6 +350,7 @@ F, G = "inventory/b/one", "inventory/b/two"
      "C001, C002 all carry order 1-1-5"),
     ([dict(item_id="C001", order_id="1-1-5"),
       dict(item_id="C002", order_id="1-1-5", state="RETURNED")], None),
+    ([dict(item_id="C001", state="HOLD")], "C001: HOLD needs a state_note saying why"),
 ])
 def test_validate_lots_and_ids(rows, want):
     errs = consign.validate([_row(**r) for r in rows], [], "K99")
@@ -767,12 +768,99 @@ def test_an_ebay_sale_on_a_channel_row_is_flagged_not_taken(shop):
     assert "eBay sale 7-7-1 matches this item: one item sells once" in r["state_note"]
 
 
+def test_a_mall_placement_is_listed_and_its_gam_sku_never_matched_on_ebay(shop, capsys):
+    placed = (TODAY - timedelta(days=10)).isoformat()
+    long_ago = (TODAY - timedelta(days=200)).isoformat()
+    # eBay ledger rows that carry the GAM SKU as a listing id: matching them
+    # would flag an ended listing and an eBay sale on a mall row.
+    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id", "ended_at"],
+         [{"sku": "zzzz0001", "status": "ENDED", "price": "99.00", "listing_id": "TW963H",
+           "ended_at": OLD}])
+    _csv(shop / "sales_ledger.csv", SALES_HEADER, [_sale("5-5-1", "zzzz0001", OLD,
+                                                         listing_id="TW963H")])
+    d = _intake(shop, [
+        {"item_id": "C001", "state": "PREP", "channel": "mall", "ask": "12.00",
+         "listing_id": "TW963H", "placed_at": placed, "split_locked": "0.625"},
+        # tagged but not yet on the floor: stays PREP
+        {"item_id": "C002", "state": "PREP", "channel": "mall", "ask": "9.99"},
+        # on the floor past listing_days
+        {"item_id": "C003", "state": "PREP", "channel": "mall", "ask": "20.00",
+         "listing_id": "4Q9BEV", "placed_at": long_ago},
+        # placed, then sold at the booth
+        {"item_id": "C004", "channel": "mall", "ask": "30.00", "listing_id": "38AKZ8",
+         "placed_at": long_ago, "sold_at": NEW, "item_price": "30.00", "card_paid": "0.00"}])
+    for _ in range(2):                           # a second sync keeps it on the floor
+        assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
+        got = {r["item_id"]: r for r in consign.read_ledger(d / "client_ledger.csv")[0]}
+        on_floor = got["K99-C001"]
+        assert (on_floor["state"], on_floor["listing_id"], on_floor["store"],
+                on_floor["ask"], on_floor["order_id"], on_floor["state_note"]) == (
+            "LISTED", "TW963H", "", "12.00", "", "")
+        assert got["K99-C002"]["state"] == "PREP"
+        assert got["K99-C003"]["state"] == "LISTED"
+        assert (f"listing window over: end it and notify client (live since {long_ago}"
+                in got["K99-C003"]["state_note"])
+        assert (got["K99-C004"]["state"], got["K99-C004"]["listing_id"]) == ("SOLD", "38AKZ8")
+        assert "listing window" not in got["K99-C004"]["state_note"]
+
+    capsys.readouterr()
+    assert consign.main(["report", "--client", "K99"]) == 0
+    out = capsys.readouterr().out
+    assert "listed     2  at ask $32.00" in out       # C001 + C003, the booth tags
+    assert "on hand    1 unit(s)" in out              # C002 only
+
+
+@pytest.mark.parametrize("row, state, flag", [
+    # its listing ended: no ended flag, and the ended row fills in nothing
+    (dict(sku="hhhh0001", store="", listing_id="", ask="18.00"), "HOLD", None),
+    # a live listing matches: still HOLD, flagged
+    (dict(sku="hhhh0002"), "HOLD", "on hold but listing 222 is live: end it, or "
+                                   "clear the hold"),
+    (dict(channel="mall", listing_id="TW963H", placed_at=NEW), "HOLD",
+     "on hold but listing TW963H is live"),
+    # a sale ends the hold
+    (dict(sku="hhhh0004"), "SOLD", None),
+    # a folder and a draft don't move it
+    (dict(inventory_folder="draft"), "HOLD", None),
+])
+def test_hold_stays_on_hand_until_a_sale(shop, row, state, flag):
+    _csv(shop / "listings_ledger.csv", ["sku", "status", "price", "listing_id"],
+         [{"sku": "hhhh0002", "status": "PUBLISHED", "price": "30.00", "listing_id": "222"},
+          {"sku": "hhhh0004", "status": "SOLD", "price": "30.00", "listing_id": "444"}])
+    _csv(shop / "listings_ledger-junk.csv",
+         ["sku", "status", "price", "listing_id", "ended_at"],
+         [{"sku": "hhhh0001", "status": "ENDED", "price": "9.99", "listing_id": "111",
+           "ended_at": OLD}])
+    _csv(shop / "sales_ledger.csv", SALES_HEADER, [_sale("4-4-4", "hhhh0004", NEW)])
+    if row.get("inventory_folder"):
+        row["inventory_folder"] = _folder(shop, "b/held", sku="hhhh0005")
+    r = _row(item_id="K99-C001", state="HOLD", state_note="re-photograph first", **row)
+    typed = {k: r[k] for k in ("store", "listing_id", "ask")}
+
+    flags = consign.sync_row(r, consign.Books(), Decimal("0.5"), TODAY)
+
+    assert r["state"] == state
+    held = [f for f in flags if "on hold" in f or "ended" in f]
+    if flag is None:
+        assert held == [], flags
+    else:
+        assert len(held) == 1 and flag in held[0], flags
+    if state == "HOLD":
+        assert r["state_note"].startswith("re-photograph first")
+    if row.get("sku") == "hhhh0001":
+        assert (flags, {k: r[k] for k in typed}) == ([], typed)
+
+
 @pytest.mark.parametrize("row, want", [
     (dict(card_paid="5.00", item_price="20.00"), "card_paid is for a mall sale only"),
     (dict(channel="mall", card_paid="25.00", item_price="20.00"), "between 0.00 and item_price"),
     (dict(channel="mall", card_paid="-1.00", item_price="20.00"), "between 0.00 and item_price"),
     (dict(channel="the mall"), "is not one word"),
     (dict(channel="mall", card_paid="20.00", item_price="20.00"), None),
+    (dict(placed_at="2026-10-25", listing_id="206653314165"), "placed_at is for an off-eBay"),
+    (dict(channel="mall", placed_at="2026-10-25"), "placed_at needs the mall item id"),
+    (dict(channel="mall", placed_at="Oct 25", listing_id="TW963H"), "not a YYYY-MM-DD"),
+    (dict(channel="mall", placed_at="2026-10-25", listing_id="TW963H"), None),
 ])
 def test_validate_channel_and_card_paid(row, want):
     errs = consign.validate([_row(item_id="K99-C001", **row)], [], "K99")

@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-10-25
 ---
 
@@ -233,6 +233,12 @@ Shipping eligible, which makes eBay refuse the publish outright — errorId 2501
 firearms policy plus ITAR Part 121. eIS is an account-level enrollment, so a
 US-only `shipToLocations` is the only lever. Measured on a Ruger Mini-14
 magazine, 2026-08-27.
+
+errorId 25019 also covers items eBay bans outright, which no policy fixes: a
+dried seahorse on the US-only policy was refused by filter
+`PI_Global_APW_SeaHorses` (2026-10-25), which cited the Live animals policy
+even though the seahorse wasn't alive. The listing manager treats that
+as a compliance block, not a routing problem.
 
 Two consequences worth stating: the US-only route **outranks an international
 request** (a legal restriction beats reach) and it **outranks Media Mail** (it
