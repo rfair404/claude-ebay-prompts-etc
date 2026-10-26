@@ -1,5 +1,5 @@
 ---
-version: 3.1.1
+version: 3.2.0
 updated: 2026-10-25
 ---
 
@@ -105,7 +105,7 @@ means.
 In `listings_ledger*.csv`, `DRAFTED` and `SYNCED` (an eBay draft offer, not
 live) are REVIEW, `PUBLISHED` is LIVE, `SOLD`/`SHIPPED` is SOLD and `ENDED`
 is ENDED. On `client_ledger.csv`, `DRAFTED` means `draft.md` exists, `LISTED`
-is LIVE, and a hand-entered `PREP` is an on-hand label that `consign sync`
+is LIVE (on eBay, or on the mall floor once `placed_at` is typed), and a hand-entered `PREP` is an on-hand label that `consign sync`
 keeps until the item is LISTED.
 
 **Waiting is not a state.** An item waiting on Russell's card, a reshoot or
@@ -546,6 +546,14 @@ the antique-mall booth, where every consigned antique sells: type `sold_at`,
 works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
 (agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
 no postage. Handling applies on every channel.
+
+**On the mall floor.** When an item goes into the booth, type the mall's own
+SKU (the GAM SKU from SimpleConsign) in `listing_id` and the date it went out
+in `placed_at`. `sync` then keeps the row `LISTED`, the report counts it
+under listed at its `ask` (the booth tag), and the listing-window flag counts
+from `placed_at`. Off eBay, `listing_id` is never looked up in the eBay
+ledgers. `sync` refuses `placed_at` on an eBay row, or without a
+`listing_id`. A row with no `placed_at` stays on hand (`PREP`).
 
 **Floors and time limits.** These only raise flags. A row's `floor` (from
 Exhibit A; a lot's floor is the total of its rows) is checked against the ask
