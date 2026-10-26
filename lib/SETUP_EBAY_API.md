@@ -408,10 +408,13 @@ DRAFTED never overwrites a later state). The ledger is gitignored
   draft → same SKU, so re-syncs are idempotent), ~4.3B space (negligible
   collision risk). Once an item is synced, its SKU is stored in the draft
   (`meta.ebay_inventory_sku`) and reused unchanged.
-- **Photos via EPS** use the Trading API `UploadSiteHostedPictures` (needs
-  `dev_id`). This is why `dev_id` is required even though the rest is REST.
-- If you'd rather not use the Trading API, you can instead host the photos
-  at public URLs and set them as `product.imageUrls` — but EPS is simplest
-  and keeps images on eBay.
+- **Photos via EPS** use the Media API `createImageFromFile` (same user
+  token, `sell.inventory` scope). The Trading API `UploadSiteHostedPictures`
+  it replaced started answering HTTP 404 "Resource not found" on 2026-10-26.
+  An uploaded image expires after 30 days unless a listing uses it.
+  `dev_id` is still needed for the Trading `GetItem` reads.
+- If you'd rather not upload, you can instead host the photos at public
+  URLs and set them as `product.imageUrls`, but EPS is simplest and keeps
+  images on eBay.
 - `--sync` re-uploads all photos each run (no hash-diff yet); fine for
   typical listing sizes.

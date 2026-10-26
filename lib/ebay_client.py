@@ -102,12 +102,14 @@ ENVIRONMENTS = {
         "apiz_base":  "https://apiz.sandbox.ebay.com",
         "auth_base":  "https://auth.sandbox.ebay.com",
         "token_url":  "https://api.sandbox.ebay.com/identity/v1/oauth2/token",
+        "apim_base":  "https://apim.sandbox.ebay.com",
     },
     "production": {
         "api_base":   "https://api.ebay.com",
         "apiz_base":  "https://apiz.ebay.com",
         "auth_base":  "https://auth.ebay.com",
         "token_url":  "https://api.ebay.com/identity/v1/oauth2/token",
+        "apim_base":  "https://apim.ebay.com",
     },
 }
 
@@ -1087,18 +1089,23 @@ def category_uses_conditions(category_id: str,
 
 
 # ---------------------------------------------------------------------------
-# eBay Picture Services (EPS) upload — Trading API UploadSiteHostedPictures
+# eBay Picture Services (EPS) upload — Media API createImageFromFile
 # ---------------------------------------------------------------------------
 #
-# The REST Sell API has no binary-image upload endpoint; product.imageUrls
-# must already be hosted. The documented way to host a local file on eBay
-# is the Trading API call UploadSiteHostedPictures, which returns a durable
-# EPS FullURL. It uses the same OAuth user token (as an IAF token) plus the
-# dev/app/cert names. This is the function that makes photo upload headless
-# — no browser, no drag-and-drop (the V1 + Chrome-stand-in pain point).
+# The Sell Inventory API has no binary-image upload; product.imageUrls must
+# already be hosted. This used the Trading API UploadSiteHostedPictures until
+# 2026-10-26, when every authenticated call to it started answering HTTP 404
+# "Resource not found" (GetItem on the same endpoint and token still 200s, so
+# it is that one call, not the host or the token). The Commerce Media API is
+# eBay's replacement: one multipart POST with the same OAuth user token
+# (sell.inventory scope), and it returns an i.ebayimg.com EPS URL. The image
+# expires after 30 days unless a listing uses it, which a sync then does.
+# This is what keeps photo upload headless — no browser, no drag-and-drop.
 
 _TRADING_COMPAT_LEVEL = "967"
 _TRADING_SITE_ID = "0"  # US
+
+_MEDIA_IMAGE_PATH = "/commerce/media/v1_beta/image/create_image_from_file"
 
 
 def _trading_endpoint(creds: EbayCredentials) -> str:
@@ -1109,67 +1116,60 @@ def _trading_endpoint(creds: EbayCredentials) -> str:
 
 def upload_site_hosted_picture(image_bytes: bytes, picture_name: str = "photo",
                                creds: Optional[EbayCredentials] = None) -> str:
-    """Upload one image to EPS via UploadSiteHostedPictures; return the EPS URL.
+    """Upload one image to EPS via the Media API; return its EPS image URL.
 
-    Requires: app_id, cert_id, dev_id (Trading API needs all three names),
-    and a user refresh_token. Raises EbayAuthError if any are missing.
+    Requires a user refresh_token (sell.inventory). Raises EbayAuthError if it
+    is missing and EbayAPIError on an HTTP error or a reply with no URL.
     """
     creds = creds or load_credentials()
     if not creds.has_user:
         raise EbayAuthError("EPS upload needs a user refresh_token (Sell scope). See --check.")
-    if not creds.dev_id:
-        raise EbayAuthError(
-            "EPS upload via the Trading API needs ebay.dev_id (Dev ID) in config.\n"
-            "  Find it at https://developer.ebay.com/my/keys (same keyset as app_id/cert_id)."
-        )
-    iaf = get_user_access_token(creds)
-
-    xml = (
-        '<?xml version="1.0" encoding="utf-8"?>'
-        '<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
-        f"<PictureName>{_xml_escape(picture_name)}</PictureName>"
-        "<PictureSet>Supersize</PictureSet>"
-        "</UploadSiteHostedPicturesRequest>"
-    )
+    token = get_user_access_token(creds)
 
     boundary = "----ebaybizEPSboundary7d01b2"
+    filename = picture_name.replace('"', "").replace("\r", "").replace("\n", "") or "photo"
     pre = (
         f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="XML Payload"\r\n'
-        "Content-Type: text/xml;charset=utf-8\r\n\r\n"
-        f"{xml}\r\n"
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="dummy"; filename="{_xml_escape(picture_name)}.jpg"\r\n'
+        f'Content-Disposition: form-data; name="image"; filename="{filename}.jpg"\r\n'
         "Content-Type: image/jpeg\r\n\r\n"
     ).encode("utf-8")
     post = f"\r\n--{boundary}--\r\n".encode("utf-8")
     payload = pre + image_bytes + post
 
     headers = {
-        "X-EBAY-API-COMPATIBILITY-LEVEL": _TRADING_COMPAT_LEVEL,
-        "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
-        "X-EBAY-API-SITEID": _TRADING_SITE_ID,
-        "X-EBAY-API-DEV-NAME": creds.dev_id,
-        "X-EBAY-API-APP-NAME": creds.app_id,
-        "X-EBAY-API-CERT-NAME": creds.cert_id,
-        "X-EBAY-API-IAF-TOKEN": iaf,
+        "Authorization": f"Bearer {token}",
         "Content-Type": f"multipart/form-data; boundary={boundary}",
+        "Accept": "application/json",
     }
-    req = urllib.request.Request(_trading_endpoint(creds), data=payload, method="POST", headers=headers)
+    url = creds.env["apim_base"] + _MEDIA_IMAGE_PATH
+    req = urllib.request.Request(url, data=payload, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             body_text = resp.read().decode("utf-8", errors="replace")
+            location = resp.headers.get("Location")
     except urllib.error.HTTPError as e:
-        raise EbayAPIError(e.code, f"UploadSiteHostedPictures → HTTP {e.code}",
+        raise EbayAPIError(e.code, f"Media createImageFromFile → HTTP {e.code}",
                            e.read().decode("utf-8", errors="replace")) from e
 
-    ack = _xml_tag(body_text, "Ack") or _xml_tag(body_text, "ack")
-    if ack and ack.lower() not in ("success", "warning"):
-        raise EbayAPIError(0, "UploadSiteHostedPictures returned a Failure", body_text)
-    full_url = _xml_tag(body_text, "FullURL")
-    if not full_url:
-        raise EbayAPIError(0, "UploadSiteHostedPictures response had no <FullURL>", body_text)
-    return full_url
+    try:
+        data = json.loads(body_text) if body_text.strip() else {}
+    except ValueError:
+        data = {}
+    image_url = data.get("imageUrl")
+    if not image_url and location:
+        # The create reply is documented as 201 + Location; the body is a bonus.
+        get = urllib.request.Request(location, method="GET", headers={
+            "Authorization": f"Bearer {token}", "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(get, timeout=60) as resp:
+                image_url = (json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+                             .get("imageUrl"))
+        except urllib.error.HTTPError as e:
+            raise EbayAPIError(e.code, f"Media getImage → HTTP {e.code}",
+                               e.read().decode("utf-8", errors="replace")) from e
+    if not image_url:
+        raise EbayAPIError(0, "Media createImageFromFile reply had no imageUrl", body_text)
+    return image_url
 
 
 # A policy hold comes back from GetItem as an <Errors> block with this code,
