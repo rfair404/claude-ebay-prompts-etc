@@ -363,7 +363,33 @@ def delete_campaign(campaign_id: str, confirm: bool, creds=None) -> None:
     print(f"  campaign {campaign_id} deleted")
 
 
+def _ebay_errors(e) -> str:
+    """eBay's refusal, one line per error: errorId, message, parameters."""
+    try:
+        errs = json.loads(e.body or "").get("errors") or []
+    except (ValueError, AttributeError):
+        errs = []
+    if not errs:
+        return f"{e}\n  {e.body or '(no body)'}"
+    lines = [str(e)]
+    for x in errs:
+        params = ", ".join(f"{q.get('name')}={q.get('value')}"
+                           for q in x.get("parameters") or [])
+        lines.append(f"  errorId {x.get('errorId')}: {x.get('message')}"
+                     + (f" [{params}]" if params else ""))
+    return "\n".join(lines)
+
+
 def main() -> int:
+    from ebay_client import EbayAPIError
+    try:
+        return _main()
+    except EbayAPIError as e:
+        print(f"eBay refused: {_ebay_errors(e)}", file=sys.stderr)
+        return 1
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--budget", type=float, default=20.0, help="daily budget USD (default 20)")
     ap.add_argument("--top", type=int, default=40, help="how many listings to propose")
