@@ -7,6 +7,11 @@ call, 2026-10-22). Every PREP question (orientation, crop, colour, hero,
 montage) goes to the `art-director` agent through the
 [`/ad` skill](../.claude/skills/ad/SKILL.md), and its call is the sign-off.
 
+**Gate: eligibility first.** On printed matter or photos that show people,
+PREP starts only after the art director's eligibility check
+([art-director.md](../.claude/agents/art-director.md), "PREP sign-off:
+eligibility first"). A BLOCKED item gets no PREP.
+
 **Output:** `<shoot-dir>/listing/` (the ONLY directory DRAFT reads),
 `<shoot-dir>/.prep/prep.json` (what was done + the approval stamp),
 `<shoot-dir>/.prep/prep_presets.jpg`, `<shoot-dir>/.prep/prep_review.jpg`.

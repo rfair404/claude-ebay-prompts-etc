@@ -225,6 +225,52 @@ def resolve_photo_paths(draft: Draft) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# eBay eligibility — two optional meta keys that keep an item off eBay
+# ---------------------------------------------------------------------------
+#   meta.ebay_eligible: false            default true; with
+#   meta.ebay_ineligible_reason: "<why>"  (e.g. eBay adult policy 4278)
+#   meta.channel: "mall"                 where it sells instead. Blank or
+#                                        "ebay" means eBay, the meaning
+#                                        `channel` has in client_ledger.csv.
+# list_edit.py refuses every eBay-writing path for such a draft; `status`
+# shows it and names "off eBay" as the next action.
+
+_ELIGIBLE_WORDS = frozenset({"", "true", "yes", "y", "on", "1"})
+
+
+def draft_channel(frontmatter: dict) -> str:
+    """meta.channel, lowercased; "" means eBay (blank and "ebay" alike)."""
+    meta = frontmatter.get("meta") if isinstance(frontmatter, dict) else None
+    ch = str((meta or {}).get("channel") or "").strip().lower()
+    return "" if ch == "ebay" else ch
+
+
+def ebay_ineligible_reason(frontmatter: dict) -> str | None:
+    """The reason text when meta.ebay_eligible is false, else None.
+
+    Fails closed: any value other than missing/blank/true-like counts as
+    false, so a typo can't put an ineligible item back on eBay."""
+    meta = frontmatter.get("meta") if isinstance(frontmatter, dict) else None
+    meta = meta or {}
+    val = meta.get("ebay_eligible")
+    if val is None or val is True or str(val).strip().lower() in _ELIGIBLE_WORDS:
+        return None
+    return str(meta.get("ebay_ineligible_reason") or "").strip().rstrip(".") or "no reason given"
+
+
+def ebay_block_reason(frontmatter: dict) -> str | None:
+    """Why this draft must never be written to eBay, as one line, or None."""
+    parts = []
+    reason = ebay_ineligible_reason(frontmatter)
+    if reason:
+        parts.append(f"INELIGIBLE for eBay: {reason}")
+    channel = draft_channel(frontmatter)
+    if channel:
+        parts.append(f"channel is {channel}, not eBay")
+    return "; ".join(parts) or None
+
+
+# ---------------------------------------------------------------------------
 # CLI — offline self-test against a draft file
 # ---------------------------------------------------------------------------
 

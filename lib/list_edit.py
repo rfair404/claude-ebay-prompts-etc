@@ -99,8 +99,8 @@ from typing import Optional
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
 from gdrive_mirror import ledger_changed
-from draft_io import (Draft, iter_drafts, parse_draft, resolve_photo_paths, set_photo_order,
-                       update_meta)
+from draft_io import (Draft, ebay_block_reason, iter_drafts, parse_draft, resolve_photo_paths,
+                       set_photo_order, update_meta)
 from verdict import emit as _verdict_emit
 from voice_check import check_voice
 from price_gate import sold_pull_issues
@@ -427,6 +427,25 @@ def _refuse_voided(sku: str, store: Optional[str]) -> None:
             f"Skipped; nothing was sent to eBay. This draft.md is stale.")
 
 
+class EbayIneligibleError(ValueError):
+    """The draft is marked not for eBay (meta.ebay_eligible: false, or a
+    meta.channel other than eBay, e.g. "mall"). Raised before any eBay call
+    and before the draft or ledger is touched."""
+
+
+def _refuse_off_ebay(draft_path: Path) -> None:
+    """Refuse an eBay-writing path for a draft that must stay off eBay.
+    Unparseable drafts fall through: the path's own parse reports them."""
+    try:
+        fm = parse_draft(draft_path).frontmatter
+    except Exception:  # noqa: BLE001
+        return
+    reason = ebay_block_reason(fm)
+    if reason:
+        raise EbayIneligibleError(
+            f"{draft_path}: {reason}. Refused; nothing was sent to eBay.")
+
+
 def void_listing(sku: str, *, store: Optional[str] = None, confirm: bool = False,
                  creds: Optional[EbayCredentials] = None) -> tuple[dict, str, bool]:
     """Mark a superseded DRAFTED ledger row VOIDED, so a stray draft.md that
@@ -505,6 +524,7 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
     Returns (sku, ledger_path). Creating that row is the point, so a failed
     ledger write raises LedgerWriteError."""
     draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
     if norm["changed"]:
         print(f"  [normalize] {norm['note']}")
@@ -581,6 +601,10 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
         draft = parse_draft(draft_path)
     except Exception as e:  # parse failure is itself the blocking issue
         return [f"draft parse error: {e}"]
+
+    off_ebay = ebay_block_reason(draft.frontmatter)
+    if off_ebay:
+        issues.append(f"ebay: {off_ebay} (never sync, publish or relist on eBay)")
 
     title = str(draft.get("title") or "")
     if not title:
@@ -1765,8 +1789,9 @@ def build_review_card(draft_path: Path,
     (prompts/_shared.md) is unchanged.
     """
     import csv
-    creds = creds or load_credentials()
     draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
+    creds = creds or load_credentials()
     shoot = draft_path.parent
 
     sku, _ = record_draft(draft_path, store=creds.store)  # ensure SKU + DRAFTED
@@ -2031,11 +2056,12 @@ def create_or_update_listing(draft_path: Path,
     strict_ledger=True raises LedgerWriteError when that row can't be written
     (--sync, and --list so nothing goes live untracked); otherwise it only warns.
     """
+    draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
     creds = creds or load_credentials()
     if not creds.has_user:
         raise EbayAuthError("Sync needs user-context OAuth. Run `python list_edit.py --setup-check`.")
 
-    draft_path = _resolve_draft_path(draft_path)
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids before anything hits eBay
     if norm["changed"]:
         print(f"  [normalize] {norm['note']}")
@@ -2363,10 +2389,11 @@ def update_listing_fields(draft_path: Path, fields,
     REFUSES a listing eBay has on a policy hold (ListingOnHold), with the
     Seller Hub revise link. A dry run warns and still builds the plan.
     """
+    draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
     creds = creds or load_credentials()
     if not creds.has_user:
         raise EbayAuthError("Update needs user-context OAuth. Run `python list_edit.py --setup-check`.")
-    draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
     sku = _sku_for(draft)
     canon = _canonical_sync_fields(fields)
@@ -2574,10 +2601,11 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     calls publishOffer; --sync never does.
     The PUBLISHED ledger row is written to `creds.store`'s own file (GH #158).
     """
+    draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
     creds = creds or load_credentials()
     if not creds.has_user:
         raise EbayAuthError("Publish needs user-context OAuth. Run `python list_edit.py --setup-check`.")
-    draft_path = _resolve_draft_path(draft_path)
     draft = parse_draft(draft_path)
     offer_id = str(draft.get("meta.ebay_offer_id") or "").strip()
     if not offer_id:
@@ -3039,6 +3067,12 @@ def _cli() -> None:
     args = ap.parse_args()
 
     try:
+        # Off-eBay drafts are refused before credentials load, so the refusal
+        # is the same line on every machine. The functions check again.
+        write_target = (args.record or args.review or args.sync or args.publish
+                        or args.list_target or args.update)
+        if write_target:
+            _refuse_off_ebay(_resolve_draft_path(write_target))
         if args.validate:
             path = _resolve_draft_path(args.validate)
             issues = validate_draft_for_sync(path)

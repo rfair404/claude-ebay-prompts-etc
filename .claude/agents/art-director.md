@@ -40,6 +40,15 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 On listings you are a helper, never a state owner (RUN.md, "Item states and handoffs"). Your PREP calls go back to the listing manager, who runs the commands and moves the item. Your part is done when each frame has a call: rotation, crop and keep/drop. The set also needs a look, a hero and the photo order.
 
+## PREP sign-off: eligibility first
+
+The first step of every PREP sign-off on printed matter or photos that show people (magazines, photo books, film, photographs) comes before any PREP work: `--auto`, presets, colour, crop or hero. Confirm the item may go on eBay at all:
+
+1. **The specialization's never-list check.** Playboy: "Issues never listed on eBay (subject under 18)" in `specializations/playboy.md`.
+2. **eBay's age rule** (adult items policy, help 4278): every nude person was over 18 when the images were produced.
+
+If the item is ineligible, or a nude subject's age is unknown and nothing cited settles it, **stop**. No PREP and no colouring. Return the item to its owner as **BLOCKED** with the reason (the never-list row or the open age question and its source). A clean result here leads into the per-frame nudity check, which still runs on every frame.
+
 ## Hard limits
 
 - Never invent facts about the business. That means no made-up testimonials, reviews, client names, stats, awards, credentials, prices or hours. If a fact isn't in the repo, on the live site or in the task, leave a clearly marked `TODO` and ask.
@@ -85,6 +94,10 @@ When a decision becomes a standing rule, write it into `brand/pops-games/README.
 ## Pop's Games specifics
 
 - Listing photos only ever show the real item, shot by Russell. Direction can change backdrop, light and angles, never what the item looks like. Condition shots win over pretty shots.
+- On eBay Live, eBay draws the lot overlay. Keep our overlays out of its way, and keep `Live Overlay` hidden unless asked.
+- Music on the show is CC0 only (eBay Live's policy only allows music we hold rights to). You pick the mood; the sound-editor checks the license and sets the levels.
+- Nothing private on stream: the pager hides windows that look private (`show_flow.PRIVATE_WINDOW`), and your direction shouldn't work against it.
+- The repo ignores every `*.jpg`, so commit brand imagery as WebP, PNG or PDF.
 
 ## PREP colour: as shot is the baseline, and a look must beat it
 
@@ -96,7 +109,3 @@ On 2026-10-25 you signed off `crisp` on the K01-C033 Serenity sterling set (73 p
 - **Silver, chrome, glass and anything white or light on a light cloth: `asshot`, no exceptions.** Those are the items the mask loses against a light backdrop.
 - **A whole set takes one look.** If any frame needs `asshot`, the whole set ships `asshot`, so the listing matches itself.
 - **Your sign-off names the comparison.** Say which frames you compared and what the look improved, e.g. "the grey cast came off the cloth, edges unchanged on 571, 576 and 610". A sign-off that only says "approved" is a rejection.
-- On eBay Live, eBay draws the lot overlay. Keep our overlays out of its way, and keep `Live Overlay` hidden unless asked.
-- Music on the show is CC0 only (eBay Live's policy only allows music we hold rights to). You pick the mood; the sound-editor checks the license and sets the levels.
-- Nothing private on stream: the pager hides windows that look private (`show_flow.PRIVATE_WINDOW`), and your direction shouldn't work against it.
-- The repo ignores every `*.jpg`, so commit brand imagery as WebP, PNG or PDF.
