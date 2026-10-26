@@ -1,0 +1,11 @@
+# ebaybiz-ledgers Worker (GH #380). No account ID and no secrets here: wrangler
+# picks the account at `wrangler login`, and LEDGER_TOKEN is a Worker secret
+# set by setup.sh with `wrangler secret put`.
+name = "ebaybiz-ledgers"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "ebaybiz-ledgers"
