@@ -105,7 +105,9 @@ STAGES = {
 # sync. An unrecognized model (a future release, a proxied name) falls back
 # to DEFAULT_PRICING rather than costing $0 — "approximately right" beats
 # "silently free" for a report whose whole point is catching overspend.
+# Rates: platform.claude.com/docs/en/about-claude/pricing, read 2026-10-26.
 MODEL_PRICING = {
+    "claude-opus-5-5": (4.00, 20.00),
     "claude-opus-5": (5.00, 25.00),
     "claude-mythos-5": (10.00, 50.00),
     "claude-mythos-preview": (10.00, 50.00),
@@ -113,6 +115,7 @@ MODEL_PRICING = {
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-4-7": (5.00, 25.00),
     "claude-opus-4-6": (5.00, 25.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
     "claude-sonnet-5": (2.00, 10.00),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
@@ -120,6 +123,18 @@ MODEL_PRICING = {
 DEFAULT_PRICING = (3.00, 15.00)   # unrecognized model: mid-tier fallback rate
 CACHE_WRITE_MULT = 1.25
 CACHE_READ_MULT = 0.10
+# The 5.5 models bill a cache hit at 0.05x input ($0.20 Opus, $0.10 Sonnet),
+# half the older multiplier. Cache reads are about half of all spend here, so
+# the default 0.10 would double-count them.
+CACHE_READ_MULT_BY_MODEL = {"claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.05}
+
+
+def _read_mult(model) -> float:
+    if isinstance(model, str):
+        for prefix, mult in CACHE_READ_MULT_BY_MODEL.items():
+            if model.startswith(prefix):
+                return mult
+    return CACHE_READ_MULT
 
 
 def _model_rates(model) -> tuple:
@@ -142,7 +157,7 @@ def _turn_cost_usd(usage: dict, model) -> float:
     return (input_tok * in_rate
             + output_tok * out_rate
             + cache_w * in_rate * CACHE_WRITE_MULT
-            + cache_r * in_rate * CACHE_READ_MULT) / 1_000_000
+            + cache_r * in_rate * _read_mult(model)) / 1_000_000
 
 
 def _slug(text: str) -> str:
