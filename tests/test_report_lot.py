@@ -139,8 +139,9 @@ def test_written_account_is_plain_ascii(estate, monkeypatch):
 
 
 def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
-    # The client reads the account: an unlisted row shows its estimate, not
-    # the push-high ask it will list at. A live or sold row shows its ask.
+    # The client reads the account: an unsold row shows its estimate, not
+    # the push-high ask it lists at; a listed row with no estimate shows its
+    # ask labelled as the list price.
     import consign as C
     monkeypatch.setattr(C, "REPO", tmp_path)
     monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
@@ -154,13 +155,16 @@ def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
             dict(base, item_id="K01-C040", description="Listed cup", state="LISTED",
                  est_low="90.00", est_high="90.00", ask="145.00"),
             dict(base, item_id="K01-C041", description="Asked only", state="PREP",
-                 ask="24.99")]
+                 ask="24.99"),
+            dict(base, item_id="K01-C042", description="Listed, no estimate", state="LISTED",
+                 ask="35.00")]
     C.write_ledger(lot / C.LEDGER_NAME, rows)
     text, _ = RL.consign_account(lot, "K01", date(2026, 10, 25))
     line = {r["item_id"]: next(ln for ln in text.splitlines() if ln.startswith(r["item_id"]))
             for r in rows}
     assert "$1682.55-3365.09" in line["K01-C033"] and "5995" not in line["K01-C033"]
-    assert "ask $145.00" in line["K01-C040"]
+    assert "$90.00-90.00" in line["K01-C040"] and "145" not in line["K01-C040"]
+    assert "list $35.00" in line["K01-C042"]
     assert "ask $24.99" in line["K01-C041"]
 
 
