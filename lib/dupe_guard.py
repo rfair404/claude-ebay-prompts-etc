@@ -2,25 +2,28 @@
 
 The same object photographed twice (a bin walk-through frame, then its own
 shoot; a second TG-7 import; an intake re-entry) used to come back as a new
-catalog or client-ledger row. Every path that creates a row now scores the
-candidate against the rows already on record first:
+catalog or client-ledger row. Every path that creates a row now checks the
+candidate against the rows already on record first.
 
-    score = description similarity            (0..1, shared words / sqrt(|a|*|b|))
-          + W_FRAME  when a frame id is shared (the same TG-7 frame)
-          + W_BIN    when the bin is the same
-          + W_HINT   when triage's "possible duplicate of <row>" note names it
-                     (a hint lifts a match into review, never on to attach)
-    (capped at 1.0; the same item folder is 1.0 outright)
+ATTACH needs hard evidence that it is the same physical object, and only one
+row may have it:
+- the candidate's item folder is that row's `inventory_folder`, or
+- the candidate shares a frame id with that row and with no other row on
+  record (a frame of that object alone, not a bin walk-through frame, which
+  every item in the bin shares).
+Then the candidate's frames (and folder, if the row had none) go onto that
+row, the row is marked for an IDENTIFY re-run, and no new row is made.
 
-- one row at ATTACH or above, and no second one: the candidate is that row.
-  Its frames (and folder, if the row had none) go onto the row, and the row is
-  marked for an IDENTIFY re-run.
-- two rows at ATTACH or above, or a best score between REVIEW and ATTACH: the
-  candidate goes to the review queue (dupe_queue.csv) for the inventory
-  manager. No row is created.
-- below REVIEW: a new row, as before.
+Everything else makes the row as before. Words can only flag it:
 
-`--new` (force_new) makes the row anyway, and says so in its `why`.
+    score = description similarity  (0..1, shared words / sqrt(|a|*|b|))
+          + W_BIN   when the bin is the same
+          + W_HINT  when triage's "possible duplicate of <row>" note names it
+
+A score of POSSIBLE or more (or two rows with hard evidence) writes a
+POSSIBLE_DUPE line to dupe_queue.csv for the inventory manager.
+
+`--new` (force_new) never attaches, and says so in the row's `why`.
 Plain csv and re only; nothing here calls eBay or deletes anything.
 """
 from __future__ import annotations
@@ -33,9 +36,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-ATTACH = 0.6
-REVIEW = 0.35
-W_FRAME = 0.15
+POSSIBLE = 0.35
 W_BIN = 0.1
 W_HINT = 0.25
 
@@ -57,6 +58,8 @@ STOP = frozenset("""
 """.split())
 _WORD = re.compile(r"[a-z]+")
 _DUPE_NOTE = re.compile(r"possible duplicate", re.I)
+# A camera frame id: letters then 4+ digits (ZZ240649, P1010004, IMG_0042).
+_FRAME = re.compile(r"\b[A-Za-z]{1,5}_?\d{4,}\b")
 
 
 def tokens(text: str) -> set[str]:
@@ -73,7 +76,7 @@ def tokens(text: str) -> set[str]:
 
 def frames(text: str) -> set[str]:
     """Frame ids from a `photos` field: `ZZ240649.JPG ZZ240650` -> {ZZ240649, ZZ240650}."""
-    return {Path(p).stem.upper() for p in re.split(r"[\s,;]+", text or "") if p.strip()}
+    return {m.upper() for m in _FRAME.findall(text or "")}
 
 
 def norm_folder(folder: str) -> str:
@@ -135,8 +138,8 @@ class Match:
 
 @dataclass
 class Decision:
-    action: str            # "attach" | "review" | "new"
-    matches: list          # Match, best first, every one at REVIEW or above
+    action: str            # "attach" | "possible" | "new"
+    matches: list          # Match, best first: hard evidence, then score >= POSSIBLE
 
     @property
     def best(self) -> Optional[Match]:
@@ -159,36 +162,74 @@ def _hinted(hint: str, row: Row) -> bool:
 
 
 def score(cand: dict, row: Row) -> Match:
-    """How sure we are that `cand` (description, bin, photos, inventory_folder,
-    hint) is the object `row` already records."""
+    """How alike `cand` (description, bin, hint) and `row` read. A flag only:
+    words, bin and hint never attach on their own."""
     d = row.data
-    cf = norm_folder(cand.get("inventory_folder", ""))
-    if cf and cf == norm_folder(d.get("inventory_folder", "")):
-        return Match(1.0, row, ["same folder"])
     s = similarity(cand.get("description", ""), d.get("description", ""))
     reasons = [f"words {s:.2f}"]
-    if frames(cand.get("photos", "")) & frames(d.get("photos", "")):
-        s += W_FRAME
-        reasons.append("shared frame")
     cb = norm_bin(cand.get("bin", ""))
     if cb and cb == norm_bin(d.get("bin", "")):
         s += W_BIN
         reasons.append("same bin")
     if _hinted(cand.get("hint", ""), row):
-        # a hint is a guess: it lifts a weak match into review, never to attach
-        s = max(s, min(s + W_HINT, ATTACH - 0.01))
+        s += W_HINT
         reasons.append("triage hint")
     return Match(round(min(s, 1.0), 2), row, reasons)
 
 
+def _shoot_frames(row: Row) -> set[str]:
+    """Frame ids filed in the row's own item folder: its shoot set. Bin and
+    walk-through frames stay in the lot folder, so they are never here."""
+    f = norm_folder(row.data.get("inventory_folder", ""))
+    parts = row.source.resolve().parts
+    if not f or "inventory" not in parts:
+        return set()
+    root = Path(*parts[:len(parts) - 1 - parts[::-1].index("inventory")])
+    d = root / f
+    if not d.is_dir():
+        return set()
+    return {p.stem.upper() for p in d.iterdir()
+            if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg", ".orf", ".nef")}
+
+
+def evidence(cand: dict, row: Row, frame_rows: dict) -> str:
+    """Hard evidence that `cand` is the object `row` records, or ''. A lot
+    member (`lot_id`) shares its folder with its lot-mates, so a folder match
+    there is never proof."""
+    cf = norm_folder(cand.get("inventory_folder", ""))
+    if (cf and cf == norm_folder(row.data.get("inventory_folder", ""))
+            and not row.data.get("lot_id")):
+        return "same folder"
+    shared = frames(cand.get("photos", "")) & frames(row.data.get("photos", ""))
+    own = sorted(f for f in shared if frame_rows.get(f) == 1)
+    if own:
+        filed = _shoot_frames(row)
+        own = [f for f in own if f in filed]
+    return f"shoot frame {own[0]}" if own else ""
+
+
 def decide(cand: dict, rows: list[Row]) -> Decision:
-    ms = sorted((m for m in (score(cand, r) for r in rows) if m.score >= REVIEW),
-                key=lambda m: -m.score)
-    if not ms:
-        return Decision("new", [])
-    if ms[0].score >= ATTACH and (len(ms) == 1 or ms[1].score < ATTACH):
-        return Decision("attach", ms)
-    return Decision("review", ms)
+    """attach: exactly one row has hard evidence. possible: the row is made,
+    but two rows have hard evidence or one reads alike (score >= POSSIBLE).
+    new: nothing close."""
+    frame_rows: dict = {}
+    for r in rows:
+        for f in frames(r.data.get("photos", "")):
+            frame_rows[f] = frame_rows.get(f, 0) + 1
+    hard = []
+    for r in rows:
+        why = evidence(cand, r, frame_rows)
+        if why:
+            m = score(cand, r)
+            hard.append(Match(1.0, r, [why] + m.reasons))
+    soft = sorted((m for m in (score(cand, r) for r in rows)
+                   if m.score >= POSSIBLE and all(m.row is not h.row for h in hard)),
+                  key=lambda m: -m.score)
+    if len(hard) == 1:
+        return Decision("attach", hard + soft)
+    if hard or soft:
+        return Decision("possible", hard + soft)
+    return Decision("new", [])
 
 
 # --------------------------------------------------------------------------- #
@@ -226,17 +267,6 @@ def scope_files(inventory: Path, target: Path) -> list[Path]:
     found.update(p.resolve() for p in inventory.glob(f"tg7-*/{CATALOG}"))
     found.update(p.resolve() for p in inventory.glob(f"CONSIGN-*/**/{LEDGER}"))
     return sorted(found)
-
-
-def expand(paths: list[Path]) -> list[Path]:
-    """Files as given; a folder means every catalog and ledger under it."""
-    out = []
-    for p in paths:
-        if p.is_dir():
-            out += sorted(p.rglob(CATALOG)) + sorted(p.rglob(LEDGER))
-        elif p.is_file():
-            out.append(p)
-    return out
 
 
 def attach(row: Row, cand: dict, today: str) -> bool:
@@ -292,7 +322,7 @@ def slug(text: str, words: int = 5) -> str:
 
 @dataclass
 class Outcome:
-    action: str            # "attached" | "queued" | "added" | "unchanged"
+    action: str            # "attached" | "unchanged" | "added" (flagged when possible)
     key: str
     decision: Decision
     path: Optional[Path] = None   # the folder made for a new row
@@ -301,8 +331,9 @@ class Outcome:
 def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
                     force_new: str = "", attach_to: str = "", make_folder: bool = True,
                     today: Optional[str] = None) -> Outcome:
-    """The one way a catalog.csv row gets made: score `cand` against every
-    row in `scope` (plus the catalog itself), then attach, queue or add."""
+    """The one way a catalog.csv row gets made: check `cand` against every
+    row in `scope` (plus the catalog itself), then attach it, or add the row
+    (with a POSSIBLE_DUPE queue line when one reads alike)."""
     today = today or date.today().isoformat()
     catalog = catalog.resolve()
     files = list(dict.fromkeys([catalog, *(p.resolve() for p in scope)]))
@@ -330,11 +361,6 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
                   "re-run IDENTIFY on this row", today)
         return Outcome("attached" if changed else "unchanged", row.key, decision)
 
-    if decision.action == "review":
-        queue(catalog.parent, "REVIEW", target, cand, decision.matches,
-              "inventory manager: --attach <key> or --new", today)
-        return Outcome("queued", "", decision)
-
     own = loaded[catalog]
     fields = own[0].fields if own else list(CATALOG_FIELDS)
     for f in CATALOG_FIELDS:
@@ -356,6 +382,10 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
         if decision.matches:
             queue(catalog.parent, "FORCED_NEW", f"{target}#{rec['no']}", cand,
                   decision.matches, force_new, today)
+    elif decision.action == "possible":
+        queue(catalog.parent, "POSSIBLE_DUPE", f"{target}#{rec['no']}", cand,
+              decision.matches, "row made; if it is the same object, fold it into "
+              "the match", today)
     write_rows(catalog, fields, [r.data for r in own] + [rec])
     if folder is not None:
         folder.mkdir(parents=True, exist_ok=True)

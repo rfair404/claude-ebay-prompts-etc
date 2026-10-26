@@ -17,10 +17,12 @@ lot's triage.csv (frame, kind, dest, note).
         --description "tin toy car, red" --photos "P1010004 P1010005" \
         --hint "possible duplicate of K01-C042"
 
-`add` is the one way a new catalog row is made (lib/dupe_guard.py): it scores
-the object against the rows already on record and attaches it to the one it
-matches, queues it for the inventory manager when it can't tell, or adds the
-row (and its folder with intake.txt). `--new "<reason>"` adds it anyway.
+`add` is the one way a new catalog row is made (lib/dupe_guard.py). When one
+row on record has the same item folder, or a frame no other row has, the
+object is that row: its frames go onto it and no row is made. Otherwise the
+row (and its folder with intake.txt) is made, with a POSSIBLE_DUPE line in
+dupe_queue.csv when a row reads alike. `--new "<reason>"` never attaches;
+`--attach <key>` attaches to the row named.
 
 It never deletes or overwrites a file, and it moves only within inventory/.
 """
@@ -144,8 +146,7 @@ def add(a: argparse.Namespace) -> None:
     if cat.name != dupe_guard.CATALOG or "inventory" not in cat.parts[:-1]:
         sys.exit(f"not a catalog.csv under inventory/: {a.catalog}")
     inv = Path(*cat.parts[:len(cat.parts) - cat.parts[::-1].index("inventory")])
-    scope = (dupe_guard.expand([Path(p) for p in a.against]) if a.against
-             else dupe_guard.scope_files(inv, cat))
+    scope = dupe_guard.scope_files(inv, cat)
     cand = {k: v for k, v in {
         "description": a.description, "bin": a.bin, "qty": a.qty, "marks": a.marks,
         "condition": a.condition, "photos": a.photos, "inventory_folder": a.folder,
@@ -157,12 +158,12 @@ def add(a: argparse.Namespace) -> None:
         print(f"ATTACH {out.key}" + (" (nothing new)" if out.action == "unchanged" else
                                      ": frames added, re-run IDENTIFY")
               + (f" · {best.label()}" if best else ""))
-    elif out.action == "queued":
-        print(f"REVIEW queued in {cat.parent.name}/{dupe_guard.QUEUE}: "
-              + "; ".join(m.label() for m in out.decision.matches[:3]))
     else:
         print(f"NEW {out.key}" + (f" -> {dupe_guard.rel(out.path)}/" if out.path else "")
               + (" (--new)" if a.new else ""))
+        if out.decision.action == "possible" and not a.new:
+            print(f"POSSIBLE_DUPE in {cat.parent.name}/{dupe_guard.QUEUE}: "
+                  + "; ".join(m.label() for m in out.decision.matches[:3]))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -180,16 +181,13 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("summary", help="print the finish pop-up line")
     s.add_argument("lot")
     n = sub.add_parser("add", help="add a catalog row, unless the object is already "
-                                   "on record (then attach or queue it)")
+                                   "on record (then its frames go onto that row)")
     n.add_argument("catalog", help="the bin's catalog.csv (made if missing)")
     n.add_argument("--description", required=True)
     for f in ("bin", "qty", "marks", "condition", "photos", "why"):
         n.add_argument(f"--{f}", default="")
     n.add_argument("--folder", default="", help="its item folder, when it has one")
     n.add_argument("--hint", default="", help="triage's 'possible duplicate of ...' note")
-    n.add_argument("--against", nargs="+", default=[], metavar="PATH",
-                   help="catalogs, ledgers or folders to check (default: this bin, "
-                        "every tg7-* catalog and every CONSIGN-* ledger)")
     g = n.add_mutually_exclusive_group()
     g.add_argument("--new", default="", metavar="REASON",
                    help="add the row anyway; the reason goes in its `why`")

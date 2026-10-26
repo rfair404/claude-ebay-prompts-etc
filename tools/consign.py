@@ -1341,11 +1341,11 @@ def next_id(rows: list[dict]) -> int:
 def import_rows(d: Path, incoming: list[dict], client: Optional[str],
                 intake: Optional[str] = None, force_new: str = "") -> dict:
     """Append `incoming` to the folder's ledger, unless a row is an object one
-    of the client's ledgers already holds (lib/dupe_guard.py). Then its frames
-    go onto that row (attached), or, when it could be more than one row, it
-    waits in dupe_queue.csv for the inventory manager (queued). `force_new`
-    adds every row anyway and puts the reason in its `why`. Returns the counts
-    added, skipped, attached and queued."""
+    of the client's ledgers already holds (lib/dupe_guard.py: the same folder,
+    or a frame no other row has). Then its frames go onto that row (attached).
+    A row that only reads like one on record is added and flagged in
+    dupe_queue.csv. `force_new` never attaches and puts the reason in the
+    row's `why`. Returns the counts added, skipped, attached and flagged."""
     if client:
         if not CODE_RE.match(client):
             raise SystemExit(f"[X] client code {client!r}: letters, digits, - and _ only")
@@ -1372,7 +1372,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     # Only rows already on record: one catalog's own rows are distinct objects.
     on_record = [dupe_guard.Row(p, r) for p, rs in ledgers.items() for r in rs]
     today = date.today().isoformat()
-    count = dict(added=0, skipped=0, attached=0, queued=0)
+    count = dict(added=0, skipped=0, attached=0, flagged=0)
     touched = set()
     for rec in incoming:
         rec["intake"] = rec["intake"] or received
@@ -1398,12 +1398,11 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
             else:
                 count["skipped"] += 1
             continue
-        elif hit.action == "review":
-            dupe_guard.queue(d, "REVIEW", d.name, rec, hit.matches,
-                             "inventory manager: import it alone with --new, or put "
-                             "its frames on the matching row", today)
-            count["queued"] += 1
-            continue
+        elif hit.action == "possible":
+            dupe_guard.queue(d, "POSSIBLE_DUPE", f"{code}-C{n:03d}", rec, hit.matches,
+                             "row made; if it is the same object, fold it into the "
+                             "match", today)
+            count["flagged"] += 1
         rec["item_id"] = f"{code}-C{n:03d}"
         rec["client_code"] = code
         rec["state"] = rec["state"] or "INTAKE"
@@ -1963,7 +1962,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="date the items were received (default: context.txt "
                         "`acquired:`, the folder's date, or today)")
     p.add_argument("--new", default="", metavar="REASON",
-                   help="add every row even when one looks like a row already on "
+                   help="add every row, never attach one to a row already on "
                         "record; the reason goes in its `why`")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
@@ -1993,8 +1992,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"{d.name}: added {c['added']} row(s), skipped {c['skipped']} duplicate(s)"
               + (f", attached {c['attached']} to a row already on record (re-run "
                  f"IDENTIFY)" if c["attached"] else "")
-              + (f", queued {c['queued']} for review in {dupe_guard.QUEUE}"
-                 if c["queued"] else ""))
+              + (f", flagged {c['flagged']} added row(s) as possible duplicates in "
+                 f"{dupe_guard.QUEUE}" if c["flagged"] else ""))
         if args.client and args.client not in load_registry():
             print(f"  ! {args.client} is not in {SA._rel(registry_path())} yet: add a row "
                   f"(split defaults to 0.5 until then)")
