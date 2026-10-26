@@ -164,3 +164,38 @@ def test_import_says_so_when_triage_leaves_no_summary(importer, tmp_path):
     _import({**env, "FAKE_NO_SUMMARY": "1"})
     last = (tmp_path / "notify.calls").read_text().splitlines()[-1]
     assert last.startswith("-a|TG-7|TG-7: sorting failed|2 frame(s) sorted: 1 overview, 1 item")
+
+
+def test_import_without_a_hint_passes_no_model(importer, tmp_path):
+    main, env = importer
+    _import(env)
+    args = (tmp_path / "claude.args").read_text().splitlines()
+    assert "--model" not in args
+    assert "first-pass" not in args[args.index("-p") + 1]
+
+
+def test_a_hint_file_steers_one_import_then_is_used_up(importer, tmp_path):
+    main, env = importer
+    hints = main / "inventory" / "_consign"
+    hints.mkdir()
+    (hints / "tg7_next.txt").write_text("client: KBD\nmodel: haiku\n")
+    assert _import(env).returncode == 0
+    args = (tmp_path / "claude.args").read_text().splitlines()
+    assert args[args.index("--model") + 1] == "haiku"
+    prompt = args[args.index("-p") + 1]
+    assert "first-pass triage only" in prompt and "client KBD" in prompt
+    lot = next((main / "inventory").glob("tg7-*"))
+    assert not (hints / "tg7_next.txt").exists()
+    assert (hints / f"tg7_next.used-{lot.name}.txt").exists()
+    assert "hint used: client=KBD model=haiku" in (lot / "import.log").read_text()
+
+
+def test_a_hint_value_that_is_not_a_plain_code_is_ignored(importer, tmp_path):
+    main, env = importer
+    hints = main / "inventory" / "_consign"
+    hints.mkdir()
+    (hints / "tg7_next.txt").write_text("client: not a code\nmodel: haiku; rm -rf /\n")
+    _import(env)
+    args = (tmp_path / "claude.args").read_text().splitlines()
+    assert "--model" not in args
+    assert "client" not in args[args.index("-p") + 1].split("first-pass")[1]
