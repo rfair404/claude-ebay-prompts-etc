@@ -20,6 +20,15 @@ false`, since the card waits on it) with this brief:
   says: read the diffs, check CI on both OSes, look for collisions between
   open PRs, post one `gh pr review <n> --comment` per PR starting with its
   verdict. Review branches in a worktree, never in the main checkout.
+- **Merge every open PR that can merge.** A PR goes on **Merge now** when
+  CI is green on both OSes, it merges cleanly onto main plus the PRs ahead
+  of it, and it has no must-fix that would break main (a bug, a collision,
+  a rule break). Nits, naming, "would be cleaner as", a better home for a
+  function: none of these hold a PR. Merge it and post the note as a
+  follow-up for its owner. If a PR conflicts only with another PR on today's
+  list, order the two so one lands first, and send the other to
+  **Needs a fix first** only if it still won't merge cleanly after that. Each
+  **Needs a fix first** line names what stops the merge today.
 - Mark reviewable drafts ready (`gh pr ready <n>`) and decide stale and
   overlapping PRs (merge, fold or close) yourself.
 - Work out the next version from the last tag (`git describe --tags
