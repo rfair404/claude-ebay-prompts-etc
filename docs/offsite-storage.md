@@ -1,5 +1,5 @@
 ---
-version: 1.2.0
+version: 1.2.1
 updated: 2026-10-26
 ---
 
@@ -170,9 +170,19 @@ which keeps backing the ledgers up as before.
   fork the record.
 - **Cost:** expected to stay within the R2 and Workers free tiers.
 
-### Setup (once)
+### Setup (once): run after P1.4 merges
 
-From the main checkout (the GH #103 rule). The script logs in to Cloudflare,
+Russell has nothing to do after this release. The setup and seed below wait
+until P1.2 to P1.4 have merged.
+
+Don't run `ledger seed --apply` until P1.2 to P1.4 have converted every
+writer. Until then, `list_edit`, `sync_actuals` and `consign` still write the
+CSVs directly, so the seeded cloud copy goes stale. The first `update()` after
+P1.2 then GETs the stale cloud rows, applies `fn` and `atomic_write`s them
+over the local CSV (`lib/ledger_store.py` `update()`, 200 branch). Every row
+written since the seed is lost, and cloud mode leaves no `.backup-*`.
+
+When P1.4 has merged, run it from the main checkout (the GH #103 rule). The script logs in to Cloudflare,
 creates the bucket and its 90-day `history/` rule, deploys the Worker, sets a
 fresh token, writes the `ledger_store:` block into `config.yaml` (don't type
 it by hand), runs `ledger check` and logs out. Re-running it rotates the token.
