@@ -364,11 +364,7 @@ def delete_campaign(campaign_id: str, confirm: bool, creds=None) -> None:
 
 
 def _ebay_errors(e) -> str:
-    """eBay's refusal, one line per error: errorId, message, parameters.
-
-    The traceback alone says only "HTTP 400"; the reason is in the body
-    (#366's create failed on errorId 36161 and the run showed none of it).
-    """
+    """eBay's refusal, one line per error: errorId, message, parameters."""
     try:
         errs = json.loads(e.body or "").get("errors") or []
     except (ValueError, AttributeError):
