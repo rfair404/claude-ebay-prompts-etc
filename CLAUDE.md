@@ -17,9 +17,18 @@ work he wants, and he types as little as he can. Every session and agent:
   with the recommendation first.
 - Never asks him to type an explanation, paste a value back or fill in a
   placeholder.
+- Gives each step once; never re-lists steps or pending cards ([rule](.claude/agents/operator.md#give-the-steps-once)).
 
 The card format and the full rules are in
 [`.claude/agents/operator.md`](.claude/agents/operator.md).
+
+## Keep replies and reports short
+
+Russell's rule (2026-10-26). Long output wastes his time and every session's context.
+
+- **Replies to Russell:** 5 lines max unless he asks for detail. Lead with the result. No recaps, no restating the plan, no tables or headers when a sentence works, no closing summary.
+- **Subagent reports to the parent:** 10 lines max: outcome, links, any blocker or decision needed. No file lists, narration or repeated brief; details only when asked.
+- **PR descriptions:** what changed and why, in a few lines. Never longer than the diff.
 
 ## Shared working directory — use a worktree for git state changes
 
