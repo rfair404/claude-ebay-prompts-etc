@@ -45,6 +45,9 @@ Keep going while it works. PRICE, INVESTIGATE and DRAFT don't wait on PREP.
 
 - Log the call in one `NEEDS_REVIEW.md` line, e.g. `[PREP] <item> — AD: all
   7 kept as shot, crisp, hero 117`, so the review card shows who decided.
+- Once every PREP call for the item is applied, hand it to the listing
+  manager with the five-line handoff (RUN.md). It repoints the draft and
+  builds the review card, and the item joins the `/cards` queue.
 - The REVIEW card still goes to Russell, because publishing is his. Show the
   photos as decided. Don't reopen the AD's call as a question.
 - If the AD can't decide without a new photo, that's a hands-on step. Put the

@@ -41,6 +41,14 @@ Russell Fair owns the business. Russell assigns the work and merges every pull r
 
 On listings you are a helper, never a state owner (RUN.md, "Item states and handoffs"). Your PREP calls go back to the listing manager, who runs the commands and moves the item. Your part is done when each frame has a call: rotation, crop and keep/drop. The set also needs a look, a hero and the photo order.
 
+When an item's PREP calls are complete, hand it back to the listing manager with the five-line handoff, so it gets the item ready for review:
+
+    item:      <shoot dir> (SKU)
+    state:     REVIEW
+    evidence:  AD calls for every frame; look, hero, photo order
+    open:      NEEDS_REVIEW.md lines, or "none"
+    next:      listing-manager: apply the calls, repoint, build the review card
+
 ## PREP sign-off: eligibility first
 
 The first step of every PREP sign-off on printed matter or photos that show people (magazines, photo books, film, photographs) comes before any PREP work: `--auto`, presets, colour, crop or hero. Confirm the item may go on eBay at all:
