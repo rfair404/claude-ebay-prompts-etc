@@ -1648,16 +1648,23 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     sold_net = _sum(dec(r["net"]) if r["actuals_complete"] == "yes" else provisional_net(r)
                     for r in sold)
     listed = [r for r in units if r["state"] == "LISTED"]
-    listed_ask = [dec(r["ask"]) for r in listed]
     hand = [r for r in rows if (r["state"] or "INTAKE") in ON_HAND]
-    lows, highs, unpriced = [], [], 0
-    for r in hand:
-        lo, hi = dec(r["est_low"]), dec(r["est_high"])
-        if lo is None and hi is None:
-            unpriced += 1
-            continue
-        lows.append(lo if lo is not None else hi)
-        highs.append(hi if hi is not None else lo)
+
+    def estimates(group):
+        """(lows, highs, unestimated): a blank bound takes the other one."""
+        lows, highs, none = [], [], 0
+        for r in group:
+            lo, hi = dec(r["est_low"]), dec(r["est_high"])
+            if lo is None and hi is None:
+                none += 1
+                continue
+            lows.append(lo if lo is not None else hi)
+            highs.append(hi if hi is not None else lo)
+        return lows, highs, none
+    # The client is quoted Conservative-Recommended (est_low-est_high), never
+    # the Push-high ask a listing sits at; the ask shows only as list price.
+    listed_lows, listed_highs, listed_none = estimates(listed)
+    lows, highs, unpriced = estimates(hand)
     gone = by_state["RETURNED"] + by_state["DISPOSED"]
     excluded = [r for r in rows if r["state"] == "EXCLUDED"]
 
@@ -1665,9 +1672,10 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     out.append(f"    sold     {len(sold):>3}  net ${money(sold_net)}"
                + (f"  ({len(incomplete)} provisional: ad fee or postage not known yet)"
                   if incomplete else ""))
-    out.append(f"    listed   {len(listed):>3}  at ask ${money(_sum(listed_ask))}"
-               + (f"  (unpriced {sum(a is None for a in listed_ask)})"
-                  if any(a is None for a in listed_ask) else ""))
+    out.append(f"    listed   {len(listed):>3}  est ${money(_sum(listed_lows))}-"
+               f"${money(_sum(listed_highs))}"
+               f"  (list price ${money(_sum(dec(r['ask']) for r in listed))})"
+               + (f"  (no estimate {listed_none})" if listed_none else ""))
     out.append(f"    on hand  {sum(r['item_id'] not in mates for r in hand):>3} unit(s), "
                f"{len(hand)} item(s)  est ${money(_sum(lows))}-${money(_sum(highs))}"
                + (f"  (unpriced {unpriced})" if unpriced else ""))

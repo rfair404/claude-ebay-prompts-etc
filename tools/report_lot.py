@@ -335,10 +335,15 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     def val(r: dict) -> str:
         if r.get("state") == "EXCLUDED":
             return "kept $" + (r.get("buyout_price") or "0")
-        # The client reads this: an unlisted row shows its estimate, not the
-        # ask it will list at, so a push-high ask is never read as a promise.
-        live = (r.get("state") or "") in ("LISTED",) + C.SOLD_STATES
-        if r.get("ask") and (live or not r.get("est_low")):
+        # The client reads this: an unsold row shows its estimate
+        # (Conservative-Recommended), not the push-high ask it lists at, so the
+        # ask is never read as a promise. A listed row with no estimate shows
+        # its ask labelled as the list price.
+        state = r.get("state") or ""
+        lo, hi = r.get("est_low") or r.get("est_high"), r.get("est_high") or r.get("est_low")
+        if state == "LISTED":
+            return f"${lo}-{hi}" if lo else ("list $" + r["ask"] if r.get("ask") else "-")
+        if r.get("ask") and (state in C.SOLD_STATES or not r.get("est_low")):
             return "ask $" + r["ask"]
         if r.get("est_low"):
             return f"${r['est_low']}-{r.get('est_high') or '?'}"

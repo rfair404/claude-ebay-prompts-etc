@@ -806,8 +806,24 @@ def test_a_mall_placement_is_listed_and_its_gam_sku_never_matched_on_ebay(shop, 
     capsys.readouterr()
     assert consign.main(["report", "--client", "K99"]) == 0
     out = capsys.readouterr().out
-    assert "listed     2  at ask $32.00" in out       # C001 + C003, the booth tags
+    # C001 + C003, the booth tags: no estimate, so nothing is quoted, and the
+    # tags show only as the list price
+    assert "listed     2  est $0.00-$0.00  (list price $32.00)  (no estimate 2)" in out
     assert "on hand    1 unit(s)" in out              # C002 only
+
+
+def test_a_listed_row_is_quoted_at_its_estimate_not_its_ask():
+    # The client is quoted Conservative-Recommended; the Push-high ask is only
+    # the list price and never enters the quoted value.
+    base = {k: "" for k in consign.COLUMNS}
+    rows = [dict(base, item_id="K01-C001", state="LISTED", ask="99.00",
+                 est_low="40.00", est_high="60.00"),
+            dict(base, item_id="K01-C002", state="LISTED", ask="30.00", est_high="20.00"),
+            dict(base, item_id="K01-C003", state="LISTED", ask="50.00")]
+    out = consign.client_summary([("i", r) for r in rows], Decimal("0.6"), today=TODAY)
+    listed = next(ln for ln in out if ln.strip().startswith("listed"))
+    assert listed.split("listed", 1)[1].split() == [
+        "3", "est", "$60.00-$80.00", "(list", "price", "$179.00)", "(no", "estimate", "1)"]
 
 
 @pytest.mark.parametrize("row, state, flag", [
