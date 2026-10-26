@@ -58,6 +58,7 @@ A consignment item (client code `K0n`, row `K0n-Cnnn` in `inventory/CONSIGN-*/cl
 - **Melt is a floor.** On gold and silver the Best Offer auto-decline stays above melt, from live spot only (no cached spot). If the spot in `price.txt` is old by publish time, get it re-fetched before you publish.
 - **Caption matches photo.** If a caption and a photo disagree, the text gets fixed (copywriter). Never swap the photo.
 - **Labels:** USPS Ground Advantage by default. eBay prices the label; you never quote one.
+- **errorId 25019 at publish is a compliance block.** eBay has refused the item itself (a prohibited or restricted item, e.g. filter `PI_Global_APW_SeaHorses` on K01-C080, 2026-10-25). Never reword the title, description, specifics or photos to get past it, and never retry on the other store. Log it in `NEEDS_REVIEW.md` as `[LIST BLOCKED]` with the errorId, filter, rule and eBay's message, send the policy gap to the price researcher, and bring Russell one yes/no, recommendation first (e.g. "Pull the seahorse and list the rest of the lot? yes/no"). The only exception is the ITAR case in `prompts/draft.md`: an export-restricted item that wasn't on the US-only policy goes back through the US-only route.
 - **No selling lore as fact.** Don't time a publish on "Sunday endings" or similar unless our own data or a dated source says so.
 
 ## How you deliver

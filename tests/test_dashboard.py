@@ -194,28 +194,65 @@ def test_gather_backlog_rows_carry_sku_and_ledger_status(repo):
     assert row["ledger_status"] == "SYNCED"
 
 
-def test_gather_backlog_preloads_the_ledger_once_not_once_per_shoot(repo, monkeypatch):
-    # lib.status.gather()'s own _ledger_row() re-scans listings_ledger.csv
-    # on every call unless handed a preloaded {sku: row} map — verify
-    # gather_backlog() always passes one, across multiple shoots, so a
-    # large inventory doesn't re-read the ledger file per shoot.
+def test_gather_backlog_reads_each_ledger_once_not_once_per_shoot(repo, monkeypatch):
+    # gather_backlog() hands lib.status.gather() every store's ledger
+    # preloaded, so a large inventory doesn't re-read a ledger per shoot.
     inv = repo / "inventory"
     for name in ("item-1", "item-2", "item-3"):
         _frame(_shoot(inv, "lot", name))
     _write_ledger(repo / "listings_ledger.csv", [{"sku": "abc12345", "status": "SYNCED"}])
 
-    calls = []
-    real_ledger_row = _status._ledger_row
-
-    def _spy(sku, ledger_by_sku=None, *rest, **kw):
-        calls.append(ledger_by_sku)
-        return real_ledger_row(sku, ledger_by_sku, *rest, **kw)
-
-    monkeypatch.setattr(_status, "_ledger_row", _spy)
+    reads = []
+    real_rows = dash._rows
+    monkeypatch.setattr(dash, "_rows", lambda p: reads.append(p) or real_rows(p))
+    monkeypatch.setattr(_status, "load_ledger",
+                        lambda store: pytest.fail(f"re-read {store} per shoot"))
     d = dash.gather_backlog()
     assert d["count"] == 3
-    assert len(calls) == 3
-    assert all(c is not None for c in calls)   # every call got the preloaded map
+    assert len(reads) == len(set(reads))
+
+
+def test_gather_backlog_in_a_worktree_reads_the_main_checkouts_ledgers(repo, monkeypatch):
+    """2026-10-25: run from a worktree, the dashboard found no ledger and
+    listed 12 items as ready for review — 10 were PUBLISHED and 1 SOLD."""
+    from test_status import make_worktree
+    import stores as _stores
+    main, wt = make_worktree(repo)
+    inv = wt / "inventory"
+    monkeypatch.setattr(dash, "REPO", wt)
+    monkeypatch.setattr(dash, "INVENTORY", inv)
+    monkeypatch.setattr(dash, "LEDGER", wt / "listings_ledger.csv")
+    monkeypatch.setattr(_stores, "REPO", wt)
+    for name, sku, store in (("pub", "aaaa1111", ""), ("sold", "bbbb2222", "junk"),
+                             ("new", "cccc3333", "")):
+        shoot = _shoot(inv, name)
+        _frame(shoot)
+        store_line = f'store: "{store}"\n' if store else ""
+        (shoot / "draft.md").write_text(
+            f'---\ntitle: "x"\n{store_line}meta:\n  ebay_inventory_sku: "{sku}"\n---\nb\n')
+    _write_ledger(main / "listings_ledger.csv",
+                  [{"sku": "aaaa1111", "status": "PUBLISHED"},
+                   {"sku": "bbbb2222", "status": "SOLD"},
+                   {"sku": "cccc3333", "status": "DRAFTED"}])
+    _write_ledger(main / "listings_ledger-junk.csv", [{"sku": "bbbb2222", "status": "VOIDED"}])
+
+    d = dash.gather_backlog()
+    by = {Path(r["dir"]).name: r for r in d["rows"]}
+    assert by["pub"]["ledger_status"] == "PUBLISHED"
+    assert by["sold"]["ledger_status"] == "SOLD"
+    assert d["missing_ledgers"] == []
+    # Only the DRAFTED one can be waiting for review; the listed ones are not.
+    stuck = [n for n, r in by.items() if r["bucket"] == "ready for review"]
+    assert stuck in ([], ["new"])
+    assert "ready for review" not in (by["pub"]["bucket"], by["sold"]["bucket"])
+
+
+def test_a_missing_ledger_is_reported_not_silently_ready_for_review(repo):
+    shoot = _shoot(repo / "inventory", "item")
+    _frame(shoot)
+    d = dash.gather_backlog()
+    assert d["missing_ledgers"] == ["listings_ledger.csv"]
+    assert "No ledger found" in dash._backlog_section(d)
 
 
 # ---------------------------------------------------------------------------

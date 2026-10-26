@@ -101,6 +101,25 @@ def test_strict_does_not_raise_for_ordinary_item():
     assert chosen == _BASE_POLICIES["fulfillment"]
 
 
+# --------------------------------------------------------- a draft's own policy
+def test_a_draft_named_policy_wins_over_the_default():
+    # An eBay Live lot on the buyer-paid LIVE policy (tools/live/tool_lot.py).
+    draft = _draft({"title": ORDINARY_TITLE, "shipping": {"fulfillment_policy_id": "live-fid"}})
+    with _patched_fulfillment_policies([*_BASE_POLICIES.values(), "live-fid"]):
+        chosen, msgs = L._resolve_shipping_policy(draft, dict(_BASE_POLICIES), _Creds(), strict=True)
+    assert chosen == "live-fid"
+    assert "draft's own policy" in msgs[0]
+
+
+def test_a_us_only_item_with_its_own_policy_still_goes_us_only():
+    # Legal routing outranks the draft's choice: the named policy may ship Worldwide.
+    policies = {**_BASE_POLICIES, "fulfillment_us_only": "usonly-fid"}
+    draft = _draft({"title": RESTRICTED_TITLE, "shipping": {"fulfillment_policy_id": "live-fid"}})
+    with _patched_fulfillment_policies([*policies.values(), "live-fid"]):
+        chosen, _msgs = L._resolve_shipping_policy(draft, policies, _Creds(), strict=True)
+    assert chosen == "usonly-fid"
+
+
 # --------------------------------------------------------- strict=False (preflight, advisory)
 def test_non_strict_falls_back_with_blocker_message():
     draft = _draft({"title": RESTRICTED_TITLE})

@@ -712,6 +712,15 @@ def test_turn_cost_usd_prices_input_output_and_cache_tiers():
     assert _turn_cost_usd({}, "claude-opus-5") == 0.0
 
 
+def test_turn_cost_usd_prices_the_5_5_models_at_their_own_rates():
+    # Opus 5.5 is $4/$20 with a $0.20 cache hit, not Opus 5's $5/$25/$0.50.
+    assert _turn_cost_usd({"input_tokens": 1_000_000}, "claude-opus-5-5") == 4.0
+    assert _turn_cost_usd({"output_tokens": 1_000_000}, "claude-opus-5-5") == 20.0
+    assert _turn_cost_usd({"cache_creation_input_tokens": 1_000_000}, "claude-opus-5-5") == 5.0
+    assert round(_turn_cost_usd({"cache_read_input_tokens": 1_000_000}, "claude-opus-5-5"), 6) == 0.2
+    assert round(_turn_cost_usd({"cache_read_input_tokens": 1_000_000}, "claude-sonnet-5-5"), 6) == 0.1
+
+
 def test_command_bucket_normalizes_common_repo_commands():
     assert _command_bucket(
         "python -m lib.photo_prep.prep inventory/x --approve-auto"

@@ -2523,6 +2523,13 @@ def _presets_sheet(rows, out_path: Path, cell: int = 340) -> None:
         c = rec["crop"]
         bits = [f"rot {o['applied']}deg ({o['source']})",
                 "crop yes" if c["applied"] else f"crop no ({c['reason'][:38]})"]
+        # A look that failed the improvement gate rendered as shot; say so,
+        # or its tile reads as a look that happens to change nothing.
+        fell = [p for p in names
+                if ((rec.get("presets") or {}).get(p, {}).get("report") or {})
+                .get("fell_back_to_asshot")]
+        if fell:
+            bits.append("as shot, not better: " + ", ".join(fell))
         colour = (120, 200, 255) if o["needs_ask"] else (200, 235, 200)
         strips.append(_label(cell * (len(names) + 1), f"{name}   " + "  |  ".join(bits),
                              colour, 26))
@@ -2552,6 +2559,9 @@ def _review_sheet(rows, out_path: Path, cell: int = 340) -> None:
         if col:
             bits.append(f"bg {col['bg_luma_before']:.0f}->{col['bg_luma_after']:.0f}")
             bits.append(f"str {col['strength']}")
+            if col.get("fell_back_to_asshot"):
+                bits.append("AS SHOT (look not better: "
+                            + "; ".join(col["verify"]["reasons"])[:60] + ")")
             if col["subject_newly_clipped"] or col["subject_newly_crushed"]:
                 bits.append(f"rails +{col['subject_newly_clipped']}/"
                             f"{col['subject_newly_crushed']}")

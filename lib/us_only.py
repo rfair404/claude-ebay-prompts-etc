@@ -20,6 +20,19 @@ is what makes a listing eBay-International-Shipping eligible. eIS is an
 ACCOUNT-level enrollment, so it cannot be switched off per listing from the
 draft — the only lever is a policy whose shipToLocations are US-only.
 
+**US-only has to be spelled as exclusions.** Measured 2026-10-25 on the main
+store's US-only policy 297194269014: with `shipToLocations: {}` the listing
+read back `ShipToLocations: US` with no international services, and eIS still
+offered it to GB, CA and DE buyers. A PUT of `regionIncluded: [US]` was
+refused as "the same as in the system" (eBay treats empty as US), and
+`regionExcluded: [Worldwide]` was stored but never reached the listings.
+Excluding every world region outside North America plus CA, MX, BM, GL and PM
+by name (`US_ONLY_SHIP_TO`) reached the listings' `ExcludeShipToLocation`
+within minutes, with no re-push, and eIS stopped offering them abroad.
+Puerto Rico still gets eIS next to USPS; it is US territory, so that is
+domestic for export purposes. `ship_to_warning` flags a configured US-only
+policy that lacks these exclusions.
+
 Hence `ebay.fulfillment_policy_id_us_only`. Routing lives in
 `list_edit.py:_resolve_shipping_policy`; this module only decides WHETHER an
 item needs it.
@@ -146,3 +159,49 @@ def us_only_reasons(draft: Any) -> list[str]:
 
 def is_us_only(draft: Any) -> bool:
     return bool(us_only_reasons(draft))
+
+
+# --- the policy side: what a US-only fulfillment policy must carry ----------
+# Account API RegionSet. eBay drops the regionIncluded US on read-back (it is
+# implied on EBAY_US); the exclusions are what keep eIS off. See the module
+# docstring for the 2026-10-25 measurements behind each entry.
+US_ONLY_EXCLUDED_WORLD_REGIONS = (
+    "Africa", "Asia", "Central America and Caribbean", "Europe",
+    "Middle East", "Oceania", "South America", "Southeast Asia",
+)
+# North America minus the US. "North America" itself is not excluded, so the
+# domestic market can never be caught by the exclusion.
+US_ONLY_EXCLUDED_COUNTRIES = ("CA", "MX", "BM", "GL", "PM")
+
+US_ONLY_SHIP_TO: dict = {
+    "regionIncluded": [{"regionName": "US", "regionType": "COUNTRY"}],
+    "regionExcluded": (
+        [{"regionName": r, "regionType": "WORLD_REGION"}
+         for r in US_ONLY_EXCLUDED_WORLD_REGIONS]
+        + [{"regionName": c, "regionType": "COUNTRY"}
+           for c in US_ONLY_EXCLUDED_COUNTRIES]),
+}
+
+
+def ship_to_warning(policy: dict) -> str:
+    """Why this fulfillment policy will NOT keep a listing US-only, or "".
+
+    For the policy configured as `fulfillment_policy_id_us_only`. An empty or
+    US-included-only shipToLocations looks domestic and still lets account-
+    level eIS sell the item abroad, so the check is on the exclusions.
+    """
+    ship_to = policy.get("shipToLocations") or {}
+    excluded = {str(r.get("regionName") or "")
+                for r in (ship_to.get("regionExcluded") or [])}
+    missing = [r for r in US_ONLY_EXCLUDED_WORLD_REGIONS + US_ONLY_EXCLUDED_COUNTRIES
+               if r not in excluded]
+    if not missing:
+        return ""
+    name = policy.get("name") or policy.get("fulfillmentPolicyId") or "?"
+    if not excluded:
+        what = "has no shipToLocations exclusions"
+    else:
+        what = "does not exclude " + ", ".join(missing)
+    return (f"shipping: WARNING — US-only policy '{name}' {what}, so eBay "
+            "International Shipping can still offer this listing abroad. PUT "
+            "us_only.US_ONLY_SHIP_TO as its shipToLocations (lib/us_only.py).")

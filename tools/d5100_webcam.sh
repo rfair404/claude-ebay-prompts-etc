@@ -13,6 +13,12 @@
 # live view. Every 2s a frame is written to $SNAP, for checking framing while OBS holds the
 # webcam. The camera takes one USB connection at a time, so other gphoto2 commands (ISO,
 # shutter) only work while this is stopped.
+#
+# Every gphoto2 call names the D5100's port: with no --port gphoto2 takes the first camera it
+# lists, and a TG-7 plugged in over USB ("Mass Storage Camera  disk:/media/...") comes first, so
+# live view went to the TG-7 and failed forever (2026-10-25). The port is read from
+# `gphoto2 --auto-detect` on every (re)start (it changes when the camera is replugged);
+# PORT=usb:001,036 overrides it.
 DEV=${DEV:-/dev/video10}
 SNAP=${SNAP:-${TMPDIR:-/tmp}/d5100_latest.jpg}
 # FPS caps the webcam feed (e.g. FPS=10 for a lighter preview); unset = the camera's ~24 fps.
@@ -26,10 +32,17 @@ RATE=()
 case ${SNAP##*/} in ?*.*) CLOCK=${SNAP%.*}.clock ;; *) CLOCK=$SNAP.clock ;; esac
 CLOCK_TIMEOUT=${CLOCK_TIMEOUT:-5}
 
+# The D5100's port from `gphoto2 --auto-detect` ("Nikon DSC D5100 (PTP mode)  usb:001,036").
+d5_port() {
+  if [ -n "${PORT:-}" ]; then echo "$PORT"; return; fi
+  timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --auto-detect 2>/dev/null \
+    | grep -i 'Nikon DSC D5100' | grep -oE 'usb:[0-9]+,[0-9]+' | head -n 1
+}
+
 set_clock() {
   local out cur said year rc
   # gphoto2 2.5 prints a DATE widget as "Type: DATE", "Current: <epoch>", "Printable: <%c>"
-  if out=$(timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --get-config datetime 2>&1); then
+  if out=$(timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --port "$D5" --get-config datetime 2>&1); then
     cur=$(sed -n 's/^Current: *\(-\{0,1\}[0-9][0-9]*\) *$/\1/p' <<<"$out" | head -n 1)
     said=$(sed -n 's/^Printable: *//p' <<<"$out" | head -n 1)
     if [ -n "$cur" ] && year=$(date -d "@$cur" +%Y 2>/dev/null); then
@@ -47,13 +60,19 @@ set_clock() {
     rc=$?
     echo "$(date +%T) couldn't read the D5100 clock (gphoto2 exit $rc)" >&2
   fi
-  timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --set-config datetime=now >/dev/null 2>&1 \
+  timeout -k 2 "$CLOCK_TIMEOUT" gphoto2 --port "$D5" --set-config datetime=now >/dev/null 2>&1 \
     || echo "$(date +%T) couldn't set the D5100 clock; starting live view anyway" >&2
 }
 
 while true; do
+  D5=$(d5_port)
+  if [ -z "$D5" ]; then
+    echo "$(date +%T) no D5100 detected by gphoto2 --auto-detect (on, plugged in, dial on M or A?); retrying in 2s" >&2
+    sleep 2
+    continue
+  fi
   set_clock
-  gphoto2 --stdout --capture-movie 2>/dev/null \
+  gphoto2 --port "$D5" --stdout --capture-movie 2>/dev/null \
     | ffmpeg -hide_banner -loglevel error -i - \
         -map 0:v "${RATE[@]}" -vcodec rawvideo -pix_fmt yuv420p -threads 0 -f v4l2 "$DEV" \
         -map 0:v -vf fps=0.5 -update 1 -y "$SNAP"

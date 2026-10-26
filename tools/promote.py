@@ -38,6 +38,8 @@ stay a deliberate keystroke — the same shape as the PREP gate and list_edit's
     python tools/promote.py --create "NAME" --auto-add-min 25 --confirm
     python tools/promote.py --campaign ID --top 20 --add-ads --confirm
     python tools/promote.py --campaign ID --bidding DYNAMIC --confirm
+    python tools/promote.py --create "NAME" --smart --budget 5 --max-cpc 0.40 \
+        --copy-ads-from OLD_ID --end OLD_ID --confirm
 
 AUTO-ADD AND A CURATED LIST ARE MUTUALLY EXCLUSIVE
 
@@ -52,6 +54,7 @@ import csv
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
@@ -150,12 +153,20 @@ def suggestions(campaign_id: str, creds=None) -> dict:
 
 
 def create_campaign(name: str, budget: float, confirm: bool,
-                    min_price=None, ad_rate: float = 10.0, creds=None) -> str:
+                    min_price=None, ad_rate: float = 10.0, creds=None,
+                    smart: bool = False, max_cpc: Optional[float] = None) -> str:
     """Create a CPC (Priority) campaign. Returns its id.
 
     `min_price` switches on `campaignCriterion`: eBay then re-checks the
     inventory daily and adds any listing at or above that ask by itself. Without
     it the campaign holds exactly the listings we add by id.
+
+    `smart` makes a cost-per-click campaign Smart-targeted: eBay picks the
+    searches and bids, and ads go in by listing id with no ad group or
+    keywords. That is the shape auto_promote's `cpc_campaign` fills. eBay
+    refuses a Smart create without `max_cpc`, the most one click may cost
+    ($0.02-$100). eBay's own figure for a set of listings
+    comes from POST /ad_campaign/suggest_max_cpc.
 
     THE CRITERION CAN ONLY BE SET HERE. There is no criterion-update method on
     the campaign resource, so a campaign created without it can never learn the
@@ -188,6 +199,10 @@ def create_campaign(name: str, budget: float, confirm: bool,
         body["fundingStrategy"] = {"fundingModel": "COST_PER_CLICK"}
         body["budget"] = {"daily": {"amount": {"value": f"{budget:.2f}",
                                                "currency": "USD"}}}
+        if smart:
+            body["campaignTargetingType"] = "SMART"
+            body["fundingStrategy"]["bidPreferences"] = [
+                {"maxCpc": {"amount": {"value": f"{max_cpc:.2f}", "currency": "USD"}}}]
     if min_price is not None:
         body["campaignCriterion"] = {
             "criterionType": "INVENTORY_PARTITION",
@@ -270,6 +285,45 @@ def add_ads(campaign_id: str, listing_ids: list, confirm: bool,
                             f"/bulk_create_ads_by_listing_id", body)
 
 
+def copy_ads(src_id: str, dst_id: str, confirm: bool, creds=None) -> bool:
+    """Add every ACTIVE ad of campaign `src_id` to `dst_id`, by listing id,
+    500 per call. add_ads drops excluded consignment lots, which is the point
+    when `src_id` is a rule-based campaign that picked them up. A Smart
+    destination takes ads with no ad group. True when nothing failed."""
+    api_send = _api(creds)
+    ids, offset = [], 0
+    while True:
+        page = api_send("GET", f"/sell/marketing/v1/ad_campaign/{src_id}"
+                               f"/ad?limit=500&offset={offset}")
+        got = page.get("ads") or []
+        ids += [str(a["listingId"]) for a in got
+                if a.get("adStatus") == "ACTIVE" and a.get("listingId")]
+        offset += len(got)
+        if not got or offset >= int(page.get("total") or 0):
+            break
+    print(f"  {len(ids)} active ad(s) in {src_id}")
+    failed = 0
+    for i in range(0, len(ids), 500):
+        res = add_ads(dst_id, ids[i:i + 500], confirm, creds=creds) or {}
+        for x in res.get("responses") or []:
+            if not str(x.get("statusCode", "")).startswith("2"):
+                failed += 1
+                print(f"   FAILED {x.get('listingId')}: "
+                      f"{json.dumps(x.get('errors'))[:160]}")
+    if confirm:
+        print(f"[eBay] copied into {dst_id}, {failed} failed")
+    return failed == 0
+
+
+def end_campaign(campaign_id: str, confirm: bool, creds=None) -> None:
+    """End a campaign. Its ads and report history stay on eBay."""
+    if not confirm:
+        print(f"DRY — would POST /sell/marketing/v1/ad_campaign/{campaign_id}/end")
+        return
+    _api(creds)("POST", f"/sell/marketing/v1/ad_campaign/{campaign_id}/end")
+    print(f"  campaign {campaign_id} ended")
+
+
 def set_bidding(campaign_id: str, strategy: str, confirm: bool, creds=None) -> None:
     """FIXED -> DYNAMIC: eBay manages the bids and updates them daily.
 
@@ -309,7 +363,33 @@ def delete_campaign(campaign_id: str, confirm: bool, creds=None) -> None:
     print(f"  campaign {campaign_id} deleted")
 
 
+def _ebay_errors(e) -> str:
+    """eBay's refusal, one line per error: errorId, message, parameters."""
+    try:
+        errs = json.loads(e.body or "").get("errors") or []
+    except (ValueError, AttributeError):
+        errs = []
+    if not errs:
+        return f"{e}\n  {e.body or '(no body)'}"
+    lines = [str(e)]
+    for x in errs:
+        params = ", ".join(f"{q.get('name')}={q.get('value')}"
+                           for q in x.get("parameters") or [])
+        lines.append(f"  errorId {x.get('errorId')}: {x.get('message')}"
+                     + (f" [{params}]" if params else ""))
+    return "\n".join(lines)
+
+
 def main() -> int:
+    from ebay_client import EbayAPIError
+    try:
+        return _main()
+    except EbayAPIError as e:
+        print(f"eBay refused: {_ebay_errors(e)}", file=sys.stderr)
+        return 1
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--budget", type=float, default=20.0, help="daily budget USD (default 20)")
     ap.add_argument("--top", type=int, default=40, help="how many listings to propose")
@@ -328,6 +408,17 @@ def main() -> int:
                     help="cost-per-sale ad rate %%, used when --auto-add-min is set "
                          "(default 10)")
     ap.add_argument("--delete", metavar="ID", help="delete a campaign (needs --confirm)")
+    ap.add_argument("--smart", action="store_true",
+                    help="on --create: Smart targeting (ads by listing id, no keywords); "
+                         "needs --max-cpc")
+    ap.add_argument("--max-cpc", type=float,
+                    help="with --smart: the most one click may cost, USD")
+    ap.add_argument("--copy-ads-from", metavar="ID",
+                    help="add that campaign's active ads to --campaign/--create, "
+                         "excluded consignment lots dropped (needs --confirm)")
+    ap.add_argument("--end", metavar="ID",
+                    help="end a campaign; with --copy-ads-from, only once every "
+                         "ad copied (needs --confirm)")
     ap.add_argument("--bidding", choices=("FIXED", "DYNAMIC"),
                     help="set the bidding strategy (needs --confirm)")
     ap.add_argument("--confirm", action="store_true",
@@ -336,6 +427,8 @@ def main() -> int:
         ap, help_extra="With --confirm and more than one store configured, "
                        "--store must be given explicitly.")
     a = ap.parse_args()
+    if a.create and a.smart and a.max_cpc is None:
+        ap.error("--smart needs --max-cpc (eBay refuses a Smart campaign without it)")
 
     # A --confirm run spends money on one account. With 2+ stores configured,
     # ambient state ($EBAYBIZ_STORE / ebay.active_store) must not pick which
@@ -354,10 +447,24 @@ def main() -> int:
 
     if a.create:
         cid = create_campaign(a.create, a.budget, a.confirm,
-                              a.auto_add_min, a.ad_rate, creds=creds)
+                              a.auto_add_min, a.ad_rate, creds=creds, smart=a.smart,
+                              max_cpc=a.max_cpc)
         print(f"campaign: {cid or '(dry run)'}")
         if cid:
             a.campaign = cid
+
+    if a.copy_ads_from:
+        if a.confirm and not a.campaign:
+            raise SystemExit("--copy-ads-from needs --campaign or --create")
+        ok = copy_ads(a.copy_ads_from, a.campaign or "(new)", a.confirm, creds=creds)
+        if a.end and ok:
+            end_campaign(a.end, a.confirm, creds=creds)
+        elif a.end:
+            print(f"  NOT ending {a.end}: some ads did not copy")
+        return 0 if ok else 1
+    if a.end:
+        end_campaign(a.end, a.confirm, creds=creds)
+        return 0
 
     live = live_listings(store)
     camps, ads = campaigns_and_ads(creds)

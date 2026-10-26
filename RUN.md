@@ -1,5 +1,5 @@
 ---
-version: 3.1.1
+version: 3.4.0
 updated: 2026-10-25
 ---
 
@@ -95,7 +95,7 @@ means.
 | **INTAKE** | inventory-manager, through `/intake` (`.claude/skills/intake/SKILL.md`); the inventory-buyer helps and keeps the cost | The item has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). For an owned bin, the inventory-buyer makes sure the bin's `context.txt` has `spend:` and `acquired:`; it never moves an item. | Russell (shoot), via a shot list on his card |
 | **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
 | **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. | listing-manager |
-| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`--record` exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row), PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
+| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`--record` exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row), eligibility checked and PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
 | **LIVE** | listing-manager until the live read-back matches the approved card, then the inventory-manager | Ledger `PUBLISHED` (client ledger `LISTED`), listing URL reported, live price, Best Offer floors, shipping, photos and promotion match the card. | inventory-manager (aging), listing-manager for any approved revision |
 | **SOLD** | shipping-assistant | Label bought, item packed, tracking uploaded within handling time. | accountant |
 | **ENDED** (unsold) | inventory-manager | A next step chosen: relist, lot, junk store, live-show slot or return. A relist goes back through the listing manager. | listing-manager or Russell's card |
@@ -105,8 +105,10 @@ means.
 In `listings_ledger*.csv`, `DRAFTED` and `SYNCED` (an eBay draft offer, not
 live) are REVIEW, `PUBLISHED` is LIVE, `SOLD`/`SHIPPED` is SOLD and `ENDED`
 is ENDED. On `client_ledger.csv`, `DRAFTED` means `draft.md` exists, `LISTED`
-is LIVE, and a hand-entered `PREP` is an on-hand label that `consign sync`
-keeps until the item is LISTED.
+is LIVE (on eBay, or on the mall floor once `placed_at` is typed), and a hand-entered `PREP` is an on-hand label that `consign sync`
+keeps until the item is LISTED. A hand-entered `HOLD` (its `state_note` says
+why) is an on-hand hold that `sync` keeps past an ended listing, flags if a
+live listing matches, and gives up only on a sale.
 
 **Waiting is not a state.** An item waiting on Russell's card, a reshoot or
 another agent stays in its state with the same owner. A `NEEDS_REVIEW.md`
@@ -496,6 +498,19 @@ loss), `client_never_owes` (a loss pays the client $0) or `client_bears_loss`
 client's next id (`K01-C048`, numbered across all of that client's ledgers),
 stamps `intake` (`--intake`, else `acquired:` in `context.txt`, the folder's
 date, or today) and skips a row with the same intake, bin and description.
+It also guards against the same object coming in twice (a bin frame, then its
+own shoot; a second import). Each new row is checked against every row in the
+client's ledgers (`lib/dupe_guard.py`). When exactly one row has the same item
+folder (not a lot-mate's shared folder), or a frame filed in that row's own
+item folder and on no other row, the new row is that object: its frames go
+onto the row with `re-run IDENTIFY` in its `why`, and no row is made. Anything
+else is added as before. If a row reads alike (shared description words, plus
+0.1 for the same bin and 0.25 for a triage `possible duplicate of` note naming
+it, 0.35 or more), the added row gets a `POSSIBLE_DUPE` line in
+`dupe_queue.csv` in the intake folder for the inventory manager. A shared bin
+walk-through frame is never proof: every item in the bin shares it.
+`--new "<reason>"` never attaches and writes the reason in each row's `why`. New catalog rows from camera triage
+and `/intake` go through the same check (`python tools/tg7_triage.py add`).
 Run `consign sync` from the main checkout; from a worktree it refuses. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED and SETTLED. A row clears once
@@ -546,6 +561,14 @@ the antique-mall booth, where every consigned antique sells: type `sold_at`,
 works out the mall's fee, 10% of `item_price` plus 3% of `card_paid`
 (agreement §4.2(b); `MALL_COMMISSION` and `MALL_CARD_RATE`). A mall sale has
 no postage. Handling applies on every channel.
+
+**On the mall floor.** When an item goes into the booth, type the mall's own
+SKU (the GAM SKU from SimpleConsign) in `listing_id` and the date it went out
+in `placed_at`. `sync` then keeps the row `LISTED`, the report counts it
+under listed at its `ask` (the booth tag), and the listing-window flag counts
+from `placed_at`. Off eBay, `listing_id` is never looked up in the eBay
+ledgers. `sync` refuses `placed_at` on an eBay row, or without a
+`listing_id`. A row with no `placed_at` stays on hand (`PREP`).
 
 **Floors and time limits.** These only raise flags. A row's `floor` (from
 Exhibit A; a lot's floor is the total of its rows) is checked against the ask

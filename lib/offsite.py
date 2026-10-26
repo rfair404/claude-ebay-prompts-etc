@@ -68,7 +68,6 @@ import os
 import shutil
 import socket
 import ssl
-import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -79,6 +78,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, Optional
+
+import stores
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -193,13 +194,7 @@ def load_offsite_config(cfg: Optional[dict] = None) -> OffsiteConfig:
 
 def data_root(start: Path = REPO) -> Path:
     """The main checkout — where the ledgers and inventory/ really live."""
-    try:
-        common = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--path-format=absolute",
-             "--git-common-dir"], capture_output=True, text=True, check=True).stdout.strip()
-        return Path(common).resolve().parent
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return start
+    return stores.main_checkout(start)
 
 
 # ---------------------------------------------------------------------------

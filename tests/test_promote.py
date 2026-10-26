@@ -109,3 +109,42 @@ def test_nothing_is_sent_without_confirm(capsys):
 @pytest.mark.parametrize("val,want", [("$1,234.50", 1234.5), ("", 0.0), (None, 0.0)])
 def test_price_parsing(val, want):
     assert promote._f(val) == want
+
+
+def test_smart_create_carries_max_cpc(capsys):
+    """36161 Smart targeting campaigns require a 'bidPreferences.maxCpc' value."""
+    b = _body(capsys, smart=True, max_cpc=0.4)
+    assert b["campaignTargetingType"] == "SMART"
+    assert b["fundingStrategy"]["bidPreferences"] == [
+        {"maxCpc": {"amount": {"value": "0.40", "currency": "USD"}}}]
+
+
+def test_an_ebay_refusal_prints_its_errors_not_a_traceback(monkeypatch, capsys):
+    """#366's create died on a bare 'HTTP 400'; the reason was in the body."""
+    import ebay_client
+    body = json.dumps({"errors": [{
+        "errorId": 36161, "domain": "API_MARKETING", "category": "REQUEST",
+        "message": "Smart targeting campaigns require a 'bidPreferences.maxCpc' value.",
+        "parameters": [{"name": "campaignTargetingType", "value": "SMART"}]}]})
+
+    def refuse(*a, **k):
+        raise ebay_client.EbayAPIError(
+            400, "POST /sell/marketing/v1/ad_campaign → HTTP 400", body)
+
+    monkeypatch.setattr(promote, "create_campaign", refuse)
+    monkeypatch.setattr(ebay_client, "load_credentials",
+                        lambda **k: ebay_client.EbayCredentials())
+    monkeypatch.setattr(promote.stores, "resolve_store_name", lambda s: "default")
+    monkeypatch.setattr(sys, "argv", ["promote.py", "--create", "X", "--smart",
+                                      "--max-cpc", "0.40", "--budget", "5"])
+    assert promote.main() == 1
+    err = capsys.readouterr().err
+    assert "HTTP 400" in err
+    assert ("errorId 36161: Smart targeting campaigns require a "
+            "'bidPreferences.maxCpc' value. [campaignTargetingType=SMART]") in err
+
+
+def test_an_unparseable_refusal_still_shows_the_raw_body():
+    import ebay_client
+    e = ebay_client.EbayAPIError(502, "POST x → HTTP 502", "<html>Bad Gateway</html>")
+    assert "<html>Bad Gateway</html>" in promote._ebay_errors(e)
