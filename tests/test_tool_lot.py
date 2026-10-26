@@ -379,3 +379,81 @@ def test_model_flag_reaches_the_claude_call_and_is_saved(sale, monkeypatch):
     claude = next(c for c in calls if "-p" in c)
     assert claude[claude.index("--model") + 1] == "claude-opus-5-5"
     assert json.loads((sale / "sale.json").read_text())["model"] == "claude-opus-5-5"
+
+
+def test_opus_is_for_one_run_and_not_saved(sale, monkeypatch):
+    calls = []
+    run_tool(monkeypatch, sale, "--no-sync", "--opus", calls=calls)
+    claude = next(c for c in calls if "-p" in c)
+    assert claude[claude.index("--model") + 1] == T.OPUS
+    assert json.loads((sale / "sale.json").read_text())["model"] == T.DEFAULTS["model"]
+
+
+CORRECTED = {**IDENT, "lot": "Spring Clamps, LED Flashlight & Pry Bar",
+             "items": ["2 spring clamps, black with orange tips", "LED flashlight, black",
+                       "Pry bar, black"],
+             "maybe_not_for_sale": ["yellow sticky-note pad"]}
+
+
+def _stamp_offer(lot: Path, offer="326305813011"):
+    text = (lot / "draft.md").read_text()
+    (lot / "draft.md").write_text(
+        text.replace("  notes: |-", f'  ebay_offer_id: "{offer}"\n  notes: |-', 1))
+    (lot / ".prep").mkdir(exist_ok=True)
+    (lot / ".prep" / "prep.json").write_text('{"approved": true}')
+
+
+def test_reidentify_rewrites_the_lot_in_place_and_updates_its_offer(sale, tmp_path, monkeypatch,
+                                                                     capsys):
+    run_tool(monkeypatch, sale, "--no-sync")
+    lot = sale / "tool-lot-1"
+    _stamp_offer(lot)
+    sku = parse_draft(lot / "draft.md").get("meta.ebay_inventory_sku")
+    capsys.readouterr()
+
+    calls = []
+    rc = run_tool(monkeypatch, sale, "--reidentify", "1", "--opus",
+                  "--note", "that's a pry bar, not snips", reply=json.dumps(CORRECTED), calls=calls)
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert T.lot_numbers(sale) == [1]                       # no new lot
+    d = parse_draft(lot / "draft.md")
+    assert d.get("title") == "TOOL LOT #1 Spring Clamps, LED Flashlight & Pry Bar"
+    assert "- Pry bar, black" in d.body and "Aviation" not in d.body
+    assert d.get("meta.ebay_offer_id") == "326305813011"     # the same offer
+    assert d.get("meta.ebay_inventory_sku") == sku           # the same SKU
+    assert d.get("photos") == [T.PHOTO] and d.get("price") == "1.00"
+    assert "re-identified" in d.get("meta.notes") and "pry bar, not snips" in d.get("meta.notes")
+    rows = ledger_rows(tmp_path)
+    assert len(rows) == 1 and rows[0]["title"] == d.get("title")
+    claude = next(c for c in calls if "-p" in c)
+    assert claude[claude.index("--model") + 1] == T.OPUS
+    sync = [c for c in calls if "--sync" in c]
+    assert len(sync) == 1 and not {"--publish", "--list", "--confirm"} & set(sync[0])
+    assert "old: TOOL LOT #1 Spring Clamps, LED Flashlight & Aviation Snips" in out
+    assert "new: TOOL LOT #1 Spring Clamps, LED Flashlight & Pry Bar" in out
+    assert "maybe not for sale, left out: yellow sticky-note pad" in out
+    assert json.loads((sale / "sale.json").read_text())["model"] == T.DEFAULTS["model"]
+
+
+def test_reidentify_holds_on_a_failed_check_and_leaves_the_offer(sale, monkeypatch, capsys):
+    run_tool(monkeypatch, sale, "--no-sync")
+    _stamp_offer(sale / "tool-lot-1")
+    calls = []
+    rc = run_tool(monkeypatch, sale, "--reidentify", "1",
+                  reply=json.dumps({**CORRECTED, "all_visible": False}), calls=calls)
+    assert rc == 1
+    assert not [c for c in calls if "--sync" in c]
+    assert "[HOLD] TOOL LOT #1" in capsys.readouterr().out
+
+
+def test_identify_passes_russells_note(monkeypatch):
+    monkeypatch.setattr(T, "claude_bin", lambda: "/bin/claude")
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(kw["input"])
+        return ok(json.dumps({"type": "result", "is_error": False,
+                              "result": json.dumps(IDENT)}) + "\n")
+    T.identify(Image.new("RGB", (10, 10)), "m", run=run, note="that's a pry bar")
+    assert "that's a pry bar" in json.loads(seen[0])["message"]["content"][1]["text"]

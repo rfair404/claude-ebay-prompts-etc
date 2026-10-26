@@ -47,6 +47,9 @@ large lots) and the identify model. A flag (--store, --rotate, --model,
     python tools/live/tool_lot.py --store junk     # this sale lists to the junk store from now on
     python tools/live/tool_lot.py --frame X.jpg    # a saved frame instead of the feed's
     python tools/live/tool_lot.py --sale-dir DIR   # another sale folder (a test, a second sale)
+    python tools/live/tool_lot.py --opus           # identify with Opus 5.5, this run only
+    python tools/live/tool_lot.py --reidentify 2 --opus --note "that's a pry bar"
+                                                   # lot 2 again: copy rewritten, same offer updated
 """
 from __future__ import annotations
 
@@ -102,6 +105,7 @@ DEFAULTS = {
     "start_price": "1.00",
     "price_decided": DECIDED,
 }
+OPUS = "claude-opus-5-5"  # --opus: the stronger identify, for one run
 # Size class -> (weight lb, package L x W x D in, which policy). Guesses for
 # calculated shipping; meta.notes says so.
 SIZES = {
@@ -113,9 +117,12 @@ SIZES = {
 
 PROMPT = """You catalog a lot for an eBay tool sale from one photo. The plywood
 board, the easel, the cloth behind it and the small black scale ruler are the
-set, never part of the lot. Reply with JSON only, no code fence:
+set, never part of the lot. Things that look like workspace clutter or props
+(sticky notes, loose paper, pens, rulers, tape) go in maybe_not_for_sale, never
+in items or the title. Reply with JSON only, no code fence:
 {"lot": "what's in the lot for a title, most valuable first, at most 62 chars, e.g. Spring Clamps, LED Flashlight & Aviation Snips",
  "items": ["one line per item or group, with count and color, e.g. 2 spring clamps, black with orange tips"],
+ "maybe_not_for_sale": ["clutter or props you can see that are probably not for sale, e.g. yellow sticky-note pad"],
  "type": "eBay item type, e.g. Tool Lot",
  "brand": "a brand you can read on the tools, else empty",
  "color": "main color",
@@ -247,9 +254,11 @@ def parse_identify(text: str) -> dict:
     return data
 
 
-def identify(im: Image.Image, model: str, run=None) -> dict:
+def identify(im: Image.Image, model: str, run=None, note: str | None = None) -> dict:
     """One headless claude call with the frame inline: no tools, no settings,
-    no session saved, no thinking, so it is a single fast model turn."""
+    no session saved, no thinking, so it is a single fast model turn. `note`
+    is Russell's correction ("that's a pry bar, not a caulk gun"), passed as
+    context."""
     run = run or subprocess.run
     exe = claude_bin()
     if not exe:
@@ -259,7 +268,9 @@ def identify(im: Image.Image, model: str, run=None) -> dict:
     msg = {"type": "user", "message": {"role": "user", "content": [
         {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                      "data": base64.b64encode(buf.getvalue()).decode()}},
-        {"type": "text", "text": "Catalog this lot."}]}}
+        {"type": "text", "text": "Catalog this lot." + (
+            f"\nRussell, who has the lot in hand, says: {note}\nTrust what he says about the items."
+            if note else "")}]}}
     cmd = [exe, "-p", "--model", model, "--effort", "low", "--tools", "",
            "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
            "--disable-slash-commands", "--system-prompt", PROMPT,
@@ -360,6 +371,8 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
         notes.append(f"IDENTIFY FAILED: {error} -- write the title and items by hand.")
     if held:
         notes.append(f"PREP HOLD for the art director: {'; '.join(held)}.")
+    if not_for_sale(ident):
+        notes.append(f"left out as probably not for sale: {'; '.join(not_for_sale(ident))}.")
     notes_yaml = "\n".join(f"    {line}" for line in notes)
 
     body = ["A lot of tools, sold together.", ""]
@@ -607,6 +620,146 @@ def sync(lot_dir: Path, approved: bool, run=None) -> tuple[bool, str]:
     return False, f"eBay sync failed: {_fail_line(r)}"
 
 
+# --------------------------------------------------------------- re-identify
+
+def not_for_sale(ident: dict | None) -> list[str]:
+    """What the identify set aside as workspace clutter or props."""
+    return [str(x).strip() for x in ((ident or {}).get("maybe_not_for_sale") or []) if str(x).strip()]
+
+
+def _split(text: str) -> tuple[list[str], str]:
+    """(frontmatter lines, body) of a draft.md."""
+    m = re.match(r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n(.*)$", text, re.DOTALL)
+    if not m:
+        raise LotError("draft.md has no frontmatter")
+    return m.group(1).split("\n"), m.group(2)
+
+
+def _block(lines: list[str], key: str) -> tuple[int, int] | None:
+    """[start, end) of a top-level key's lines: the key line and the indented
+    lines under it."""
+    for i, ln in enumerate(lines):
+        if ln.startswith(f"{key}:"):
+            j = i + 1
+            while j < len(lines) and lines[j].startswith((" ", "\t")):
+                j += 1
+            return i, j
+    return None
+
+
+def rewrite_copy(old: str, new: str, note_line: str) -> str:
+    """`old` draft.md with its buyer copy (title, condition, condition
+    description, item specifics, body) taken from `new`, and `note_line`
+    added to meta.notes. Everything else stays: SKU, offer id, photos,
+    price, shipping."""
+    old_fm, _ = _split(old)
+    new_fm, new_body = _split(new)
+    for key in ("title", "condition", "condition_description", "item_specifics"):
+        o, n = _block(old_fm, key), _block(new_fm, key)
+        if n is None:
+            continue
+        repl = new_fm[n[0]:n[1]]
+        if o is None:
+            old_fm += repl
+        else:
+            old_fm[o[0]:o[1]] = repl
+    meta = _block(old_fm, "meta")
+    if meta:
+        notes = next((i for i in range(*meta) if old_fm[i].strip().startswith("notes: |")), None)
+        if notes is not None:
+            j = notes + 1
+            while j < meta[1] and old_fm[j].startswith("    "):
+                j += 1
+            old_fm.insert(j, f"    {note_line}")
+    return "---\n" + "\n".join(old_fm) + "\n---\n" + new_body
+
+
+def _items(body: str) -> list[str]:
+    return [ln[2:].strip() for ln in body.splitlines() if ln.startswith("- ")]
+
+
+def _photos_approved(lot_dir: Path) -> bool:
+    try:
+        return bool(json.loads((lot_dir / ".prep" / "prep.json").read_text()).get("approved"))
+    except (OSError, ValueError):
+        return False
+
+
+def reidentify(sale: Path, n: int, s: dict, note: str | None = None, no_sync: bool = False,
+               run=None) -> int:
+    """Identify lot N again from its own frame (Russell asked for Opus, or
+    disputes what's in it), rewrite its buyer copy in place, re-record, and
+    update its unpublished offer if it has one. Never a new lot, never a new
+    offer, never a publish."""
+    from draft_io import parse_draft
+    t0 = time.monotonic()
+    lot_dir = sale / f"{LOT_PREFIX}{n}"
+    draft, frame = lot_dir / "draft.md", lot_dir / PHOTO
+    if not (draft.exists() and frame.exists()):
+        print(f"[FAIL] {_rel(lot_dir)}: no draft.md and {PHOTO} to re-identify", file=sys.stderr)
+        return 2
+    before = parse_draft(draft)
+
+    t = time.monotonic()
+    try:
+        ident = identify(upright(Image.open(frame).convert("RGB"), s["rotate"]), s["model"],
+                         run=run, note=note)
+    except LotError as e:
+        _log("identify", time.monotonic() - t, f"FAILED: {e}")
+        print(f"[FAIL] TOOL LOT #{n}: identify failed; draft.md left as it was.")
+        return 1
+    _log("identify", time.monotonic() - t, f"{ident.get('lot')} ({s['model']})")
+    held = hold_reasons(ident)
+
+    line = f"re-identified {datetime.now():%Y-%m-%d} with {s['model']}"
+    if note:
+        line += f" (Russell: {note})"
+    if held:
+        line += f"; PREP HOLD for the art director: {'; '.join(held)}"
+    if not_for_sale(ident):
+        line += f"; left out as probably not for sale: {'; '.join(not_for_sale(ident))}"
+    new = build_draft(n, lot_dir, ident, s, held=held)
+    draft.write_text(rewrite_copy(draft.read_text(encoding="utf-8"), new, line + "."),
+                     encoding="utf-8")
+    after = parse_draft(draft)
+
+    print(f"  title  old: {before.get('title')}")
+    print(f"         new: {after.get('title')}")
+    print(f"  items  old: {'; '.join(_items(before.body)) or '(none)'}")
+    print(f"         new: {'; '.join(_items(after.body)) or '(none)'}")
+    if not_for_sale(ident):
+        print(f"  maybe not for sale, left out: {'; '.join(not_for_sale(ident))}")
+
+    t = time.monotonic()
+    try:
+        sku = _record_one(lot_dir, run=run)
+    except LotError as e:
+        _log("record", time.monotonic() - t, f"FAILED: {e}")
+        return 1
+    _log("record", time.monotonic() - t, f"sku {sku} (same lot, ledger title updated)")
+
+    offer = str(after.get("meta.ebay_offer_id") or "").strip()
+    live = str(after.get("meta.ebay_listing_id") or after.get("meta.published_at") or "").strip()
+    synced = False
+    if held:
+        state, ok = "copy rewritten, HELD for the art director", False
+    elif live:
+        state, ok = "copy rewritten; the listing is live, so its revision is the listing manager's", True
+    elif not offer:
+        state, ok = "copy rewritten (no eBay offer yet)", True
+    elif no_sync:
+        state, ok = "copy rewritten; offer not updated (--no-sync)", True
+    else:
+        t = time.monotonic()
+        synced, msg = sync(lot_dir, _photos_approved(lot_dir), run=run)
+        _log("sync", time.monotonic() - t, msg)
+        state, ok = ("copy rewritten, offer updated" if synced else "copy rewritten, offer update failed"), synced
+    print(f"  total    {time.monotonic() - t0:5.1f}s")
+    tag = "[OK]" if ok else "[HOLD]" if held else "[FAIL]"
+    print(f"{tag} TOOL LOT #{n}: {state}. Not published.")
+    return 0 if ok else 1
+
+
 # --------------------------------------------------------------- main
 
 def main(argv=None) -> int:
@@ -619,7 +772,14 @@ def main(argv=None) -> int:
     ap.add_argument("--start-price", help="every lot's start price (saved; default 1.00)")
     ap.add_argument("--frame", type=Path, help="use this image instead of the feed's frame")
     ap.add_argument("--sale-dir", help="sale folder (default inventory/tool-sale-<yyyy-mm>)")
+    ap.add_argument("--opus", action="store_true",
+                    help=f"identify with {OPUS} for this run only (not saved)")
+    ap.add_argument("--reidentify", type=int, metavar="N",
+                    help="re-run identify on lot N's own frame and rewrite its copy")
+    ap.add_argument("--note", help="with --reidentify: Russell's correction, given to identify")
     args = ap.parse_args(argv)
+    if args.note and not args.reidentify:
+        ap.error("--note goes with --reidentify N")
 
     t0 = time.monotonic()
     sale = sale_dir(args.sale_dir)
@@ -629,6 +789,10 @@ def main(argv=None) -> int:
     except InvalidOperation:
         print(f"[FAIL] --start-price {args.start_price!r} is not a number", file=sys.stderr)
         return 2
+    if args.opus:
+        s = {**s, "model": OPUS}  # this run only: sale.json keeps its model
+    if args.reidentify:
+        return reidentify(sale, args.reidentify, s, note=args.note, no_sync=args.no_sync)
 
     t = time.monotonic()
     try:
@@ -647,7 +811,9 @@ def main(argv=None) -> int:
     ident, err = None, None
     try:
         ident = identify(upright(im, s["rotate"]), s["model"])
-        _log("identify", time.monotonic() - t, str(ident.get("lot")))
+        _log("identify", time.monotonic() - t, f"{ident.get('lot')} ({s['model']})")
+        if not_for_sale(ident):
+            print(f"  maybe not for sale, left out: {'; '.join(not_for_sale(ident))}")
     except LotError as e:
         err = str(e)
         _log("identify", time.monotonic() - t, f"FAILED: {err}")
