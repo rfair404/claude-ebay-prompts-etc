@@ -263,6 +263,20 @@ gdrive:
   auto: true                # false: only the daily timer / manual pushes
 
 # ---------------------------------------------------------------------------
+# Ledgers in the cloud — lib/ledger_store.py (`ebz ledger`), GH #380
+# ---------------------------------------------------------------------------
+# Optional. Without this block every ledger write stays local, as before.
+# With it, writes go through the allowlist Worker (cloud/ledger-worker/) with
+# ETag locking, and the local CSVs become a cache. Don't type it by hand:
+# `bash cloud/ledger-worker/setup.sh --phase 1` deploys the Worker and writes
+# this block with a fresh token. EBAYBIZ_LEDGER_TOKEN wins over token:.
+# Once this checkout has written to the cloud (.ledger_etags.json exists),
+# removing the block makes ledger writes refuse instead of forking the record.
+# ledger_store:
+#   url: "https://ebaybiz-ledgers.SUBDOMAIN.workers.dev"
+#   token: "REPLACE_ME"
+
+# ---------------------------------------------------------------------------
 # CURATE strategy profiles
 # ---------------------------------------------------------------------------
 # Profiles encode the Buy Point math used by CURATE. The active profile
