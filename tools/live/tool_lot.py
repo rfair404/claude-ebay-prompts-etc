@@ -350,6 +350,10 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
     size = str(ident.get("size") or "medium").strip().lower()
     size = size if size in SIZES else "medium"
     lb, (ln, wd, dp), pol = SIZES[size]
+    oz = 0
+    pkg = s.get("package")  # one bag size for every lot in the sale (sale.json)
+    if pkg:
+        lb, oz, (ln, wd, dp), pol = pkg["lb"], pkg["oz"], tuple(pkg["in"]), "policy_small"
     cond = str(ident.get("condition") or "").strip().upper()
     # The identify's grade as is. At sync, list_edit's preflight maps it to a
     # condition the category accepts and says so (82251 takes only id 3000
@@ -363,8 +367,11 @@ def build_draft(n: int, lot_dir: Path, ident: dict | None, s: dict, *,
     notes = [f"TOOL LOT #{n} from one D5 live-view frame, {now.astimezone():%Y-%m-%d} "
              f"(tools/live/tool_lot.py, identify: {s['model']}).",
              f"price: ${s['start_price']} start, the sale's start price ({operator_price(s)}).",
-             f"weight/dims: guesses from size class '{size}', not measured; "
-             "calculated shipping charges by them."]
+             (f"weight/dims: the sale's bag size {ln}x{wd}x{dp} in, {lb} lb {oz} oz "
+              "(sale.json package), not measured; calculated shipping charges by them."
+              if pkg else
+              f"weight/dims: guesses from size class '{size}', not measured; "
+              "calculated shipping charges by them.")]
     if error:
         notes.append(f"IDENTIFY FAILED: {error} -- write the title and items by hand.")
     if held:
@@ -431,7 +438,7 @@ best_offer:
 shipping:
   weight:
     major_lb: {lb}
-    minor_oz: 0
+    minor_oz: {oz}
   package_in:
     length: {ln}
     width:  {wd}

@@ -339,6 +339,16 @@ def test_large_lots_take_the_large_live_policy(tmp_path):
     assert d.get("shipping.weight.major_lb") == 20
 
 
+def test_sale_package_sets_every_lot_to_one_bag_size(tmp_path):
+    s = {**T.DEFAULTS, "package": {"lb": 0, "oz": 8, "in": [6, 4, 2]}}
+    text = T.build_draft(5, tmp_path / "tool-lot-5", {**IDENT, "size": "heavy"}, s)
+    (tmp_path / "draft.md").write_text(text)
+    d = parse_draft(tmp_path / "draft.md")
+    assert d.get("shipping.fulfillment_policy_id") == T.LIVE_SMALL
+    assert (d.get("shipping.weight.major_lb"), d.get("shipping.weight.minor_oz")) == (0, 8)
+    assert [d.get(f"shipping.package_in.{k}") for k in ("length", "width", "depth")] == [6, 4, 2]
+
+
 def test_for_parts_stays_for_parts(tmp_path):
     text = T.build_draft(4, tmp_path / "tool-lot-4",
                          {**IDENT, "condition": "FOR_PARTS_OR_NOT_WORKING"}, dict(T.DEFAULTS))
