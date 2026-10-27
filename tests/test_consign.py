@@ -583,18 +583,13 @@ def test_clearing_waits_for_the_later_of_sale_and_delivery(shop):
         assert ("no delivery date" in r["state_note"]) is flagged, iid
 
 
-@pytest.mark.parametrize("draft_format, sold_format, flagged", [
-    ("", "", False), ("AUCTION", "", True), ("", "AUCTION", True),
-    ("FIXED_PRICE", "FIXED_PRICE", False)])
-def test_an_auction_listing_is_flagged(shop, draft_format, sold_format, flagged):
-    folder = _sold_item(shop, "b/auction", "hhhh0001", NEW, "8-8-1", sold_format=sold_format)
-    draft = shop / folder / "draft.md"
-    draft.write_text(draft.read_text(encoding="utf-8").replace(
-        "---\n\nbody", f'format: "{draft_format}"\n---\n\nbody'), encoding="utf-8")
+def test_an_auction_sale_is_not_flagged(shop):
+    # eBay conducts the auction (Russell, 2026-10-26), so auction format is fine.
+    folder = _sold_item(shop, "b/auction", "hhhh0001", NEW, "8-8-1", sold_format="AUCTION")
     d = _intake(shop, [{"item_id": "C001", "inventory_folder": folder}])
     assert consign.sync_intake(d, consign.Books(), {}, apply=True, today=TODAY) == 0
-    note = consign.read_ledger(d / "client_ledger.csv")[0][0]["state_note"]
-    assert ("auction format" in note) is flagged
+    r = consign.read_ledger(d / "client_ledger.csv")[0][0]
+    assert r["state"] == "SOLD" and "auction" not in r["state_note"]
 
 
 @pytest.mark.parametrize("context, intake", [
