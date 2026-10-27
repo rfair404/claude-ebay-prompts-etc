@@ -57,6 +57,7 @@ from typing import Any
 # ITAR gate is certain to fire. Matched case-insensitively on the key.
 _GUN_ASPECT_KEYS = (
     "for gun type",
+    "gun type",
     "number of rounds",
     "caliber/gauge",
     "caliber",
@@ -76,6 +77,16 @@ _GUN_CONTEXT = (
     r"ruger|glock|colt|remington|winchester|mossberg|marlin|savage|"
     r"beretta|sig sauer|sig\b|springfield|kel-?tec|henry|browning|"
     r"smith\s*&\s*wesson|s&w\b|ar-?15|ak-?47|m1a|mini-?14|1911|10/22"
+)
+
+# --- firearm TYPE words: strict enough to pair with a generic "parts" -----
+# Brand names (Henry, Savage, Winchester) are not here: "Henry Ford Car Parts"
+# must stay domestic-eligible. Black powder replicas (1851 Navy, cap and ball)
+# are firearm parts under eBay's policy id=4277 all the same. "Black powder
+# coated" is a hardware finish, not a gun.
+_GUN_TYPE = (
+    r"revolver|pistol|handgun|rifle|shotgun|firearm|carbine|"
+    r"black\s?powder(?!\s?coat)|muzzle-?loader|cap\s(?:and|&|n)\sball"
 )
 
 # --- calibers: a caliber beside a part word is unambiguous ----------------
@@ -100,6 +111,12 @@ US_ONLY_PATTERNS: tuple[tuple[str, str], ...] = (
      "firearm part in a named caliber (US export-restricted)"),
     (rf"(?:{_PART_WORDS})[\w\s\-/.,']{{0,40}}?(?:{_CALIBER})",
      "firearm part in a named caliber (US export-restricted)"),
+    # A firearm type word beside "parts" — e.g. "Spare Parts Fits 1851 Navy
+    # Black Powder Revolver", where no single part is named.
+    (rf"\b(?:{_GUN_TYPE})\b[\w\s\-/.,'&]{{0,40}}?\bparts?\b",
+     "firearm parts (US export-restricted)"),
+    (rf"\bparts?\b[\w\s\-/.,'&]{{0,40}}?\b(?:{_GUN_TYPE})\b",
+     "firearm parts (US export-restricted)"),
     # Whole categories that are US-only regardless of wording.
     (r"\bgun\s+parts?\b|\bfirearm\s+parts?\b|\brifle\s+parts?\b",
      "firearm parts (US export-restricted)"),
