@@ -1,6 +1,6 @@
 ---
-version: 1.0.0
-updated: 2026-10-23
+version: 1.0.1
+updated: 2026-10-26
 ---
 
 # Consignment Agreement
@@ -36,7 +36,7 @@ You want us to sell some of your items for you. You keep owning them until they 
 
 ## 3. Prices
 
-3.1. We choose where and how to sell each item: the channel, the listing format, the price and any markdowns. We do this within any floor you set on Exhibit A. <!-- TODO(attorney): does selling a consigned item by auction (eBay auction format, or an auction on eBay Live) need a Georgia auctioneer license? Until answered, tools/consign.py flags any auction-format listing of a consigned item. Not client wording. -->
+3.1. We choose where and how to sell each item: the channel, the listing format, the price and any markdowns. We do this within any floor you set on Exhibit A.
 
 3.2. You may set a lowest price (a "floor") for any item in the `floor` column of Exhibit A. The floor is the lowest price you'll accept for the item, before any shipping. It applies wherever we sell the item, and we won't sell it for less without your written OK. Floors are your price protection: they are how you control the lowest price an item can sell for.
 

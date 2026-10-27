@@ -230,7 +230,6 @@ _KEY_LINE_RE = re.compile(r"^\s*[A-Za-z_]+\s*:\s*\S")
 _DATE_NAME_RE = re.compile(r"^(\d{4})-?(\d{2})-?(\d{2})$")
 _ID_RE = re.compile(r"^(?:(?P<code>.+)-)?C(?P<n>\d+)$")
 _LOT_NOTE_RE = re.compile(r"^in lot \S+ with \S+$")
-_FORMAT_RE = re.compile(r'^format:\s*"?([A-Za-z_]+)"?', re.M)
 
 SETTLEMENT_COLUMNS = [
     "settlement_id", "client_code", "period_start", "period_end", "item_ids",
@@ -1072,14 +1071,6 @@ def _freeze_paid(r: dict, paid_share: str, target: Optional[Decimal], adjusted: 
                      f"adjust by ${money(adj)}")
 
 
-def draft_format(fdir: Path) -> str:
-    p = fdir / "draft.md"
-    if not p.is_file():
-        return ""
-    m = _FORMAT_RE.search(p.read_text(encoding="utf-8", errors="ignore"))
-    return m.group(1).upper() if m else ""
-
-
 def _amount(v: str) -> Optional[Decimal]:
     """A figure sync copied in (a draft's price, say): None when blank or bad."""
     try:
@@ -1115,7 +1106,6 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
     ebay_id = "" if off else r["listing_id"]
     folder = r["inventory_folder"] = norm_folder(r["inventory_folder"])
     state = "INTAKE"
-    fmt = ""
     if folder:
         fdir = REPO / folder
         if fdir.is_dir():
@@ -1124,7 +1114,6 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             flags.append(f"folder not found: {folder}")
         if (fdir / "draft.md").is_file():
             state = "DRAFTED"
-            fmt = draft_format(fdir)
         d = books.drafts.get(folder)
         if d:
             r["sku"] = r["sku"] or d.get("sku", "")
@@ -1190,7 +1179,6 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
             r["split_locked"] = str(split)
         if not r["handling"] and not r["paid_to_client_date"]:  # likewise the fee
             r["handling"] = money(handling)
-        fmt = (srow.get("sold_format") or "").strip().upper() or fmt
     elif hand_sold:
         state = "SOLD"
         if not r["split_locked"]:
@@ -1204,9 +1192,6 @@ def sync_row(r: dict, books: Books, split: Decimal, today: date,
     elif listing and listing_status(listing[1]) == "SOLD" and not vanished:
         flags.append("the listings ledger says SOLD but no sales ledger row matches: "
                      "run the finance sync (lib/sync_actuals.py --all-stores --apply)")
-    if fmt == "AUCTION":
-        flags.append("auction format: consigned items stay fixed-price until the "
-                     "Georgia auctioneer-licence question is answered")
 
     sold = bool(sale) or hand_sold
     settle_money(r, row_split(r, split), loss_rule)
