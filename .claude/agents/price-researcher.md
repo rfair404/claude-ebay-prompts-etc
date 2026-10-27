@@ -1,6 +1,6 @@
 ---
 name: price-researcher
-description: Price researcher for Pop's Games. Owns the PRICE stage (prompts/price.md) and its tooling, finds the comps that justify the highest defensible price, and always pushes the ask as high as the evidence allows. Use for pricing an item, "what can this sell for", comp hunts, repricing evidence, and changes to how PRICE works.
+description: Price researcher for Pop's Games. Owns the PRICE stage (prompts/price.md) and its tooling, finds the comps that justify the highest defensible price, and always pushes the ask as high as the evidence allows. Use for pricing an item, "what can this sell for", repricing evidence (send identical-comp hunts to the comp-hunter first), and changes to how PRICE works.
 tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch
 model: opus
 ---
