@@ -701,3 +701,69 @@ def test_other_sell_paths_stay_on_the_api_host():
         assert fake.requests[-1].full_url.startswith("https://api.sandbox.ebay.com/sell/fulfillment/")
 
     _patched(fake, go)
+
+
+# ---------------------------------------------------------------------------
+# EPS photo upload — Media API (Trading UploadSiteHostedPictures 404s since
+# 2026-10-26)
+# ---------------------------------------------------------------------------
+
+class _MediaResponse(_FakeResponse):
+    def __init__(self, payload, location=None):
+        super().__init__(payload)
+        self.headers = {"Location": location} if location else {}
+
+
+_EPS = "https://i.ebayimg.com/00/s/NjQwWDQyNg==/z/abc/$_1.JPG?set_id=8800005007"
+
+
+def test_photo_upload_posts_to_media_api_not_trading():
+    fake = _Fake(_token_response("tok-user"),
+                 _MediaResponse({"imageUrl": _EPS}, location="https://apim.sandbox.ebay.com/x/abc"))
+
+    def go():
+        url = ebay_client.upload_site_hosted_picture(b"JPEGDATA", "D5_0001", creds=CREDS)
+        req = fake.requests[-1]
+        assert url == _EPS
+        assert req.full_url == ("https://apim.sandbox.ebay.com"
+                                "/commerce/media/v1_beta/image/create_image_from_file")
+        assert "ws/api.dll" not in req.full_url
+        assert req.get_header("Authorization") == "Bearer tok-user"
+        assert req.get_header("Content-type").startswith("multipart/form-data; boundary=")
+        assert b'name="image"; filename="D5_0001.jpg"' in req.data
+        assert b"JPEGDATA" in req.data
+        return len(fake.requests)
+
+    assert _patched(fake, go) == 2  # token + one upload
+
+
+def test_photo_upload_reads_location_when_body_has_no_url():
+    fake = _Fake(_token_response("tok-user"),
+                 _MediaResponse({}, location="https://apim.sandbox.ebay.com/commerce/media/v1_beta/image/abc"),
+                 _MediaResponse({"imageUrl": _EPS}))
+
+    def go():
+        assert ebay_client.upload_site_hosted_picture(b"x", "p", creds=CREDS) == _EPS
+        assert fake.requests[-1].full_url.endswith("/image/abc")
+        assert fake.requests[-1].get_method() == "GET"
+
+    _patched(fake, go)
+
+
+def test_photo_upload_http_error_keeps_body():
+    fake = _Fake(_token_response("tok-user"), _http_error(404, b"Resource not found"))
+
+    def go():
+        try:
+            ebay_client.upload_site_hosted_picture(b"x", "p", creds=CREDS)
+            raise AssertionError("expected EbayAPIError")
+        except EbayAPIError as e:
+            assert e.status == 404 and "Resource not found" in e.body
+
+    _patched(fake, go)
+
+
+def test_photo_upload_needs_no_dev_id():
+    fake = _Fake(_token_response("tok-user"), _MediaResponse({"imageUrl": _EPS}))
+    assert CREDS.dev_id is None
+    assert _patched(fake, lambda: ebay_client.upload_site_hosted_picture(b"x", creds=CREDS)) == _EPS
