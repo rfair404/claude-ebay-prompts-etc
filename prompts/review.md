@@ -60,17 +60,20 @@ second. So REVIEW always also builds the page:
 
     python tools/review_card_html.py <shoot-dir>    # -> <shoot-dir>/review_card.html
 
-It prints `review: http://127.0.0.1:8770/review/<shoot>` — the local app's
-live render of the same page (`python -m lib.cli serve`, `webapp/server.py`).
-**That URL is the link you give the operator**, beside the text card in chat.
-If it also prints the "local app isn't running" hint, start the app (from the
-main checkout) rather than handing over a dead link; if it can't be started,
-say so and fall back to sending the file. Review pages are **not** uploaded to
-the offsite bucket and have no R2 link
-([docs/offsite-storage.md](../docs/offsite-storage.md)). The link is live, so
-after a re-render the same URL shows the new page. This is the official
-review surface — not a 4,000px JPEG, not a prose summary, not the text card
-alone.
+**The operator gets the page as an R2 link**, beside the text card in chat.
+Copy `review_card.html` to `reports/review_cards/<today>/<n>-<plain-name>.html`
+and share it from the main checkout:
+
+    python -m lib.cli offsite share reports/review_cards/<today>/<file>
+
+The [`/cards` skill](../.claude/skills/cards/SKILL.md) does this per item.
+`offsite share` refuses the copy inside the shoot folder, so share the
+`reports/` copy ([docs/offsite-storage.md](../docs/offsite-storage.md)). A
+re-render needs a fresh copy and a fresh link. The script also prints
+`review: http://127.0.0.1:8770/review/<shoot>`, the local app's live render
+(`python -m lib.cli serve`); that opens on this machine only, so it is never
+the link you send. This is the official review surface — not a 4,000px JPEG,
+not a prose summary, not the text card alone.
 
 What the page must carry (the generator does this; don't strip it):
 - the listing as a buyer meets it — the lead photo big enough to judge, every
