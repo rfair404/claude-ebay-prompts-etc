@@ -518,6 +518,9 @@ it, 0.35 or more), the added row gets a `POSSIBLE_DUPE` line in
 walk-through frame is never proof: every item in the bin shares it.
 `--new "<reason>"` never attaches and writes the reason in each row's `why`. New catalog rows from camera triage
 and `/intake` go through the same check (`python tools/tg7_triage.py add`).
+A one-shot `inventory/_consign/tg7_next.txt` (lines `client: KBD`, `model: haiku`)
+makes the next TG-7 import a first-pass triage of that client's bin on that
+model, with no IDENTIFY; the import renames it `tg7_next.used-<lot>.txt`.
 Run `consign sync` from the main checkout; from a worktree it refuses. `sync`
 reads the listings and sales ledgers only (no eBay calls) and moves each row
 through SHOT, DRAFTED, LISTED, SOLD, CLEARED and SETTLED. A row clears once

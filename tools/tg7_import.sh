@@ -9,6 +9,10 @@
 # command is tools/tg7_triage.py, which moves frames and logs them.
 # A mount with nothing new does nothing. Log: inventory/<lot>/import.log;
 # the outcome is in inventory/<lot>/TRIAGE.txt.
+# One-shot hint: if inventory/_consign/tg7_next.txt exists (lines `client: KBD`
+# and/or `model: haiku`), this import is a first-pass triage for that
+# consignment client on that model (--model), with no IDENTIFY. The import
+# renames it tg7_next.used-<lot>.txt, so it applies to one import only.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -36,8 +40,19 @@ if [ -z "$CLAUDE" ]; then
   notify "TG-7: sorting not started" "no claude CLI found"
   exit 1
 fi
-cd "$MAIN" && "$CLAUDE" --agent inventory-manager -p \
-  "Camera import triage for inventory/$LOT, per your \"Camera import triage\" section. Unattended: ask nothing; no PRICE, PREP or DRAFT; nothing on eBay." \
+prompt="Camera import triage for inventory/$LOT, per your \"Camera import triage\" section. Unattended: ask nothing; no PRICE, PREP or DRAFT; nothing on eBay."
+model=()
+HINT=$MAIN/inventory/_consign/tg7_next.txt
+if [ -f "$HINT" ]; then
+  client=$(sed -nE 's/^client:[[:space:]]*([A-Z0-9]{2,8})[[:space:]]*$/\1/p' "$HINT" | head -1)
+  m=$(sed -nE 's/^model:[[:space:]]*([a-z0-9.-]+)[[:space:]]*$/\1/p' "$HINT" | head -1)
+  mv "$HINT" "${HINT%.txt}.used-$LOT.txt"
+  echo "hint used: client=${client:-none} model=${m:-default}"
+  [ -n "$m" ] && model=(--model "$m")
+  prompt+=" Hint for this import: first-pass triage only (\"Triage-only hint\" in that section)."
+  [ -n "$client" ] && prompt+=" This lot is a consigned bin for client $client: catalog with add --no-folder; consign import waits for an attended run."
+fi
+cd "$MAIN" && "$CLAUDE" --agent inventory-manager "${model[@]}" -p "$prompt" \
   --permission-mode acceptEdits \
   --allowedTools Read Write Edit Glob Grep "Bash(python tools/tg7_triage.py:*)" \
   "Bash(python3 tools/tg7_triage.py:*)"
