@@ -65,6 +65,33 @@ def test_various_restricted_categories():
         assert is_us_only(mk(title)), title
 
 
+def test_black_powder_revolver_parts_route_us_only():
+    """K01-C137: a spare-parts card naming no single part, only the gun."""
+    title = ("Richland Arms Nicky Line Spare Parts Fits 1851 Navy Army "
+             "Black Powder Revolver")
+    assert "firearm parts (US export-restricted)" in us_only_reasons(mk(title))
+    for t in ("Revolver Parts Lot Hammer Springs Screws",
+              "Pistol Spare Parts Kit",
+              "Cap and Ball Replica Parts Set",
+              "Muzzleloader Replacement Parts"):
+        assert is_us_only(mk(t)), t
+
+
+def test_gun_type_aspect_alone_is_enough():
+    assert is_us_only(mk("Spare Parts Set", extra={"For Gun Type": "Revolver"}))
+    assert is_us_only(mk("Spare Parts Set", extra={"Gun Type": "Revolver"}))
+
+
+def test_generic_parts_need_a_firearm_type():
+    """Brand names alone beside "parts" are not firearm context."""
+    for title in (
+        "Henry Ford Model T Car Parts Lot",
+        "Vintage Singer Sewing Machine Parts Bobbin Case",
+        "Black Powder Coated Steel Shelf Bracket Parts",
+    ):
+        assert not is_us_only(mk(title)), f"false positive: {title}"
+
+
 # ----------------------------------------------------- must NOT route (!!!)
 def test_periodicals_are_not_firearms():
     """The false-positive case this whole design is shaped around."""
