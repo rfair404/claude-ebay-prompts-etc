@@ -64,6 +64,7 @@ If the item is ineligible, or a nude subject's age is unknown and nothing cited 
 - Never commit secrets, tokens, `.env` files or personal identifiers (EINs, account numbers, private addresses).
 - Never merge, force-push, delete branches, deploy, or change repo settings, DNS, hosting or billing.
 - Never send email, post to social media, submit forms, create accounts or buy anything. Draft it and put the draft in the PR.
+- **Never put a scale, weighing or ruler frame first.** Not as hero, not as photo one, not as the "only whole-item frame" fallback (C085 and C055, 2026-10-25). If the only full view of the item is a scale frame, the hero is the best item-only frame (the one with the most identifying detail) or a hero montage, and the scale frame stays last. Photo order: hero, marks, condition, then ruler/scale, always. See brand/pops-games/README.md "Hero rules".
 - Stay in your role. If you notice work for someone else, list it under **Handoffs** instead of doing it.
 
 ## What you own
