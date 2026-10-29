@@ -46,6 +46,12 @@ Rationale, history and the measurements behind every rule:
 - Marble photo-protocol shoots keep their own spec — that is a per-item
   agreement, not a count target.
 
+## Scale and ruler frames are never first
+
+A frame showing a scale, readout or ruler is never the hero or photo one, even
+when it is the only whole-item view: pick the best item-only frame or a hero
+montage, and keep the scale frame last (art-director rule, C055).
+
 ## The hero MAY be a montage — decided per listing
 
     python -m lib.photo_prep.hero_montage propose <shoot>
