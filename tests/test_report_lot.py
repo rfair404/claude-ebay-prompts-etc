@@ -169,8 +169,9 @@ def test_consign_row_shows_estimate_until_listed(tmp_path, monkeypatch):
 
 
 def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
-    # report_lot's consignment path renders the breakdown with consign's own
-    # renderer, under the sale, in the text and in the CSV.
+    # report_lot's consignment path keeps the ledger to one line per item and
+    # explains each sale's fees in a section after it (consign's own
+    # renderer), in the text and in the CSV.
     import consign as C
     monkeypatch.setattr(C, "REPO", tmp_path)
     monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
@@ -191,18 +192,24 @@ def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
         dict(base, item_id="K01-C051", description="Unsold cup", state="LISTED",
              ask="20.00")])
     text, rows = RL.consign_account(lot, "K01", date(2026, 10, 25))
-    sale = text.splitlines()
+    ledger, _, fees = text.partition("SOLD ITEM FEES")
+    sale = ledger.splitlines()
     i = next(n for n, ln in enumerate(sale) if ln.startswith("K01-C050"))
-    assert "fee FINAL_VALUE_FEE" in sale[i + 1] and "12.5% DERIVED (fee / $40.00 base)" in sale[i + 1]
-    assert "fee AD" in sale[i + 2] and "8.0% SOURCED (eBay campaign bid, read 2026-10-25)" in sale[i + 2]
-    assert "taken off gross before the split" in sale[i + 2]
-    assert sale[i + 3].startswith("K01-C051")          # no breakdown for an unsold item
+    assert sale[i + 1].startswith("K01-C051")          # no fee lines in the ledger
+    assert "fee FINAL_VALUE_FEE" not in ledger and "fee AD" not in ledger
+    f = fees.splitlines()
+    j = next(n for n, ln in enumerate(f) if ln.startswith("K01-C050"))
+    assert "sold $40.00" in f[j + 1] and "net $27.80" in f[j + 1] and "client $13.90" in f[j + 1]
+    assert "fee FINAL_VALUE_FEE" in f[j + 2] and "12.5% DERIVED (fee / $40.00 base)" in f[j + 2]
+    assert "fee AD" in f[j + 3] and "8.0% SOURCED (eBay campaign bid, read 2026-10-25)" in f[j + 3]
+    assert "taken off gross before the split" in f[j + 3]
+    assert "K01-C051" not in fees                      # no breakdown for an unsold item
     assert [(r["line"], r["item_id"], r["fee_type"], r["fee_amount"], r["fee_rate"],
              r["ebay_fee"], r["ad_fee"]) for r in rows] == [
         ("item", "K01-C050", "", "", "", "5.00", "3.20"),
+        ("item", "K01-C051", "", "", "", "", ""),
         ("fee", "K01-C050", "FINAL_VALUE_FEE", "5.00", "12.5%", "", ""),   # counted once
-        ("fee", "K01-C050", "AD", "3.20", "8.0%", "", ""),
-        ("item", "K01-C051", "", "", "", "", "")]
+        ("fee", "K01-C050", "AD", "3.20", "8.0%", "", "")]
     monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
     _, csv_path = RL.write(lot, text, rows, date(2026, 10, 25))
     assert b"DERIVED (fee / $40.00 base)" in csv_path.read_bytes()
