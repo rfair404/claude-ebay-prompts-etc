@@ -1,5 +1,5 @@
 ---
-version: 4.1.0
+version: 5.1.0
 updated: 2026-10-29
 ---
 
@@ -41,7 +41,7 @@ report written from a worktree lands in main's `reports/`, which both offsite
 backups copy. See CLAUDE.md, "Pipeline data".
 
     plan  <photos-dir>   → IDENTIFY → PRICE → CURATE                 (pre-buy: buy list)
-    list  <photos-dir>   → PREP(gate) → INVESTIGATE → DRAFT → REVIEW(gate)→publish
+    list  <photos-dir>   → INVESTIGATE → PRICE → DRAFT → price agreed → PREP(gate) → REVIEW(gate)→publish
     full  <photos-dir>   → all in order, ending at the REVIEW gate
 
 If no mode is given: a single-item or grouped shoot of items the user
@@ -94,8 +94,9 @@ means.
 |---|---|---|---|
 | **INTAKE** | inventory-manager, through `/intake` (`.claude/skills/intake/SKILL.md`); the inventory-buyer helps and keeps the cost | The item has a row in its bin's `catalog.csv`, plus an item folder with `intake.txt` (owned) or a `client_ledger.csv` row (consigned). For an owned bin, the inventory-buyer makes sure the bin's `context.txt` has `spend:` and `acquired:`; it never moves an item. | Russell (shoot), via a shot list on his card |
 | **SHOT** | Russell, with the digital-tech | One item per folder, frames per the shot list, marks and measurements read aloud and in frame. | inventory-manager |
+| **IDENTIFIED** (provisional) | inventory-manager | `identify.txt` exists and the item has its provisional ledger entry. **Stop: back to Russell**, who says which items go on to PRICE. Never straight to PREP. | Russell |
 | **DRAFTED** | inventory-manager | `identify.txt`, `price.txt`, `investigate.txt` and `draft.md` exist. | listing-manager |
-| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`--record` exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row), eligibility checked and PREP approved under the art director's sign-off, draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
+| **REVIEW** | listing-manager | `list_edit.py --record` has stamped the SKU (the item number) **and the ledger row exists** (`--record` exits 0 and `grep <sku> listings_ledger*.csv` in the main checkout finds the row), Russell has agreed the price, eligibility checked and PREP approved under the art director's sign-off (PREP starts only after the price is agreed), draft repointed to `listing/`, `list_edit.py --review` passes, the review card is built, and the presenter has shown it to Russell. | Russell (publish yes/no) |
 | **LIVE** | listing-manager until the live read-back matches the approved card, then the inventory-manager | Ledger `PUBLISHED` (client ledger `LISTED`), listing URL reported, live price, Best Offer floors, shipping, photos and promotion match the card. | inventory-manager (aging), listing-manager for any approved revision |
 | **SOLD** | shipping-assistant | Label bought, item packed, tracking uploaded within handling time. | accountant |
 | **ENDED** (unsold) | inventory-manager | A next step chosen: relist, lot, junk store, live-show slot or return. A relist goes back through the listing manager. | listing-manager or Russell's card |
@@ -152,8 +153,8 @@ what phase each is in), the **gates**, and any write that touches shared
 state. It never holds a raw photo, a comp JSON, forum matches, or a worker's
 full reasoning — those are what make the window huge.
 
-**One worker (`Agent` tool) per item**, covering IDENTIFY→PRICE→
-INVESTIGATE→DRAFT, **capped at 4 concurrent** (PRICE hits the logged-in
+**One worker (`Agent` tool) per item**, covering IDENTIFY→INVESTIGATE→
+PRICE→DRAFT, **capped at 4 concurrent** (PRICE hits the logged-in
 browser and eBay Browse; more trips rate limits). Each worker starts on a
 fresh context, reads
 [`prompts/_shared.md`](prompts/_shared.md) plus the phase prompt it needs —
@@ -448,7 +449,7 @@ live state, `--apply` to heal), `pick-list` (orders awaiting shipment),
 `policy-sweep`, `price-audit` (asks above their own comp evidence),
 `sales-report`, `promote`, `voice` (in-hand linter, `--audit` for a tree),
 `listing` (the LIST/EDIT CLI), `prep`, `single-pass` (gate-check
-IDENTIFY→PREP→PRICE→INVESTIGATE→DRAFT for a routine item; see
+IDENTIFY→INVESTIGATE→PRICE→DRAFT (PREP after the price is agreed) for a routine item; see
 [prompts/single_pass.md](prompts/single_pass.md)), `observe` (session
 transcripts -> friction report; read-only, `--report` to print it,
 `--economics` for the #61 run-cost table — context/turn, tool-call
@@ -837,7 +838,24 @@ fetch, photo prep) is shared from `lib/` — no phase duplicates it.
 1. Resolve shoot dir + mode (state inferred mode in one line).
 2. IDENTIFY → write `identify.txt`. Log any grouping questions to
    NEEDS_REVIEW; do not stop.
-2b. PREP → `--auto` FIRST (one pass, no questions: every frame turned and every
+2b. STOP. IDENTIFY and the provisional ledger entries end the inventory
+   manager's turn. The items go back to Russell, not on to PREP or PRICE;
+   he says which go on.
+3. INVESTIGATE (list mode), per item → commit to the confident
+   assessment; log open questions; write `investigate.txt`.
+4. CURATE (plan mode) → write `review.md`.
+5. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
+   → Stage B eBay sold via the logged-in browser → Stage C Chrome only if
+   confidence is low); adopt Recommended tier as provisional working
+   price; write `price.txt`. Never stops. Never runs before INVESTIGATE: no `investigate.txt`, no PRICE.
+6. DRAFT (list mode) → render template (`photos:` lists the originals
+   until PREP), run the pre-write validation pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
+   to stamp the item's SKU into the draft and create its lifecycle ledger
+   record (status DRAFTED). Do this for EVERY draft, and again after any edit.
+6a. STOP for the price. Russell agrees the item's price (yes/no card, `/yn`) before
+   any PREP. Until then the PRICE tier is provisional and nothing is prepped,
+   not even `--auto`.
+6b. PREP → `--auto` FIRST (one pass, no questions: every frame turned and every
    crop planned, conservatively — margin left around the item — and nothing
    approved). Show the widget of that best attempt, then one card
    (`python tools/prep_card.py <shoot>`) of the revised frames, and ask once:
@@ -856,19 +874,8 @@ fetch, photo prep) is shared from `lib/` — no phase duplicates it.
    orientation` → `--stage crop` (`--crop NAME=off|on|padF`) → `--approve-stage
    crop` → `--apply` → `--stage color` (`--pick studio|punch`) →
    `--approve-stage color` → `--approve`. Photos land in `listing/`;
-   INVESTIGATE still reads the originals.
-3. PRICE each saleable item → run the exact-match hunt (Stage A WebSearch
-   → Stage B eBay sold via the logged-in browser → Stage C Chrome only if
-   confidence is low); adopt Recommended tier as provisional working
-   price; write `price.txt`. Never stops.
-4. CURATE (plan mode) → write `review.md`.
-5. INVESTIGATE (list mode), per item → commit to the confident
-   assessment; log open questions; write `investigate.txt`.
-6. DRAFT (list mode) → point `photos:` at the prepped files
-   (`prep --repoint-draft --apply-repoint`), render template, run the
-   pre-write validation pass, write `draft.md`, then `python lib/list_edit.py --record <shoot-dir>`
-   to stamp the item's SKU into the draft and create its lifecycle ledger
-   record (status DRAFTED). Do this for EVERY draft, and again after any edit.
+   INVESTIGATE still reads the originals. Then put the art director's photo
+   order in `photos:` and `prep --repoint-draft --apply-repoint`; re-run `--record`.
 7. REVIEW (list mode) → `python lib/list_edit.py --review <shoot-dir>` — one
    command that records (if needed) + preflights + builds `review_card.md` —
    then `python tools/review_card_html.py <shoot-dir>` and deliver the page
