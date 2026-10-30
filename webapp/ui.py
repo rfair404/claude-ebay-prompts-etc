@@ -109,13 +109,17 @@ def _e(v) -> str:
     return html.escape(str(v), quote=True)
 
 
+# Outside the f-strings: Python 3.11 refuses a backslash in an f-string expression.
+_CUR = ' aria-current="page"'
+
+
 def _store_links(stores: Sequence[str], current: Optional[str], path: str) -> str:
     """`All stores` plus one link per store. A view choice, never pooled —
     the dashboard draws one panel per store either way."""
     items = [("All stores", path, current is None)]
     items += [(s, f"{path}?store={quote(s)}", s == current) for s in stores]
     return "".join(
-        f'<li><a class="fh-l" href="{_e(href)}"{" aria-current=\"page\"" if on else ""}>'
+        f'<li><a class="fh-l" href="{_e(href)}"{_CUR if on else ""}>'
         f'{_e(label)}</a></li>' for label, href, on in items)
 
 
@@ -125,7 +129,7 @@ def _tabs(shoot: str, current: str) -> str:
             ("prep", "Frame Check", f"/prep/{q}"),
             ("card", "Contact sheet", f"/prep/{q}/card.jpg")]
     return "".join(
-        f'<li><a class="fh-l" href="{_e(href)}"{" aria-current=\"page\"" if key == current else ""}>'
+        f'<li><a class="fh-l" href="{_e(href)}"{_CUR if key == current else ""}>'
         f'{_e(label)}</a></li>' for key, label, href in tabs)
 
 
@@ -135,7 +139,8 @@ def button(label: str, action: str, slots: dict, *, main: bool = False,
     opts = {"busy": busy or label, "done": done or label + ": done", "reload": reload}
     onclick = (f"fhRun(this,{json.dumps(action)},{json.dumps(slots)},"
                f"{json.dumps(opts)})")
-    return (f'<button type="button"{" class=\"fh-main\"" if main else ""} '
+    cls = ' class="fh-main"' if main else ""
+    return (f'<button type="button"{cls} '
             f'onclick="{_e(onclick)}">{_e(label)}</button>')
 
 
@@ -146,7 +151,7 @@ def bar(*, stores: Sequence[str], store: Optional[str] = None, path: str = "/",
     and is shown, not picked; the switcher's links go to the dashboard."""
     parts = [f'<a class="fh-name" href="/">{_e(SHOP_NAME)}</a>',
              '<ul class="fh-nav" aria-label="Pages">'
-             f'<li><a class="fh-l" href="/"{" aria-current=\"page\"" if path == "/" and not shoot else ""}>Dashboard</a></li>'
+             f'<li><a class="fh-l" href="/"{_CUR if path == "/" and not shoot else ""}>Dashboard</a></li>'
              '<li><a class="fh-l" href="/pager">Live</a></li>'
              '<li><a class="fh-l" href="/freight">Freight</a></li></ul>']
     if shoot:
