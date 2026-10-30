@@ -5,7 +5,7 @@ ledger, photo and draft.md with it; there was no second copy. This module
 keeps one in an S3-compatible bucket (Cloudflare R2 by default: 10 GB free,
 then $0.015/GB-month, no egress fees — Backblaze B2 works the same way).
 
-    python -m lib.cli offsite check            # config + bucket reachable?
+    python -m lib.cli offsite check            # is the R2 copy fresh? (--probe: bucket round-trip too)
     python -m lib.cli offsite status           # what push/pull would do
     python -m lib.cli offsite push             # dry run
     python -m lib.cli offsite push --apply     # upload new + changed files
@@ -89,7 +89,8 @@ REPO = Path(__file__).resolve().parent.parent
 # at any depth under dir/. Other entries match one path level each, "*"
 # never crossing a "/". The regenerable class-3 caches are left out.
 # The ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies.
-# Also what lib/gdrive_mirror.py pushes after each ledger write.
+# Also what lib/gdrive_mirror.ledger_changed() pushes (to R2, then Drive)
+# after each ledger write, and the paths that count as a ledger write.
 LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
@@ -97,6 +98,10 @@ LEDGER_INCLUDE = (
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",
+    # consignment: each intake's item ledger and the client registry
+    # (tools/consign.py). The registry is the one file with client names.
+    "inventory/**/client_ledger*.csv",
+    "inventory/_consign/**",
 )
 DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # eBay exports: the live-listing sheets built from the eBay APIs
@@ -116,10 +121,6 @@ DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # map left by the 2026-10 wipe: which sold SKUs belong to which folder
     "inventory/**/context.txt",
     "inventory/**/RECOVERED.md",
-    # consignment: each intake's item ledger and the client registry
-    # (tools/consign.py). The registry is the one file with client names.
-    "inventory/**/client_ledger.csv",
-    "inventory/_consign/**",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",
@@ -139,6 +140,7 @@ MEDIA_SUFFIXES = (
 )
 
 STATE_FILE = ".offsite_state.json"     # md5 cache; /.*.json is gitignored
+STATUS_FILE = ".offsite_status.json"   # last good / failed push per target
 CONFLICT_DIR = ".offsite_conflicts"
 MAX_SINGLE_PUT = 5 * 1024**3 - 1       # S3 single-PUT ceiling
 MAX_PRESIGN_SECONDS = 7 * 24 * 3600    # SigV4 presigned-URL ceiling
@@ -597,6 +599,92 @@ def push(remote, root: Path, plan: Plan, data_prefix: str,
     return _parallel(up, plan.local_only + plan.changed, "pushed")
 
 
+def push_ledgers(cfg: OffsiteConfig, root: Path, remote=None) -> list[str]:
+    """Push just the LEDGER_INCLUDE files: the after-write push that
+    gdrive_mirror's background worker runs. Same rules as push (never
+    deletes, a replaced object goes to history/ first). Returns the files
+    that failed; raises OffsiteError if the bucket can't be listed."""
+    remote = remote or S3Remote(cfg)
+    data_prefix = cfg.prefix + "data/"
+    cache = Md5Cache(root / STATE_FILE)
+    plan = make_plan(root, LEDGER_INCLUDE, remote.list(data_prefix), data_prefix, cache)
+    cache.save()
+    return push(remote, root, plan, data_prefix, f"{cfg.prefix}history/{_stamp()}/")
+
+
+def record_status(root: Path, target: str, ok: bool, error: str = "", *,
+                  full: bool = False, now: Optional[dt.datetime] = None) -> None:
+    """Note a push's result in STATUS_FILE, per target ("r2", "gdrive"):
+    last_ok / last_full_ok (a full push) / last_failure + error, UTC ISO.
+    What `offsite check` reads for freshness. Best effort: never raises."""
+    path = root / STATUS_FILE
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
+    try:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        t = data.setdefault(target, {})
+        if ok:
+            t["last_ok"] = stamp
+            if full:
+                t["last_full_ok"] = stamp
+        else:
+            t["last_failure"] = stamp
+            t["error"] = error[:500]
+        tmp = path.with_suffix(".tmp.json")  # /.*.json is gitignored
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as e:                 # status must not fail a backup
+        print(f"offsite: status not saved ({e})", file=sys.stderr)
+
+
+LEDGER_GRACE = dt.timedelta(minutes=15)   # a write this fresh may still be pushing
+FULL_PUSH_MAX_AGE = dt.timedelta(hours=36)
+
+
+def freshness(root: Path, now: Optional[dt.datetime] = None) -> list[str]:
+    """Problems with the R2 copy, read from STATUS_FILE (no network): the last
+    push failed, a ledger is newer than the last good push by more than
+    LEDGER_GRACE, or the last full push is older than FULL_PUSH_MAX_AGE.
+    An empty list means healthy."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        t = json.loads((root / STATUS_FILE).read_text(encoding="utf-8")).get("r2", {})
+    except (OSError, ValueError):
+        t = {}
+    if not t:
+        return [f"no push recorded yet ({STATUS_FILE} missing or empty)"]
+
+    def when(k):
+        try:
+            return dt.datetime.fromisoformat(t[k])
+        except (KeyError, ValueError):
+            return None
+    last_ok, last_full, last_fail = when("last_ok"), when("last_full_ok"), when("last_failure")
+    problems = []
+    if last_fail and (not last_ok or last_fail > last_ok):
+        problems.append(f"last push failed {last_fail:%Y-%m-%d %H:%M}Z: {t.get('error', '')}")
+    if not last_full:
+        problems.append("no full push recorded")
+    elif now - last_full > FULL_PUSH_MAX_AGE:
+        hrs = (now - last_full).total_seconds() / 3600
+        problems.append(f"last full push was {hrs:.0f} h ago (limit {FULL_PUSH_MAX_AGE.total_seconds() / 3600:.0f})")
+    if last_ok:
+        newest = None
+        for rel in local_files(root, LEDGER_INCLUDE):
+            try:
+                m = dt.datetime.fromtimestamp((root / rel).stat().st_mtime, dt.timezone.utc)
+            except OSError:
+                continue
+            if newest is None or m > newest[0]:
+                newest = (m, rel)
+        if newest and newest[0] - last_ok > LEDGER_GRACE:
+            problems.append(f"{newest[1]} changed {newest[0]:%Y-%m-%d %H:%M}Z, after the "
+                            f"last good push ({last_ok:%Y-%m-%d %H:%M}Z)")
+    return problems
+
+
 def prunable(remote, prefix: str, include: Iterable[str]) -> list[str]:
     """Bucket keys under data/ and history/ that the rules no longer select."""
     include = tuple(include)
@@ -712,10 +800,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--expires-days", type=float, default=7,
                     help="share: link lifetime in days (max 7)")
     ap.add_argument("--root", type=Path, help="data root (default: the main checkout)")
+    ap.add_argument("--probe", action="store_true",
+                    help="check: also do a write/read round-trip against the bucket")
     a = ap.parse_args(argv)
     if (a.action == "share") != bool(a.files):
         ap.error("share takes one or more files; the other actions take none")
 
+    if a.action == "check":
+        root = (a.root or data_root()).resolve()
+        problems = freshness(root)
+        for p in problems:
+            print(f"offsite: STALE: {p}", file=sys.stderr)
+        if not problems:
+            print("ok — R2 copy is fresh (last push good, no unpushed ledger, "
+                  "full push under 36 h old)")
+        if not a.probe:
+            return 1 if problems else 0
+        rc = 1 if problems else 0
+    else:
+        rc = 0
     try:
         cfg = load_offsite_config()
         remote = S3Remote(cfg)
@@ -730,7 +833,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             n = remote.check()
             print(f"ok — {cfg.endpoint}/{cfg.bucket}: write/read round-trip passed, "
                   f"{n} data object(s) stored")
-            return 0
+            return rc
 
         if a.action == "prune":
             keys = prunable(remote, cfg.prefix, cfg.include)
@@ -765,6 +868,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if a.action == "push":
             failed = push(remote, root, plan, data_prefix,
                           f"{cfg.prefix}history/{_stamp()}/")
+            record_status(root, "r2", not failed,
+                          f"{len(failed)} file(s) failed" if failed else "", full=True)
         else:
             failed = pull(remote, root, plan, data_prefix, a.overwrite)
         if failed:

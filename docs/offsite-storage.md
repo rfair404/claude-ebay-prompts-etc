@@ -1,5 +1,5 @@
 ---
-version: 2.0.0
+version: 2.1.0
 updated: 2026-10-26
 ---
 
@@ -81,7 +81,7 @@ The bucket holds revenue data and buyer addresses (pick sheets inside
 5. From the main checkout:
 
 ```
-python -m lib.cli offsite check          # write/read round-trip
+python -m lib.cli offsite check --probe  # write/read round-trip
 python -m lib.cli offsite push           # dry run: what would upload
 python -m lib.cli offsite push --apply
 ```
@@ -93,7 +93,15 @@ python -m lib.cli offsite status         # diff, no transfer
 python -m lib.cli offsite push --apply   # after a shoot / listing session
 ```
 
-Nightly, via crontab (`crontab -e`):
+`offsite check` reads `.offsite_status.json` (no network) and exits 1 if the
+last push failed, a ledger is newer than the last good push by over 15 min, or
+the last full push is over 36 h old. `--probe` adds the bucket round-trip.
+
+Daily at 03:00 (`Persistent=true`, so a missed run fires at next login), as a
+systemd user timer: `tools/systemd/ebaybiz-offsite.{service,timer}` push, then
+run `offsite check`; a failure starts `ebaybiz-offsite-notify.service` (desktop
+alert). Install with `tools/systemd/install-offsite-timer.sh --apply` (no
+`--apply` is a dry run). Logs: `journalctl --user -u ebaybiz-offsite`. Or, via crontab (`crontab -e`):
 
 ```
 30 2 * * * cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli offsite push --apply >> .offsite.log 2>&1
