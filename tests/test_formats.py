@@ -541,7 +541,10 @@ def test_a_clean_card_says_so_and_a_photo_gap_withdraws_it(ebay):
 def _published_command(card: str) -> list[str]:
     """The argv the card tells the operator to run to publish, as typed."""
     line = next(ln for ln in card.splitlines() if "list_edit.py --list" in ln)
-    argv = shlex.split(line.strip())
+    # posix=False: POSIX mode eats the backslashes in a Windows path. It keeps
+    # the surrounding quotes, so strip them.
+    argv = [t[1:-1] if len(t) > 1 and t[0] == t[-1] and t[0] in "\"'" else t
+            for t in shlex.split(line.strip(), posix=False)]
     assert argv[:2] == ["python", "lib/list_edit.py"], argv
     return argv[2:]
 
