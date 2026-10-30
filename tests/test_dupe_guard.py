@@ -141,6 +141,21 @@ def test_exact_resighting_on_import_attaches_to_the_row_on_record(inv, capsys):
     assert len(read(inv / "CONSIGN-K01" / "dupe_queue.csv")) == 1
 
 
+def test_an_attach_writes_the_client_ledger_through_consign(inv, monkeypatch):
+    # One client-ledger write path (#380): the attach goes through
+    # consign.write_ledger with the rows as read, so its cloud check applies.
+    path = ledger(inv, FLATWARE_LOT, GIFT_BAG)
+    calls = []
+    real = consign.write_ledger
+    monkeypatch.setattr(consign, "write_ledger",
+                        lambda p, rows, base=None: calls.append((p, base)) or real(p, rows, base))
+    assert import_catalog(inv, [dict(bin="03", qty="1 set", photos="ZZ900302 ZZ900310",
+                                     description="Flatware in a gift bag")]) == 0
+    attach_calls = [c for c in calls if c[1] is not None]
+    assert [p for p, _ in attach_calls] == [path]
+    assert [r["item_id"] for r in attach_calls[0][1]] == ["K01-C007", "K01-C008"]
+
+
 def test_two_items_sharing_a_bin_frame_and_words_both_get_rows(inv, capsys):
     # Every item in a bin walk-through shares its frame and bin: no attach.
     path = ledger(inv, BELT)

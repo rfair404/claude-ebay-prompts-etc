@@ -110,6 +110,7 @@ import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
 import dupe_guard  # noqa: E402  one object, one row
+import ledger_store  # noqa: E402  client_ledger writes (GH #380 P1.4)
 from report import ascii_text  # noqa: E402  report text is plain ASCII
 
 INVENTORY = REPO / "inventory"
@@ -452,8 +453,45 @@ def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> Optional[Pat
     return backup
 
 
-def write_ledger(path: Path, rows: list[dict]) -> Optional[Path]:
-    return _write_csv(path, COLUMNS, rows)
+def _ledgers() -> "ledger_store.LedgerStore":
+    """The ledger store config.yaml asks for (GH #380). With no
+    `ledger_store:` block it is local mode and write_ledger is the plain CSV
+    write it always was."""
+    try:
+        return ledger_store.open_store(root=REPO)
+    except ledger_store.LedgerStoreError as e:
+        raise SystemExit(f"[X] {e}") from None
+
+
+def _as_read(rows: list[dict]) -> list[dict]:
+    """Rows in read_ledger()'s shape, so two reads of one file compare equal."""
+    return [{c: (r.get(c) or "").strip() for c in COLUMNS} for r in rows]
+
+
+def write_ledger(path: Path, rows: list[dict],
+                 base: Optional[list[dict]] = None) -> Optional[Path]:
+    """Write one client ledger. Local mode: `_write_csv` (backup beside it).
+    Cloud mode: through ledger_store.update(), and refused, nothing written,
+    when the stored ledger is no longer `base` (the rows as this run read
+    them), so a write from another machine or session is never lost. Returns
+    the backup path (local mode only)."""
+    st = _ledgers()
+    if not st.cloud:
+        return _write_csv(path, COLUMNS, rows)
+    out = [{c: r.get(c, "") for c in COLUMNS} for r in rows]
+
+    def replace(current: list[dict]) -> list[dict]:
+        if base is not None and _as_read(current) != _as_read(base):
+            raise ledger_store.Conflict(
+                f"{path.parent.name}/{LEDGER_NAME} changed since this run read it; "
+                f"nothing written. Run the command again.")
+        return out
+
+    try:
+        st.update(ledger_store.CLIENT_LEDGER, replace, intake=path.parent)
+    except ledger_store.LedgerStoreError as e:
+        raise SystemExit(f"[X] {e}") from None
+    return None
 
 
 def _context(d: Path) -> str:
@@ -1323,7 +1361,7 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
     if not apply:
         return 0
     if changed:
-        backup = write_ledger(path, rows)
+        backup = write_ledger(path, rows, before)
         print(f"  [OK] wrote {path.name}" + (f" (backup {backup.name})" if backup else ""))
     return 0
 
@@ -1385,6 +1423,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     rows, unknown = read_ledger(path)
     if unknown:
         raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    bases = {path: [dict(r) for r in rows]}      # as read: write_ledger's base
     migrate(rows, d, code)
     received = intake or default_intake(d) or date.today().isoformat()
     seen = {(r["intake"], r["bin"], r["description"]) for r in rows}
@@ -1392,6 +1431,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     for o in client_dirs(code):
         if o.resolve() != d.resolve():
             ledgers[o / LEDGER_NAME] = read_ledger(o / LEDGER_NAME)[0]
+            bases[o / LEDGER_NAME] = [dict(r) for r in ledgers[o / LEDGER_NAME]]
             migrate(ledgers[o / LEDGER_NAME], o, code)
     n = next_id([r for rs in ledgers.values() for r in rs])
     # Only rows already on record: one catalog's own rows are distinct objects.
@@ -1438,7 +1478,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     if count["added"]:
         touched.add(path)
     for p in touched:
-        write_ledger(p, ledgers[p])
+        write_ledger(p, ledgers[p], bases[p])
     return count
 
 
@@ -1470,8 +1510,9 @@ def new_client_ledger(code: str) -> Path:
     d = INVENTORY / f"{INTAKE_PREFIX}{code}"
     if (d / LEDGER_NAME).exists():
         raise SystemExit(f"[X] {d.name} already has a {LEDGER_NAME}")
-    set_intake_client(d.mkdir(parents=True, exist_ok=True) or d, code)
-    write_ledger(d / LEDGER_NAME, [])
+    d.mkdir(parents=True, exist_ok=True)
+    set_intake_client(d, code)
+    write_ledger(d / LEDGER_NAME, [], base=[])
     return d / LEDGER_NAME
 
 
@@ -1522,12 +1563,13 @@ def regenerate_client(code: str, *, apply: bool) -> dict:
     folder is gone is only reported. States and eBay figures are filled by the
     `sync` that follows (it needs the main checkout's ledgers)."""
     dirs = client_dirs(code)
-    ledgers = {}
+    ledgers, bases = {}, {}
     for d in dirs:
         rows, unknown = read_ledger(d / LEDGER_NAME)
         if unknown:
             raise SystemExit(f"[X] {d / LEDGER_NAME} has unknown column(s) "
                              f"{', '.join(unknown)}")
+        bases[d] = [dict(r) for r in rows]
         migrate(rows, d, code)
         ledgers[d] = rows
     every = [r for rs in ledgers.values() for r in rs]
@@ -1565,7 +1607,7 @@ def regenerate_client(code: str, *, apply: bool) -> dict:
         if rows != with_cols or not path.exists() or _header(path) != COLUMNS:
             res["rewritten"] += 1
             if apply:
-                write_ledger(path, rows)
+                write_ledger(path, rows, bases[d])
     return res
 
 
