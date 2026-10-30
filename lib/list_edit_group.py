@@ -357,6 +357,7 @@ def sync_group(group_path: Path, creds: Optional[EbayCredentials] = None,
         api_send("PUT", f"/sell/inventory/v1/inventory_item_group/{group_key}", group_body, creds=creds)
 
     # Offers per SKU (unpublished). Update if one already exists for the SKU.
+    offer_ids: dict[str, str] = {}
     for v in _variations(draft):
         sku = str(v.get("sku"))
         offer_body = _variation_offer(draft, v, category_id, location_key, policies)
@@ -367,13 +368,25 @@ def sync_group(group_path: Path, creds: Optional[EbayCredentials] = None,
         if offer_id:
             api_send("PUT", f"/sell/inventory/v1/offer/{offer_id}", offer_body, creds=creds)
         else:
-            api_send("POST", "/sell/inventory/v1/offer", offer_body, creds=creds)
+            resp = api_send("POST", "/sell/inventory/v1/offer", offer_body, creds=creds)
+            offer_id = str((resp or {}).get("offerId") or "")
+        offer_ids[sku] = offer_id or ""
 
     if not dry_run:
         update_meta(group_path, {
             "ebay_inventory_item_group_key": group_key,
             "last_synced": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
+        # Ledger: one SYNCED row per variation SKU, as the single-item sync
+        # writes (#311 P2). Bookkeeping after the eBay write: a failure warns
+        # (upsert_listing prints it) and never undoes the sync.
+        title = str(draft.get("title") or "")
+        for v in _variations(draft):
+            sku = str(v.get("sku"))
+            if le.upsert_listing(sku, "SYNCED", title=title, offer_id=offer_ids.get(sku, ""),
+                                 price=le._to_decimal_str(v.get("price")) or "",
+                                 store=creds.store):
+                print(f"  [ledger] {sku} -> SYNCED")
 
     built["group_key"] = group_key
     built["variant_skus"] = variant_skus
@@ -402,7 +415,24 @@ def publish_group(group_path: Path, creds: Optional[EbayCredentials] = None,
             "ebay_listing_id": listing_id,
             "published_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
-    return {"published": True, "listing_id": listing_id, "response": resp}
+    # Ledger: every variation SKU -> PUBLISHED on the one group listing
+    # (#311 P2). The listing is already live, so a failed write is returned
+    # in ledger_errors rather than raised, as list_edit's publish does.
+    ledger_errors: list[str] = []
+    title = str(draft.get("title") or "")
+    url = f"https://www.ebay.com/itm/{listing_id}" if listing_id else ""
+    for v in _variations(draft):
+        sku = str(v.get("sku") or "").strip()
+        if not sku:
+            continue
+        try:
+            le.upsert_listing(sku, "PUBLISHED", title=title, listing_id=listing_id, url=url,
+                              price=le._to_decimal_str(v.get("price")) or "",
+                              store=creds.store, strict=True)
+        except le.LedgerWriteError as e:
+            ledger_errors.append(str(e))
+    return {"published": True, "listing_id": listing_id, "response": resp,
+            "ledger_errors": ledger_errors}
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +480,10 @@ def main() -> None:
                 print("  Re-run with --confirm to go live.")
             else:
                 print(f"[LIVE] published listing {res.get('listing_id')}")
+                for err in res.get("ledger_errors") or []:
+                    print(f"[FAIL] {err}", file=sys.stderr)
+                if res.get("ledger_errors"):
+                    sys.exit(1)
         else:
             ap.print_help()
     except (ValueError, FileNotFoundError, EbayAuthError, EbayAPIError) as e:

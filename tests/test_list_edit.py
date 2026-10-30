@@ -612,6 +612,26 @@ def test_publish_offer_is_idempotent_second_call_does_not_republish():
             assert rows[0]["status"] == "PUBLISHED"
 
 
+def test_group_sync_writes_a_synced_ledger_row_per_variation():
+    """#311 P2: a live sync_group upserts each variation SKU (SYNCED, its own
+    price and offer id); a re-sync updates those rows, never duplicates them."""
+    send, calls = _fake_api({"/sell/inventory/v1/offer": {"offerId": "OFF-NEW"}})
+    with tempfile.TemporaryDirectory() as td:
+        path = _write_group_draft(Path(td))
+        with _ledger_at(Path(td)) as ledger, \
+                _patched(G, api_send=send), \
+                _patched(L, upload_photos_to_eps=lambda paths, creds=None: ["EPS"],
+                         _resolve_policies_and_location=lambda creds: (_POLICIES, "LOC"),
+                         _find_offer_id_for_sku=lambda sku, creds: ""):
+            G.sync_group(path, creds=_Creds())
+            G.sync_group(path, creds=_Creds())
+            rows = _ledger_rows(ledger)
+
+    assert [(r["sku"], r["status"], r["offer_id"], r["price"], r["title"]) for r in rows] == [
+        ("sku-mpn-100", "SYNCED", "OFF-NEW", "19.99", "Vintage Widget Lot"),
+        ("sku-mpn-200", "SYNCED", "OFF-NEW", "29.99", "Vintage Widget Lot")]
+
+
 def test_publish_group_dry_run_golden_body():
     with tempfile.TemporaryDirectory() as td:
         path = _write_group_draft(Path(td))
@@ -631,11 +651,19 @@ def test_publish_group_golden_confirmed_body_and_response():
     })
     with tempfile.TemporaryDirectory() as td:
         path = _write_group_draft(Path(td))
-        with _patched(G, api_send=send):
+        with _ledger_at(Path(td)) as ledger, _patched(G, api_send=send):
             res = G.publish_group(path, creds=_Creds(), confirm=True)
+            rows = _ledger_rows(ledger)
 
     assert res["published"] is True
     assert res["listing_id"] == "555444333"
+    assert res["ledger_errors"] == []
+    # #311 P2: every variation SKU gets a PUBLISHED row on the one listing.
+    assert [(r["sku"], r["status"], r["listing_id"], r["price"]) for r in rows] == [
+        ("sku-mpn-100", "PUBLISHED", "555444333", "19.99"),
+        ("sku-mpn-200", "PUBLISHED", "555444333", "29.99")]
+    assert rows[0]["url"] == "https://www.ebay.com/itm/555444333"
+    assert rows[0]["published_at"]
     publishes = [c for c in calls if "publish_by_inventory_item_group" in c[1]]
     assert len(publishes) == 1
     method, url, body = publishes[0]
