@@ -257,7 +257,7 @@ def client(tmp_path):
         (offer("111"), "Brass <b>lamp</b>", None),
         (offer("222", best_offer=True), "Quilt", None)]), base=tmp_path)
     server.set_live_base(tmp_path)
-    with TestClient(server.app) as c:
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as c:
         yield c
     server.set_live_base(None)
 
@@ -307,6 +307,6 @@ def test_state_post_works_when_server_runs_via_runpy(tmp_path):
     LS.save_lineup("demo", "junk", LS.build_lineup([(offer("111"), "Lamp", None)]),
                    base=tmp_path)
     ns["set_live_base"](tmp_path)
-    with TestClient(ns["app"]) as c:
+    with TestClient(ns["app"], base_url="http://127.0.0.1:8770") as c:
         r = c.post("/live/demo/state", json={"lot": 1, "note": "hi"})
     assert r.status_code == 200, r.text

@@ -27,7 +27,8 @@ page, a phone, or another agent's web app can drive the show:
     GET  /api/pager/tg7preview.jpg  a JPEG of the TG-7 preview scene (?width=80-540, default 270)
     POST /api/pager/watch       {"action": "start" | "stop"}: the camera watch (black over a dead camera)
     POST /api/pager/reconnect   OBS reopens the D5100 and webcam sources (black / frozen picture)
-    POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop"}
+    POST /api/pager/stream      {"dest": "ebay" | "twitch", "action": "start" | "stop", "confirm": true}
+                                (a start without confirm is a 400; a stop needs none)
     POST /api/pager/standin     {"on": true}: white panel for the D5100 in the item view
     POST /api/pager/music       {"on": true | false}: fade it in / out (~2 s, show_music.py);
                                 {"preset": "lofi" | "folk"}: switch mixes (fades out and back in if on)
@@ -128,7 +129,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
-from webapp.freight import _local_only
+from webapp.security import local_only as _local_only
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "live"))
 import obsctl as _obsctl          # noqa: E402
@@ -145,6 +146,10 @@ class StandinRequest(BaseModel):
 class StreamRequest(BaseModel):
     dest: Literal["ebay", "twitch"]
     action: Literal["start", "stop"]
+    # Going live is a human gate (#311 "Gates that stay human"): the page sends
+    # confirm only after its second tap. A start without it is a 400. Stop
+    # never needs it, so nothing can stand between Russell and ending a feed.
+    confirm: bool = False
 
 
 Page = Literal["intro", "item", "closeup", "next", "desktop", "webcam", "multi"]
@@ -286,6 +291,8 @@ def pager_transitions() -> dict:
 
 @router.post("/api/pager/stream")
 def pager_stream(req: StreamRequest) -> dict:
+    if req.action == "start" and not req.confirm:
+        raise HTTPException(400, "going live needs confirm: true (the second tap)")
     with _obs() as c:
         fn = _show_flow.go_live if req.action == "start" else _show_flow.stop_dest
         r = fn(c, req.dest)
@@ -1030,7 +1037,7 @@ async function stream(dest) {
   streaming = true; streamButtons(true);
   say((action === 'start' ? 'Connecting to ' : 'Stopping ') + NAMES[dest] + '...');
   try {
-    const st = await api('POST', '/api/pager/stream', { dest, action }, 30000);
+    const st = await api('POST', '/api/pager/stream', { dest, action, confirm: true }, 30000);
     if (!switching) show(st, ['stream:' + dest]);
     const r = st.stream;
     say(action === 'start' ? (r.changed ? NAMES[dest] + ' is live: ' + r.kbps + ' kbps.' : NAMES[dest] + ' was already live.')

@@ -799,6 +799,9 @@ def test_stream_route(client, obs, monkeypatch):
     real = SF.go_live
     monkeypatch.setattr(SF, "go_live", lambda c, d: real(c, d, check=0))
     r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start"})
+    assert r.status_code == 400 and "confirm" in r.json()["detail"]   # going live is a second tap
+    assert not obs.active.get("Stream")
+    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start", "confirm": True})
     assert r.status_code == 200
     body = r.json()
     assert body["streams"]["twitch"]["live"] and not body["streams"]["ebay"]["live"]
@@ -806,11 +809,11 @@ def test_stream_route(client, obs, monkeypatch):
     r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "stop"})
     assert r.json()["streams"]["twitch"]["live"] is False
     assert client.post("/api/pager/stream", json={"dest": "youtube", "action": "start"}).status_code == 422
-    assert client.post("/api/pager/stream", json={"dest": "ebay", "action": "start"},
+    assert client.post("/api/pager/stream", json={"dest": "ebay", "action": "start", "confirm": True},
                        headers={"origin": "https://evil.example"}).status_code == 403
     obs.params = {}
     obs.active["Stream"] = True  # eBay live, so Twitch can't fall back to its own profile
-    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start"})
+    r = client.post("/api/pager/stream", json={"dest": "twitch", "action": "start", "confirm": True})
     assert r.status_code == 502 and "twitch-setup" in r.json()["detail"]
 
 
