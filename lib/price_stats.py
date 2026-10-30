@@ -54,6 +54,7 @@ Programmatic:
 from __future__ import annotations
 
 import json
+import math
 import re
 import statistics
 from collections import Counter
@@ -95,10 +96,9 @@ MIN_SELLER_FEEDBACK = 50    # below this feedback count → Tier-C exclusion
 
 # competitor_charm_pattern (GH #82) — the top-competing-sellers' charm-price
 # convention, as distinct from charm_price_share (our own sold comps, used
-# only as a currency-leak guard — see comps_core.charm_share). A majority
-# ending among ENOUGH competitors is preferred over the generic charm default
-# when proposing the recommended/working price; too thin a sample falls back
-# to today's unadjusted behavior unchanged.
+# only as a currency-leak guard — see comps_core.charm_share). It is
+# informational only: every emitted price is a whole dollar (Russell's rule,
+# 2026-10-29), so a competitor's .99 never moves our ask.
 COMPETITOR_CHARM_MAJORITY = 0.60     # issue's own threshold: ≥60% ⇒ decisive
 # The issue frames this as "top 3-5 sellers" — 2 sellers agreeing is
 # coincidence, not a convention, so 3 is the floor.
@@ -636,35 +636,23 @@ def apply_new_price_ceiling(
     return out
 
 
-def apply_charm_ending(price: float, pattern: str) -> float:
-    """Nudge `price` to the nearest price ending in `pattern`'s cents.
+def whole_dollar(price: float, floor: float | None = None) -> float:
+    """Round `price` to the nearest whole dollar (halves up).
 
-    Tries the ending at the current, prior, and next whole dollar and keeps
-    whichever lands closest to `price` — so the nudge is at most ~$1, never a
-    jump to an unrelated price point. Unknown pattern (e.g. "other"/None) is
-    a no-op.
+    With an evidence `floor` (e.g. a melt value) the result is never below
+    it: a floor that is not itself whole rounds UP to the next dollar.
 
-    >>> apply_charm_ending(34.50, ".99")
-    34.99
-    >>> apply_charm_ending(34.50, ".00")
+    >>> whole_dollar(34.99)
+    35.0
+    >>> whole_dollar(34.40)
     34.0
-    >>> apply_charm_ending(19.60, ".99")
-    19.99
-    >>> apply_charm_ending(0.10, ".95")
-    0.95
+    >>> whole_dollar(34.40, floor=34.10)
+    35.0
     """
-    cents = {".00": 0, ".99": 99, ".97": 97, ".95": 95}.get(pattern)
-    if cents is None:
-        return round(price, 2)
-    base = int(price)
-    candidates = [base + cents / 100, base - 1 + cents / 100, base + 1 + cents / 100]
-    # The "prior whole dollar" candidate can go negative for a low-dollar
-    # price (e.g. price=0.10 -> base-1+cents/100 = -0.05) and would then win
-    # on raw distance — a charm-price nudge must never produce a negative
-    # tier price. Excluding it still leaves the "current"/"next" candidates,
-    # so there's always a non-negative choice.
-    candidates = [c for c in candidates if c >= 0]
-    return round(min(candidates, key=lambda c: abs(c - price)), 2)
+    out = float(math.floor(price + 0.5))
+    if floor is not None and out < floor:
+        out = float(math.ceil(floor))
+    return out
 
 
 def competitor_charm_pattern(
@@ -744,7 +732,7 @@ def competitor_charm_pattern(
         }
     if top_pattern == "other":
         # A majority landing on a non-charm cents value isn't actionable —
-        # apply_charm_ending() no-ops on "other", so surfacing it as a
+        # "other" is never actionable, so surfacing it as a
         # decisive pattern would make price_from_runs() claim a "nudged to
         # competitor-dominant ending" that never actually moved the price.
         return {
@@ -880,13 +868,8 @@ def price_from_runs(
     signal: active listings from the top sellers in the matched category
     (`lib/ebay_browse.top_sellers_active`). The report always carries
     `competitor_charm_pattern` (see `competitor_charm_pattern()` — never
-    None). When it finds a clear majority ending (>= `competitor_majority_pct`
-    among >= `competitor_min_sellers` sellers / `competitor_min_listings`
-    listings), the `recommended` tier's price is nudged to that ending
-    (`apply_charm_ending`) instead of the generic charm default; the
-    unadjusted median survives alongside it as `pre_charm_price`. With no
-    competitor data, or too thin/no-majority a signal, `recommended` is
-    exactly today's median — unchanged.
+    None) but is informational only: every tier price is rounded to a whole
+    dollar (`whole_dollar`), whatever the competitors' endings.
     """
     if not best_match_json and not price_high_json:
         raise ValueError("provide at least one of best_match_json / price_high_json")
@@ -995,30 +978,15 @@ def price_from_runs(
     if ceiling and needs_vetting:
         ceiling_basis = (
             f"ceiling candidate from price_high (VET — confirm same item/cond, "
-            f"else use ${round(p90, 2)}): \"{ceiling.title[:55]}\" ({ceiling.url})")
+            f"else use ${whole_dollar(p90):.0f}): \"{ceiling.title[:55]}\" ({ceiling.url})")
     elif ceiling:
         ceiling_basis = f"vetted ceiling comp from price_high: \"{ceiling.title[:55]}\" ({ceiling.url})"
     else:
         ceiling_basis = f"no price_high comp survived filters → {PUSH_HIGH_FALLBACK_PCT}th percentile fallback"
 
-    conservative_price = round(percentile(sorted_kept, CONSERVATIVE_PCT), 2)
-    recommended_median = round(percentile(sorted_kept, RECOMMENDED_PCT), 2)
-    recommended_price = recommended_median
-    recommended_basis = "median of like-condition comparable sold (working price)"
-    # GH #82: a clear competitor-charm majority beats the generic charm
-    # default — nudge the working price to that ending. Never below the
-    # conservative floor, and never more than ~$1 from the median (see
-    # apply_charm_ending) — this composes with the distribution, it doesn't
-    # override it.
-    if competitor_charm.get("pattern"):
-        nudged = apply_charm_ending(recommended_median, competitor_charm["pattern"])
-        recommended_price = max(nudged, conservative_price)
-        recommended_basis = (
-            f"median of like-condition comparable sold (${recommended_median}), "
-            f"nudged to competitor-dominant ending {competitor_charm['pattern']} "
-            f"({competitor_charm['share']:.0%} of {competitor_charm['n_competitors']} "
-            f"competing sellers — >= {competitor_majority_pct:.0%} majority threshold)"
-        )
+    conservative_price = whole_dollar(percentile(sorted_kept, CONSERVATIVE_PCT))
+    recommended_price = whole_dollar(percentile(sorted_kept, RECOMMENDED_PCT))
+    recommended_basis = "median of like-condition comparable sold (working price), whole dollar"
 
     report["tiers"] = {
         "conservative": {
@@ -1028,13 +996,12 @@ def price_from_runs(
         "recommended": {
             "price": recommended_price,
             "basis": recommended_basis,
-            **({"pre_charm_price": recommended_median} if recommended_price != recommended_median else {}),
         },
         "push_high": {
-            "price": round(push_high, 2),
+            "price": whole_dollar(push_high),
             "basis": ceiling_basis,
             "needs_vetting": needs_vetting,
-            "fallback_if_unvetted": round(p90, 2) if needs_vetting else None,
+            "fallback_if_unvetted": whole_dollar(p90) if needs_vetting else None,
         },
     }
     report["ceiling_comp"] = (
@@ -1072,7 +1039,7 @@ def render(report: dict) -> str:
     if cc.get("pattern"):
         out.append(f"  Competitor charm pattern: {cc['pattern']} "
                    f"({cc['share']:.0%} of {cc['n_competitors']} competing sellers, "
-                   f"n={cc['n_listings']} listings) — preferred over generic charm default")
+                   f"n={cc['n_listings']} listings) — informational only; prices are whole dollars")
     elif report.get("competitor_active_requested"):
         # Competitor data WAS supplied — show why it produced no signal
         # (e.g. every record was unparseable or missing a seller id) rather
@@ -1142,7 +1109,7 @@ def _cli() -> None:
     ap.add_argument("--competitor-active",
                     help="Saved active-listings JSON from the top competing sellers in the "
                          "matched category (lib/ebay_browse.py top-sellers) — GH #82: learn "
-                         "their charm-price convention instead of the generic default")
+                         "their charm-price convention (informational; prices stay whole-dollar)")
     ap.add_argument("--json", action="store_true", help="Emit the full report as JSON")
     args = ap.parse_args()
 

@@ -246,7 +246,7 @@ hard you looked. An exact match beats any era-peer; commit to it (per _shared).
 Trigger: B is `THIN`, or `RAN` with `n_kept=0`, and no era-peer
 is close enough to anchor on (a unique antique, an odd maker, a one-of tool).
 Asks and judgment give no ceiling here, so they come out LOW: K01-C021, a
-Hopkins bench band saw priced on judgment at $119.99, sold the same day at
+Hopkins bench band saw priced on judgment at $120, sold the same day at
 full ask.
 
 1. **Historian first.** Hand the item to the `historian` agent for maker,
@@ -431,8 +431,7 @@ From `price_stats.py` on the cleaned set — adopt its numbers, don't re-derive.
 Free-shipping ⇒ these are delivered prices; always pair with net-to-us.
 
 - **Conservative** — 25th percentile of the like-condition cleaned set.
-- **Recommended (max supported)** — median, nudged to the competitor charm
-  ending when one is decisive (below); otherwise the plain median. In
+- **Recommended (max supported)** — the median, rounded to a whole dollar. In
   headless flow this is the provisional working price (SOFT gate — logged to
   NEEDS_REVIEW, not a stop).
 - **Push-high** — the vetted `price_high` ceiling. If flagged `needs_vetting`
@@ -443,23 +442,15 @@ Free-shipping ⇒ these are delivered prices; always pair with net-to-us.
 anchor Recommended on the exact-match median instead; say so; keep the
 distribution as context.
 
-**Competitor charm-price convention (GH #82).** `charm_price_share` (above,
-from our own sold comps) is a currency-leak guard, not a pricing signal — it
-says charm pricing is common in general, not what THIS niche's winning
-sellers actually do. When useful (a category with an obvious cluster of
-competing stores), pull `lib/ebay_browse.py top-sellers "<query>" --category
-<id> --json competitors.json` and pass it to `price_stats.py
---competitor-active competitors.json`. The report's
-`competitor_charm_pattern` buckets `.00`/`.99`/`.97`/`.95`/`other` across
-those sellers' active listings:
-- **Clear majority** (≥60% of ≥3 competing sellers / ≥5 listings — the
-  `pattern`/`share`/`n_competitors` fields) ⇒ Recommended is nudged to that
-  ending (`tiers.recommended.pre_charm_price` keeps the un-nudged median for
-  the record). State the pattern + share in the Distribution line.
-- **No majority, or too few competitors** (`pattern: null`, see `reason`) ⇒
-  unchanged — Recommended stays the plain median, same as when this step is
-  skipped entirely. This is optional per item; skip it outright on a thin or
-  single-competitor niche rather than force a signal that isn't there.
+**Whole-dollar prices (Russell's rule, 2026-10-29).** Every ask, step-down
+tier and Best Offer floor you emit ends in .00 — never .99, .97 or .95.
+`price_stats.py` already rounds its three tiers to the nearest dollar; round
+any price you derive yourself the same way (nearest, halves up), and never
+below an evidence floor such as melt — round that UP to the next dollar.
+`competitor_charm_pattern` (from `--competitor-active`, see
+`lib/ebay_browse.py top-sellers`) is informational only: you may cite what
+competitors do, but it never moves our price. `charm_price_share` stays a
+currency-leak guard.
 
 **Thin market (conf=thin, n<3):** no percentiles — closest-comp/era-peer
 method, widen the bracket, flag rarity. The three tiers still apply, anchored
