@@ -655,21 +655,10 @@ def _write_ledger(name: str, path: Path, store: Optional[str], fn) -> None:
     two runs can't drop each other's rows. `path`'s folder is the store root,
     and the config comes from stores.load_config(), so a test that isolates
     stores never reaches the real ledgers or the cloud. ledger_store also
-    runs the Drive mirror after the write.
-
-    A store whose file isn't on the allowlist (a third store added to
-    config.yaml before the Worker's list) still writes locally in local mode,
-    as it did before; in cloud mode NotAllowed stands, so nothing diverges
-    from the cloud copy unseen."""
+    runs the Drive mirror after the write. backup=False: this writer never
+    made .backup-* copies, and the event log still records the change."""
     ls = ledger_store.open_store(stores.load_config(), root=path.parent)
-    try:
-        ls.update(name, fn, store=store)
-    except ledger_store.NotAllowed:
-        if ls.cloud:
-            raise
-        fields, rows = ledger_store.parse_csv(path.read_bytes()) if path.exists() else ([], [])
-        ledger_store.atomic_write(path, ledger_store.to_csv(fields, fn(rows)))
-        ls.mirror(path)
+    ls.update(name, fn, store=store, backup=False)
 
 
 def _ordered(row: dict, fields: list[str]) -> dict:
