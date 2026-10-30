@@ -23,6 +23,7 @@ prompt, not the archive.
 | [osd-audit-2026-08-21.md](osd-audit-2026-08-21.md) | The measurement behind PREP's OSD confidence floor — why orientation detection was confidently wrong, and the number that fixed it. |
 | [prep-white-backgrounds.md](prep-white-backgrounds.md) | PROPOSAL, not built. Why the punch preset does not transfer from dark cloth to white-background shoots. |
 | [prep-resume-plan.md](prep-resume-plan.md) | PLAN ONLY, no code. `--resume` / `--jobs N` for PREP (#74 item 3). |
+| [v9-alpha-walkthrough.md](v9-alpha-walkthrough.md) | The ten-stop demo script for Russell for v9.0.0-alpha.1: one command per stop, what it shows, what needs his hands, and what the demo never touches. |
 | [client-onboarding/checklist.md](client-onboarding/checklist.md) | DRAFT — attorney review pending. Start here for a new consignment or purchase client: what to collect by deal and client type, red flags, and where each record goes. |
 | [client-onboarding/consignment-agreement.md](client-onboarding/consignment-agreement.md) | DRAFT — attorney review pending. The client-facing consignment agreement template. |
 | [client-onboarding/purchase-agreement.md](client-onboarding/purchase-agreement.md) | DRAFT — attorney review pending. The purchase agreement and bill of sale template for buying a client's items outright. |

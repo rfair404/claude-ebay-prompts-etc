@@ -19,10 +19,12 @@ before a performance report if the numbers look stale.
 
 `listings_ledger.csv` is incomplete by construction:
 
-  * **CHOICE / multi-variation listings never reach it.** `list_edit_group.py`
-    publishes from `draft_group.md` and does not call `upsert_listing()`, so
-    four live group listings (26 variations) were invisible to the ledger as of
-    2026-08-15.
+  * **Older CHOICE / multi-variation listings never reached it.**
+    `list_edit_group.py` published from `draft_group.md` without calling
+    `upsert_listing()`, so four live group listings (26 variations) were
+    invisible to the ledger as of 2026-08-15. Group sync and publish now write
+    SYNCED and PUBLISHED rows per variation; listings from before that still
+    come only from the drafts.
   * **Rows go stale.** `--update` doesn't touch the ledger, and a sale never
     writes back at all, so `status` drifts from reality.
 

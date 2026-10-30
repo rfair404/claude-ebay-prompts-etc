@@ -1,5 +1,5 @@
 ---
-version: 5.0.0
+version: 5.1.0
 updated: 2026-10-29
 ---
 
@@ -633,6 +633,45 @@ An older ledger loads as it is. The first `sync --apply` adds the new columns
 rewrites bare `C001` ids as `K01-C001`; nothing has to be converted by hand.
 
 Paperwork for a new client: [docs/client-onboarding/checklist.md](docs/client-onboarding/checklist.md).
+
+## Ledger writes (v9.0.0-alpha.1)
+
+Every ledger writer goes through `lib/ledger_store.py`; the design is in
+[docs/offsite-storage.md](docs/offsite-storage.md). With no `ledger_store:`
+block in `config.yaml` (local mode) files and commands are as before. What
+changed for the runbook:
+
+- **Writers:** `list_edit` and `ledger_reconcile --apply` (listings ledger),
+  `sync_actuals --apply` (sales and unwound) and `consign` (client ledgers)
+  write through `ledger_store.update()`. In cloud mode a write is refused,
+  with "run it again", if another machine changed the ledger since this run
+  read it.
+- **`tools/live_audit.py --apply` no longer writes the ledger.** It rewrites
+  only a LIVE row's draft whose own `ebay_listing_id` matches; SKU-only
+  matches are printed as skipped. Heal the ledger with
+  `python -m lib.cli reconcile --apply`.
+- **Group listings get ledger rows.** `--sync` on a `draft_group.md` writes a
+  SYNCED row per variation SKU, and `--publish --confirm` a PUBLISHED row per
+  variation. A failed ledger write after publish shows `[FAIL]` but does not
+  undo the live listing.
+- **Three more `consign` commands:** `consign template` (an empty standard
+  ledger), `consign new <client>` and `consign regenerate [client] [--apply]`,
+  which rewrites every client ledger to the standard columns and adds an
+  INTAKE row for each catalogued item folder no row holds. Dry run by
+  default; run `consign sync --apply` after.
+- **R2 follows every ledger write**, and `offsite check` reports whether the
+  last push worked.
+- **Check the record:** `python -m lib.cli ledger verify` replays the hash
+  chained event log in `reports/ledger_chain/` and exits 1 on a break.
+- **Local app:** `.venv/bin/python -m lib.cli serve` (127.0.0.1:8770 only).
+  Every route refuses a non-loopback Host and a cross-origin write. A job
+  left `queued` or `running` at restart becomes an error and does not rerun.
+  `POST /api/pager/stream` needs `"confirm": true` to start a stream.
+  `/api/actions` runs local PREP and hero actions only; none writes to eBay.
+- **Tests:** `tests/conftest.py` refuses any non-loopback socket, clears the
+  `EBAY_*` and `APIFY_*` variables and points `EBAYBIZ_CONFIG` at a fixture.
+
+Walk-through for Russell: [docs/v9-alpha-walkthrough.md](docs/v9-alpha-walkthrough.md).
 
 ## Background dispatch (optional, #59)
 
