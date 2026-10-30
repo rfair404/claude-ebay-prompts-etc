@@ -1,6 +1,6 @@
 ---
-version: 2.0.0
-updated: 2026-10-26
+version: 2.1.0
+updated: 2026-10-29
 ---
 
 # Offsite storage for listing data
@@ -141,6 +141,30 @@ An older version of an overwritten file is under
 - `pull` never replaces a differing local file without `--overwrite`.
 - Nothing transfers without `--apply`.
 
+## Every ledger write pushes to R2 (v9.0.0-alpha.1, #400)
+
+Before, R2 only got a copy when someone ran `offsite push --apply`. Now
+`gdrive_mirror.ledger_changed()`, the one after-write hook (list_edit,
+sync_actuals, ledger_reconcile and `ledger_store.update()` already call it),
+starts a detached job that pushes the ledgers to R2 first, then to Drive if a
+`gdrive:` block is set. The same never-delete and `history/` rules apply.
+
+- **What counts as a ledger write:** any main-checkout path `LEDGER_INCLUDE`
+  selects. That list now includes `inventory/**/client_ledger*.csv` and
+  `inventory/_consign/**`; before, only files in the repo root counted.
+- **Status:** each result goes to `.offsite_status.json` (`last_ok`,
+  `last_full_ok`, `last_failure` and the error, per target). A failure also
+  fires `notify-send` (best effort). `offsite push --apply` and
+  `gdrive push --apply` record their status too.
+- **Checking it (#405):** `offsite check` reads that file, with no network
+  and no config, and exits 1 if the last push failed, a ledger is newer than
+  the last good push by more than 15 minutes, or the last full push is over
+  36 hours old. The old write/read round-trip is `offsite check --probe`.
+- **Daily timer (#405):** `tools/systemd/ebaybiz-offsite.{service,timer}` pushes
+  at 03:00, then runs `offsite check`. Install (once, dry run without
+  `--apply`): `tools/systemd/install-offsite-timer.sh --apply`. This replaces
+  the crontab line under "Day to day".
+
 ## Ledger store (GH #380, Phase 1)
 
 The ledgers' cloud copy that writers lock against, so two sessions writing
@@ -154,7 +178,8 @@ which keeps backing the ledgers up as before.
   `LEDGER_TOKEN` secret.
 - **Allowed keys:** `listings_ledger.csv`, `sales_ledger.csv`,
   `unwound_orders.csv`, their `-junk` versions, and `client_ledger-K01.csv`.
-  The list is `ALLOWED` in `worker.js` and `LEDGERS` in `lib/ledger_store.py`;
+  A new client needs a Worker redeploy before cloud mode can write its
+  ledger. The list is `ALLOWED` in `worker.js` and `LEDGERS` in `lib/ledger_store.py`;
   `tests/test_ledger_store.py` keeps them equal. `inventory_sheet` (rebuilt
   from eBay) and `clients.csv` (client names) are deliberately off it.
 - **Writes:** `ledger_store.update()` reads the key, applies the change and
@@ -169,6 +194,15 @@ which keeps backing the ledgers up as before.
   local as before. Once `.ledger_etags.json` exists, this checkout has written
   to the cloud, and removing the block makes ledger writes refuse rather than
   fork the record.
+- **Event log (#402):** each `update()` that changes a table appends one JSONL
+  line to `reports/ledger_chain/<key>.jsonl`: the header, rows added and
+  removed, the hash of the replayed table, and the previous line's hash. A
+  write made outside `update()` is logged as `drift` on the next update, so
+  the log always replays to the file on disk. The log is per checkout, so
+  another machine's writes show as drift. `ledger verify` checks it.
+- **Readers:** `ledger_store.rows(name, store=None, **column=value)` reads a
+  ledger as dicts of strings in both modes, with no config needed. Existing
+  readers are not converted yet.
 - **Cost:** expected to stay within the R2 and Workers free tiers.
 
 ### Setup (once): run after P1.4 merges
@@ -177,7 +211,8 @@ Russell has nothing to do after this release. The setup and seed below wait
 until P1.2 to P1.4 have merged.
 
 Don't run `ledger seed --apply` until P1.2 to P1.4 have converted every
-writer. Until then, `list_edit`, `sync_actuals` and `consign` still write the
+writer: `list_edit` and `ledger_reconcile` (#408), `sync_actuals` (#401) and
+`consign` (#398). Until all merge, the unconverted ones still write the
 CSVs directly, so the seeded cloud copy goes stale. The first `update()` after
 P1.2 then GETs the stale cloud rows, applies `fn` and `atomic_write`s them
 over the local CSV (`lib/ledger_store.py` `update()`, 200 branch). Every row
@@ -206,6 +241,7 @@ and `restore` are dry runs without `--apply`.
 | `seed [--apply]` | first upload of each local ledger; never overwrites a seeded key |
 | `history <key>` | that key's saved versions (90 days) |
 | `restore <key> <stamp> [--apply]` | puts a saved version back; the one it replaces goes to `history/`, so a restore can be undone |
+| `verify [key...] [--strict]` | replays each event log locally and names the first broken line; exit 1 on a break. Drift is a warning, or a failure with `--strict` |
 
 ## Second copy: Google Drive
 
