@@ -1,6 +1,6 @@
 ---
-version: 1.0.0
-updated: 2026-10-26
+version: 1.0.1
+updated: 2026-10-29
 ---
 
 # Live-streaming machine setup (eBay Live + OBS)
@@ -456,7 +456,7 @@ a refocus runs; the last one pressed wins. The same pager is served as JSON for 
 /api/pager/refocus`, `POST /api/pager/wb {"preset": "daylight"}`, `POST /api/pager/reconnect`, `POST /api/pager/hold
 {"on": true}`, `POST /api/pager/step`, `POST /api/pager/tg7 {"action":
 "start"}`, `POST /api/pager/watch {"action": "start"}` and `POST /api/pager/stream {"dest": "twitch", "action":
-"start"}`. The page has Start/Stop buttons for eBay and Twitch,
+"start", "confirm": true}`. The page has Start/Stop buttons for eBay and Twitch,
 each confirmed by a second click within 5 s (the button turns amber and the status bar asks; no pop-up, which the desktop app's browser pane would block). `webapp/pager.py` documents the JSON and error codes.
 `show_flow.py page|status|refocus --json` prints the same objects.
 

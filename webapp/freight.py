@@ -37,7 +37,7 @@ from freight.models import (ACCESSORIALS, FreightAddress, FreightQuote,
 from freight.providers import ProviderNotReady
 from freight.store import STATUSES, FreightStore, Shipment
 from tools.sales_report import STYLE, _e, _stat
-from webapp.security import LOCAL_HOSTS, PII_HEADERS, local_only as _local_only  # noqa: F401
+from webapp.security import PII_HEADERS, local_only as _local_only
 
 # The guard moved to webapp/security.py (#311 slice 1) and now runs app-wide;
 # the router keeps it too, so /freight stays guarded if mounted elsewhere.

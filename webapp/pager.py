@@ -116,7 +116,7 @@ mid-call; 502 is any other OBS or camera failure, with the reason as the
 detail.
 
 These routes change what a public broadcast shows, so they get freight's
-guard (webapp/freight.py `_local_only`): loopback Host only, and writes
+guard (webapp/security.py `local_only`): loopback Host only, and writes
 from loopback origins only. Build the control page as a route of this app
 (same origin) or a page on localhost; there are no CORS headers.
 """
