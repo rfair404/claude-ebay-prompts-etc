@@ -1,7 +1,10 @@
 """lib/gdrive_mirror.py — the rclone command, the ledger-write trigger guards,
-and the debounce worker. rclone itself is never run. No pytest fixtures —
-runs under tests/run_all.py too.
+the debounce worker and its R2 + Drive pass. rclone and R2 are never
+reached: R2 is an in-memory bucket. No pytest fixtures — runs under
+tests/run_all.py too.
 """
+import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -12,8 +15,28 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
 import gdrive_mirror as gm  # noqa: E402
+import offsite  # noqa: E402
 
 CFG = gm.GdriveConfig(remote="gdrive", folder="EBAYBIZ-backup")
+R2 = offsite.OffsiteConfig(endpoint="https://r2.invalid", bucket="b", region="auto",
+                           access_key_id="k", secret_access_key="s")
+
+
+class _Bucket:
+    """In-memory S3: the calls offsite.push makes."""
+
+    def __init__(self):
+        self.objs = {}
+
+    def list(self, prefix):
+        return {k: offsite.RemoteObject(len(v), hashlib.md5(v).hexdigest())
+                for k, v in self.objs.items() if k.startswith(prefix)}
+
+    def put(self, key, data, md5_hex, content_type="application/octet-stream"):
+        self.objs[key] = data
+
+    def copy(self, src, dst):
+        self.objs[dst] = self.objs[src]
 
 
 def _tree(files):
@@ -58,8 +81,11 @@ def test_copy_args_dry_run_and_few():
 
 def test_selection_ledgers_only_vs_full():
     root = _tree(["listings_ledger.csv", "sales_ledger-junk.csv", "config.yaml",
-                  "inventory/a/draft.md", "inventory/a/IMG_1.JPG", "reports/r.html"])
-    assert gm.selection(CFG, root, True) == ["listings_ledger.csv", "sales_ledger-junk.csv"]
+                  "inventory/a/draft.md", "inventory/a/IMG_1.JPG", "reports/r.html",
+                  "inventory/K01/client_ledger.csv", "inventory/_consign/clients.csv"])
+    assert gm.selection(CFG, root, True) == [
+        "inventory/K01/client_ledger.csv", "inventory/_consign/clients.csv",
+        "listings_ledger.csv", "sales_ledger-junk.csv"]
     full = gm.selection(CFG, root, False)
     assert "inventory/a/draft.md" in full and "reports/r.html" in full
     assert "config.yaml" not in full and "inventory/a/IMG_1.JPG" not in full
@@ -93,13 +119,12 @@ def test_load_config():
         raise AssertionError("unconfigured must raise")
 
 
-def _trigger(root, ledger, **env):
+def _trigger(root, ledger, targets=(None, CFG), **env):
     calls = []
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     try:
-        with _Patch(gm, load_gdrive_config=lambda: CFG), \
-             _Patch(gm.shutil, which=lambda _: "/usr/bin/rclone"):
+        with _Patch(gm, _targets=lambda: targets):
             started = gm.ledger_changed(ledger, root=root,
                                         spawn=lambda *a, **k: calls.append(a))
     finally:
@@ -117,6 +142,51 @@ def test_trigger_spawns_for_main_ledger():
     assert started and len(calls) == 1
     assert calls[0][0][-3:] == ["_worker", "--root", str(root.resolve())]
     assert (root / gm.PENDING_FILE).exists()
+
+
+def test_trigger_spawns_for_r2_alone_and_client_ledgers():
+    root = _tree(["inventory/K01/client_ledger.csv", "inventory/_consign/clients.csv"])
+    for rel in ("inventory/K01/client_ledger.csv", "inventory/_consign/clients.csv"):
+        (root / gm.PENDING_FILE).unlink(missing_ok=True)
+        started, calls = _trigger(root, root / rel, targets=(R2, None))
+        assert started and len(calls) == 1, rel
+
+
+def test_trigger_ignores_non_ledgers_and_no_targets():
+    root = _tree(["inventory/a/draft.md", "config.yaml", "listings_ledger.csv"])
+    for rel in ("inventory/a/draft.md", "config.yaml"):
+        assert _trigger(root, root / rel, targets=(R2, CFG)) == (False, [])
+    assert _trigger(root, root / "listings_ledger.csv", targets=(None, None)) == (False, [])
+    assert not (root / gm.PENDING_FILE).exists()
+
+
+def test_trigger_counts_a_link_into_main():
+    """A worktree's inventory/ link resolves to main, so its writes count."""
+    root = _tree(["inventory/K01/client_ledger.csv"])
+    wt = _tree([])
+    try:
+        (wt / "inventory").symlink_to(root / "inventory", target_is_directory=True)
+    except OSError:
+        return                                               # no symlinks here
+    started, _ = _trigger(root, wt / "inventory/K01/client_ledger.csv", targets=(R2, None))
+    assert started
+    assert _trigger(root, wt / "listings_ledger.csv", targets=(R2, None)) == (False, [])
+
+
+def test_targets_from_config():
+    with _Patch(gm.shutil, which=lambda _: None):            # no rclone
+        r2, g = gm._targets({"offsite": {"endpoint": "https://e", "bucket": "b",
+                                         "access_key_id": "k", "secret_access_key": "s"},
+                             "gdrive": {"remote": "gd"}})
+    assert r2 and r2.bucket == "b" and g is None
+    old = {k: os.environ.pop(k, None) for k in ("EBAYBIZ_OFFSITE_ACCESS_KEY_ID",
+                                                "EBAYBIZ_OFFSITE_SECRET_ACCESS_KEY")}
+    try:
+        with _Patch(gm.shutil, which=lambda _: "/usr/bin/rclone"):
+            r2, g = gm._targets({"gdrive": {"remote": "gd"}})
+    finally:
+        os.environ.update({k: v for k, v in old.items() if v is not None})
+    assert r2 is None and g and g.remote == "gd"
 
 
 def test_trigger_ignores_ledger_outside_main_checkout():
@@ -150,7 +220,7 @@ def test_stale_lock_is_replaced():
 
 
 def test_trigger_never_raises():
-    with _Patch(gm, load_gdrive_config=lambda: (_ for _ in ()).throw(RuntimeError("x"))):
+    with _Patch(gm, _targets=lambda: (_ for _ in ()).throw(RuntimeError("x"))):
         root = _tree(["listings_ledger.csv"])
         assert gm.ledger_changed(root / "listings_ledger.csv", root=root) is False
 
@@ -166,11 +236,77 @@ def test_worker_batches_writes_and_cleans_up():
             (root / gm.PENDING_FILE).write_text("2")
         return 0
 
-    with _Patch(gm, load_gdrive_config=lambda: CFG, push=fake_push):
+    with _Patch(gm, _targets=lambda: (None, CFG), push=fake_push):
         assert gm._worker(root, debounce=0) == 0
     assert len(pushes) == 2 and pushes[0] == {"apply": True, "ledgers_only": True}
     assert not (root / gm.PENDING_FILE).exists()
     assert not (root / gm.LOCK_FILE).exists()
+
+
+def test_worker_survives_a_crashing_pass():
+    root = _tree(["listings_ledger.csv"])
+    (root / gm.PENDING_FILE).write_text("1")
+    with _Patch(gm, _push_all=lambda r: 1 / 0):
+        assert gm._worker(root, debounce=0) == 2
+    assert not (root / gm.LOCK_FILE).exists()
+
+
+def test_push_all_r2_first_then_drive_and_status():
+    root = _tree(["listings_ledger.csv", "inventory/K01/client_ledger.csv",
+                  "inventory/a/draft.md"])
+    bucket, order, notes = _Bucket(), [], []
+    real = offsite.push_ledgers
+
+    def r2_push(cfg, r):
+        order.append("r2")
+        return real(cfg, r, remote=bucket)
+
+    def drive_push(cfg, r, **kw):
+        order.append("gdrive")
+        return 0
+
+    with _Patch(gm, _targets=lambda: (R2, CFG), push=drive_push,
+                _notify=lambda *a: notes.append(a)), \
+         _Patch(offsite, push_ledgers=r2_push):
+        assert gm._push_all(root) == 0
+    assert order == ["r2", "gdrive"] and not notes
+    assert sorted(bucket.objs) == ["data/inventory/K01/client_ledger.csv",
+                                   "data/listings_ledger.csv"]
+    st = json.loads((root / offsite.STATUS_FILE).read_text())
+    assert "last_ok" in st["r2"] and "last_ok" in st["gdrive"]
+    assert "last_full_ok" not in st["r2"]
+
+
+def test_push_ledgers_keeps_history_of_replaced_ledger():
+    root = _tree(["listings_ledger.csv"])
+    bucket = _Bucket()
+    bucket.objs["data/listings_ledger.csv"] = b"old"
+    assert offsite.push_ledgers(R2, root, remote=bucket) == []
+    assert bucket.objs["data/listings_ledger.csv"] == b"x"
+    assert [v for k, v in bucket.objs.items() if k.startswith("history/")] == [b"old"]
+
+
+def test_push_all_failure_is_recorded_and_notified():
+    root = _tree(["listings_ledger.csv"])
+    notes = []
+
+    def boom(cfg, r):
+        raise offsite.OffsiteError("GET b: HTTP 403")
+
+    with _Patch(gm, _targets=lambda: (R2, None), _notify=lambda *a: notes.append(a)), \
+         _Patch(offsite, push_ledgers=boom):
+        assert gm._push_all(root) == 1
+    st = json.loads((root / offsite.STATUS_FILE).read_text())
+    assert st["r2"]["error"] == "GET b: HTTP 403" and "last_failure" in st["r2"]
+    assert "last_ok" not in st["r2"] and len(notes) == 1
+
+
+def test_record_status_keeps_last_ok_across_a_failure():
+    root = _tree([])
+    offsite.record_status(root, "r2", True, full=True)
+    offsite.record_status(root, "r2", False, "boom")
+    st = json.loads((root / offsite.STATUS_FILE).read_text())["r2"]
+    assert {"last_ok", "last_full_ok", "last_failure"} <= set(st) and st["error"] == "boom"
 
 
 def test_upsert_listing_nudges_drive():
