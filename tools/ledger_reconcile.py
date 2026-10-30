@@ -383,19 +383,10 @@ def _write_ledger(ledger: Path, store: str, fn) -> list[dict]:
     historic listings_ledger.backup-*.csv; a named store's starts with its own
     stem, listings_ledger-junk.backup-*, covered by .gitignore, #156), an
     atomic rewrite, then the Drive nudge. Cloud mode merges into the cloud
-    copy under If-Match and the Worker keeps the previous version instead.
-
-    A store whose file isn't on the allowlist (a store added to config.yaml
-    before the Worker's list) still writes locally in local mode; in cloud
-    mode NotAllowed stands, so nothing diverges from the cloud copy unseen."""
+    copy under If-Match and the Worker keeps the previous version instead."""
     ls = ledger_store.open_store(stores.load_config(), root=ledger.parent)
     ls.mirror = lambda p: ledger_changed(p)
-    try:
-        _, cached = ls.resolve("listings", store)
-    except ledger_store.NotAllowed:
-        if ls.cloud:
-            raise
-        cached = None
+    _, cached = ls.resolve("listings", store)
     if cached == ledger:
         before = set(ledger.parent.glob(f"{ledger.stem}.backup-*{ledger.suffix}"))
         rows = ls.update("listings", fn, store=store)

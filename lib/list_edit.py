@@ -345,24 +345,21 @@ def _write_listings_ledger(path: Path, store: str, fn) -> None:
     With `ledger_store:` in config.yaml the write goes through
     ledger_store.update(): the cloud copy is read, `fn` applied and written
     under If-Match, so two writers can't drop each other's rows; the CSV at
-    `path` is the cache. Without it (local mode) `path` is rewritten in
-    place exactly as before, no .backup-* copy (this runs on every sync,
-    publish, sale and shipment), then the Drive copy is nudged. A local
-    checkout that has cloud state but lost the config block is refused
-    (ledger_store.Refused) before anything is written."""
+    `path` is the cache. Without it (local mode) the same update() rewrites
+    `path` atomically and appends the event log, with no .backup-* copy
+    (this runs on every sync, publish, sale and shipment). Either way the
+    Drive copy is nudged after. A local checkout that has cloud state but
+    lost the config block is refused (ledger_store.Refused) before anything
+    is written."""
     ls = ledger_store.open_store(_stores.load_config(), root=path.parent)
-    if not ls.cloud:
-        fields, rows = ledger_store.parse_csv(path.read_bytes()) if path.exists() else ([], [])
-        ledger_store.atomic_write(path, ledger_store.to_csv(_LEDGER_FIELDS, fn(rows)))
-        ledger_changed(path)
-        return
+    ls.mirror = lambda p: ledger_changed(p)
     key, cached = ls.resolve("listings", store)
     if cached != path:
-        # $EBAYBIZ_LISTINGS_LOG pointed the ledger somewhere ledger_store
-        # doesn't cache; writing the cloud copy would leave `path` stale.
+        # The ledger path isn't where ledger_store keeps this store's
+        # ledger; writing there would leave `path` stale.
         raise ledger_store.LedgerStoreError(
-            f"{path} is not the cache for cloud key {key} ({cached}); nothing written")
-    ls.update("listings", fn, store=store)
+            f"{path} is not the ledger_store path for {key} ({cached}); nothing written")
+    ls.update("listings", fn, store=store, backup=False)
 
 
 def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
