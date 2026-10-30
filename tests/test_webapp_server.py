@@ -32,7 +32,7 @@ def client(tmp_path, monkeypatch):
                          lambda: {"stub": "backlog+drafts+drift"})
     monkeypatch.setattr(server._dashboard, "draw",
                          lambda d: f"<html><body>{d['stub']}</body></html>")
-    with TestClient(server.app) as c:
+    with TestClient(server.app, base_url="http://127.0.0.1:8770") as c:
         yield c
     queue.shutdown()
     server.set_queue(None)

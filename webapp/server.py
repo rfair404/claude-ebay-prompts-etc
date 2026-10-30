@@ -70,8 +70,8 @@ for _p in (str(REPO), str(REPO / "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from fastapi import FastAPI, HTTPException          # noqa: E402
-from fastapi.responses import HTMLResponse          # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException # noqa: E402
+from fastapi.responses import FileResponse, HTMLResponse  # noqa: E402
 from pydantic import BaseModel                       # noqa: E402
 
 import live_show as _live                            # noqa: E402
@@ -79,16 +79,23 @@ import pick_store as _pick_store                     # noqa: E402
 import stores as _stores                             # noqa: E402
 import tools.dashboard as _dashboard                 # noqa: E402
 import tools.review_card_html as _review_card_html   # noqa: E402
+import webapp.actions as _actions                      # noqa: E402
 import webapp.freight as _freight                      # noqa: E402
 import webapp.jobs as _jobs                            # noqa: E402
 import webapp.pager as _pager                          # noqa: E402
+import webapp.ui as _ui                                # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
+from webapp.security import local_only                # noqa: E402
 
 DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
 DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
-app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
+# Every route, app-wide (#311 slice 1): a loopback Host, a loopback Origin on
+# writes, and no-store headers. Until this, only /freight and /api/pager had
+# it, so POST /api/jobs and POST /live/{show}/state were unguarded.
+app = FastAPI(title="ebay-ops (local, #31 Phase 2)",
+              dependencies=[Depends(local_only)])
 app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
 app.include_router(_pager.router)     # /api/pager — which page of the live show is on air
 _queue: Optional[JobQueue] = None
@@ -105,7 +112,8 @@ def get_queue() -> JobQueue:
 
 def make_queue(db_path: Path) -> JobQueue:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    return JobQueue(db_path, JOB_HANDLERS)
+    # "action" runs one row of webapp/actions.py (#311 slice 3).
+    return JobQueue(db_path, {**JOB_HANDLERS, "action": _actions.run_job})
 
 
 _pick_store_dir: Optional[Path] = None
@@ -174,33 +182,40 @@ def dashboard(store: Optional[str] = None) -> str:
     each. `?store=NAME`: that store's drift and drafts only. The name is
     validated before it goes anywhere near a filename (stores.paths builds
     `listings_ledger-<store>.csv` from it)."""
+    known = _dashboard._store_names()
+    shell = _ui.bar(stores=known, store=store, path="/")
     if store is None:
-        return _dashboard.draw(_dashboard.gather())
+        return _ui.wrap(_dashboard.draw(_dashboard.gather()), shell)
     try:
         _stores.validate_store_name(store)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    known = _dashboard._store_names()
     if store not in known:
         raise HTTPException(
             status_code=404,
             detail=f"no store {store!r} configured (known: {', '.join(known)})")
-    return _dashboard.draw(_dashboard.gather([store], only_store=store))
+    return _ui.wrap(_dashboard.draw(_dashboard.gather([store], only_store=store)), shell)
+
+
+def _draft_store(shoot_dir: Path) -> str:
+    """The store this item publishes to — the draft's own (stores.draft_store),
+    never the URL's. Shown in the shell; "" when there's no readable draft."""
+    try:
+        from draft_io import parse_draft
+        return _stores.draft_store(parse_draft(shoot_dir / "draft.md").frontmatter)
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def _item_shell(shoot: str, shoot_dir: Path, tab: str, buttons=()) -> str:
+    return _ui.bar(stores=_dashboard._store_names(), shoot=shoot, tab=tab,
+                   draft_store=_draft_store(shoot_dir), buttons=buttons)
 
 
 def _resolve_review_dir(shoot: str) -> Path:
-    """A shoot path relative to inventory/, at any depth. Each segment must be
-    a plain name, and the result must still sit under inventory/ once
-    resolved — the same guard `_resolve_shoot_dir` keeps for jobs, widened
-    from one level to many because shoots nest (`fr/arquilt`)."""
-    parts = shoot.split("/") if shoot else []
-    if not parts or "\\" in shoot or any(p in ("", ".", "..") for p in parts):
-        raise ValueError(f"invalid shoot path: {shoot!r}")
-    inventory = _jobs.INVENTORY.resolve()
-    shoot_dir = inventory.joinpath(*parts).resolve()
-    if inventory not in shoot_dir.parents or not shoot_dir.is_dir():
-        raise ValueError(f"unknown shoot: {shoot!r}")
-    return shoot_dir
+    """A shoot path relative to inventory/, at any depth (`fr/arquilt`). One
+    guard for pages and jobs alike: webapp/jobs.py's `_resolve_shoot_dir`."""
+    return _jobs._resolve_shoot_dir(shoot)
 
 
 @app.get("/review/{shoot:path}", response_class=HTMLResponse)
@@ -219,7 +234,98 @@ def review(shoot: str) -> str:
         raise HTTPException(
             status_code=404,
             detail=f"{shoot!r} has no draft.md yet — DRAFT hasn't run")
-    return _review_card_html.render(shoot_dir)
+    buttons = []
+    if not _has_sku(shoot_dir):
+        buttons.append(_ui.button("Record the draft", "listing-record", {"shoot": shoot},
+                                  busy="Recording the draft", done="Draft recorded"))
+    return _ui.wrap(_review_card_html.render(shoot_dir, app_shoot=shoot),
+                    _item_shell(shoot, shoot_dir, "review", buttons))
+
+
+def _has_sku(shoot_dir: Path) -> bool:
+    try:
+        from draft_io import parse_draft
+        meta = parse_draft(shoot_dir / "draft.md").frontmatter.get("meta") or {}
+        return bool(meta.get("ebay_inventory_sku"))
+    except Exception:                                        # noqa: BLE001
+        return False
+
+
+def _prep_dir(shoot: str) -> Path:
+    try:
+        shoot_dir = _resolve_review_dir(shoot)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not (shoot_dir / ".prep" / "prep.json").exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{shoot!r} has no PREP manifest yet — run prep --auto first")
+    return shoot_dir
+
+
+# Declared before /prep/{shoot:path}: the path converter is greedy, so the
+# page route would otherwise swallow ".../card.jpg" as part of the shoot.
+@app.get("/prep/{shoot:path}/card.jpg")
+def prep_card(shoot: str, refresh: bool = False) -> FileResponse:
+    """The shoot's numbered contact sheet (tools/prep_card.py), the same
+    `.prep/card.jpg` the art director reads from disk. Built on first ask,
+    or again with `?refresh=1`. Reads and writes inside the shoot only."""
+    shoot_dir = _prep_dir(shoot)
+    card = shoot_dir / ".prep" / "card.jpg"
+    if refresh or not card.exists():
+        import tools.prep_card as _prep_card
+        try:
+            card = _prep_card.build(shoot_dir)
+        except SystemExit as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileResponse(card, media_type="image/jpeg")
+
+
+@app.get("/prep/{shoot:path}", response_class=HTMLResponse)
+def prep_page(shoot: str) -> str:
+    """Frame Check (tools/prep_sheet_html.py), live, with each stage's
+    Accept panel able to run its answer through the action table."""
+    shoot_dir = _prep_dir(shoot)
+    import tools.prep_sheet_html as _prep_sheet
+    page = _prep_sheet.render(shoot_dir, app_shoot=shoot)
+    buttons = [
+        _ui.button("Render listing photos", "prep-apply", {"shoot": shoot},
+                   busy="Rendering listing/", done="Listing photos rendered"),
+        _ui.button("Propose a hero montage", "hero-montage-propose", {"shoot": shoot},
+                   busy="Composing a montage", done="Montage proposed", reload=False),
+    ]
+    return _ui.wrap(page, _item_shell(shoot, shoot_dir, "prep", buttons))
+
+
+class ActionRequest(BaseModel):
+    slots: dict = {}
+
+
+ActionRequest.model_rebuild()
+
+
+@app.get("/api/actions")
+def list_actions() -> list[dict]:
+    return _actions.as_dict()
+
+
+@app.post("/api/actions/{name}")
+def run_action(name: str, req: ActionRequest) -> dict:
+    """Validate the slots against the action's table row, then queue it.
+    Unknown action: 404. A bad slot: 400, and nothing is queued. The job
+    carries the name and the raw slots; the worker re-validates them."""
+    try:
+        act = _actions.get(name)
+        _actions.validate(name, req.slots)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc.args[0])) from exc
+    except _actions.SlotError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if act.writes_ebay or act.needs_confirm:
+        raise HTTPException(status_code=400,
+                            detail=f"{name} writes to eBay and needs a dry run first")
+    job_id = get_queue().enqueue("action", {"action": name, "slots": req.slots})
+    return {"id": job_id, "status": "queued"}
 
 
 def _live_lineup(show: str) -> dict:
@@ -346,7 +452,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="ebz serve")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    # access_log off: URLs carry pick-sheet tokens today and OAuth codes later.
+    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)
     return 0
 
 

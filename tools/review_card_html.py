@@ -35,6 +35,7 @@ import argparse
 import base64
 import html
 import io
+import json
 import re
 import sys
 import urllib.parse
@@ -265,12 +266,18 @@ def _fact(label: str, value: str, cls: str = "") -> str:
             f'<dd>{value}</dd></div>')
 
 
-def render(shoot: Path) -> str:
+def render(shoot: Path, app_shoot: str | None = None) -> str:
     """Build the review page as a string — no file I/O beyond reading the
     shoot's own local, secret-free inputs (draft.md, price.txt,
     review_card.md, the listing photos). Split out from build() so a live
     server (webapp/server.py's #31 Phase 2 review route) can return the
-    page directly instead of writing it to disk and reading it back."""
+    page directly instead of writing it to disk and reading it back.
+
+    `app_shoot` is the shoot's path under inventory/ when the local app
+    serves the page (#311 slice 3). Then the cover picker gets a button that
+    runs `listing --set-hero` through the app's action table, instead of
+    asking for the frame number in the chat. A file built by build() never
+    gets it: that page stays script-free and "for looking, not for doing"."""
     shoot = Path(shoot)
     draft = parse_draft(shoot / "draft.md")
     fm = draft.frontmatter
@@ -326,7 +333,8 @@ def render(shoot: Path) -> str:
 
     chips = "".join(
         f'<input class="pick" type="radio" name="hero" id="h{f["i"]}"'
-        f'{" checked" if f["i"] == 0 else ""}>'
+        + (f' data-photo="{html.escape(f["rel"])}"' if app_shoot else "")
+        + f'{" checked" if f["i"] == 0 else ""}>'
         f'<label for="h{f["i"]}" title="{html.escape(f["name"])}">'
         f'<span class="chipimg" style="background-image:var(--p{f["i"]})"></span>'
         f'<span class="chipn">{f["i"] + 1}</span></label>'
@@ -344,6 +352,18 @@ def render(shoot: Path) -> str:
         for f in frames)
 
     shoot_posix = shoot.as_posix()
+    if app_shoot:
+        run = ("var p=document.querySelector('input[name=hero]:checked');"
+               "fhRun(this,'listing-set-hero',{shoot:" + json.dumps(app_shoot)
+               + ",photo:p?p.dataset.photo:''},{busy:'Setting the cover',"
+               "done:'Cover set',reload:true})")
+        hint_html = ('<p class="hint">Frame 1 is eBay\'s gallery image. Pick a frame, '
+                     'then make it the cover.</p>'
+                     '<p class="hint"><button type="button" class="setcover" onclick="'
+                     + html.escape(run) + '">Make the picked frame the cover</button></p>')
+    else:
+        hint_html = ('<p class="hint">Frame 1 is eBay\'s gallery image. Picking a frame here only\n'
+                     '        previews it; to change the cover, name its number in the chat.</p>')
     cmds = ""   # the picker reports its choice in the chat, not as a command
 
     bo_line = ("on · auto-decline $" + str(bo.get("auto_decline_amount"))
@@ -390,8 +410,6 @@ def render(shoot: Path) -> str:
     page = f"""<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(_page_name(title))}</title>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap">
 <style>
 :root{{
 {vars_}
@@ -416,7 +434,7 @@ def render(shoot: Path) -> str:
 }}
 *{{box-sizing:border-box}}
 body{{margin:0;padding:26px 20px 60px;background:var(--ground);color:var(--ink);
-  font:15px/1.5 "IBM Plex Sans",ui-sans-serif,system-ui,sans-serif}}
+  font:15px/1.5 ui-sans-serif,system-ui,sans-serif}}
 .card{{max-width:1120px;margin:0 auto;background:var(--surface);
   border:1px solid var(--rule);border-radius:4px;box-shadow:var(--shadow);overflow:hidden}}
 
@@ -424,12 +442,12 @@ body{{margin:0;padding:26px 20px 60px;background:var(--ground);color:var(--ink);
   display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}}
 .eyebrow{{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
   color:var(--muted);margin:0 0 7px}}
-h1{{font:500 25px/1.24 Newsreader,Georgia,serif;margin:0;text-wrap:balance;max-width:30ch}}
-.hdr .ct{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11.5px;
+h1{{font:500 25px/1.24 Georgia,serif;margin:0;text-wrap:balance;max-width:30ch}}
+.hdr .ct{{font-family:ui-monospace,monospace;font-size:11.5px;
   color:var(--muted);margin-top:7px}}
 .store{{margin:0 0 9px}}
 .ask{{margin-left:auto;text-align:right}}
-.ask .amt{{font:500 30px/1 "IBM Plex Mono",ui-monospace,monospace;
+.ask .amt{{font:500 30px/1 ui-monospace,monospace;
   font-variant-numeric:tabular-nums;color:var(--accent)}}
 .ask .sub{{font-size:12px;color:var(--muted);margin-top:5px}}
 
@@ -438,7 +456,7 @@ h1{{font:500 25px/1.24 Newsreader,Georgia,serif;margin:0;text-wrap:balance;max-w
 .col{{padding:22px 24px;min-width:0}}
 @media(min-width:900px){{.col+.col{{border-left:1px solid var(--rule)}}}}
 
-h2{{font:600 11px/1 "IBM Plex Sans",sans-serif;letter-spacing:.13em;
+h2{{font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.13em;
   text-transform:uppercase;color:var(--muted);margin:0 0 13px}}
 .col+.col h2:not(:first-child),.wide h2:not(:first-child){{margin-top:26px}}
 
@@ -448,7 +466,7 @@ h2{{font:600 11px/1 "IBM Plex Sans",sans-serif;letter-spacing:.13em;
   background-size:contain;background-repeat:no-repeat;background-position:center;
   border:1px solid var(--rule);border-radius:3px;cursor:zoom-in}}
 .shotcap{{display:block;margin-top:8px;font-size:11.5px;color:var(--muted);
-  font-family:"IBM Plex Mono",ui-monospace,monospace}}
+  font-family:ui-monospace,monospace}}
 /* The cover sits at half width with the rest of the shoot beside it, so the
    gallery image AND every other frame are visible without scrolling. A hero
    that filled the column pushed the strip below the fold, which is where the
@@ -474,7 +492,7 @@ h2{{font:600 11px/1 "IBM Plex Sans",sans-serif;letter-spacing:.13em;
 .chipimg{{position:absolute;inset:0;background-size:contain;
   background-repeat:no-repeat;background-position:center}}
 .chipn{{position:absolute;left:0;bottom:0;padding:2px 7px;font-size:11.5px;
-  font-family:"IBM Plex Mono",ui-monospace,monospace;background:var(--surface);
+  font-family:ui-monospace,monospace;background:var(--surface);
   color:var(--muted);border-top-right-radius:3px}}
 .pick:focus-visible+label{{outline:2px solid var(--accent);outline-offset:2px}}
 .hint{{font-size:12.5px;color:var(--muted);margin:11px 0 0;max-width:52ch}}
@@ -483,7 +501,7 @@ dl{{margin:0;display:grid;gap:11px}}
 .fact{{display:grid;grid-template-columns:130px 1fr;gap:12px;align-items:baseline}}
 .fact dt{{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}}
 .fact dd{{margin:0}}
-.mono{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums}}
+.mono{{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums}}
 .pill{{display:inline-block;padding:2px 8px;border:1px solid currentColor;
   border-radius:2px;font-size:11px;letter-spacing:.05em;text-transform:uppercase}}
 .pill.ok{{color:var(--ok)}} .pill.warn{{color:var(--warn)}} .pill.acc{{color:var(--accent)}}
@@ -493,7 +511,7 @@ th,td{{text-align:left;padding:6px 10px 6px 0;border-bottom:1px solid var(--rule
   vertical-align:top}}
 th{{font-weight:500;color:var(--muted);width:44%}}
 tr.lead th,tr.lead td{{color:var(--accent)}}
-td.n{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;
+td.n{{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;
   white-space:nowrap;width:88px}}
 td.note{{color:var(--muted);font-size:12.5px}}
 .scroll{{overflow-x:auto}}
@@ -502,7 +520,7 @@ td.note{{color:var(--muted);font-size:12.5px}}
 .disc{{font-size:14px;line-height:1.6;background:var(--sunk);border-radius:3px;
   padding:14px 16px;margin:0}}
 .desc{{max-width:66ch}}
-.desc h3{{font:500 16px/1.3 Newsreader,Georgia,serif;margin:22px 0 8px}}
+.desc h3{{font:500 16px/1.3 Georgia,serif;margin:22px 0 8px}}
 .desc p{{margin:0 0 11px}} .desc ul{{margin:0 0 11px;padding-left:20px}}
 .desc li{{margin:0 0 4px}}
 ul.flags{{margin:0;padding-left:18px;font-size:13.5px}}
@@ -512,7 +530,7 @@ ul.flags li{{margin:0 0 5px}} ul.flags .clear{{color:var(--ok);list-style:none;m
 .note{{color:var(--muted);font-size:12.5px}}
 iframe.comps{{width:100%;height:520px;border:1px solid var(--rule);border-radius:3px;background:#fff}}
 
-pre{{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:12.5px;
+pre{{font-family:ui-monospace,monospace;font-size:12.5px;
   background:var(--sunk);border:1px solid var(--rule);border-radius:3px;
   padding:11px 13px;margin:0;overflow-x:auto;white-space:pre-wrap;word-break:break-all}}
 .cmd{{display:none}}
@@ -555,8 +573,7 @@ a:focus-visible,label:focus-visible{{outline:2px solid var(--accent);outline-off
         <div class="shotcol">{shots}</div>
         <div class="strip">{chips}</div>
       </div>
-      <p class="hint">Frame 1 is eBay's gallery image. Picking a frame here only
-        previews it; to change the cover, name its number in the chat.</p>
+      {hint_html}
     </div>
 
     <div class="col">

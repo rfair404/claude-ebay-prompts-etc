@@ -201,7 +201,7 @@ def test_live_audit_passes_one_store_to_both_halves(repo, monkeypatch):
     assert got == {"offers": "junk", "seller": "junkhandle"}
 
 
-def test_live_audit_apply_writes_only_the_stores_ledger_and_drafts(repo, monkeypatch, tmp_path):
+def test_live_audit_apply_scopes_drafts_and_leaves_ledgers_alone(repo, monkeypatch, tmp_path):
     import live_audit as la
     inv = repo / "inventory"
     for name, store_line in (("j", 'store: "junk"\n'), ("m", "")):
@@ -217,6 +217,7 @@ def test_live_audit_apply_writes_only_the_stores_ledger_and_drafts(repo, monkeyp
     _write_ledger(junk_led, [{"sku": "gone0001", "status": "PUBLISHED"}])
     _write_ledger(main_led, [{"sku": "gone0001", "status": "PUBLISHED"}])
     main_before = main_led.read_bytes()
+    junk_before = junk_led.read_bytes()
 
     drafts = la.scan_drafts("junk", la.load_ledger("junk"))
     assert [d["dir"] for d in drafts] == ["inventory/j"]
@@ -228,7 +229,8 @@ def test_live_audit_apply_writes_only_the_stores_ledger_and_drafts(repo, monkeyp
     actives.write_text("[]", encoding="utf-8")
     assert la.main(["--store", "junk", "--offers", str(offers),
                     "--actives", str(actives), "--apply"]) == 0
-    assert _read(junk_led)[0]["status"] == "NEEDS_CHECK"
+    # --apply never writes a ledger (#345); ledger_reconcile.py owns that
+    assert junk_led.read_bytes() == junk_before
     assert main_led.read_bytes() == main_before
 
 

@@ -98,6 +98,8 @@ from typing import Optional
 
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
+import stores as _stores
+import ledger_store  # the one write path for the listings ledger (#380)
 from gdrive_mirror import ledger_changed
 from draft_io import (Draft, ebay_block_reason, iter_drafts, parse_draft, resolve_photo_paths,
                        set_photo_order, update_meta)
@@ -333,6 +335,33 @@ class LedgerWriteError(RuntimeError):
         super().__init__(f"ledger write: {path}: {err}")
 
 
+class _NoLedgerRow(LookupError):
+    """A field edit for a SKU with no row: write nothing (upsert_listing)."""
+
+
+def _write_listings_ledger(path: Path, store: str, fn) -> None:
+    """Apply `fn(rows) -> rows` to `store`'s listings ledger at `path` (#380 P1.2).
+
+    With `ledger_store:` in config.yaml the write goes through
+    ledger_store.update(): the cloud copy is read, `fn` applied and written
+    under If-Match, so two writers can't drop each other's rows; the CSV at
+    `path` is the cache. Without it (local mode) the same update() rewrites
+    `path` atomically and appends the event log, with no .backup-* copy
+    (this runs on every sync, publish, sale and shipment). Either way the
+    Drive copy is nudged after. A local checkout that has cloud state but
+    lost the config block is refused (ledger_store.Refused) before anything
+    is written."""
+    ls = ledger_store.open_store(_stores.load_config(), root=path.parent)
+    ls.mirror = lambda p: ledger_changed(p)
+    key, cached = ls.resolve("listings", store)
+    if cached != path:
+        # The ledger path isn't where ledger_store keeps this store's
+        # ledger; writing there would leave `path` stale.
+        raise ledger_store.LedgerStoreError(
+            f"{path} is not the ledger_store path for {key} ({cached}); nothing written")
+    ls.update("listings", fn, store=store, backup=False)
+
+
 def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
                    offer_id: str = "", listing_id: str = "", url: str = "",
                    store: Optional[str] = None, strict: bool = False) -> Optional[str]:
@@ -358,16 +387,13 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         return None
     import csv
     path = None
-    try:
-        path = _ledger_path(store)
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        rows: list[dict] = []
-        if path.exists():
-            with path.open(newline="", encoding="utf-8") as f:
-                rows = list(csv.DictReader(f))
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def apply(rows: list[dict]) -> list[dict]:
+        # Pure, so ledger_store can re-run it on a fresher copy (#380).
         row = next((r for r in rows if r.get("sku") == sku), None)
         if row is None and not status:
-            return None
+            raise _NoLedgerRow(sku)
         if row is None:
             row = {k: "" for k in _LEDGER_FIELDS}
             row["sku"] = sku
@@ -389,14 +415,16 @@ def upsert_listing(sku: str, status: str, *, title: str = "", price: str = "",
         if tsfield and not row.get(tsfield):
             row[tsfield] = ts
         row["updated_at"] = ts
-        with path.open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=_LEDGER_FIELDS, extrasaction="ignore")
-            w.writeheader()
-            for r in rows:
-                w.writerow({k: r.get(k, "") for k in _LEDGER_FIELDS})
-        ledger_changed(path)
+        return [{k: r.get(k, "") for k in _LEDGER_FIELDS} for r in rows]
+
+    try:
+        sp = store_paths(store)
+        path = sp.listings_ledger
+        _write_listings_ledger(path, sp.store, apply)
         return str(path)
-    except (OSError, csv.Error) as e:
+    except _NoLedgerRow:
+        return None
+    except (OSError, csv.Error, ledger_store.LedgerStoreError) as e:
         err = LedgerWriteError(path, e)
         if strict:
             raise err from e

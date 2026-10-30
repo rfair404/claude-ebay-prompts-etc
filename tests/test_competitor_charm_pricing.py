@@ -6,17 +6,9 @@ a currency-leak guard over OUR OWN sold comps — it says charm pricing is
 common in general, nothing about what a specific niche's competing stores are
 doing right now. `competitor_charm_pattern` (lib/price_stats.py) buckets
 ending-price patterns across the top competing sellers' ACTIVE listings (from
-lib/ebay_browse.py) and, when there's a clear majority, prefers that ending
-for the `recommended` tier instead of the generic charm default.
-
-Two things have to hold:
-  1. A real majority (>=60%, >=3 sellers, >=5 listings — the issue's own bar)
-     is preferred over the generic default, and the nudge is traceable
-     (`pre_charm_price` survives alongside the adjusted price).
-  2. Anything short of that — too few competitors, or no majority ending —
-     changes NOTHING: `recommended` is exactly today's median, and
-     `charm_price_share`-only behavior (no competitor data at all) is
-     unaffected.
+lib/ebay_browse.py). Since 2026-10-29 that pattern is informational only:
+every emitted tier price is a whole dollar and a competitor majority never
+moves it.
 
 Run:  python tests/test_competitor_charm_pricing.py
   or: pytest tests/test_competitor_charm_pricing.py
@@ -59,21 +51,18 @@ def test_charm_ending_buckets():
     assert price_stats.charm_ending(18.50) == "other"
 
 
-def test_apply_charm_ending_stays_within_a_dollar():
-    assert price_stats.apply_charm_ending(34.50, ".99") == 34.99
-    assert price_stats.apply_charm_ending(34.50, ".00") == 34.0
-    assert price_stats.apply_charm_ending(19.60, ".99") == 19.99
-    # unknown pattern is a no-op (just rounds)
-    assert price_stats.apply_charm_ending(34.503, "other") == 34.5
+def test_whole_dollar_rounds_to_nearest_halves_up():
+    assert price_stats.whole_dollar(34.99) == 35.0
+    assert price_stats.whole_dollar(34.40) == 34.0
+    assert price_stats.whole_dollar(34.50) == 35.0
+    assert price_stats.whole_dollar(0.20) == 0.0
 
 
-def test_apply_charm_ending_never_returns_a_negative_price():
-    # Copilot review on #93: the "prior whole dollar" candidate
-    # (base - 1 + cents/100) goes negative for a low-dollar price and used
-    # to win on raw distance — e.g. price=0.10, pattern='.95' picked -0.05.
-    assert price_stats.apply_charm_ending(0.10, ".95") == 0.95
-    assert price_stats.apply_charm_ending(0.02, ".99") == 0.99
-    assert price_stats.apply_charm_ending(0.50, ".00") >= 0
+def test_whole_dollar_never_below_evidence_floor():
+    # melt 34.10: nearest dollar is 34, but that sits under the floor
+    assert price_stats.whole_dollar(34.20, floor=34.10) == 35.0
+    assert price_stats.whole_dollar(34.60, floor=34.10) == 35.0
+    assert price_stats.whole_dollar(40.00, floor=34.10) == 40.0
 
 
 def test_majority_pattern_found_and_returned():
@@ -147,25 +136,27 @@ def test_junk_prices_are_skipped_not_fatal():
 # price_from_runs() — wired into the price-proposal logic
 # ---------------------------------------------------------------------------
 
-def test_recommended_is_nudged_when_a_majority_is_found():
-    baseline = _report()["tiers"]["recommended"]["price"]  # 35.95 (whole-ish)
+def _assert_whole_dollar_tiers(r):
+    for name, t in r["tiers"].items():
+        assert t["price"] == int(t["price"]), (name, t["price"])
+        assert "pre_charm_price" not in t
+
+
+def test_every_tier_is_whole_dollar_even_with_a_99_majority():
     listings = _listings([
-        ("alice", 30.00), ("bob", 40.00), ("carol", 50.00),
-        ("dave", 20.00), ("erin", 60.00), ("frank", 12.99),
+        ("alice", 29.99), ("bob", 39.99), ("carol", 49.99),
+        ("dave", 19.99), ("erin", 59.99), ("frank", 12.99),
     ])
     r = _report(competitor_listings=listings)
-    cc = r["competitor_charm_pattern"]
-    assert cc["pattern"] == ".00"
-    rec = r["tiers"]["recommended"]
-    assert price_stats.charm_ending(rec["price"]) == ".00"
-    assert rec["price"] != baseline
-    assert rec["pre_charm_price"] == baseline
-    assert ".00" in rec["basis"]
-    # the nudge never crosses the conservative floor
-    assert rec["price"] >= r["tiers"]["conservative"]["price"]
-    # other tiers are untouched by the nudge
-    assert "pre_charm_price" not in r["tiers"]["conservative"]
-    assert "pre_charm_price" not in r["tiers"]["push_high"]
+    assert r["competitor_charm_pattern"]["pattern"] == ".99"  # still reported
+    _assert_whole_dollar_tiers(r)
+    t = r["tiers"]
+    assert t["recommended"]["price"] == _report()["tiers"]["recommended"]["price"]
+    assert t["conservative"]["price"] <= t["recommended"]["price"] <= t["push_high"]["price"]
+
+
+def test_tiers_are_whole_dollar_without_competitor_data():
+    _assert_whole_dollar_tiers(_report())
 
 
 def test_recommended_unchanged_when_no_majority():
@@ -177,7 +168,6 @@ def test_recommended_unchanged_when_no_majority():
     r = _report(competitor_listings=listings)
     assert r["competitor_charm_pattern"]["pattern"] is None
     assert r["tiers"]["recommended"] == baseline["tiers"]["recommended"]
-    assert "pre_charm_price" not in r["tiers"]["recommended"]
 
 
 def test_recommended_unchanged_when_too_few_competitors():
@@ -199,8 +189,7 @@ def test_charm_price_share_only_behavior_is_unchanged_with_no_competitor_data():
     assert cc["pattern"] is None
     assert cc["n_competitors"] == 0
     assert cc["reason"] == "no competitor active-listing data supplied"
-    assert r["tiers"]["recommended"]["price"] == 35.95
-    assert "pre_charm_price" not in r["tiers"]["recommended"]
+    assert r["tiers"]["recommended"]["price"] == 36.0
 
 
 def test_competitor_charm_pattern_surfaced_even_when_thin():
@@ -257,8 +246,7 @@ def test_recommended_unchanged_when_majority_is_other():
     ])
     r = _report(competitor_listings=listings)
     assert r["competitor_charm_pattern"]["pattern"] is None
-    assert r["tiers"]["recommended"]["price"] == 35.95
-    assert "pre_charm_price" not in r["tiers"]["recommended"]
+    assert r["tiers"]["recommended"]["price"] == 36.0
 
 
 def test_render_shows_the_no_signal_reason_when_competitor_data_was_requested():

@@ -72,7 +72,7 @@ from ebay_client import api_send, load_credentials, EbayAPIError, EbayAuthError 
 import ebay_finances  # noqa: E402  /sell/finances/v1/transaction reader (#119)
 import stores  # noqa: E402  the one store model (#156)
 from draft_io import iter_drafts  # noqa: E402
-from gdrive_mirror import ledger_changed  # noqa: E402  Drive copy after each write
+import ledger_store  # noqa: E402  the one write path for sales/unwound (#380)
 from report import REPORTING_TZ_LABEL, to_report_date  # noqa: E402
 from stores import draft_belongs_to_store, draft_store_from_text, ledger_keys  # noqa: E402
 
@@ -648,6 +648,24 @@ def _load_sales_ledger(path: Path) -> dict:
         return {_sale_key(r): r for r in csv.DictReader(f)}
 
 
+def _write_ledger(name: str, path: Path, store: Optional[str], fn) -> None:
+    """Apply `fn(rows) -> rows` to ledger `name` through lib/ledger_store
+    (#380 P1.3): local mode rewrites `path` atomically; with `ledger_store:`
+    configured the cloud copy is read, merged and written under If-Match, so
+    two runs can't drop each other's rows. `path`'s folder is the store root,
+    and the config comes from stores.load_config(), so a test that isolates
+    stores never reaches the real ledgers or the cloud. ledger_store also
+    runs the Drive mirror after the write. backup=False: this writer never
+    made .backup-* copies, and the event log still records the change."""
+    ls = ledger_store.open_store(stores.load_config(), root=path.parent)
+    ls.update(name, fn, store=store, backup=False)
+
+
+def _ordered(row: dict, fields: list[str]) -> dict:
+    """`row` with exactly `fields`, in that order (the old DictWriter output)."""
+    return {k: row.get(k, "") for k in fields}
+
+
 def write_sales_ledger(rows: list[dict], store: Optional[str] = None, *,
                        unwound_order_ids=()) -> Path:
     """Merge `rows` into `store`'s sales ledger — never a wholesale overwrite.
@@ -669,31 +687,31 @@ def write_sales_ledger(rows: list[dict], store: Optional[str] = None, *,
     — so a shared file is exactly where one store's order could replace
     another store's sale. Returns the path written."""
     path = stores.paths(store).sales_ledger
-    merged = _load_sales_ledger(path)
     gone = set(unwound_order_ids)
-    merged = {k: v for k, v in merged.items() if k[0] not in gone}
-    for r in rows:
-        out = dict(r)
-        for k in _MONEY_FIELDS:
-            out[k] = _money(r[k])
-        key = _sale_key(out)
-        existing = merged.get(key)
-        for k in _OPTIONAL_MONEY_FIELDS:
-            # None (not yet read from the Finances API this run) stays
-            # whatever the ledger already had, not "" — a --skip-finances
-            # run or a degraded Finances call would otherwise silently
-            # erase a real figure a PRIOR run already recorded. Only an
-            # actual fetched value (never blank, per the SALES_FIELDS
-            # comment on why 0.00 would be a false claim) overwrites it.
-            v = r.get(k)
-            out[k] = _money(v) if v is not None else (existing or {}).get(k, "")
-        merged[key] = out
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=SALES_FIELDS, extrasaction="ignore")
-        w.writeheader()
-        for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True):
-            w.writerow(r)
-    ledger_changed(path)
+
+    def merge(current: list[dict]) -> list[dict]:
+        merged = {_sale_key(r): r for r in current}
+        merged = {k: v for k, v in merged.items() if k[0] not in gone}
+        for r in rows:
+            out = dict(r)
+            for k in _MONEY_FIELDS:
+                out[k] = _money(r[k])
+            key = _sale_key(out)
+            existing = merged.get(key)
+            for k in _OPTIONAL_MONEY_FIELDS:
+                # None (not yet read from the Finances API this run) stays
+                # whatever the ledger already had, not "" — a --skip-finances
+                # run or a degraded Finances call would otherwise silently
+                # erase a real figure a PRIOR run already recorded. Only an
+                # actual fetched value (never blank, per the SALES_FIELDS
+                # comment on why 0.00 would be a false claim) overwrites it.
+                v = r.get(k)
+                out[k] = _money(v) if v is not None else (existing or {}).get(k, "")
+            merged[key] = out
+        return [_ordered(r, SALES_FIELDS)
+                for r in sorted(merged.values(), key=lambda x: x["sold_at"], reverse=True)]
+
+    _write_ledger("sales", path, store, merge)
     return path
 
 
@@ -710,27 +728,24 @@ def write_unwound_orders(rows: list[dict], store: Optional[str] = None, *,
     `unwound_order_ids`: eBay can reverse a refund, and the refund test can
     flip, so an order must never sit in both files. Returns the path written."""
     path = stores.paths(store).unwound_orders
-    existing: dict = {}
-    if path.exists():
-        with path.open(encoding="utf-8-sig", newline="") as f:
-            existing = {_sale_key(r): r for r in csv.DictReader(f)}
     gone = {r["order_id"] for r in rows} | set(sold_order_ids)
-    merged = {k: v for k, v in existing.items() if k[0] not in gone}
-    for r in rows:
-        key = _sale_key(r)
-        old = existing.get(key) or {}
-        out = {k: r.get(k, "") for k in UNWOUND_FIELDS}
-        for k in ("original_gross", "refunded", "ad_fee", "actual_postage"):
-            v = r.get(k)
-            out[k] = _money(v) if v is not None else old.get(k, "")
-        merged[key] = out
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=UNWOUND_FIELDS, extrasaction="ignore")
-        w.writeheader()
-        for r in sorted(merged.values(), key=lambda x: (x["sold_at"], x["order_id"]),
-                        reverse=True):
-            w.writerow(r)
-    ledger_changed(path)
+
+    def merge(current: list[dict]) -> list[dict]:
+        existing = {_sale_key(r): r for r in current}
+        merged = {k: v for k, v in existing.items() if k[0] not in gone}
+        for r in rows:
+            key = _sale_key(r)
+            old = existing.get(key) or {}
+            out = {k: r.get(k, "") for k in UNWOUND_FIELDS}
+            for k in ("original_gross", "refunded", "ad_fee", "actual_postage"):
+                v = r.get(k)
+                out[k] = _money(v) if v is not None else old.get(k, "")
+            merged[key] = out
+        return [_ordered(r, UNWOUND_FIELDS)
+                for r in sorted(merged.values(), key=lambda x: (x["sold_at"], x["order_id"]),
+                                reverse=True)]
+
+    _write_ledger("unwound", path, store, merge)
     return path
 
 

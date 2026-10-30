@@ -405,6 +405,103 @@ def test_s3remote_against_local_stub_server():
         srv.shutdown()
 
 
+# ---------------------------------------------------------------------------
+# Restore an empty machine from the offsite copy (GH #397, PR 4)
+# ---------------------------------------------------------------------------
+
+_SECRET = "SYNTHETIC-R2-SECRET-do-not-leak"
+
+# Everything a dead machine must get back, with awkward bytes on purpose
+# (CRLF, non-ASCII, no trailing newline, an empty file) so "restored" means
+# byte-identical and not "has the same lines". All names and rows are made up.
+_MACHINE = {
+    "listings_ledger.csv": b"sku,status\r\nabc12345,PUBLISHED\r\n",
+    "listings_ledger-junk.csv": "sku,status\nzz000001,SOLD ✓\n".encode(),
+    "listings_ledger.csv.backup-20261008-232617": b"sku,status\nold00001,DRAFTED",
+    "sales_ledger.csv": b"order,total\nT-0001,12.00\n",
+    "unwound_orders.csv": b"",
+    "hand_listed_locations.csv": b"sku,bin\nabc12345,A1\n",
+    "inventory/lot-1/draft.md": b"---\ntitle: Synthetic Widget\n---\nbody\n",
+    "inventory/fr/nested/identify.txt": b"synthetic identification\n",
+    "inventory/CONSIGN-TEST/client_ledger.csv": b"item,client\r\nC001,Test Client One\r\n",
+    "inventory/_consign/clients.csv": b"code,name\nT01,Test Client One\n",
+    "inventory/_consign/T01/settlements.csv": b"id,amount\nS-1,1.00\n",
+}
+# On the old machine too, but never meant to leave it.
+_NEVER_OFFSITE = {
+    "config.yaml": f"ebay:\n  user_refresh_token: {_SECRET}\n".encode(),
+    "inventory/lot-1/IMG_0001.jpg": b"\xff\xd8\xff photo bytes",
+    "inventory/lot-1/review_card.html": b"<html>rebuilt on demand</html>",
+    "lib/offsite.py": b"# code lives in git, not the bucket\n",
+}
+
+
+def _offsite_cli(monkeypatch, tmp_path, fake):
+    """offsite.main() for real (arg parsing, config load, plan, push/pull),
+    with only the S3 wire replaced by the in-memory bucket. Any socket use
+    fails the test: restoring from the offsite copy needs no network."""
+    import socket
+
+    import config
+
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("offsite:\n  endpoint: https://r2.invalid\n  bucket: synthetic\n"
+                   "  access_key_id: AKIA-SYNTHETIC\n"
+                   f"  secret_access_key: {_SECRET}\n", encoding="utf-8")
+    monkeypatch.setenv("EBAYBIZ_CONFIG", str(cfg))
+    monkeypatch.delenv("EBAYBIZ_OFFSITE_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("EBAYBIZ_OFFSITE_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.setattr(config, "_cached_config", None)       # re-read; restored after
+    monkeypatch.setattr(offsite, "S3Remote", lambda cfg: fake)
+
+    def no_network(*a, **kw):
+        raise AssertionError("offsite restore tried to open a network connection")
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(socket, "create_connection", no_network)
+    return offsite.main
+
+
+def test_an_empty_machine_is_restored_from_the_offsite_copy(tmp_path, monkeypatch, capsys):
+    """The point of the whole offsite copy: the old machine is gone, a clean
+    tree is pointed at the bucket, and `pull --apply` brings every ledger,
+    client ledger, consignment file, draft and identification back
+    byte-for-byte, without photos, review pages, code or config.yaml."""
+    old, fresh = tmp_path / "old-machine", tmp_path / "new-machine"
+    for rel, data in {**_MACHINE, **_NEVER_OFFSITE}.items():
+        (old / rel).parent.mkdir(parents=True, exist_ok=True)
+        (old / rel).write_bytes(data)
+    fresh.mkdir()
+    bucket = FakeRemote()
+    run = _offsite_cli(monkeypatch, tmp_path, bucket)
+
+    assert run(["push", "--apply", "--root", str(old)]) == 0
+
+    # what left the old machine: all of it, and nothing that must stay
+    sent = {k[len(DP):] for k in bucket.objs if k.startswith(DP)}
+    assert sent == set(_MACHINE), sorted(sent ^ set(_MACHINE))
+    assert not any(_SECRET.encode() in v for v in bucket.objs.values()), \
+        "a secret reached the bucket"
+
+    # a dry run changes nothing on the new machine
+    capsys.readouterr()
+    assert run(["pull", "--root", str(fresh)]) == 0
+    assert "dry run" in capsys.readouterr().out
+    assert offsite.local_files(fresh, offsite.DEFAULT_INCLUDE) == []
+
+    # the real restore
+    assert run(["pull", "--apply", "--root", str(fresh)]) == 0
+    restored = offsite.local_files(fresh, offsite.DEFAULT_INCLUDE)
+    assert restored == sorted(_MACHINE), sorted(set(restored) ^ set(_MACHINE))
+    for rel, data in _MACHINE.items():
+        assert (fresh / rel).read_bytes() == data, f"{rel} came back different"
+    for rel in _NEVER_OFFSITE:
+        assert not (fresh / rel).exists(), f"{rel} should not be on the new machine"
+
+    # and the new machine now reads as fully in sync with the bucket
+    plan = _plan(fresh, bucket)
+    assert not (plan.local_only or plan.changed or plan.remote_only)
+    assert plan.same == len(_MACHINE)
+
 def test_freshness_flags_failure_stale_full_push_and_unpushed_ledger(tmp_path):
     import os
     now = dt.datetime(2026, 10, 29, 12, 0, tzinfo=dt.timezone.utc)

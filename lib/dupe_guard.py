@@ -245,7 +245,20 @@ def read_rows(path: Path) -> list[Row]:
                 for row in r]
 
 
-def write_rows(path: Path, fields: list, rows: list[dict], backup: bool = False) -> None:
+def write_rows(path: Path, fields: list, rows: list[dict], backup: bool = False,
+               base: Optional[list[dict]] = None) -> None:
+    """Write a catalog, queue or client ledger. A client_ledger.csv goes
+    through tools/consign.write_ledger, the one client-ledger write path
+    (GH #380): a timestamped backup locally, and in cloud mode refused,
+    nothing written, when the stored ledger is no longer `base`."""
+    if path.name == LEDGER:
+        import sys
+        tools = str(Path(__file__).resolve().parent.parent / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        import consign  # not at the top: consign imports this module
+        consign.write_ledger(path, rows, base=base)
+        return
     if backup and path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
@@ -352,11 +365,12 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
 
     if decision.action == "attach":
         row = decision.best.row
+        src = loaded[row.source]
+        base = [dict(r.data) for r in src]          # as read, before attach()
         changed = attach(row, cand, today)
         if changed:
-            src = loaded[row.source]
             write_rows(row.source, row.fields, [r.data for r in src],
-                       backup=row.is_ledger)
+                       backup=row.is_ledger, base=base)
         queue(catalog.parent, "ATTACHED", row.key, cand, decision.matches,
               "re-run IDENTIFY on this row", today)
         return Outcome("attached" if changed else "unchanged", row.key, decision)

@@ -6,6 +6,9 @@ the state of each item, what it is worth and what we owe.
     python -m lib.cli consign import CONSIGN-K01 -             # CSV/TSV on stdin
     python -m lib.cli consign sync                             # dry run, every ledger
     python -m lib.cli consign sync CONSIGN-K01 --apply
+    python -m lib.cli consign template                         # the standard empty ledger
+    python -m lib.cli consign new K09                          # a client's ledger from it
+    python -m lib.cli consign regenerate [K01] [--apply]       # rebuild all ledgers from inventory/
     python -m lib.cli consign report --client K01 --csv
     python -m lib.cli consign settle K01 --through 2026-11-30  # dry run; --apply writes
     python -m lib.cli consign settle K01 --through 2026-11-30 --final  # agreement ended
@@ -107,6 +110,7 @@ import offsite  # noqa: E402  data_root(): the main checkout
 import stores  # noqa: E402  the one store model (#156)
 import sync_actuals as SA  # noqa: E402  scan_drafts / load_listings_ledger
 import dupe_guard  # noqa: E402  one object, one row
+import ledger_store  # noqa: E402  client_ledger writes (GH #380 P1.4)
 from report import ascii_text  # noqa: E402  report text is plain ASCII
 
 INVENTORY = REPO / "inventory"
@@ -449,8 +453,45 @@ def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> Optional[Pat
     return backup
 
 
-def write_ledger(path: Path, rows: list[dict]) -> Optional[Path]:
-    return _write_csv(path, COLUMNS, rows)
+def _ledgers() -> "ledger_store.LedgerStore":
+    """The ledger store config.yaml asks for (GH #380). With no
+    `ledger_store:` block it is local mode and write_ledger is the plain CSV
+    write it always was."""
+    try:
+        return ledger_store.open_store(root=REPO)
+    except ledger_store.LedgerStoreError as e:
+        raise SystemExit(f"[X] {e}") from None
+
+
+def _as_read(rows: list[dict]) -> list[dict]:
+    """Rows in read_ledger()'s shape, so two reads of one file compare equal."""
+    return [{c: (r.get(c) or "").strip() for c in COLUMNS} for r in rows]
+
+
+def write_ledger(path: Path, rows: list[dict],
+                 base: Optional[list[dict]] = None) -> Optional[Path]:
+    """Write one client ledger. Local mode: `_write_csv` (backup beside it).
+    Cloud mode: through ledger_store.update(), and refused, nothing written,
+    when the stored ledger is no longer `base` (the rows as this run read
+    them), so a write from another machine or session is never lost. Returns
+    the backup path (local mode only)."""
+    st = _ledgers()
+    if not st.cloud:
+        return _write_csv(path, COLUMNS, rows)
+    out = [{c: r.get(c, "") for c in COLUMNS} for r in rows]
+
+    def replace(current: list[dict]) -> list[dict]:
+        if base is not None and _as_read(current) != _as_read(base):
+            raise ledger_store.Conflict(
+                f"{path.parent.name}/{LEDGER_NAME} changed since this run read it; "
+                f"nothing written. Run the command again.")
+        return out
+
+    try:
+        st.update(ledger_store.CLIENT_LEDGER, replace, intake=path.parent)
+    except ledger_store.LedgerStoreError as e:
+        raise SystemExit(f"[X] {e}") from None
+    return None
 
 
 def _context(d: Path) -> str:
@@ -1320,7 +1361,7 @@ def sync_intake(d: Path, books: Books, registry: dict, *, apply: bool,
     if not apply:
         return 0
     if changed:
-        backup = write_ledger(path, rows)
+        backup = write_ledger(path, rows, before)
         print(f"  [OK] wrote {path.name}" + (f" (backup {backup.name})" if backup else ""))
     return 0
 
@@ -1382,6 +1423,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     rows, unknown = read_ledger(path)
     if unknown:
         raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    bases = {path: [dict(r) for r in rows]}      # as read: write_ledger's base
     migrate(rows, d, code)
     received = intake or default_intake(d) or date.today().isoformat()
     seen = {(r["intake"], r["bin"], r["description"]) for r in rows}
@@ -1389,6 +1431,7 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     for o in client_dirs(code):
         if o.resolve() != d.resolve():
             ledgers[o / LEDGER_NAME] = read_ledger(o / LEDGER_NAME)[0]
+            bases[o / LEDGER_NAME] = [dict(r) for r in ledgers[o / LEDGER_NAME]]
             migrate(ledgers[o / LEDGER_NAME], o, code)
     n = next_id([r for rs in ledgers.values() for r in rs])
     # Only rows already on record: one catalog's own rows are distinct objects.
@@ -1435,8 +1478,165 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
     if count["added"]:
         touched.add(path)
     for p in touched:
-        write_ledger(p, ledgers[p])
+        write_ledger(p, ledgers[p], bases[p])
     return count
+
+
+# --------------------------------------------------------------------------- #
+# template and regenerate
+# --------------------------------------------------------------------------- #
+IMAGE_EXT = (".jpg", ".jpeg", ".png", ".heic", ".nef", ".dng", ".orf", ".raw")
+ITEM_MARKERS = ("identify.txt",)
+TEMPLATE_NAME = "client_ledger.template.csv"
+
+
+def template_path() -> Path:
+    return INVENTORY / "_consign" / TEMPLATE_NAME
+
+
+def write_template() -> Path:
+    """The standard client ledger: the COLUMNS header and no rows. Every
+    client's ledger starts from it and regenerate rewrites to it."""
+    p = template_path()
+    _write_csv(p, COLUMNS, [])
+    return p
+
+
+def new_client_ledger(code: str) -> Path:
+    """inventory/CONSIGN-<code>/ with the standard empty ledger and the client
+    named in context.txt. Refuses a code that already has a ledger."""
+    if not CODE_RE.match(code):
+        raise SystemExit(f"[X] client code {code!r}: letters, digits, - and _ only")
+    d = INVENTORY / f"{INTAKE_PREFIX}{code}"
+    if (d / LEDGER_NAME).exists():
+        raise SystemExit(f"[X] {d.name} already has a {LEDGER_NAME}")
+    d.mkdir(parents=True, exist_ok=True)
+    set_intake_client(d, code)
+    write_ledger(d / LEDGER_NAME, [], base=[])
+    return d / LEDGER_NAME
+
+
+def _images(d: Path) -> list[str]:
+    return sorted(f.name for f in d.iterdir() if f.suffix.lower() in IMAGE_EXT)
+
+
+def item_folders(root: Path) -> list[Path]:
+    """Item folders under an intake: a folder with an identify.txt, meaning
+    someone catalogued the object. Bins, boxes, raw photo dumps and draft-only
+    lot folders are not items, so they never over-book a client; a folder starting with _ or . is skipped, and an
+    item is not descended."""
+    out = []
+    for c in sorted(root.iterdir()):
+        if not c.is_dir() or c.name[0] in "_.":
+            continue
+        if any((c / m).exists() for m in ITEM_MARKERS):
+            out.append(c)
+        else:
+            out.extend(item_folders(c))
+    return out
+
+
+def _folder_description(f: Path) -> str:
+    """A row description for a folder nobody has catalogued: the first line of
+    identify.txt that reads like a title, else the folder name."""
+    ident = f / "identify.txt"
+    if ident.exists():
+        for line in ident.read_text(encoding="utf-8", errors="ignore").splitlines():
+            t = re.sub(r"^[#*\s>-]+|[*\s]+$", "", line)
+            t = re.sub(r"^(title|item|name|identification)\s*:\s*", "", t, flags=re.I)
+            if len(t) > 3:
+                return t[:140]
+    return re.sub(r"^(?:[A-Za-z0-9]+-)?C\d+-", "", f.name).replace("-", " ")
+
+
+def _folder_item_no(name: str) -> Optional[int]:
+    m = re.match(r"^(?:[A-Za-z0-9]+-)?C(\d+)(?:[a-z]|-|$)", name)
+    return int(m.group(1)) if m else None
+
+
+def regenerate_client(code: str, *, apply: bool) -> dict:
+    """Rebuild one client's ledgers from what is actually in inventory/:
+    every ledger is rewritten in the standard column order with the per-client
+    columns filled, and every item folder under the client's CONSIGN-* intakes
+    that no row holds gets a new INTAKE row. Hand-typed fields (state, cut,
+    buyout, asks, sales, payouts) are kept; no row is ever deleted, a row whose
+    folder is gone is only reported. States and eBay figures are filled by the
+    `sync` that follows (it needs the main checkout's ledgers)."""
+    dirs = client_dirs(code)
+    ledgers, bases = {}, {}
+    for d in dirs:
+        rows, unknown = read_ledger(d / LEDGER_NAME)
+        if unknown:
+            raise SystemExit(f"[X] {d / LEDGER_NAME} has unknown column(s) "
+                             f"{', '.join(unknown)}")
+        bases[d] = [dict(r) for r in rows]
+        migrate(rows, d, code)
+        ledgers[d] = rows
+    every = [r for rs in ledgers.values() for r in rs]
+    held = {norm_folder(r["inventory_folder"]) for r in every if r["inventory_folder"]}
+    nums = {n for r in every if (n := id_num(r["item_id"])) is not None}
+    res = dict(added=[], extra=[], missing=[], rewritten=0)
+    n = next_id(every)
+    for d in dirs:
+        for f in item_folders(d):
+            rel = norm_folder(str(f.relative_to(REPO)) if f.is_relative_to(REPO)
+                              else str(f.relative_to(INVENTORY)))
+            if rel in held:
+                continue
+            no = _folder_item_no(f.name)
+            if no in nums:        # a re-shoot or twin folder of a row we hold
+                res["extra"].append(rel)
+                continue
+            rec = {c: "" for c in COLUMNS}
+            rec.update(item_id=f"{code}-C{n:03d}", client_code=code, state="INTAKE",
+                       description=_folder_description(f), qty="1",
+                       bin="" if f.parent == d else f.parent.name,
+                       photos=str(len(_images(f))), inventory_folder=rel,
+                       intake=default_intake(d))
+            ledgers[d].append(rec)
+            held.add(rel)
+            res["added"].append((rec["item_id"], rel))
+            n += 1
+    for r in every:
+        f = norm_folder(r["inventory_folder"])
+        if f and not (REPO / f).is_dir() and not (INVENTORY.parent / f).is_dir():
+            res["missing"].append((r["item_id"], f))
+    for d, rows in ledgers.items():
+        path = d / LEDGER_NAME
+        with_cols = read_ledger(path)[0]
+        if rows != with_cols or not path.exists() or _header(path) != COLUMNS:
+            res["rewritten"] += 1
+            if apply:
+                write_ledger(path, rows, bases[d])
+    return res
+
+
+def _header(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        return next(csv.reader(f), [])
+
+
+def regenerate(client: Optional[str], *, apply: bool) -> int:
+    codes = sorted({intake_client(d) for d in all_intakes()} - {""})
+    if client:
+        if client not in codes:
+            raise SystemExit(f"[X] no ledger for client {client}")
+        codes = [client]
+    for code in codes:
+        r = regenerate_client(code, apply=apply)
+        print(f"\n{code}: {len(r['added'])} new row(s), {r['rewritten']} ledger(s) "
+              f"rewritten, {len(r['extra'])} twin folder(s), {len(r['missing'])} missing")
+        for iid, rel in r["added"]:
+            print(f"  + {iid:<10} {rel}")
+        for rel in r["extra"]:
+            print(f"  = twin of a held row, not added: {rel}")
+        for iid, rel in r["missing"]:
+            print(f"  ! {iid:<10} folder gone: {rel}")
+    print(f"\n{'[OK] written (backups made)' if apply else '[DRY RUN] Nothing written. Re-run with --apply.'}"
+          " Then run `consign sync --apply` from the main checkout.")
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1997,6 +2197,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
+    sub.add_parser("template", help="write the standard empty client ledger "
+                                    "(inventory/_consign/client_ledger.template.csv)")
+    p = sub.add_parser("new", help="start a client's ledger from the standard template")
+    p.add_argument("client", help="client code, e.g. K01")
+    p = sub.add_parser("regenerate", help="rebuild every client ledger to the standard "
+                                          "template from what is in inventory/")
+    p.add_argument("client", nargs="?", help="one client (default: all)")
+    p.add_argument("--apply", action="store_true", help="write the ledgers (backup first)")
     p = sub.add_parser("report", help="per-client account: states, value, money owed")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--client", help="only this client")
@@ -2028,6 +2236,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"  ! {args.client} is not in {SA._rel(registry_path())} yet: add a row "
                   f"(split defaults to 0.5 until then)")
         return 0
+    if args.cmd == "template":
+        print(f"[OK] wrote {write_template()}")
+        return 0
+    if args.cmd == "new":
+        print(f"[OK] wrote {new_client_ledger(args.client)}")
+        return 0
+    if args.cmd == "regenerate":
+        return regenerate(args.client, apply=args.apply)
     if args.cmd == "settle":
         through = iso(args.through)
         if through is None:

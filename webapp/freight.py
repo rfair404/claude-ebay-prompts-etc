@@ -24,9 +24,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from urllib.parse import urlparse
-
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -39,33 +37,10 @@ from freight.models import (ACCESSORIALS, FreightAddress, FreightQuote,
 from freight.providers import ProviderNotReady
 from freight.store import STATUSES, FreightStore, Shipment
 from tools.sales_report import STYLE, _e, _stat
+from webapp.security import PII_HEADERS, local_only as _local_only
 
-PII_HEADERS = {
-    "Cache-Control": "no-store, no-cache, must-revalidate, private",
-    "X-Robots-Tag": "noindex, nofollow, noarchive",
-    "Referrer-Policy": "no-referrer",
-}
-
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
-
-
-def _local_only(request: Request, response: Response) -> None:
-    """Every /freight route: the browser must be talking to this machine by
-    a loopback name, and a write must come from a loopback page.
-
-    Binding 127.0.0.1 stops other machines, not other web pages: a site the
-    operator visits can point its own hostname at 127.0.0.1 (DNS rebinding)
-    and then call these routes as same-origin — including the one that
-    books freight. Checking Host (and Origin on writes) closes that. JSON
-    answers carry buyer addresses, so they get the no-store headers too."""
-    host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
-    if host not in LOCAL_HOSTS:
-        raise HTTPException(403, f"served to localhost only, not {host!r}")
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
-        origin = request.headers.get("origin")
-        if origin and (urlparse(origin).hostname or "") not in LOCAL_HOSTS:
-            raise HTTPException(403, "cross-origin write refused")
-    response.headers.update(PII_HEADERS)
+# The guard moved to webapp/security.py (#311 slice 1) and now runs app-wide;
+# the router keeps it too, so /freight stays guarded if mounted elsewhere.
 
 
 router = APIRouter(dependencies=[Depends(_local_only)])

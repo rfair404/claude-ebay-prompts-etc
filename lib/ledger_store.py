@@ -10,7 +10,8 @@ which this module keeps current as a cache.
 Two modes, picked by config.yaml:
 
   local   No `ledger_store:` block. Read the CSV, apply fn, back it up as
-          <stem>.backup-<stamp><suffix> (today's habit) and replace it
+          <stem>.backup-<stamp><suffix> (today's habit; update(backup=False)
+          skips it for writers that never kept one) and replace it
           atomically. Refused when .ledger_etags.json exists: this checkout
           has written to the cloud, and a local write would fork the record.
   cloud   `ledger_store: {url, token}`. GET the key from the allowlist Worker
@@ -26,19 +27,40 @@ marked pending in .ledger_etags.json with the ETag the CSV was based on.
 stops and names the rebuild from eBay. A pending key is pushed first by the
 next update(), so an offline write is never silently overwritten.
 
+Reads (GH #380 P3.1): `rows(name, store=None, intake=None, **eq)` returns
+the ledger's rows as dicts with today's column names and string values,
+filtered on column == value. Until the D1 cutover (P3.5) it reads the CSV.
+
+Event log (GH #394): every update() that changes a ledger also appends one
+event to reports/ledger_chain/<key>.jsonl. An event holds the rows it added
+and removed (a changed row is one of each), the header, a hash of the
+resulting table and the hash of the event before it, so editing or deleting
+any past event breaks every link after it. The first event is a genesis
+snapshot of the rows as found. A write made outside update() (another
+machine, a hand edit, a tool not converted yet) shows up as a `drift` event
+on the next update(), so the log still replays to exactly what is on disk.
+Replaying the log rebuilds every table, which is how the D1 tables become
+views over it later. The ledger CSVs themselves are unchanged.
+`ebz ledger verify` walks each log from its first event and names the first
+broken link. The log is local to this checkout until it moves behind the
+Worker; anchoring the chain head (#394 item 3) is a later PR.
+
 CLI (`python -m lib.cli ledger ...`): check, pull, push, seed, history,
-restore. Every command that writes to the cloud is a dry run without --apply,
+restore, verify. Every command that writes to the cloud is a dry run without --apply,
 except push, whose only job is to upload writes already made.
 
 LEDGERS is the allowlist and must equal ALLOWED in cloud/ledger-worker/
-worker.js (tests/test_ledger_store.py checks). Adding a key means changing
-both and Russell redeploying the Worker. inventory_sheet (rebuilt from eBay)
+worker.js (tests/test_ledger_store.py checks). It is enforced in cloud mode
+only; local mode accepts any key (a new client such as K02 needs no change
+here until it goes to the cloud). Adding a cloud key means changing both and
+Russell redeploying the Worker. inventory_sheet (rebuilt from eBay)
 and clients.csv (client names) are deliberately not on it.
 """
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import json
 import os
@@ -47,6 +69,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -96,6 +119,10 @@ MAX_ATTEMPTS = 5
 MAX_BYTES = 5 * 1024 * 1024            # the Worker's cap
 PROBE_KEY = "inventory_sheet.csv"      # never allowlisted: `check` expects 403
 TIMEOUT = 20
+CHAIN_DIR = Path("reports") / "ledger_chain"   # under root; reports/ is gitignored
+CHAIN_SUFFIX = ".jsonl"
+CHAIN_VERSION = 1
+GENESIS_PREV = "0" * 64
 
 
 class LedgerStoreError(RuntimeError):
@@ -239,6 +266,146 @@ def _rebuild_hint(key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Event log (GH #394): an append-only, hash-chained record of every change
+# ---------------------------------------------------------------------------
+
+def _canon(obj) -> str:
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _row_keys(fields: list[str], rows: list[dict]) -> Counter:
+    """The table as a multiset of canonical rows, each holding every column.
+    Row order is not part of it: a table view has none."""
+    return Counter(_canon({c: str(r.get(c, "") or "") for c in fields}) for r in rows)
+
+
+def state_hash(fields: list[str], keys: Counter) -> str:
+    body = _canon({"fields": list(fields), "rows": sorted(keys.elements())})
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def event_hash(event: dict) -> str:
+    body = _canon({k: v for k, v in event.items() if k != "hash"})
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class Replay:
+    """A chain read back from its first event."""
+    events: int = 0
+    head: str = GENESIS_PREV           # hash of the last good event
+    state: str = ""                    # state hash after the last good event
+    fields: list = field(default_factory=list)
+    keys: Counter = field(default_factory=Counter)
+    broken: Optional[str] = None       # first broken link, or None
+
+
+def replay(path: Path, key: Optional[str] = None) -> Replay:
+    """Walk a chain file from its first event, checking every link and
+    rebuilding the table. Stops at the first broken link."""
+    rp = Replay()
+    if not path.exists():
+        return rp
+    with open(path, "rb") as f:
+        lines = f.read().split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    for n, raw in enumerate(lines, 1):
+        where = f"line {n}"
+        try:
+            ev = json.loads(raw.decode("utf-8"))
+            if not isinstance(ev, dict):
+                raise ValueError("not an object")
+        except ValueError as e:
+            rp.broken = f"{where}: not a JSON event ({e})"
+            return rp
+        where += f" (seq {ev.get('seq')})"
+        if ev.get("hash") != event_hash(ev):
+            rp.broken = f"{where}: hash does not match its contents (edited)"
+            return rp
+        if ev.get("prev") != rp.head:
+            rp.broken = f"{where}: prev does not link to the event before it (deleted or reordered)"
+            return rp
+        if ev.get("seq") != rp.events:
+            rp.broken = f"{where}: seq should be {rp.events}"
+            return rp
+        if key is not None and ev.get("key") != key:
+            rp.broken = f"{where}: event is for {ev.get('key')!r}, not {key!r}"
+            return rp
+        if (ev.get("kind") == "genesis") != (n == 1):
+            rp.broken = f"{where}: genesis must be the first event and only the first"
+            return rp
+        keys = rp.keys.copy()
+        for r in ev.get("remove") or []:
+            k = _canon(r)
+            if keys[k] < 1:
+                rp.broken = f"{where}: removes a row that is not in the table"
+                return rp
+            keys[k] -= 1
+        keys += Counter(_canon(r) for r in ev.get("add") or [])
+        keys = +keys
+        fields = list(ev.get("fields") or [])
+        if state_hash(fields, keys) != ev.get("state"):
+            rp.broken = f"{where}: replayed table does not match its state hash"
+            return rp
+        rp.events, rp.head, rp.state = rp.events + 1, ev["hash"], ev["state"]
+        rp.fields, rp.keys = fields, keys
+    return rp
+
+
+def _event(rp: Replay, key: str, kind: str, fields: list[str], keys: Counter) -> dict:
+    ev = {
+        "v": CHAIN_VERSION,
+        "seq": rp.events,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "key": key,
+        "kind": kind,
+        "fields": list(fields),
+        "remove": [json.loads(k) for k in sorted((rp.keys - keys).elements())],
+        "add": [json.loads(k) for k in sorted((keys - rp.keys).elements())],
+        "state": state_hash(fields, keys),
+        "prev": rp.head,
+    }
+    ev["hash"] = event_hash(ev)
+    return ev
+
+
+def _append_event(path: Path, rp: Replay, ev: dict, keys: Counter) -> None:
+    """One line per event, appended and fsynced; rp moves to the new head."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "ab") as f:
+        f.write(json.dumps(ev, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                + b"\n")
+        f.flush()
+        os.fsync(f.fileno())
+    rp.events, rp.head, rp.state = rp.events + 1, ev["hash"], ev["state"]
+    rp.fields, rp.keys = list(ev["fields"]), keys.copy()
+
+
+def record(path: Path, key: str, before: tuple[list[str], list[dict]],
+           after: tuple[list[str], list[dict]]) -> list[dict]:
+    """Append the events for one write: genesis on a new chain, drift when the
+    table fn saw is not where the chain left off, then the change itself.
+    Returns the events written. A broken chain is not extended."""
+    rp = replay(path, key)
+    if rp.broken:
+        raise LedgerStoreError(f"{key}: event log broken at {rp.broken}; not extended — "
+                               f"run `python -m lib.cli ledger verify`")
+    written = []
+    b_fields, b_keys = before[0], _row_keys(*before)
+    a_fields, a_keys = after[0], _row_keys(*after)
+    kind = ("genesis" if rp.events == 0 else
+            "drift" if state_hash(b_fields, b_keys) != rp.state else None)
+    if kind:
+        written.append(_event(rp, key, kind, b_fields, b_keys))
+        _append_event(path, rp, written[-1], b_keys)
+    if state_hash(a_fields, a_keys) != rp.state:
+        written.append(_event(rp, key, "change", a_fields, a_keys))
+        _append_event(path, rp, written[-1], a_keys)
+    return written
+
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
@@ -266,16 +433,19 @@ def load_ledger_config(cfg: Optional[dict] = None) -> Optional[dict]:
 
 class LedgerStore:
     """`transport=None` is local mode. `root` holds the store ledgers and the
-    state file; `mirror(path)` runs after each successful write."""
+    state file; `mirror(path)` runs after each successful write. Event logs
+    go under `chain_dir` (default <root>/reports/ledger_chain)."""
 
     def __init__(self, *, root: Path, transport=None,
                  mirror: Callable[[Path], None] = _gdrive_ledger_changed,
                  client_dir: Callable[[str], Optional[Path]] = _client_dir,
+                 chain_dir: Optional[Path] = None,
                  out=sys.stderr):
         self.root = Path(root)
         self.transport = transport
         self.mirror = mirror
         self.client_dir = client_dir
+        self.chain_dir = Path(chain_dir) if chain_dir else self.root / CHAIN_DIR
         self.out = out
 
     @property
@@ -310,7 +480,8 @@ class LedgerStore:
     # -- names ------------------------------------------------------------
     def resolve(self, name: str, store: Optional[str] = None,
                 intake=None) -> tuple[str, Path]:
-        """(allowlisted key, local CSV path) for an update() target."""
+        """(key, local CSV path) for an update() target. The key must be on
+        the LEDGERS allowlist in cloud mode only."""
         if name == CLIENT_LEDGER:
             if not intake:
                 raise LedgerStoreError("client_ledger needs intake= (the CONSIGN-* folder)")
@@ -330,7 +501,7 @@ class LedgerStore:
         else:
             raise LedgerStoreError(
                 f"unknown ledger {name!r} — one of {', '.join([*STORE_LEDGERS, CLIENT_LEDGER])}")
-        if key not in LEDGERS:
+        if self.cloud and key not in LEDGERS:
             raise NotAllowed(f"{key} is not on the ledger allowlist (lib/ledger_store.LEDGERS)")
         return key, path
 
@@ -341,11 +512,72 @@ class LedgerStore:
             return d / CLIENT_LEDGER_FILE if d else None
         return self.root / key
 
+    # -- the read API -----------------------------------------------------
+    def rows(self, name: str, store: Optional[str] = None, *, intake=None,
+             **eq) -> list[dict]:
+        """The ledger's rows (dicts, string values, today's column names),
+        keeping those where every `column=value` in eq matches. A missing
+        ledger is []. Naming a column the ledger doesn't have is an error."""
+        _key, path = self.resolve(name, store, intake)
+        fields, rows = _read(path)
+        unknown = [c for c in eq if fields and c not in fields]
+        if unknown:
+            raise LedgerStoreError(f"{path.name} has no column {', '.join(unknown)}")
+        want = {c: "" if v is None else str(v) for c, v in eq.items()}
+        return [r for r in rows if all(r.get(c, "") == v for c, v in want.items())]
+
+    # -- the event log ----------------------------------------------------
+    def chain_path(self, key: str) -> Path:
+        return self.chain_dir / (key + CHAIN_SUFFIX)
+
+    def _chain(self, key: str, before: tuple[list[str], list[dict]], data: bytes) -> None:
+        """Log a write already on disk. Never fails the write: a log that
+        can't be extended says so, and verify names the break."""
+        try:
+            record(self.chain_path(key), key, before, parse_csv(data))
+        except (LedgerStoreError, OSError) as e:
+            print(f"[ledger] event log: {e}", file=self.out)
+
+    def verify(self, keys: Optional[list[str]] = None, *,
+               check_csv: bool = True) -> tuple[bool, bool, list[str]]:
+        """(chains intact, CSVs match their heads, report lines). Walks each
+        chain from its first event; a CSV that moved past its head is drift
+        (written outside update()), recorded by the next update()."""
+        if keys:
+            names = list(keys)
+        else:
+            names = sorted(p.name[:-len(CHAIN_SUFFIX)]
+                           for p in self.chain_dir.glob("*" + CHAIN_SUFFIX))
+        if not names:
+            return True, True, [f"no event logs under {self.chain_dir}"]
+        ok, clean, out = True, True, []
+        for key in names:
+            rp = replay(self.chain_path(key), key)
+            if rp.broken:
+                ok = False
+                out.append(f"BROKEN {key}  {rp.broken}")
+                continue
+            if rp.events == 0:
+                out.append(f"--     {key}  no events")
+                continue
+            line = f"ok     {key}  {rp.events} events  {sum(rp.keys.values())} rows  head {rp.head[:12]}"
+            path = self.path_for_key(key) if check_csv else None
+            if path is not None and path.exists():
+                fields, rows = _read(path)
+                if state_hash(fields, _row_keys(fields, rows)) != rp.state:
+                    clean = False
+                    line += "  DRIFT: CSV changed outside update() since the last event"
+            out.append(line)
+        return ok, clean, out
+
     # -- the write API ----------------------------------------------------
-    def update(self, name: str, fn, *, store: Optional[str] = None, intake=None) -> list[dict]:
+    def update(self, name: str, fn, *, store: Optional[str] = None, intake=None,
+               backup: bool = True) -> list[dict]:
+        """Apply fn(rows) -> rows. backup=False skips the local-mode
+        .backup-* copy (the event log is still appended)."""
         key, path = self.resolve(name, store, intake)
         if not self.cloud:
-            return self._local(path, fn)
+            return self._local(key, path, fn, backup=backup)
         if key in self.state()["pending"]:
             try:
                 self._push_key(key, path)
@@ -382,26 +614,31 @@ class LedgerStore:
                 raise LedgerStoreError(f"PUT {key}: HTTP {p.status} {p.body[:200]!r}")
             atomic_write(path, data)
             self._set_etag(key, p.headers.get("etag"), clear_pending=True)
+            self._chain(key, (fields, rows), data)
             self.mirror(path)
             return new
         raise Conflict(f"{key}: still conflicting after {MAX_ATTEMPTS} attempts; "
                        f"nothing written — run it again")
 
-    def _local(self, path: Path, fn) -> list[dict]:
+    def _local(self, key: str, path: Path, fn, *, backup: bool = True) -> list[dict]:
         fields, rows = _read(path)
         new = _apply(fn, rows)
-        if path.exists():
+        if backup and path.exists():
             stamp = time.strftime("%Y%m%d-%H%M%S")
             path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
                 path.read_bytes())
-        atomic_write(path, to_csv(fields, new))
+        data = to_csv(fields, new)
+        atomic_write(path, data)
+        self._chain(key, (fields, rows), data)
         self.mirror(path)
         return new
 
     def _offline(self, key: str, path: Path, fn) -> list[dict]:
         fields, rows = _read(path)
         new = _apply(fn, rows)
-        atomic_write(path, to_csv(fields, new))
+        data = to_csv(fields, new)
+        atomic_write(path, data)
+        self._chain(key, (fields, rows), data)
         s = self.state()
         # Keep the ETag of the FIRST offline write: that is what the cache
         # was based on, and what the cloud must still be at for push.
@@ -574,8 +811,9 @@ def open_store(cfg: Optional[dict] = None, *, root: Optional[Path] = None,
     cloud state (.ledger_etags.json) but the config lost its ledger_store:.
     Always local mode while $EBAYBIZ_LISTINGS_LEDGER redirects the ledger."""
     root = Path(root) if root else REPO
-    if os.environ.get("EBAYBIZ_LISTINGS_LEDGER"):
-        return LedgerStore(root=root)      # test redirection never touches the cloud
+    env = os.environ.get("EBAYBIZ_LISTINGS_LEDGER")
+    if env:                                # test redirection never touches the cloud
+        return LedgerStore(root=root, chain_dir=Path(env).parent / CHAIN_DIR.name)
     conf = load_ledger_config(cfg)
     if conf is None:
         if (root / STATE_FILE).exists():
@@ -588,9 +826,16 @@ def open_store(cfg: Optional[dict] = None, *, root: Optional[Path] = None,
 
 
 def update(name: str, fn: Callable[[list[dict]], list[dict]], *,
-           store: Optional[str] = None, intake=None) -> list[dict]:
-    """Apply `fn(rows) -> rows` to one ledger and return the rows written."""
-    return open_store().update(name, fn, store=store, intake=intake)
+           store: Optional[str] = None, intake=None, backup: bool = True) -> list[dict]:
+    """Apply `fn(rows) -> rows` to one ledger and return the rows written.
+    backup=False skips the local .backup-* copy, for writers that never made one."""
+    return open_store().update(name, fn, store=store, intake=intake, backup=backup)
+
+
+def rows(name: str, store: Optional[str] = None, *, intake=None, **eq) -> list[dict]:
+    """A ledger's rows, filtered on column == value (GH #380 P3.1). Reads the
+    local CSV in both modes until the D1 cutover, so it needs no config."""
+    return LedgerStore(root=REPO).rows(name, store, intake=intake, **eq)
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +858,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("key", choices=LEDGERS)
     p.add_argument("stamp")
     p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("verify", help="walk each ledger's event log; exit 1 on a broken link")
+    p.add_argument("key", nargs="*", help="ledger keys to check (default: every log)")
+    p.add_argument("--chain-dir", type=Path,
+                   help="where the logs are (default: reports/ledger_chain)")
+    p.add_argument("--root", type=Path, help="where the ledger CSVs are (default: repo)")
+    p.add_argument("--strict", action="store_true",
+                   help="also exit 1 when a CSV has drifted from its log")
     args = ap.parse_args(argv)
+
+    if args.cmd == "verify":               # local files only: no config, no cloud
+        st = LedgerStore(root=args.root or REPO, chain_dir=args.chain_dir)
+        ok, clean, lines = st.verify(args.key or None)
+        print("\n".join(lines))
+        if not ok:
+            print("[X] event log broken — the first bad line is named above", file=sys.stderr)
+        return 0 if ok and (clean or not args.strict) else 1
 
     try:
         st = open_store()

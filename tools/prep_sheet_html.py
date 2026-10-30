@@ -367,7 +367,7 @@ def _card_html(stage: str, card: dict, idx: int, readonly: bool = False) -> str:
 
 
 def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
-           shoot: str, card_readonly: list | None = None) -> str:
+           shoot: str, card_readonly: list | None = None, app: bool = False) -> str:
     """`card_readonly` is a per-card bool list (default: every card interactive).
 
     A stage decided by default — assumed-upright rotation, auto-applied
@@ -392,6 +392,11 @@ def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
   <div class="grid">{body}</div>
 </section>'''
 
+    # Served by the local app (#311 slice 3), the same answer also runs from
+    # here: the app's action table takes the stage, the frames and the values,
+    # never a command string. Typed notes stay copy-only (no free text runs).
+    run_btn = (f'\n      <button class="btn run" type="button" data-for="{stage}">'
+               f'Run it now</button>' if app else "")
     notice = ('<div class="notice"><b>Preview.</b> The stage before this one is not '
               'approved yet, so this is drawn from the current plan and will be redrawn '
               'if that changes. Answer the earlier tab first.</div>') if preview else ""
@@ -415,7 +420,7 @@ def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
         come with it.</p>
       <pre class="cmd" data-stage="{stage}" data-flag="{FLAG[stage]}" data-shoot="{_esc(shoot)}"
 >python -m lib.photo_prep.prep {_esc(shoot)} --approve-stage {stage}</pre>
-      <button class="btn primary copy" type="button" data-for="{stage}">Copy</button>
+      <button class="btn primary copy" type="button" data-for="{stage}">Copy</button>{run_btn}
       <p class="fine">If Copy does nothing, select the text above — the page works
         either way.</p>
     </div>
@@ -425,7 +430,24 @@ def _panel(stage: str, cards: list, ready: bool, locked: str, preview: bool,
 
 def build(shoot: Path, out: Path,
           interactive_rotation: bool = False, interactive_color: bool = False) -> Path:
-    """`interactive_rotation` / `interactive_color` force the full per-frame
+    """Write the page to `out` — see `render()`."""
+    page = render(shoot, interactive_rotation=interactive_rotation,
+                  interactive_color=interactive_color)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8")
+    return out
+
+
+def render(shoot: Path, interactive_rotation: bool = False,
+           interactive_color: bool = False, app_shoot: str | None = None) -> str:
+    """The page as a string, for build() and for the local app's /prep route.
+
+    `app_shoot` (the shoot's path under inventory/) is set only when the app
+    serves the page: each Accept panel then also gets a "Run it now" button
+    that sends the same answer through webapp/actions.py. A file from build()
+    never has it.
+
+    `interactive_rotation` / `interactive_color` force the full per-frame
     picker open for a stage that would otherwise render read-only — see
     `READONLY_BLURB` and `_card_html`'s `readonly` doc. A frame orientation
     still needs a human look for (`needs_ask`) stays a picker regardless; the
@@ -472,7 +494,7 @@ def build(shoot: Path, out: Path,
         prev = stagemod.STAGES[i - 1] if i else None
         panels.append(_panel(s, cards, ready, locked,
                              bool(prev) and not approved[prev], sp,
-                             card_readonly=READONLY_OF.get(s)))
+                             card_readonly=READONLY_OF.get(s), app=bool(app_shoot)))
 
     page = (TEMPLATE
             .replace("__SHOOT__", _esc(sp))
@@ -482,9 +504,9 @@ def build(shoot: Path, out: Path,
             .replace("__TABS__", "".join(tabs))
             .replace("__PICKRULES__", _pick_rules())
             .replace("__PANELS__", "".join(panels)))
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page, encoding="utf-8")
-    return out
+    if app_shoot:
+        page += APP_SCRIPT.replace("__APP_SHOOT__", json.dumps(app_shoot))
+    return page
 
 
 # `<meta charset>` FIRST, before anything with a non-ASCII byte in it. The page
@@ -494,8 +516,6 @@ def build(shoot: Path, out: Path,
 # this sheet cannot afford to look like.
 TEMPLATE = r"""<meta charset="utf-8">
 <title>Frame Check</title>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
 :root{
   --ground:#EEEDEA; --surface:#FBFAF8; --sunk:#E4E2DD;
@@ -519,7 +539,7 @@ TEMPLATE = r"""<meta charset="utf-8">
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--ground);color:var(--ink);
-  font-family:Archivo,"Helvetica Neue",Arial,sans-serif;font-size:15px;line-height:1.5;
+  font-family:system-ui,"Helvetica Neue",Arial,sans-serif;font-size:15px;line-height:1.5;
   -webkit-font-smoothing:antialiased}
 h1{font-size:17px;font-weight:700;letter-spacing:-.01em;margin:0}
 
@@ -527,14 +547,14 @@ header{position:sticky;top:0;z-index:20;background:var(--surface);
   border-bottom:1px solid var(--rule);padding:12px 20px 0}
 .hrow{max-width:1500px;margin:0 auto}
 .shoot{font-size:12px;color:var(--muted);
-  font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
+  font-family:ui-monospace,Consolas,monospace}
 .tabs{display:flex;gap:3px;max-width:1500px;margin:10px auto 0;flex-wrap:wrap}
 .tab{display:flex;align-items:center;gap:7px;cursor:pointer;padding:9px 14px;
   font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
   color:var(--muted);border-bottom:2px solid transparent;border-radius:3px 3px 0 0;
   transition:background .12s ease,color .12s ease;-webkit-user-select:none;user-select:none}
 .tab:hover{color:var(--ink);background:var(--sunk)}
-.tab .n{font-family:"JetBrains Mono",monospace;font-size:10px;opacity:.65}
+.tab .n{font-family:ui-monospace,monospace;font-size:10px;opacity:.65}
 .tab .st{font-size:9.5px;padding:1px 6px;border-radius:2px;border:1px solid currentColor;
   letter-spacing:.05em}
 .tab .st.done{color:var(--ships)}
@@ -566,7 +586,7 @@ main{max-width:1500px;margin:0 auto;padding:20px 20px 40px}
 .pick:checked:not(.proposed) ~ .rim{box-shadow:inset 0 0 0 2px var(--changed);
   box-shadow:0 0 0 1px var(--changed),var(--shadow)}
 .cap{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid var(--rule)}
-.nm{font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:12px;font-weight:600}
+.nm{font-family:ui-monospace,Consolas,monospace;font-size:12px;font-weight:600}
 .tag{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
   padding:2px 7px;border-radius:2px;border:1px solid currentColor}
 .tag.ships{color:var(--ships)}
@@ -644,7 +664,7 @@ __PICKRULES__
 .bigwrap .v{width:min(100%,86vh);aspect-ratio:1/1;display:none;background-size:contain;
   background-repeat:no-repeat;background-position:center}
 .bigcap{text-align:center;color:#94969D;font-size:12px;
-  font-family:"JetBrains Mono",ui-monospace,Consolas,monospace}
+  font-family:ui-monospace,Consolas,monospace}
 .shut{justify-self:end;color:#ECEBE7;text-decoration:none;border:1px solid #3A3D42;
   border-radius:2px;padding:7px 13px;font-size:12px;font-weight:600}
 .shut:hover{border-color:#5FB3CE;color:#5FB3CE}
@@ -670,7 +690,7 @@ __PICKRULES__
 .sendbox p{margin:0 0 14px;font-size:13px;color:var(--muted)}
 .fine{margin:12px 0 0;font-size:11.5px}
 .cmd{background:var(--sunk);border:1px solid var(--rule);border-radius:2px;padding:12px;
-  font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;font-size:12px;
+  font-family:ui-monospace,Consolas,monospace;font-size:12px;
   white-space:pre-wrap;word-break:break-word;margin:0 0 14px;color:var(--ink)}
 .copy{margin-left:0}
 </style>
@@ -746,6 +766,39 @@ __TABINS__
     } else { done("Select it"); }
   });
   refresh();
+})();
+</script>
+"""
+
+
+# Only in the app (render(app_shoot=...)): "Run it now" turns the panel's
+# picks into one row of webapp/actions.py and runs it with the shell's fhRun().
+# The mapping mirrors cmdFor() above: no override -> --approve-stage; picked
+# overrides -> --set-rotate / --crop NAME=VALUE..., or --pick PRESET.
+APP_SCRIPT = r"""
+<script>
+(function(){
+  var SHOOT = __APP_SHOOT__;
+  var ACTION = {orientation: "prep-set-rotate", crop: "prep-crop", color: "prep-pick"};
+  function job(stage){
+    var panel = document.getElementById("panel-" + stage);
+    var picked = panel ? panel.querySelectorAll(".pick:checked:not(.proposed)") : [];
+    if (!picked.length) return {action: "prep-approve-stage", slots: {shoot: SHOOT, stage: stage}};
+    if (stage === "color") return {action: ACTION.color, slots: {shoot: SHOOT, preset: picked[0].value}};
+    var frames = [];
+    for (var i = 0; i < picked.length; i++)
+      frames.push(picked[i].getAttribute("data-frame") + "=" + picked[i].value);
+    return {action: ACTION[stage], slots: {shoot: SHOOT, frames: frames}};
+  }
+  document.addEventListener("click", function(e){
+    var b = e.target && e.target.closest && e.target.closest(".run");
+    if (!b || typeof fhRun !== "function") return;
+    var stage = b.getAttribute("data-for"), j = job(stage);
+    var box = document.getElementById("sendin-" + stage);
+    if (box) box.checked = false;
+    window.scrollTo(0, 0);
+    fhRun(b, j.action, j.slots, {busy: "Sending " + stage, done: stage + " recorded", reload: true});
+  });
 })();
 </script>
 """

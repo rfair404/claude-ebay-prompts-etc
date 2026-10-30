@@ -35,7 +35,9 @@ and the row itself for a SKU that was drafted but never synced).
     python tools/ledger_reconcile.py --store junk          # a named store (#156)
     python tools/ledger_reconcile.py --all-stores          # report every store
 
-A backup is written next to the ledger before any rewrite.
+A backup is written next to the ledger before any rewrite. The rewrite goes
+through lib/ledger_store (#380): with `ledger_store:` configured it merges
+into the cloud copy instead, and the Worker keeps the previous version.
 
 Per store (#156): each store reconciles its own listings ledger against its own
 Sell API account, protects SOLD rows with its own sales ledger, and writes its
@@ -57,6 +59,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "lib"))
 
 import stores                                                         # noqa: E402
+import ledger_store                                                   # noqa: E402  the one write path (#380)
 from gdrive_mirror import ledger_changed                              # noqa: E402
 from ebay_client import (load_credentials, iter_inventory_items,        # noqa: E402
                          get_offers_for_sku, EbayAPIError)
@@ -351,16 +354,65 @@ def reconcile(store: str, apply: bool = False, prune: bool = False) -> int:
         print("nothing to write.")
         return 0
 
+    now = _now()
+    pruned: list[int] = []
+
+    def fix(current: list[dict]) -> list[dict]:
+        # Pure over `current`, so ledger_store can re-run it on a fresher copy
+        # (cloud mode, #380). Orphans are recomputed for the same reason.
+        new = apply_truth(current, truth, sold, sold_on, now)
+        if prune:
+            gone = {r["sku"] for r in new
+                    if r["sku"] not in truth and r.get("status") != "VOIDED"}
+            pruned[:] = [len(gone)]
+            new = [r for r in new if r["sku"] not in gone]
+        return [{k: r.get(k, "") for k in FIELDS} for r in new]
+
+    rows = _write_ledger(ledger, store, fix)
+    if pruned and pruned[0]:
+        print(f"pruned {pruned[0]} row(s) eBay does not know")
+    print(f"wrote {ledger.name} — {len(rows)} rows, eBay treated as truth")
+    return 0
+
+
+def _write_ledger(ledger: Path, store: str, fn) -> list[dict]:
+    """Rewrite `store`'s listings ledger through lib/ledger_store (#380 P1.2).
+
+    Local mode (no `ledger_store:` in config.yaml) is today's behaviour:
+    <ledger stem>.backup-<stamp>.csv beside it (the default store keeps the
+    historic listings_ledger.backup-*.csv; a named store's starts with its own
+    stem, listings_ledger-junk.backup-*, covered by .gitignore, #156), an
+    atomic rewrite, then the Drive nudge. Cloud mode merges into the cloud
+    copy under If-Match and the Worker keeps the previous version instead."""
+    ls = ledger_store.open_store(stores.load_config(), root=ledger.parent)
+    ls.mirror = lambda p: ledger_changed(p)
+    _, cached = ls.resolve("listings", store)
+    if cached == ledger:
+        before = set(ledger.parent.glob(f"{ledger.stem}.backup-*{ledger.suffix}"))
+        rows = ls.update("listings", fn, store=store)
+        for b in sorted(set(ledger.parent.glob(f"{ledger.stem}.backup-*{ledger.suffix}")) - before):
+            print(f"backed up -> {b.name}")
+        return rows
+    if ls.cloud:
+        raise ledger_store.LedgerStoreError(
+            f"{ledger} is not where ledger_store caches {store}'s listings ledger "
+            f"({cached}); nothing written")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    # <ledger stem>.backup-<stamp>.csv: the default store keeps the historic
-    # listings_ledger.backup-*.csv; a named store's backup starts with its own
-    # stem (listings_ledger-junk.backup-*), covered by .gitignore's
-    # listings_ledger-*.csv rule (#156).
     backup = ledger.with_name(f"{ledger.stem}.backup-{stamp}.csv")
     shutil.copyfile(ledger, backup)
     print(f"backed up -> {backup.name}")
+    fields, current = ledger_store.parse_csv(ledger.read_bytes())
+    rows = fn(current)
+    ledger_store.atomic_write(ledger, ledger_store.to_csv(FIELDS, rows))
+    ledger_changed(ledger)
+    return rows
 
-    now = _now()
+
+def apply_truth(rows: list[dict], truth: dict, sold: set, sold_on: set,
+                now: str) -> list[dict]:
+    """`rows` with eBay's truth written in (the --apply rewrite). Pure: no I/O,
+    the same rules compute_drift reports. Mutates and returns `rows`."""
+    by_sku = {r["sku"]: r for r in rows}
     for sku, t in truth.items():
         if t is None:
             continue
@@ -393,19 +445,7 @@ def reconcile(store: str, apply: bool = False, prune: bool = False) -> int:
             changed = True
         if changed:
             row["updated_at"] = now
-
-    if prune and orphan:
-        rows = [r for r in rows if r["sku"] not in set(orphan)]
-        print(f"pruned {len(orphan)} row(s) eBay does not know")
-
-    with ledger.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS, extrasaction="ignore")
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k, "") for k in FIELDS})
-    print(f"wrote {ledger.name} — {len(rows)} rows, eBay treated as truth")
-    ledger_changed(ledger)
-    return 0
+    return rows
 
 
 def main(argv: list[str] | None = None) -> int:
