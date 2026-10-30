@@ -403,3 +403,32 @@ def test_s3remote_against_local_stub_server():
         assert "data/inventory/Estate Lot 3/IMG 1.jpg" not in store
     finally:
         srv.shutdown()
+
+
+def test_freshness_flags_failure_stale_full_push_and_unpushed_ledger(tmp_path):
+    import os
+    now = dt.datetime(2026, 10, 29, 12, 0, tzinfo=dt.timezone.utc)
+    assert "no push recorded" in offsite.freshness(tmp_path, now)[0]
+
+    (tmp_path / "listings_ledger.csv").write_text("a\n")
+    offsite.record_status(tmp_path, "r2", True, full=True, now=now)
+    os.utime(tmp_path / "listings_ledger.csv", (now.timestamp() - 3600,) * 2)
+    assert offsite.freshness(tmp_path, now) == []
+
+    # ledger written 20 min after the last good push
+    os.utime(tmp_path / "listings_ledger.csv", (now.timestamp() + 1200,) * 2)
+    assert "listings_ledger.csv" in offsite.freshness(tmp_path, now)[0]
+    os.utime(tmp_path / "listings_ledger.csv", (now.timestamp() + 300,) * 2)
+    assert offsite.freshness(tmp_path, now) == []
+
+    later = now + dt.timedelta(hours=37)
+    assert "full push" in offsite.freshness(tmp_path, later)[0]
+
+    offsite.record_status(tmp_path, "r2", False, "boom", now=now + dt.timedelta(hours=1))
+    assert any("boom" in p for p in offsite.freshness(tmp_path, now + dt.timedelta(hours=2)))
+
+
+def test_check_cli_exits_1_when_stale(tmp_path):
+    assert offsite.main(["check", "--root", str(tmp_path)]) == 1
+    offsite.record_status(tmp_path, "r2", True, full=True)
+    assert offsite.main(["check", "--root", str(tmp_path)]) == 0
