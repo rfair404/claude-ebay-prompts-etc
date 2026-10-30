@@ -15,10 +15,14 @@ It runs on its own two ways:
 
   * After every ledger write — a draft, sync, publish, end, delete, sale or
     shipment (list_edit.upsert_listing), a sales-ledger merge
-    (sync_actuals) and `reconcile --apply` — ledger_changed() starts a
-    detached background push of the ledger files. It waits DEBOUNCE seconds
-    first, so a pick-list run that marks 30 items SHIPPED uploads once. It
-    never blocks or fails the command that wrote the ledger.
+    (sync_actuals), `reconcile --apply` and every ledger_store.update() —
+    ledger_changed() starts a detached background push of the ledger files
+    (offsite.LEDGER_INCLUDE): to R2 first (offsite.push_ledgers) when an
+    `offsite:` block is configured, then to Drive when a `gdrive:` block is.
+    It waits DEBOUNCE seconds first, so a pick-list run that marks 30 items
+    SHIPPED uploads once. It never blocks or fails the command that wrote
+    the ledger. Each push's result goes to <main>/.offsite_status.json; a
+    failure also raises a desktop notification (notify-send, best effort).
   * Once a day, the systemd user timer pushes the full set. Persistent=true:
     a day the machine was off runs at the next boot.
 
@@ -65,7 +69,9 @@ LIB = Path(__file__).resolve().parent
 if str(LIB) not in sys.path:
     sys.path.insert(0, str(LIB))
 
-from offsite import DEFAULT_INCLUDE, LEDGER_INCLUDE, data_root, local_files  # noqa: E402
+import offsite  # noqa: E402
+from offsite import (DEFAULT_INCLUDE, LEDGER_INCLUDE, OffsiteError, data_root,  # noqa: E402
+                     local_files, record_status, selected)
 
 REPO = LIB.parent
 
@@ -234,21 +240,50 @@ def _take_lock(lock: Path) -> bool:
     return True
 
 
+def _targets(cfg: Optional[dict] = None):
+    """(OffsiteConfig | None, GdriveConfig | None): the copies the after-write
+    push feeds. R2 whenever an `offsite:` block is configured; Drive when a
+    `gdrive:` block is, `auto` is on and rclone is installed."""
+    if cfg is None:
+        import config as _config
+        cfg = _config.load_config()
+    try:
+        r2 = offsite.load_offsite_config(cfg)
+    except OffsiteError:
+        r2 = None
+    try:
+        g = load_gdrive_config(cfg)
+        if not g.auto or not shutil.which(g.rclone):
+            g = None
+    except GdriveError:
+        g = None
+    return r2, g
+
+
+def is_ledger(path, root: Path) -> bool:
+    """A path inside the main checkout that LEDGER_INCLUDE selects. A test's
+    temporary ledger, or a worktree's own root ledgers (GH #103), resolve
+    elsewhere and don't count; a worktree's inventory/ link resolves to main
+    and does."""
+    try:
+        rel = Path(path).resolve().relative_to(root).as_posix()
+    except ValueError:
+        return False
+    return selected(rel, LEDGER_INCLUDE)
+
+
 def ledger_changed(path, *, root: Optional[Path] = None, spawn=subprocess.Popen) -> bool:
     """Called right after a ledger file is written. Starts (or nudges) the
-    background Drive push. Best-effort: never raises, never waits. Returns
-    True when it started a worker.
-
-    Only the main checkout's ledgers count: a test's temporary ledger, or a
-    worktree's own copy (GH #103), is not the business record."""
+    background R2 + Drive push. Best-effort: never raises, never waits.
+    Returns True when it started a worker."""
     try:
         if os.environ.get("EBAYBIZ_GDRIVE_AUTO", "1") == "0":
             return False
         root = (root or data_root()).resolve()
-        if Path(path).resolve().parent != root:
+        if not is_ledger(path, root):
             return False
-        cfg = load_gdrive_config()
-        if not cfg.auto or not shutil.which(cfg.rclone):
+        r2, g = _targets()
+        if not (r2 or g):
             return False
         (root / PENDING_FILE).write_text(str(time.time_ns()))
         if _lock_alive(root / LOCK_FILE):
@@ -266,10 +301,50 @@ def ledger_changed(path, *, root: Optional[Path] = None, spawn=subprocess.Popen)
         return False
 
 
+def _notify(title: str, body: str) -> None:
+    """A desktop notification: nobody reads a detached worker's log."""
+    try:
+        if shutil.which("notify-send"):
+            subprocess.run(["notify-send", "-a", "EBAYBIZ", title, body[:300]],
+                           timeout=10, capture_output=True)
+    except Exception:
+        pass
+
+
+def _push_all(root: Path) -> int:
+    """One after-write pass: R2, then Drive. Each result goes to the status
+    file. Returns 0 when every configured target succeeded."""
+    r2, g = _targets()
+    rc = 0
+    if r2:
+        try:
+            failed = offsite.push_ledgers(r2, root)
+            err = (f"{len(failed)} file(s) failed: {', '.join(failed[:5])}"
+                   if failed else "")
+        except (OffsiteError, OSError) as e:
+            err = str(e)
+        print(f"[{_stamp()}] r2: {err or 'ok'}", flush=True)
+        record_status(root, "r2", not err, err)
+        if err:
+            rc = 1
+            _notify("EBAYBIZ: ledger push to R2 failed", err)
+    if g:
+        try:
+            grc = push(g, root, apply=True, ledgers_only=True)
+        except GdriveError as e:
+            print(f"gdrive: {e}", flush=True)
+            grc = 2
+        print(f"[{_stamp()}] rclone exit {grc}", flush=True)
+        record_status(root, "gdrive", grc == 0, f"rclone exit {grc}" if grc else "")
+        if grc:
+            rc = rc or grc
+            _notify("EBAYBIZ: ledger push to Google Drive failed", f"rclone exit {grc}")
+    return rc
+
+
 def _worker(root: Path, debounce: float = DEBOUNCE) -> int:
     """Push the ledgers until no new write arrived during the last push."""
     lock, pending = root / LOCK_FILE, root / PENDING_FILE
-    cfg = load_gdrive_config()
     rc = 0
     while _take_lock(lock):
         try:
@@ -281,11 +356,10 @@ def _worker(root: Path, debounce: float = DEBOUNCE) -> int:
                     break
                 print(f"[{_stamp()}] ledger changed — pushing", flush=True)
                 try:
-                    rc = push(cfg, root, apply=True, ledgers_only=True)
-                except GdriveError as e:
-                    print(f"gdrive: {e}", flush=True)
+                    rc = _push_all(root)
+                except Exception as e:       # a bad config must not wedge the lock
+                    print(f"push: {e}", flush=True)
                     rc = 2
-                print(f"[{_stamp()}] rclone exit {rc}", flush=True)
                 try:
                     if pending.read_text() == seen:
                         pending.unlink()
@@ -360,7 +434,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             check(cfg)
             print(f"ok — {cfg.remote}:{cfg.folder}: write/read round-trip passed")
             return 0
-        return push(cfg, root, apply=a.apply, ledgers_only=a.ledgers)
+        rc = push(cfg, root, apply=a.apply, ledgers_only=a.ledgers)
+        if a.apply:
+            record_status(root, "gdrive", rc == 0, f"rclone exit {rc}" if rc else "",
+                          full=not a.ledgers)
+        return rc
     except GdriveError as e:
         print(f"gdrive: {e}", file=sys.stderr)
         return 2

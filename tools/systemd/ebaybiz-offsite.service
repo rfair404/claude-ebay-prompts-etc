@@ -1,0 +1,12 @@
+# Daily full R2 push, then a freshness check (lib/offsite.py, docs/offsite-storage.md).
+# Install as a user unit with tools/systemd/install-offsite-timer.sh.
+[Unit]
+Description=EBAYBIZ: push listing data to R2, then check it is fresh
+OnFailure=ebaybiz-offsite-notify.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/EBAYBIZ
+ExecStart=%h/EBAYBIZ/.venv/bin/python -m lib.cli offsite push --apply
+ExecStartPost=%h/EBAYBIZ/.venv/bin/python -m lib.cli offsite check
+TimeoutStartSec=2h
