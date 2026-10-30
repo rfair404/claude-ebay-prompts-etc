@@ -61,7 +61,3 @@ def local_only(request: Request, response: Response) -> None:
         elif any(k.lower().startswith("sec-fetch-") for k in request.headers):
             raise HTTPException(403, "write refused: a browser sent no Origin")
     response.headers.update(PII_HEADERS)
-
-
-# The old private name, for anything that still imports it from freight.
-_local_only = local_only
