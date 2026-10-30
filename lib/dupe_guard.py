@@ -245,42 +245,20 @@ def read_rows(path: Path) -> list[Row]:
                 for row in r]
 
 
-def _ledgers():
-    """lib/ledger_store's store (GH #380): local mode unless config.yaml has
-    a `ledger_store:` block. Imported here, not at the top: ledger_store
-    reaches tools/consign.py, which imports this module."""
-    import ledger_store
-    try:
-        return ledger_store, ledger_store.open_store()
-    except ledger_store.LedgerStoreError as e:
-        raise SystemExit(f"[X] {e}") from None
-
-
-def _as_read(rows: list[dict]) -> list[dict]:
-    return [{k: (v or "").strip() for k, v in r.items() if k} for r in rows]
-
-
 def write_rows(path: Path, fields: list, rows: list[dict], backup: bool = False,
                base: Optional[list[dict]] = None) -> None:
-    """Write a catalog, queue or client ledger. A client_ledger.csv in cloud
-    mode goes through ledger_store.update(), refused (nothing written) when
-    the stored ledger is no longer `base`, the rows as they were read."""
+    """Write a catalog, queue or client ledger. A client_ledger.csv goes
+    through tools/consign.write_ledger, the one client-ledger write path
+    (GH #380): a timestamped backup locally, and in cloud mode refused,
+    nothing written, when the stored ledger is no longer `base`."""
     if path.name == LEDGER:
-        ls, st = _ledgers()
-        if st.cloud:
-            out = [{f: r.get(f, "") for f in fields} for r in rows]
-
-            def replace(current: list[dict]) -> list[dict]:
-                if base is not None and _as_read(current) != _as_read(base):
-                    raise ls.Conflict(f"{rel(path)} changed since it was read; "
-                                      f"nothing written. Run the command again.")
-                return out
-
-            try:
-                st.update(ls.CLIENT_LEDGER, replace, intake=path.parent)
-            except ls.LedgerStoreError as e:
-                raise SystemExit(f"[X] {e}") from None
-            return
+        import sys
+        tools = str(Path(__file__).resolve().parent.parent / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        import consign  # not at the top: consign imports this module
+        consign.write_ledger(path, rows, base=base)
+        return
     if backup and path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
