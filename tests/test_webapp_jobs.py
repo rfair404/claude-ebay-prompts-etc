@@ -37,10 +37,31 @@ def test_resolve_shoot_dir_accepts_a_real_shoot(inventory):
     assert jobs._resolve_shoot_dir("ge-tube-6sn7gtb") == shoot.resolve()
 
 
-@pytest.mark.parametrize("name", ["", ".", "..", "a/b", "a\\b", "../escape"])
+def test_resolve_shoot_dir_accepts_a_nested_shoot(inventory):
+    """Shoots nest (`fr/arquilt`); slice 1 of #311 widened jobs to match
+    /review/{shoot}."""
+    shoot = inventory / "fr" / "arquilt"
+    shoot.mkdir(parents=True)
+    assert jobs._resolve_shoot_dir("fr/arquilt") == shoot.resolve()
+
+
+@pytest.mark.parametrize("name", ["", ".", "..", "a\\b", "../escape", "fr/../..",
+                                  "/etc", "fr//arquilt", "fr/", "fr/./arquilt"])
 def test_resolve_shoot_dir_rejects_path_like_names(inventory, name):
+    (inventory / "fr" / "arquilt").mkdir(parents=True)
     with pytest.raises(ValueError):
         jobs._resolve_shoot_dir(name)
+
+
+def test_resolve_shoot_dir_rejects_a_symlink_out_of_inventory(inventory, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    try:
+        (inventory / "sneaky").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("no symlink permission (Windows)")
+    with pytest.raises(ValueError, match="unknown shoot"):
+        jobs._resolve_shoot_dir("sneaky")
 
 
 def test_resolve_shoot_dir_rejects_unknown_shoot(inventory):

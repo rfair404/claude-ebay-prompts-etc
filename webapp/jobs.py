@@ -44,14 +44,17 @@ PREP_AUTO_TIMEOUT = 590
 
 
 def _resolve_shoot_dir(name: str) -> Path:
-    """A shoot is a bare directory name directly under inventory/. Reject
-    anything that looks like a path — this is the one thing standing
+    """A shoot is its path under inventory/, nested or not (`fr/arquilt`,
+    `estate-lots/lot-3`). Each `/`-separated segment must be a plain name —
+    no empty, `.` or `..` segment, no backslash — and the result must still
+    sit under inventory/ once resolved. This is the one thing standing
     between an HTTP request body and reading/writing outside inventory/."""
-    if not name or "/" in name or "\\" in name or name in (".", ".."):
+    parts = name.split("/") if name else []
+    if not parts or "\\" in name or any(p in ("", ".", "..") for p in parts):
         raise ValueError(f"invalid shoot name: {name!r}")
     inventory = INVENTORY.resolve()
-    shoot_dir = (inventory / name).resolve()
-    if shoot_dir.parent != inventory or not shoot_dir.is_dir():
+    shoot_dir = inventory.joinpath(*parts).resolve()
+    if inventory not in shoot_dir.parents or not shoot_dir.is_dir():
         raise ValueError(f"unknown shoot: {name!r}")
     return shoot_dir
 
