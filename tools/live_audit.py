@@ -5,7 +5,7 @@ Local state drifts from live state and nothing forces them back together: a
 price edited in Seller Hub never reaches `draft.md`, an accepted Best Offer
 never writes back to the ledger, and an ended listing leaves a folder still
 marked PUBLISHED. This reads BOTH live sources, compares them to the local
-files, and — with `--apply` — makes the local files say what eBay says.
+files, and — with `--apply` — makes the drafts it owns say what eBay says.
 
 Two live sources, because neither alone is enough:
 
@@ -25,7 +25,15 @@ Live always wins. This tool never pushes local values to eBay — that is
 eBay -> disk.
 
   audit            report the differences (default; writes nothing)
-  audit --apply    update ledger + drafts, backing up every draft it rewrites
+  audit --apply    rewrite drifted drafts, backing up every draft it rewrites
+
+`--apply` never writes the ledger (#345). Writing the ledger from eBay is
+`tools/ledger_reconcile.py`'s job — it has the SOLD and relist rules; this
+tool's old ledger write had neither and would have turned SOLD rows into
+NEEDS_CHECK. `--apply` also only rewrites a LIVE row's draft whose own
+`ebay_listing_id` equals the offer's listing id. A draft matched by SKU alone
+(a re-shoot, a `_rebuilt/` copy, an in-progress draft carrying a live SKU) is
+reported, never rewritten, and a GONE row's draft is never rewritten.
 
 Backups go to `<shoot>/.history/draft-<timestamp>.md`, and every rewritten
 draft gets `meta.notes` stamped with what changed and when.
@@ -35,7 +43,7 @@ username the Browse half searches (storefront `seller_username`), the ledger
 (stores.paths), and which drafts are in scope (a draft's own `store:` field,
 stores.draft_store). All four come from the same store, so the two live halves
 can no longer silently audit different accounts and `--apply` only ever rewrites
-that store's drafts and ledger.
+that store's drafts.
 """
 from __future__ import annotations
 
@@ -281,6 +289,7 @@ def reconcile(offers: list[dict], actives: dict, drafts: list[dict],
             "local_title": d["title"] if d else "",
             "local_price": d["price"] if d else "",
             "draft": d["path"] if d else None,
+            "draft_listing_id": d["listing_id"] if d else "",
             "issues": issues,
         }
         if not d:
@@ -342,10 +351,22 @@ def backup_draft(path: Path) -> Path:
     return dst
 
 
+def owns_draft(row: dict) -> bool:
+    """True when `--apply` may rewrite this row's draft (#345).
+
+    Only a LIVE row, and only when the draft's own `ebay_listing_id` is the
+    offer's listing id. Drafts are matched by SKU first, so a re-shoot or
+    in-progress draft carrying a live SKU would otherwise be overwritten.
+    """
+    lid = row.get("listing_id") or ""
+    return (row.get("state") == "LIVE" and bool(lid)
+            and row.get("draft_listing_id") == lid)
+
+
 def apply_row(row: dict, verbose=True) -> list[str]:
     """Make the local draft say what eBay says. Returns what changed."""
     path = row.get("draft")
-    if not path or not Path(path).exists():
+    if not path or not Path(path).exists() or not owns_draft(row):
         return []
     text = Path(path).read_text(encoding="utf-8")
     changed = []
@@ -374,43 +395,6 @@ def apply_row(row: dict, verbose=True) -> list[str]:
     if verbose:
         print(f"    {row['dir']}: {'; '.join(changed)}")
     return changed
-
-
-def apply_ledger(rows: list[dict], verbose=True, store: str | None = None) -> int:
-    path = ledger_path(store)
-    ledger = load_ledger(store)
-    if not ledger:
-        return 0
-    by_sku = {r["sku"]: r for r in rows if r.get("sku")}
-    n = 0
-    for r in ledger:
-        row = by_sku.get(r.get("sku", ""))
-        if not row:
-            continue
-        new_status = {"LIVE": "PUBLISHED", "GONE": "NEEDS_CHECK",
-                      "NO-OFFER": "NEEDS_CHECK"}.get(row["state"])
-        if new_status and r.get("status") != new_status:
-            r["status"] = new_status
-            r["updated_at"] = _now()
-            n += 1
-        if row["live_price"] and r.get("price") != row["live_price"]:
-            r["price"] = row["live_price"]
-            r["updated_at"] = _now()
-            n += 1
-        if row["live_title"] and r.get("title") != row["live_title"]:
-            r["title"] = row["live_title"]
-            r["updated_at"] = _now()
-            n += 1
-    if n:
-        backup = path.with_suffix(f".backup-{_stamp()}.csv")
-        shutil.copyfile(path, backup)
-        with path.open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(ledger[0]))
-            w.writeheader()
-            w.writerows(ledger)
-        if verbose:
-            print(f"  ledger: {n} field(s) updated (backup {backup.name})")
-    return n
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -489,9 +473,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if a.apply:
         print("\napplying (live wins):")
-        n = sum(bool(apply_row(r)) for r in rows if r["state"] in ("LIVE", "GONE"))
+        n = sum(bool(apply_row(r)) for r in rows if r["state"] == "LIVE")
         print(f"  drafts: {n} rewritten (backups in each <shoot>/.history/)")
-        apply_ledger(rows, store=store)
+        sku_only = [r for r in drift if r.get("draft") and not owns_draft(r)]
+        for r in sku_only:
+            print(f"  skipped {r['dir']}: matched by sku only, its "
+                  f"ebay_listing_id is not {r['listing_id']}")
+        print("  ledger: not written here — run tools/ledger_reconcile.py")
     else:
         print("\n(report only — re-run with --apply to update the local files)")
     return 0
