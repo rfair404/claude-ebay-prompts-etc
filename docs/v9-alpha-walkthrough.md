@@ -1,6 +1,6 @@
 ---
-version: 1.0.0
-updated: 2026-10-29
+version: 1.0.1
+updated: 2026-10-30
 ---
 
 # v9.0.0-alpha.1 walk-through
@@ -23,18 +23,18 @@ Hands: plug the TG-7 in by USB and pick **Storage** on its screen.
 cd /home/russ/EBAYBIZ && .claude/skills/r/tg7_pull.sh
 ```
 
-## 2. Identify, price, draft a demo lot
+## 2. Identify and price a demo lot
 
-Shows: `identify.txt`, `price.txt`, `draft.md` for one lot. The demo lot is
+Shows: `identify.txt` and `price.txt` for one lot. The demo lot is
 the sample ring, copied so the fixtures stay untouched.
 
 ```bash
 cd /home/russ/EBAYBIZ && mkdir -p inventory/demo-ring && cp tests/fixtures/photos/*.jpg inventory/demo-ring/
 ```
 
-Then tell the session `/r list demo-ring`. It stops at the review gate; it
-publishes nothing. Hands: none. Note: DRAFT stamps one DRAFTED row for the
-demo SKU into the listings ledger (a local write; R2 now follows it).
+Then tell the session to run identify and price on `demo-ring` and stop at
+PRICE. Do not run DRAFT: it stamps a DRAFTED row for the demo SKU into the
+real listings ledger and pushes it to R2. Hands: none.
 
 ## 3. PREP check
 
@@ -60,11 +60,10 @@ Hands: open the link and read the card. Do not approve it.
 ## 5. list_edit dry run
 
 Shows: what a listing change would send, field by field. No `--apply`, no
-`--confirm`, nothing sent. TODO: the TD names one live listing's folder for
-`<live-shoot>` before the demo.
+`--confirm`, nothing sent. The folder is listing 206662432530 (PUBLISHED), dry-run only.
 
 ```bash
-cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli listing --update inventory/<live-shoot> --fields price --dry-run
+cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.cli listing --update inventory/tg7-20261029-0053/01-zippo-slim-lighter-lockheed-georgia --fields price --dry-run
 ```
 
 ## 6. Ledger: local mode, verify, sync preview, dashboard
