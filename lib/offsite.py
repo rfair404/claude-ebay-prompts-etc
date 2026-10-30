@@ -89,7 +89,8 @@ REPO = Path(__file__).resolve().parent.parent
 # at any depth under dir/. Other entries match one path level each, "*"
 # never crossing a "/". The regenerable class-3 caches are left out.
 # The ledgers, incl. -<store> variants and .backup-* / .csv.backup-* copies.
-# Also what lib/gdrive_mirror.py pushes after each ledger write.
+# Also what lib/gdrive_mirror.ledger_changed() pushes (to R2, then Drive)
+# after each ledger write, and the paths that count as a ledger write.
 LEDGER_INCLUDE = (
     "listings_ledger*.csv*",
     "sales_ledger*.csv*",
@@ -97,6 +98,10 @@ LEDGER_INCLUDE = (
     "listings_log.txt",
     "hand_listed_locations*.csv",
     "ledger_reconcile_report*.json",
+    # consignment: each intake's item ledger and the client registry
+    # (tools/consign.py). The registry is the one file with client names.
+    "inventory/**/client_ledger*.csv",
+    "inventory/_consign/**",
 )
 DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # eBay exports: the live-listing sheets built from the eBay APIs
@@ -116,10 +121,6 @@ DEFAULT_INCLUDE = LEDGER_INCLUDE + (
     # map left by the 2026-10 wipe: which sold SKUs belong to which folder
     "inventory/**/context.txt",
     "inventory/**/RECOVERED.md",
-    # consignment: each intake's item ledger and the client registry
-    # (tools/consign.py). The registry is the one file with client names.
-    "inventory/**/client_ledger.csv",
-    "inventory/_consign/**",
     # pick sheets staged for `offsite share` (prompts/pick_list.md)
     "inventory/_pick_lists/**",
     "reports/**",
@@ -139,6 +140,7 @@ MEDIA_SUFFIXES = (
 )
 
 STATE_FILE = ".offsite_state.json"     # md5 cache; /.*.json is gitignored
+STATUS_FILE = ".offsite_status.json"   # last good / failed push per target
 CONFLICT_DIR = ".offsite_conflicts"
 MAX_SINGLE_PUT = 5 * 1024**3 - 1       # S3 single-PUT ceiling
 MAX_PRESIGN_SECONDS = 7 * 24 * 3600    # SigV4 presigned-URL ceiling
@@ -597,6 +599,46 @@ def push(remote, root: Path, plan: Plan, data_prefix: str,
     return _parallel(up, plan.local_only + plan.changed, "pushed")
 
 
+def push_ledgers(cfg: OffsiteConfig, root: Path, remote=None) -> list[str]:
+    """Push just the LEDGER_INCLUDE files: the after-write push that
+    gdrive_mirror's background worker runs. Same rules as push (never
+    deletes, a replaced object goes to history/ first). Returns the files
+    that failed; raises OffsiteError if the bucket can't be listed."""
+    remote = remote or S3Remote(cfg)
+    data_prefix = cfg.prefix + "data/"
+    cache = Md5Cache(root / STATE_FILE)
+    plan = make_plan(root, LEDGER_INCLUDE, remote.list(data_prefix), data_prefix, cache)
+    cache.save()
+    return push(remote, root, plan, data_prefix, f"{cfg.prefix}history/{_stamp()}/")
+
+
+def record_status(root: Path, target: str, ok: bool, error: str = "", *,
+                  full: bool = False, now: Optional[dt.datetime] = None) -> None:
+    """Note a push's result in STATUS_FILE, per target ("r2", "gdrive"):
+    last_ok / last_full_ok (a full push) / last_failure + error, UTC ISO.
+    What `offsite check` reads for freshness. Best effort: never raises."""
+    path = root / STATUS_FILE
+    stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
+    try:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        t = data.setdefault(target, {})
+        if ok:
+            t["last_ok"] = stamp
+            if full:
+                t["last_full_ok"] = stamp
+        else:
+            t["last_failure"] = stamp
+            t["error"] = error[:500]
+        tmp = path.with_suffix(".tmp.json")  # /.*.json is gitignored
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as e:                 # status must not fail a backup
+        print(f"offsite: status not saved ({e})", file=sys.stderr)
+
+
 def prunable(remote, prefix: str, include: Iterable[str]) -> list[str]:
     """Bucket keys under data/ and history/ that the rules no longer select."""
     include = tuple(include)
@@ -765,6 +807,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if a.action == "push":
             failed = push(remote, root, plan, data_prefix,
                           f"{cfg.prefix}history/{_stamp()}/")
+            record_status(root, "r2", not failed,
+                          f"{len(failed)} file(s) failed" if failed else "", full=True)
         else:
             failed = pull(remote, root, plan, data_prefix, a.overwrite)
         if failed:
