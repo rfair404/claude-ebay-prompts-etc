@@ -1,5 +1,5 @@
 ---
-version: 1.0.1
+version: 1.0.2
 updated: 2026-10-30
 ---
 
@@ -47,12 +47,12 @@ cd /home/russ/EBAYBIZ && .venv/bin/python -m lib.photo_prep.center_crop tests/fi
 
 ## 4. Review card as an R2 link
 
-Shows: the card Russell would approve, opened from a private link (7 days).
+Shows: the Zippo Slim lighter's card, as Russell would approve it, opened from a private link (7 days).
 Cards are shared from a copy under `reports/review_cards/`, never from the
 shoot folder.
 
 ```bash
-cd /home/russ/EBAYBIZ && mkdir -p reports/review_cards/demo && cp inventory/demo-ring/review_card.html reports/review_cards/demo/1-demo-ring.html && .venv/bin/python -m lib.cli offsite share reports/review_cards/demo/1-demo-ring.html
+cd /home/russ/EBAYBIZ && mkdir -p reports/review_cards/demo && cp inventory/tg7-20261029-0053/01-zippo-slim-lighter-lockheed-georgia/review_card.html reports/review_cards/demo/1-zippo-slim-lighter.html && .venv/bin/python -m lib.cli offsite share reports/review_cards/demo/1-zippo-slim-lighter.html
 ```
 
 Hands: open the link and read the card. Do not approve it.
@@ -132,7 +132,7 @@ needs `"confirm": true` and the demo never sends it.
 ## 10. Web app pages
 
 Shows, on `127.0.0.1:8770` only: the dashboard with its store switcher, then
-`/review/demo-ring`, `/prep/demo-ring` (Frame Check) and `/freight`. The
+`/review/tg7-20261029-0053/01-zippo-slim-lighter-lockheed-georgia` (the Zippo), `/prep/demo-ring` (Frame Check) and `/freight`. The
 buttons there queue local PREP and hero actions only; none writes to eBay.
 Hands: open the pages; click nothing that says Run unless Russell wants a
 local PREP action on `demo-ring`.
