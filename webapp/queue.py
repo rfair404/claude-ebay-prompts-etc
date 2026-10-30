@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
+INTERRUPTED = "interrupted by restart"
+
+
 @dataclass
 class Job:
     id: int
@@ -83,6 +86,14 @@ class JobQueue:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         with self._lock:
             self._conn.execute(SCHEMA)
+            # A row still queued or running belongs to a process that is gone
+            # (a restart, a crash). Close it as an error and never re-run it:
+            # a job may already have half-written its files, and running it
+            # twice is worse than asking for it again (#311 slice 1).
+            self._conn.execute(
+                "UPDATE jobs SET status='error', error=?, finished_at=? "
+                "WHERE status IN ('queued', 'running')",
+                (INTERRUPTED, time.time()))
             self._conn.commit()
         self._executor = ThreadPoolExecutor(max_workers=max_workers,
                                              thread_name_prefix="job")

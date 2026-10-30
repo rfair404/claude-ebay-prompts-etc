@@ -70,7 +70,7 @@ for _p in (str(REPO), str(REPO / "lib")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from fastapi import FastAPI, HTTPException          # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException # noqa: E402
 from fastapi.responses import HTMLResponse          # noqa: E402
 from pydantic import BaseModel                       # noqa: E402
 
@@ -84,11 +84,16 @@ import webapp.jobs as _jobs                            # noqa: E402
 import webapp.pager as _pager                          # noqa: E402
 from webapp.jobs import JOB_HANDLERS                  # noqa: E402
 from webapp.queue import Job, JobQueue                # noqa: E402
+from webapp.security import local_only                # noqa: E402
 
 DEFAULT_DB_PATH = REPO / "reports" / "jobs.db"
 DEFAULT_PORT = _pick_store.DEFAULT_PORT   # one value; pick sheet links embed it
 
-app = FastAPI(title="ebay-ops (local, #31 Phase 2)")
+# Every route, app-wide (#311 slice 1): a loopback Host, a loopback Origin on
+# writes, and no-store headers. Until this, only /freight and /api/pager had
+# it, so POST /api/jobs and POST /live/{show}/state were unguarded.
+app = FastAPI(title="ebay-ops (local, #31 Phase 2)",
+              dependencies=[Depends(local_only)])
 app.include_router(_freight.router)   # /freight — LTL quotes, booking, tracking
 app.include_router(_pager.router)     # /api/pager — which page of the live show is on air
 _queue: Optional[JobQueue] = None
@@ -189,18 +194,9 @@ def dashboard(store: Optional[str] = None) -> str:
 
 
 def _resolve_review_dir(shoot: str) -> Path:
-    """A shoot path relative to inventory/, at any depth. Each segment must be
-    a plain name, and the result must still sit under inventory/ once
-    resolved — the same guard `_resolve_shoot_dir` keeps for jobs, widened
-    from one level to many because shoots nest (`fr/arquilt`)."""
-    parts = shoot.split("/") if shoot else []
-    if not parts or "\\" in shoot or any(p in ("", ".", "..") for p in parts):
-        raise ValueError(f"invalid shoot path: {shoot!r}")
-    inventory = _jobs.INVENTORY.resolve()
-    shoot_dir = inventory.joinpath(*parts).resolve()
-    if inventory not in shoot_dir.parents or not shoot_dir.is_dir():
-        raise ValueError(f"unknown shoot: {shoot!r}")
-    return shoot_dir
+    """A shoot path relative to inventory/, at any depth (`fr/arquilt`). One
+    guard for pages and jobs alike: webapp/jobs.py's `_resolve_shoot_dir`."""
+    return _jobs._resolve_shoot_dir(shoot)
 
 
 @app.get("/review/{shoot:path}", response_class=HTMLResponse)
@@ -346,7 +342,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="ebz serve")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = ap.parse_args(argv)
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    # access_log off: URLs carry pick-sheet tokens today and OAuth codes later.
+    uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)
     return 0
 
 

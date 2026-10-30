@@ -1,0 +1,7 @@
+# tests/fixtures/config.yaml — the config every test sees by default.
+#
+# tests/conftest.py copies this to a temp dir and points EBAYBIZ_CONFIG at the
+# copy, so no test reads Russell's real config.yaml (or ~/.ebaybiz/), and a
+# test that writes config writes the copy. Empty on purpose: the same thing a
+# CI box with no config file sees. A test that needs keys builds its own.
+{}
