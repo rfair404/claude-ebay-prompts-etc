@@ -432,3 +432,194 @@ def test_history_and_restore():
     assert _ids(w.objects["sales_ledger.csv"][0]) == ["A"]
     assert _ids((root / "sales_ledger.csv").read_bytes()) == ["A"]
     assert len(st.history("sales_ledger.csv")) == 2             # undoable
+
+
+# --------------------------------------------------------------------------
+# rows(): the read API (#380 P3.1)
+# --------------------------------------------------------------------------
+
+def test_rows_reads_and_filters():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\nB,t,2\r\nC,s,3\r\n"})
+    assert [r["order_id"] for r in st.rows("sales")] == ["A", "B", "C"]
+    assert [r["order_id"] for r in st.rows("sales", sku="s")] == ["A", "C"]
+    assert [r["order_id"] for r in st.rows("sales", sku="s", price=3)] == ["C"]
+    assert st.rows("sales", sku="nope") == []
+    assert st.rows("sales", store="junk") == []                 # no file yet
+    for bad, kw in (("sales", {"skuu": "s"}), ("inventory_sheet", {})):
+        try:
+            st.rows(bad, **kw)
+            raise AssertionError(f"expected LedgerStoreError for {bad} {kw}")
+        except ls.LedgerStoreError:
+            pass
+
+
+def test_rows_under_listings_ledger_override():
+    root = Path(tempfile.mkdtemp())
+    path = root / "elsewhere.csv"
+    path.write_bytes(b"sku,status\r\nX1,LIVE\r\nX2,SOLD\r\n")
+    old = _set_ledger_override(str(path))
+    try:
+        assert [r["sku"] for r in ls.rows("listings", status="LIVE")] == ["X1"]
+    finally:
+        _set_ledger_override(old)
+
+
+# --------------------------------------------------------------------------
+# the event log (#394)
+# --------------------------------------------------------------------------
+
+FIXTURE = ROOT / "tests" / "fixtures" / "ledger_chain"
+
+
+def _events(st, key="sales_ledger.csv"):
+    return [json.loads(line) for line in st.chain_path(key).read_text().splitlines()]
+
+
+def _rebuilt(st, key="sales_ledger.csv"):
+    rp = ls.replay(st.chain_path(key), key)
+    assert rp.broken is None, rp.broken
+    return sorted(json.loads(k)["order_id"] for k in rp.keys.elements())
+
+
+def test_update_writes_genesis_then_changes():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"))
+    st.update("sales", lambda rows: [dict(r, price="9") if r["order_id"] == "A" else r
+                                     for r in rows])
+    evs = _events(st)
+    assert [e["kind"] for e in evs] == ["genesis", "change", "change"]
+    assert [r["order_id"] for r in evs[0]["add"]] == ["A"]         # rows as found
+    assert evs[2]["remove"] == [{"order_id": "A", "sku": "s", "price": "1"}]
+    assert evs[2]["add"] == [{"order_id": "A", "sku": "s", "price": "9"}]
+    assert [e["prev"] for e in evs[1:]] == [e["hash"] for e in evs[:-1]]
+    assert _rebuilt(st) == ["A", "B"]
+    ok, clean, _ = st.verify()
+    assert ok and clean
+
+
+def test_unchanged_write_adds_no_event():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"))
+    st.update("sales", lambda rows: rows)
+    assert len(_events(st)) == 2
+
+
+def test_csv_format_is_unchanged_by_the_log():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"))
+    assert (root / "sales_ledger.csv").read_bytes() == HEADER + b"A,s,1\r\nB,s,1.00\r\n"
+    assert st.chain_path("sales_ledger.csv").parent == root / "reports" / "ledger_chain"
+
+
+def test_write_outside_update_is_drift_then_recorded():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"))
+    (root / "sales_ledger.csv").write_bytes(HEADER + b"A,s,1\r\nB,s,1.00\r\nHAND,x,5\r\n")
+    ok, clean, lines = st.verify()
+    assert ok and not clean and "DRIFT" in "\n".join(lines)
+    st.update("sales", add("C"))
+    assert [e["kind"] for e in _events(st)] == ["genesis", "change", "drift", "change"]
+    assert _rebuilt(st) == ["A", "B", "C", "HAND"]
+    ok, clean, _ = st.verify()
+    assert ok and clean
+
+
+def test_cloud_and_offline_writes_are_logged():
+    w = FakeWorker({"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    w.race = 1                                   # the retry must log once, not twice
+    st, root, _ = _store(w)
+    st.update("sales", add("B"))
+    assert [e["kind"] for e in _events(st)] == ["genesis", "change"]
+    w.offline = True
+    st.update("sales", add("C"))
+    assert _rebuilt(st) == ["A", "B", "C", "RACE"]
+    assert st.verify()[0]
+
+
+def test_broken_log_is_not_extended_and_write_still_lands():
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"))
+    p = st.chain_path("sales_ledger.csv")
+    p.write_text(p.read_text().replace('"price":"1.00"', '"price":"0.01"'))
+    before = p.read_bytes()
+    st.update("sales", add("C"))
+    assert _ids((root / "sales_ledger.csv").read_bytes()) == ["A", "B", "C"]
+    assert p.read_bytes() == before
+
+
+def test_listings_override_keeps_the_log_beside_it():
+    root = Path(tempfile.mkdtemp())
+    path = root / "ledger.csv"
+    path.write_bytes(b"sku,status\r\nX1,LIVE\r\n")
+    old = _set_ledger_override(str(path))
+    try:
+        st = ls.open_store({})
+        assert st.chain_dir == root / "ledger_chain"           # never the repo's reports/
+        st.mirror, st.out = (lambda p: None), open(os.devnull, "w")
+        st.update("listings", lambda rows: rows + [{"sku": "X2", "status": "DRAFT"}])
+        assert (root / "ledger_chain" / "listings_ledger.csv.jsonl").exists()
+    finally:
+        _set_ledger_override(old)
+
+
+def _verify_cli(chain_dir, root=FIXTURE, *extra):
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        rc = ls.main(["verify", "--chain-dir", str(chain_dir), "--root", str(root), *extra])
+    return rc, buf.getvalue()
+
+
+def test_verify_cli_on_the_fixture_is_clean():
+    rc, out = _verify_cli(FIXTURE / "chain", FIXTURE, "--strict")
+    assert rc == 0, out
+    assert "ok     sales_ledger.csv  4 events  2 rows" in out
+
+
+def _tampered(edit):
+    d = Path(tempfile.mkdtemp())
+    lines = (FIXTURE / "chain" / "sales_ledger.csv.jsonl").read_text().splitlines()
+    (d / "sales_ledger.csv.jsonl").write_text("\n".join(edit(lines)) + "\n")
+    return d
+
+
+def _rehash_edit(lines):
+    """Edit a past event AND recompute its own hashes: the next link breaks."""
+    ev = json.loads(lines[1])
+    ev["add"][0]["sold_price"] = "3.00"
+    genesis = json.loads(lines[0])["add"]
+    ev["state"] = ls.state_hash(ev["fields"], ls._row_keys(ev["fields"], genesis + ev["add"]))
+    ev["hash"] = ls.event_hash(ev)
+    return [lines[0], json.dumps(ev), *lines[2:]]
+
+
+def test_verify_cli_names_the_first_broken_link_table():
+    cases = [
+        ("edited row", lambda l: [l[0], l[1].replace('"30.00"', '"3.00"'), *l[2:]],
+         "line 2 (seq 1): hash does not match"),
+        ("deleted event", lambda l: [l[0], *l[2:]], "line 2 (seq 2): prev does not link"),
+        ("swapped events", lambda l: [l[0], l[2], l[1], l[3]], "line 2 (seq 2): prev"),
+        ("rehashed edit", _rehash_edit, "line 3 (seq 2): prev does not link"),
+        ("garbage line", lambda l: [l[0], "{not json", *l[2:]], "line 2: not a JSON event"),
+        ("genesis removed", lambda l: l[1:], "line 1 (seq 1): prev"),
+    ]
+    for name, edit, want in cases:
+        rc, out = _verify_cli(_tampered(edit))
+        assert rc == 1, (name, out)
+        assert "BROKEN sales_ledger.csv" in out and want in out, (name, out)
+
+
+def test_verify_cli_drift_fails_only_when_strict():
+    root = Path(tempfile.mkdtemp())
+    data = (FIXTURE / "sales_ledger.csv").read_bytes() + b"00-00000-00009,HAND,1.00\r\n"
+    (root / "sales_ledger.csv").write_bytes(data)
+    rc, out = _verify_cli(FIXTURE / "chain", root)
+    assert rc == 0 and "DRIFT" in out, out
+    rc, out = _verify_cli(FIXTURE / "chain", root, "--strict")
+    assert rc == 1, out
+
+
+def test_verify_with_no_logs_is_clean():
+    rc, out = _verify_cli(Path(tempfile.mkdtemp()))
+    assert rc == 0 and "no event logs" in out
