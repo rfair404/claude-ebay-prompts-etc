@@ -25,16 +25,22 @@ The wrong answer is to relax an assertion so it stops noticing.
 Run:  python tests/test_formats.py
   or: pytest tests/test_formats.py
 """
+import base64
 import csv
+import hashlib
+import io
 import json
-import re
+import shlex
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "lib"))
 
+import pytest                                                # noqa: E402
 import yaml                                                  # noqa: E402
 
 
@@ -105,21 +111,15 @@ def test_the_field_limits_are_the_ones_ebay_enforces():
         assert fc[req].get("required") is True, f"{req} stopped being required"
 
 
-# Drafts written before the constraints block existed. They stamp
-# `template_version: v1` and carry none of it, so the validator has nothing to
-# read. 15 are published and 4 have sold, so they are not going to be rewritten
-# casually — but the number must only ever go DOWN. A new one is a regression in
-# whatever wrote it.
-LEGACY_DRAFTS_WITHOUT_CONSTRAINTS = 31
-# And 21 more carry a PARTIAL block — rules dropped, none altered and none
-# invented. Those drafts are under-enforced rather than mis-enforced: the
-# validator checks fewer fields than it should, which is a smaller problem than
-# checking the wrong limit. Same rule as above, the number may only go down.
-LEGACY_DRAFTS_WITH_PARTIAL_CONSTRAINTS = 21
+# Drafts written before the constraints block existed stamp `template_version:
+# v1` and carry none of it ("legacy"); some carry a PARTIAL block ("partial":
+# rules dropped, none altered). Both are under-enforced rather than
+# mis-enforced, which is a smaller problem than checking the wrong limit, so
+# the audit counts them and fails only on a block that disagrees.
 
 
-def test_a_rendered_draft_still_matches_the_template():
-    """Real drafts in the tree, checked against the template they claim.
+def _audit_drafts(drafts):
+    """Drafts, checked against the template they claim.
 
     Two different assertions, because there are two different situations:
 
@@ -128,11 +128,8 @@ def test_a_rendered_draft_still_matches_the_template():
         validator is enforcing limits that eBay does not, or missing ones it
         does.
       * a draft that carries NONE is old, from before the block existed. Those
-        are counted, not fixed, and the count may only shrink.
+        are counted (the caller decides what a count means), not fixed.
     """
-    drafts = sorted(ROOT.glob("inventory/**/draft.md"))
-    if not drafts:
-        return
     tpl_fc = _template()["_field_constraints"]
     matched = legacy = partial = 0
     for p in drafts:
@@ -162,14 +159,46 @@ def test_a_rendered_draft_still_matches_the_template():
         assert d.get("title") is not None, f"{p}: no title"
         matched += 1
 
-    assert matched, "no drafts with a constraints block found to check"
-    assert legacy <= LEGACY_DRAFTS_WITHOUT_CONSTRAINTS, (
-        f"{legacy} drafts now claim v1 without a constraints block, up from "
-        f"{LEGACY_DRAFTS_WITHOUT_CONSTRAINTS}. Something is writing drafts that "
-        f"the validator cannot check.")
-    assert partial <= LEGACY_DRAFTS_WITH_PARTIAL_CONSTRAINTS, (
-        f"{partial} drafts now carry a partial constraints block, up from "
-        f"{LEGACY_DRAFTS_WITH_PARTIAL_CONSTRAINTS}.")
+    return matched, legacy, partial
+
+
+def _fixture_draft(tmp_path, name, constraints=None, version="v1"):
+    d = tmp_path / name
+    d.mkdir()
+    fm = {"template_version": version, "title": "Synthetic Widget"}
+    if constraints is not None:
+        fm["_field_constraints"] = constraints
+    (d / "draft.md").write_text("---\n" + yaml.safe_dump(fm) + "---\nbody\n",
+                                encoding="utf-8")
+    return d / "draft.md"
+
+
+def test_the_draft_audit_accepts_the_templates_own_constraints_and_counts_legacy(tmp_path):
+    """The audit used to walk Russell's real inventory/, so its pass/fail
+    depended on his data (50 legacy drafts there against a 'ceiling' of 31) and
+    it did nothing in CI. It now runs on drafts built here.
+
+    A draft carrying the template's block matches; one carrying none is counted
+    as legacy; one carrying a subset is counted as partial."""
+    tpl = _template()["_field_constraints"]
+    some = dict(list(tpl.items())[:2])
+    drafts = [_fixture_draft(tmp_path, "full", tpl),
+              _fixture_draft(tmp_path, "partial", some),
+              _fixture_draft(tmp_path, "legacy"),
+              _fixture_draft(tmp_path, "other-version", version="v2")]
+    assert _audit_drafts(drafts) == (2, 1, 1)
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda fc: {**fc, "title": {**fc["title"], "max_len": 200}}, "disagrees with the template"),
+    (lambda fc: {**fc, "invented_rule": {"required": True}}, "unknown constraint"),
+], ids=["a-limit-eBay-does-not-have", "a-rule-the-template-never-heard-of"])
+def test_the_draft_audit_rejects_a_drifted_constraints_block(tmp_path, change, message):
+    """A wrong limit is a rejected or truncated listing; there is no tolerance
+    for it. Mutate one rule and the audit must name the problem."""
+    bad = _fixture_draft(tmp_path, "drifted", change(_template()["_field_constraints"]))
+    with pytest.raises(AssertionError, match=message):
+        _audit_drafts([bad])
 
 
 # ---------------------------------------------------------------------------
@@ -294,36 +323,301 @@ CARD_SECTIONS = [
 ]
 
 
-def test_the_review_card_still_says_all_of_it():
+# ---- a fake eBay at urlopen -------------------------------------------------
+# The tests below run the real list_edit code, the real ebay_client request
+# building and the real CLI. Only the wire is faked.
+
+class _Wire:
+    """A response object urlopen's `with` block can use."""
+
+    def __init__(self, payload):
+        raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        self._buf = io.BytesIO(raw)
+        self.headers = {}
+
+    def read(self):
+        return self._buf.read()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class FakeEbay:
+    """Records every request and answers just enough of the Sell API for a
+    sync-then-publish to complete. Unknown requests answer {}.
+    `requests` holds (method, path-with-query, json-body-or-None, headers)."""
+
+    def __init__(self):
+        self.requests = []
+        self.offer_price = None
+        self.sku = None
+
+    def urlopen(self, req, timeout=None):
+        url = urllib.parse.urlparse(req.full_url)
+        method, path = req.get_method(), url.path
+        raw = req.data or b""
+        try:
+            body = json.loads(raw) if raw[:1] in (b"{", b"[") else None
+        except ValueError:
+            body = None
+        self.requests.append((method, path + (("?" + url.query) if url.query else ""),
+                              body, {k.lower(): v for k, v in req.header_items()}))
+        if path.endswith("/oauth2/token"):
+            return _Wire({"access_token": "fake-token", "expires_in": 7200})
+        if path.endswith("/ws/api.dll"):                         # Trading GetItem
+            return _Wire(b"<GetItemResponse><Ack>Success</Ack></GetItemResponse>")
+        if "create_image_from_file" in path:
+            return _Wire({"imageUrl": "https://i.ebayimg.example/fake.jpg"})
+        if path.endswith("/fulfillment_policy"):
+            return _Wire({"fulfillmentPolicies": [
+                {"fulfillmentPolicyId": "F1", "name": "Ground",
+                 "shippingOptions": [{"optionType": "DOMESTIC", "costType": "FLAT_RATE",
+                                      "shippingServices": [
+                                          {"shippingServiceCode": "USPSGroundAdvantage"}]}]}]})
+        if method == "PUT" and "/inventory_item/" in path:
+            self.sku = path.rsplit("/", 1)[1]
+            return _Wire(b"")
+        if method == "POST" and path.endswith("/sell/inventory/v1/offer"):
+            self.offer_price = body["pricingSummary"]["price"]["value"]
+            return _Wire({"offerId": "OFFER-1"})
+        if method == "GET" and path.endswith("/offer/OFFER-1"):
+            return _Wire({"status": "UNPUBLISHED", "sku": self.sku,
+                          "pricingSummary": {"price": {"value": self.offer_price}}})
+        if method == "POST" and path.endswith("/offer/OFFER-1/publish"):
+            return _Wire({"listingId": "110011"})
+        return _Wire({})
+
+    def writes(self):
+        """Every request that changes something on eBay (not the token grant)."""
+        return [(m, p, b) for m, p, b, _ in self.requests
+                if m in ("POST", "PUT", "DELETE") and "/oauth2/token" not in p]
+
+    def publishes(self):
+        return [r for r in self.writes() if r[1].endswith("/publish")]
+
+
+# Synthetic account data. Nothing here is real.
+_FAKE_CONFIG = """\
+ebay:
+  environment: sandbox
+  sandbox:
+    app_id: DEFAULT-APP
+    cert_id: default-cert
+    dev_id: default-dev
+    user_refresh_token: default-refresh
+  fulfillment_policy_id: F1
+  payment_policy_id: P1
+  return_policy_id: R1
+  merchant_location_key: LOC1
+  stores:
+    junk:
+      environment: sandbox
+      app_id: JUNK-APP
+      cert_id: junk-cert
+      dev_id: junk-dev
+      user_refresh_token: junk-refresh
+      fulfillment_policy_id: F1
+      payment_policy_id: P1
+      return_policy_id: R1
+      merchant_location_key: LOC2
+"""
+
+_DRAFT = """\
+---
+title: "Vintage Widget MPN-100"
+price: 24.99
+quantity: 1
+condition: "USED_GOOD"
+condition_description: "Light shelf wear."
+category_id: "12345"
+item_specifics:
+  type: "Widget"
+photos:
+  - "listing/a.jpg"
+shipping:
+  fulfillment_mode: SHIP
+meta:
+  notes: ""
+---
+A well-loved vintage widget from our collection, kept in a dry room and
+gently cared for over the years.
+"""
+
+_PRICE_TXT = ('  B · Browser   : RAN — query "widget" — best_match n=9 + price_high n=9'
+              ' — saved 2 JSONs — price_stats n_kept=8, conf=good\n')
+
+
+@pytest.fixture
+def ebay(tmp_path, monkeypatch):
+    """A synthetic shoot, a throwaway config and ledger, and a fake eBay."""
+    import config
+    import ebay_client
+    import list_edit
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(_FAKE_CONFIG, encoding="utf-8")
+    monkeypatch.setenv("EBAYBIZ_CONFIG", str(cfg))
+    monkeypatch.delenv("EBAYBIZ_STORE", raising=False)
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(tmp_path / "ledger.csv"))
+    monkeypatch.setenv("EBAYBIZ_GDRIVE_AUTO", "0")
+    monkeypatch.setattr(config, "_cached_config", None)       # re-read; restored after
+    # token caches are module state: start empty and put the old ones back
+    for name in ("_app_caches", "_user_caches", "_user_scopes_by_store"):
+        monkeypatch.setattr(ebay_client, name, {})
+    fake = FakeEbay()
+    monkeypatch.setattr(urllib.request, "urlopen", fake.urlopen)
+
+    shoot = tmp_path / "shoot"
+    (shoot / "listing").mkdir(parents=True)
+    (shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff fake jpeg")
+    (shoot / "draft.md").write_text(_DRAFT, encoding="utf-8")
+    # a sold-price pull on record, so the price gate lets the draft through
+    (shoot / "price.txt").write_text(_PRICE_TXT, encoding="utf-8")
+    (shoot / "apify_run_20261024T000000Z_browse-best_match-p1-20261023T200000.json"
+     ).write_text("{}", encoding="utf-8")
+    fake.shoot = shoot
+    fake.list_edit = list_edit
+    return fake
+
+
+def _approve_prep(shoot):
+    """A PREP manifest, signed off, for one source frame rendered to
+    listing/a.jpg, with both hashes matching what is on disk."""
+    src = shoot / "IMG_0001.jpg"
+    src.write_bytes(b"\xff\xd8\xff fake original")
+    out = shoot / "listing" / "a.jpg"
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()[:16]   # PREP keeps 16
+    (shoot / ".prep").mkdir(exist_ok=True)
+    (shoot / ".prep" / "prep.json").write_text(json.dumps({
+        "version": 1, "approved": True, "chosen_preset": "crisp",
+        "photos": {"IMG_0001.jpg": {"src_sha256": sha(src), "output": "listing/a.jpg",
+                                    "out_sha256": sha(out)}},
+    }), encoding="utf-8")
+
+
+@pytest.mark.parametrize("label", CARD_SECTIONS)
+def test_the_review_card_still_says_all_of_it(ebay, label):
     """Anything dropped from this list is something a human stops being shown
     at the moment they authorise a live listing. `Final photos` is here because
     a count and a hero filename were not enough — they could not reveal a frame
-    that never went through PREP."""
-    src = (ROOT / "lib" / "list_edit.py").read_text(encoding="utf-8")
-    i = src.index("def build_review_card")
-    body = src[i:src.index("\ndef ", i + 10)]
-    for label in CARD_SECTIONS:
-        assert label in body, f"the review card no longer shows: {label!r}"
+    that never went through PREP.
+
+    Built from a real draft through build_review_card, so a label that only
+    survives in a comment or a dead branch no longer counts."""
+    card, path = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    assert label in card, f"the review card no longer shows: {label!r}\n{card}"
+    assert Path(path).read_text(encoding="utf-8").strip() == card.strip(), \
+        "the card on disk must be the card that was shown"
 
 
-def test_the_publish_command_on_the_card_is_still_gated():
-    """The card tells the operator exactly what publishes. If that line loses
-    --confirm it is telling them something untrue about what happens next.
+def test_the_review_card_shows_this_listings_own_values(ebay):
+    """The labels above could all be present and empty. These are the values a
+    human actually approves: what is on the card must be what is in the draft."""
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    assert 'Title:     "Vintage Widget MPN-100"  [22/80]' in card
+    assert "Price:     $24.99  ·  Best Offer: off" in card
+    assert "Approve publishes this LIVE at $24.99" in card
+    assert "Condition: USED_GOOD" in card
+    assert "Light shelf wear." in card
+    assert "hero  listing/a.jpg" in card
 
-    GH #147: the command may also carry an optional `--store <name>` before
-    --confirm (a non-default store), so the lock allows anything in between
-    rather than requiring the two flags adjacent — but --confirm must still
-    follow --list {shoot} somewhere on the same constructed line."""
-    src = (ROOT / "lib" / "list_edit.py").read_text(encoding="utf-8")
-    i = src.index("def build_review_card")
-    body = src[i:src.index("\ndef ", i + 10)]
-    m = re.search(r"--list \{shoot\}.*?--confirm", body, re.DOTALL)
-    assert m, "the card's publish command lost --confirm"
+
+def test_a_clean_card_says_so_and_a_photo_gap_withdraws_it(ebay):
+    """ALL CLEAR is an AND of every section. A frame edited after PREP approved
+    it must take the banner away and say why."""
+    _approve_prep(ebay.shoot)
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    assert "ALL CLEAR" in card.splitlines()[1], card
+
+    (ebay.shoot / "listing" / "a.jpg").write_bytes(b"\xff\xd8\xff edited later")
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    assert "ALL CLEAR" not in card
+    assert "CHANGED SINCE PREP APPROVED IT" in card
+
+
+def _published_command(card: str) -> list[str]:
+    """The argv the card tells the operator to run to publish, as typed."""
+    line = next(ln for ln in card.splitlines() if "list_edit.py --list" in ln)
+    argv = shlex.split(line.strip())
+    assert argv[:2] == ["python", "lib/list_edit.py"], argv
+    return argv[2:]
+
+
+def _run_cli(monkeypatch, argv):
+    monkeypatch.setattr(sys, "argv", ["list_edit.py", *argv])
+    import list_edit
+    try:
+        list_edit._cli()
+    except SystemExit as e:                               # a refusal exits non-zero
+        return e.code
+    return 0
+
+
+def test_the_publish_command_on_the_card_publishes_and_only_with_confirm(ebay, monkeypatch, capsys):
+    """The card tells the operator exactly what publishes. Run that command, as
+    printed, against a fake eBay: it must publish once, at the price the card
+    showed. Then run it with --confirm taken off: it may sync, but nothing may
+    be published.
+
+    GH #147: the command may also carry `--store <name>` before --confirm, so
+    the check is on behaviour, not on where the flags sit."""
+    _approve_prep(ebay.shoot)
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    argv = _published_command(card)
+    assert "--confirm" in argv, f"the card's publish command lost --confirm: {argv}"
+
+    # without --confirm: a dry run, nothing goes live
+    assert _run_cli(monkeypatch, [a for a in argv if a != "--confirm"]) == 0
+    assert "DRY RUN" in capsys.readouterr().out
+    assert ebay.publishes() == [], "a publish reached eBay without --confirm"
+    assert ebay.writes(), "the dry run should still have synced the offer"
+
+    # as printed: publishes exactly once, at the price the card showed
+    assert _run_cli(monkeypatch, argv) == 0
+    assert "[LIVE] Published offer OFFER-1 -> listing 110011" in capsys.readouterr().out
+    assert len(ebay.publishes()) == 1
+    assert "$24.99" in card and ebay.offer_price == "24.99", \
+        "the price on the card is not the price sent to eBay"
+
+
+def test_the_card_command_refuses_photos_that_never_went_through_prep(ebay, monkeypatch):
+    """The card flags an un-prepped frame, and the command it prints must back
+    that up: with --confirm and no approved PREP, nothing reaches eBay at all."""
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md")
+    assert "[!] no PREP manifest" in card
+    code = _run_cli(monkeypatch, _published_command(card))
+    assert isinstance(code, str) and "PREP GATE" in code, code
+    assert ebay.writes() == [] and ebay.publishes() == []
+
+
+def test_the_card_for_another_store_publishes_to_that_store_only(ebay, monkeypatch):
+    """A card made for the junk store carries `--store junk`. Following it must
+    authenticate as junk, never as the default account."""
+    import ebay_client
+    _approve_prep(ebay.shoot)
+    creds = ebay_client.load_credentials(store="junk")
+    card, _ = ebay.list_edit.build_review_card(ebay.shoot / "draft.md", creds=creds)
+    argv = _published_command(card)
+    assert argv[argv.index("--store") + 1] == "junk", argv
+    assert argv[-1] == "--confirm"
+
+    assert _run_cli(monkeypatch, argv) == 0
+    assert len(ebay.publishes()) == 1
+    grants = [h["authorization"] for m, p, b, h in ebay.requests if p.endswith("/oauth2/token")]
+    junk = "Basic " + base64.b64encode(b"JUNK-APP:junk-cert").decode()
+    assert grants and set(grants) == {junk}, \
+        "publishing from a junk-store card used another account's credentials"
 
 
 if __name__ == "__main__":
+    import inspect
+    # tests that take fixtures need pytest; this runner can't supply them
     fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
+           if k.startswith("test_") and callable(v)
+           and not inspect.signature(v).parameters]
     bad = 0
     for fn in fns:
         try:
