@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 SA = pytest.importorskip("sync_actuals", reason="sync_actuals imports ebay_client")
 import consign  # noqa: E402
+import ledger_store  # noqa: E402
 import stores  # noqa: E402
 
 TODAY = date(2026, 12, 1)
@@ -36,6 +37,9 @@ def shop(tmp_path, monkeypatch):
     for mod in (SA, consign):
         monkeypatch.setattr(mod, "REPO", tmp_path)
         monkeypatch.setattr(mod, "INVENTORY", tmp_path / "inventory")
+    # local mode whatever config.yaml says: nothing here reaches a cloud ledger
+    monkeypatch.setattr(consign, "_ledgers", lambda: ledger_store.LedgerStore(
+        root=tmp_path, mirror=lambda p: None))
     (tmp_path / "inventory").mkdir()
     return tmp_path
 
@@ -1159,3 +1163,56 @@ def test_regenerate_adds_new_folders_keeps_typed_fields_and_dry_run_writes_nothi
             new["description"]) == ("INTAKE", "K99", "bin-03", "2", "1",
                                     "Brass mantel clock")
     assert len(list(d.glob("client_ledger.backup-*"))) == 1
+
+
+class _Cloud:
+    """The ledger Worker's GET / conditional PUT, in memory (GH #380)."""
+
+    def __init__(self):
+        self.objects, self.n = {}, 0
+
+    def put(self, key, data):
+        self.n += 1
+        self.objects[key] = (data, f'"e{self.n}"')
+
+    def __call__(self, method, path, body=None, headers=None):
+        key = path.split("/")[-1]
+        cur = self.objects.get(key)
+        if method == "GET":
+            return (ledger_store.Response(200, {"etag": cur[1]}, cur[0]) if cur
+                    else ledger_store.Response(404))
+        if (headers or {}).get("If-Match") != (cur[1] if cur else None):
+            return ledger_store.Response(412)
+        self.put(key, body)
+        return ledger_store.Response(200, {"etag": self.objects[key][1]})
+
+
+def test_cloud_mode_writes_through_ledger_store_and_never_loses_another_write(
+        shop, monkeypatch):
+    key = "client_ledger-K01.csv"
+    d = _ledger(shop, "CONSIGN-K01", [dict(item_id="K01-C001", client_code="K01",
+                                          description="Tin cup")])
+    cloud = _Cloud()
+    cloud.put(key, (d / "client_ledger.csv").read_bytes())
+    monkeypatch.setattr(consign, "_ledgers", lambda: ledger_store.LedgerStore(
+        root=shop, transport=cloud, mirror=lambda p: None))
+    roster = shop / "roster.csv"
+
+    def add(desc):
+        roster.write_text(f"description,bin\n{desc},03\n", encoding="utf-8")
+        return consign.main(["import", "CONSIGN-K01", str(roster), "--intake", "2099-03-01"])
+
+    def cloud_ids():
+        return [r["item_id"] for r in ledger_store.parse_csv(cloud.objects[key][0])[1]]
+
+    assert add("Wood spool") == 0
+    assert cloud_ids() == ["K01-C001", "K01-C002"]
+    assert (d / "client_ledger.csv").read_bytes() == cloud.objects[key][0]   # the cache
+    assert list(d.glob("client_ledger.backup-*")) == []      # history is the Worker's
+
+    # Another machine adds a row; this checkout's cache has not seen it.
+    other = cloud.objects[key][0] + b"K01-C003" + b"," * (len(consign.COLUMNS) - 1) + b"\r\n"
+    cloud.put(key, other)
+    with pytest.raises(SystemExit, match="changed since this run read it"):
+        add("Brass bell")
+    assert cloud.objects[key][0] == other

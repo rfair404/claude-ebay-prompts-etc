@@ -245,7 +245,42 @@ def read_rows(path: Path) -> list[Row]:
                 for row in r]
 
 
-def write_rows(path: Path, fields: list, rows: list[dict], backup: bool = False) -> None:
+def _ledgers():
+    """lib/ledger_store's store (GH #380): local mode unless config.yaml has
+    a `ledger_store:` block. Imported here, not at the top: ledger_store
+    reaches tools/consign.py, which imports this module."""
+    import ledger_store
+    try:
+        return ledger_store, ledger_store.open_store()
+    except ledger_store.LedgerStoreError as e:
+        raise SystemExit(f"[X] {e}") from None
+
+
+def _as_read(rows: list[dict]) -> list[dict]:
+    return [{k: (v or "").strip() for k, v in r.items() if k} for r in rows]
+
+
+def write_rows(path: Path, fields: list, rows: list[dict], backup: bool = False,
+               base: Optional[list[dict]] = None) -> None:
+    """Write a catalog, queue or client ledger. A client_ledger.csv in cloud
+    mode goes through ledger_store.update(), refused (nothing written) when
+    the stored ledger is no longer `base`, the rows as they were read."""
+    if path.name == LEDGER:
+        ls, st = _ledgers()
+        if st.cloud:
+            out = [{f: r.get(f, "") for f in fields} for r in rows]
+
+            def replace(current: list[dict]) -> list[dict]:
+                if base is not None and _as_read(current) != _as_read(base):
+                    raise ls.Conflict(f"{rel(path)} changed since it was read; "
+                                      f"nothing written. Run the command again.")
+                return out
+
+            try:
+                st.update(ls.CLIENT_LEDGER, replace, intake=path.parent)
+            except ls.LedgerStoreError as e:
+                raise SystemExit(f"[X] {e}") from None
+            return
     if backup and path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
@@ -352,11 +387,12 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
 
     if decision.action == "attach":
         row = decision.best.row
+        src = loaded[row.source]
+        base = [dict(r.data) for r in src]          # as read, before attach()
         changed = attach(row, cand, today)
         if changed:
-            src = loaded[row.source]
             write_rows(row.source, row.fields, [r.data for r in src],
-                       backup=row.is_ledger)
+                       backup=row.is_ledger, base=base)
         queue(catalog.parent, "ATTACHED", row.key, cand, decision.matches,
               "re-run IDENTIFY on this row", today)
         return Outcome("attached" if changed else "unchanged", row.key, decision)
