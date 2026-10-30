@@ -1112,3 +1112,50 @@ def _amt(x):
 
 def _base(x):
     return consign.money(x["base"])
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_regenerate_adds_new_folders_keeps_typed_fields_and_dry_run_writes_nothing(
+        shop, apply):
+    # (item folder under the intake, what regenerate does with it)
+    folders = [
+        ("K99-C001-lamp", "held"),             # the row below holds it
+        ("K99-C001b-lamp", "twin"),            # re-shoot of C001: reported, not added
+        ("bin-03/brass-clock", "added"),       # uncatalogued: new INTAKE row, next C###
+        ("raw-dump", "skipped"),               # no identify.txt: not an item
+    ]
+    typed = dict(item_id="K99-C001", client_code="K99", description="Brass lamp",
+                 state="HOLD", why="keep with its shade", buyout_price="12.00",
+                 ask="40.00", inventory_folder="inventory/CONSIGN-K99/K99-C001-lamp")
+    old_cols = consign.COLUMNS[:consign.COLUMNS.index("paid_to_client_date") + 1]
+    d = _ledger(shop, "CONSIGN-K99", [typed], header=old_cols)
+    for rel, kind in folders:
+        f = d / rel
+        f.mkdir(parents=True)
+        (f / "a.jpg").write_bytes(b"x")
+        (f / "b.jpg").write_bytes(b"x")
+        if kind != "skipped":
+            (f / "identify.txt").write_text("Title: Brass mantel clock\n", encoding="utf-8")
+    path = d / "client_ledger.csv"
+    before = path.read_bytes()
+
+    res = consign.regenerate_client("K99", apply=apply)
+
+    rel = lambda r: f"inventory/CONSIGN-K99/{r}"  # noqa: E731
+    assert res["added"] == [("K99-C002", rel(r)) for r, k in folders if k == "added"]
+    assert res["extra"] == [rel(r) for r, k in folders if k == "twin"]
+    assert res["missing"] == [] and res["rewritten"] == 1
+    if not apply:
+        assert path.read_bytes() == before
+        assert list(d.glob("client_ledger.backup-*")) == []
+        return
+    with path.open(encoding="utf-8") as fh:
+        assert next(csv.reader(fh)) == consign.COLUMNS
+    rows = {r["item_id"]: r for r in consign.read_ledger(path)[0]}
+    assert sorted(rows) == ["K99-C001", "K99-C002"]
+    assert {k: rows["K99-C001"][k] for k in typed} == typed
+    new = rows["K99-C002"]
+    assert (new["state"], new["client_code"], new["bin"], new["photos"], new["qty"],
+            new["description"]) == ("INTAKE", "K99", "bin-03", "2", "1",
+                                    "Brass mantel clock")
+    assert len(list(d.glob("client_ledger.backup-*"))) == 1

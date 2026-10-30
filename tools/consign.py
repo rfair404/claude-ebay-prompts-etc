@@ -1470,7 +1470,8 @@ def new_client_ledger(code: str) -> Path:
     d = INVENTORY / f"{INTAKE_PREFIX}{code}"
     if (d / LEDGER_NAME).exists():
         raise SystemExit(f"[X] {d.name} already has a {LEDGER_NAME}")
-    set_intake_client(d.mkdir(parents=True, exist_ok=True) or d, code)
+    d.mkdir(parents=True, exist_ok=True)
+    set_intake_client(d, code)
     write_ledger(d / LEDGER_NAME, [])
     return d / LEDGER_NAME
 
