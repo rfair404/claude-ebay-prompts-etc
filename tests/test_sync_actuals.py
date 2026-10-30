@@ -939,3 +939,80 @@ def test_fee_lines_carry_listing_and_sku_split_the_ad_fee_and_freeze_the_bid(sho
     assert [(r["bid_pct"], r["bid_pct_as_of"]) for r in got
             if r["fee_type"] == "AD" and r["line_item_id"] == "L1"] == [
         ("8.0", "2026-10-25T19:00:00+00:00")]
+
+
+# --------------------------------------------------------------------------
+# #380 P1.3: sales and unwound writes go through lib/ledger_store. Local mode
+# is covered by every test above; these pin the cloud path and the refusal.
+# --------------------------------------------------------------------------
+import ledger_store as LS  # noqa: E402
+
+
+class _Cloud:
+    """The Worker's GET and conditional PUT, nothing else."""
+
+    def __init__(self):
+        self.objects, self.n, self.puts = {}, 0, []
+
+    def __call__(self, method, path, body=None, headers=None):
+        key = path.strip("/").split("/")[1]
+        if method == "GET":
+            if key not in self.objects:
+                return LS.Response(404)
+            data, etag = self.objects[key]
+            return LS.Response(200, {"etag": etag}, data)
+        headers = headers or {}
+        etag = self.objects.get(key, (None, None))[1]
+        if headers.get("If-Match") != etag and not (
+                etag is None and headers.get("If-None-Match") == "*"):
+            return LS.Response(412)
+        self.n += 1
+        self.objects[key] = (body, f'"e{self.n}"')
+        self.puts.append((key, headers))
+        return LS.Response(200, {"etag": f'"e{self.n}"'}, b"ok")
+
+
+def _cloud_rows(cloud, key):
+    return LS.parse_csv(cloud.objects[key][0])[1]
+
+
+@pytest.fixture
+def cloud(tmp_path, monkeypatch):
+    fake = _Cloud()
+    _isolate(monkeypatch, tmp_path,
+             {**THREE_STORES, "ledger_store": {"url": "https://w.example", "token": "t"}})
+    monkeypatch.setattr(LS, "HttpTransport", lambda url, token: fake)
+    monkeypatch.setenv("EBAYBIZ_GDRIVE_AUTO", "0")
+    return fake
+
+
+def test_sales_ledger_merges_into_the_cloud_copy(tmp_path, cloud):
+    # Another machine already wrote a sale this checkout's cache never saw.
+    SA.write_sales_ledger([_sale_row("1-000", "elsewhere", "2026-07-01T00:00:00Z")])
+    (tmp_path / "sales_ledger.csv").unlink()
+
+    path = SA.write_sales_ledger([_sale_row("2-000", "here", "2026-08-01T00:00:00Z")])
+
+    assert {r["sku"] for r in _cloud_rows(cloud, "sales_ledger.csv")} == {"elsewhere", "here"}
+    assert cloud.puts[-1][1].get("If-Match"), "the second write must be conditional"
+    with path.open(encoding="utf-8") as f:
+        assert [r["sku"] for r in csv.DictReader(f)] == ["here", "elsewhere"]
+
+
+def test_unwound_orders_write_to_the_named_stores_cloud_key(cloud):
+    row = {**_sale_row("3-000", "sku-u", "2026-08-02T00:00:00Z"),
+           "original_gross": Decimal("20.00"), "refunded": Decimal("20.00"),
+           "ad_fee": None, "actual_postage": None}
+    SA.write_unwound_orders([row], "junk")
+
+    assert set(cloud.objects) == {"unwound_orders-junk.csv"}
+    (got,) = _cloud_rows(cloud, "unwound_orders-junk.csv")
+    assert (got["order_id"], got["refunded"]) == ("3-000", "20.00")
+
+
+def test_sales_write_refuses_when_cloud_state_lost_its_config(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    (tmp_path / LS.STATE_FILE).write_text("{}", encoding="utf-8")
+    with pytest.raises(LS.Refused):
+        SA.write_sales_ledger([_sale_row("1-000", "sku-a", "2026-08-01")])
+    assert not (tmp_path / "sales_ledger.csv").exists()
