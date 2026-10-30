@@ -238,6 +238,18 @@ def test_local_mode_writes_csv_with_backup():
     assert not (root / ls.STATE_FILE).exists()
 
 
+def test_local_backup_false_skips_backup_but_still_chains():
+    st, root, mirrored = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", add("B"), store="default", backup=False)
+    st.update("sales", add("C"), store="default", backup=False)
+    assert _ids((root / "sales_ledger.csv").read_bytes()) == ["A", "B", "C"]
+    assert list(root.glob("sales_ledger.backup-*.csv")) == []
+    assert [e["kind"] for e in _events(st)] == ["genesis", "change", "change"]
+    assert _rebuilt(st) == ["A", "B", "C"]
+    ok, clean, _ = st.verify()
+    assert ok and clean
+
+
 def _set_ledger_override(value):
     """Set (or with None, clear) $EBAYBIZ_LISTINGS_LEDGER; returns the old value."""
     old = os.environ.pop("EBAYBIZ_LISTINGS_LEDGER", None)
@@ -387,6 +399,29 @@ def test_bad_targets_table():
             raise AssertionError(f"expected {exc.__name__} for {args} {kw}")
         except exc:
             pass
+
+
+def test_local_mode_accepts_unlisted_keys():
+    st, root, _ = _store(None)
+    folder = root / "inventory" / "CONSIGN-K02"
+    folder.mkdir(parents=True)
+    assert "client_ledger-K02.csv" not in ls.LEDGERS
+    key, path = st.resolve("client_ledger", intake="CONSIGN-K02")
+    assert key == "client_ledger-K02.csv" and path == folder / "client_ledger.csv"
+    assert st.rows("client_ledger", intake="CONSIGN-K02") == []
+    st.update("client_ledger", add("K02-C001"), intake="CONSIGN-K02")
+    assert [r["order_id"] for r in st.rows("client_ledger", intake="CONSIGN-K02")] == ["K02-C001"]
+    assert [e["kind"] for e in _events(st, "client_ledger-K02.csv")] == ["genesis", "change"]
+
+
+def test_cloud_mode_rows_refuses_unlisted_keys():
+    st, root, _ = _store(FakeWorker())
+    (root / "inventory" / "CONSIGN-K02").mkdir(parents=True)
+    try:
+        st.rows("client_ledger", intake="CONSIGN-K02")
+        raise AssertionError("expected NotAllowed")
+    except ls.NotAllowed:
+        pass
 
 
 # --------------------------------------------------------------------------

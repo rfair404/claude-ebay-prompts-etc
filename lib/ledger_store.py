@@ -10,7 +10,8 @@ which this module keeps current as a cache.
 Two modes, picked by config.yaml:
 
   local   No `ledger_store:` block. Read the CSV, apply fn, back it up as
-          <stem>.backup-<stamp><suffix> (today's habit) and replace it
+          <stem>.backup-<stamp><suffix> (today's habit; update(backup=False)
+          skips it for writers that never kept one) and replace it
           atomically. Refused when .ledger_etags.json exists: this checkout
           has written to the cloud, and a local write would fork the record.
   cloud   `ledger_store: {url, token}`. GET the key from the allowlist Worker
@@ -49,8 +50,10 @@ restore, verify. Every command that writes to the cloud is a dry run without --a
 except push, whose only job is to upload writes already made.
 
 LEDGERS is the allowlist and must equal ALLOWED in cloud/ledger-worker/
-worker.js (tests/test_ledger_store.py checks). Adding a key means changing
-both and Russell redeploying the Worker. inventory_sheet (rebuilt from eBay)
+worker.js (tests/test_ledger_store.py checks). It is enforced in cloud mode
+only; local mode accepts any key (a new client such as K02 needs no change
+here until it goes to the cloud). Adding a cloud key means changing both and
+Russell redeploying the Worker. inventory_sheet (rebuilt from eBay)
 and clients.csv (client names) are deliberately not on it.
 """
 from __future__ import annotations
@@ -477,7 +480,8 @@ class LedgerStore:
     # -- names ------------------------------------------------------------
     def resolve(self, name: str, store: Optional[str] = None,
                 intake=None) -> tuple[str, Path]:
-        """(allowlisted key, local CSV path) for an update() target."""
+        """(key, local CSV path) for an update() target. The key must be on
+        the LEDGERS allowlist in cloud mode only."""
         if name == CLIENT_LEDGER:
             if not intake:
                 raise LedgerStoreError("client_ledger needs intake= (the CONSIGN-* folder)")
@@ -497,7 +501,7 @@ class LedgerStore:
         else:
             raise LedgerStoreError(
                 f"unknown ledger {name!r} — one of {', '.join([*STORE_LEDGERS, CLIENT_LEDGER])}")
-        if key not in LEDGERS:
+        if self.cloud and key not in LEDGERS:
             raise NotAllowed(f"{key} is not on the ledger allowlist (lib/ledger_store.LEDGERS)")
         return key, path
 
@@ -567,10 +571,13 @@ class LedgerStore:
         return ok, clean, out
 
     # -- the write API ----------------------------------------------------
-    def update(self, name: str, fn, *, store: Optional[str] = None, intake=None) -> list[dict]:
+    def update(self, name: str, fn, *, store: Optional[str] = None, intake=None,
+               backup: bool = True) -> list[dict]:
+        """Apply fn(rows) -> rows. backup=False skips the local-mode
+        .backup-* copy (the event log is still appended)."""
         key, path = self.resolve(name, store, intake)
         if not self.cloud:
-            return self._local(key, path, fn)
+            return self._local(key, path, fn, backup=backup)
         if key in self.state()["pending"]:
             try:
                 self._push_key(key, path)
@@ -613,10 +620,10 @@ class LedgerStore:
         raise Conflict(f"{key}: still conflicting after {MAX_ATTEMPTS} attempts; "
                        f"nothing written — run it again")
 
-    def _local(self, key: str, path: Path, fn) -> list[dict]:
+    def _local(self, key: str, path: Path, fn, *, backup: bool = True) -> list[dict]:
         fields, rows = _read(path)
         new = _apply(fn, rows)
-        if path.exists():
+        if backup and path.exists():
             stamp = time.strftime("%Y%m%d-%H%M%S")
             path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
                 path.read_bytes())
@@ -819,9 +826,10 @@ def open_store(cfg: Optional[dict] = None, *, root: Optional[Path] = None,
 
 
 def update(name: str, fn: Callable[[list[dict]], list[dict]], *,
-           store: Optional[str] = None, intake=None) -> list[dict]:
-    """Apply `fn(rows) -> rows` to one ledger and return the rows written."""
-    return open_store().update(name, fn, store=store, intake=intake)
+           store: Optional[str] = None, intake=None, backup: bool = True) -> list[dict]:
+    """Apply `fn(rows) -> rows` to one ledger and return the rows written.
+    backup=False skips the local .backup-* copy, for writers that never made one."""
+    return open_store().update(name, fn, store=store, intake=intake, backup=backup)
 
 
 def rows(name: str, store: Optional[str] = None, *, intake=None, **eq) -> list[dict]:
