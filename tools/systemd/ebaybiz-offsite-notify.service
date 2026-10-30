@@ -1,0 +1,7 @@
+# Started by ebaybiz-offsite.service when it fails. Best effort desktop alert.
+[Unit]
+Description=EBAYBIZ: tell the desktop the offsite push failed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env notify-send -u critical -a EBAYBIZ "EBAYBIZ: daily R2 push failed" "Run: journalctl --user -u ebaybiz-offsite"

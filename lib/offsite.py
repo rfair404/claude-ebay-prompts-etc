@@ -5,7 +5,7 @@ ledger, photo and draft.md with it; there was no second copy. This module
 keeps one in an S3-compatible bucket (Cloudflare R2 by default: 10 GB free,
 then $0.015/GB-month, no egress fees — Backblaze B2 works the same way).
 
-    python -m lib.cli offsite check            # config + bucket reachable?
+    python -m lib.cli offsite check            # is the R2 copy fresh? (--probe: bucket round-trip too)
     python -m lib.cli offsite status           # what push/pull would do
     python -m lib.cli offsite push             # dry run
     python -m lib.cli offsite push --apply     # upload new + changed files
@@ -639,6 +639,52 @@ def record_status(root: Path, target: str, ok: bool, error: str = "", *,
         print(f"offsite: status not saved ({e})", file=sys.stderr)
 
 
+LEDGER_GRACE = dt.timedelta(minutes=15)   # a write this fresh may still be pushing
+FULL_PUSH_MAX_AGE = dt.timedelta(hours=36)
+
+
+def freshness(root: Path, now: Optional[dt.datetime] = None) -> list[str]:
+    """Problems with the R2 copy, read from STATUS_FILE (no network): the last
+    push failed, a ledger is newer than the last good push by more than
+    LEDGER_GRACE, or the last full push is older than FULL_PUSH_MAX_AGE.
+    An empty list means healthy."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        t = json.loads((root / STATUS_FILE).read_text(encoding="utf-8")).get("r2", {})
+    except (OSError, ValueError):
+        t = {}
+    if not t:
+        return [f"no push recorded yet ({STATUS_FILE} missing or empty)"]
+
+    def when(k):
+        try:
+            return dt.datetime.fromisoformat(t[k])
+        except (KeyError, ValueError):
+            return None
+    last_ok, last_full, last_fail = when("last_ok"), when("last_full_ok"), when("last_failure")
+    problems = []
+    if last_fail and (not last_ok or last_fail > last_ok):
+        problems.append(f"last push failed {last_fail:%Y-%m-%d %H:%M}Z: {t.get('error', '')}")
+    if not last_full:
+        problems.append("no full push recorded")
+    elif now - last_full > FULL_PUSH_MAX_AGE:
+        hrs = (now - last_full).total_seconds() / 3600
+        problems.append(f"last full push was {hrs:.0f} h ago (limit {FULL_PUSH_MAX_AGE.total_seconds() / 3600:.0f})")
+    if last_ok:
+        newest = None
+        for rel in local_files(root, LEDGER_INCLUDE):
+            try:
+                m = dt.datetime.fromtimestamp((root / rel).stat().st_mtime, dt.timezone.utc)
+            except OSError:
+                continue
+            if newest is None or m > newest[0]:
+                newest = (m, rel)
+        if newest and newest[0] - last_ok > LEDGER_GRACE:
+            problems.append(f"{newest[1]} changed {newest[0]:%Y-%m-%d %H:%M}Z, after the "
+                            f"last good push ({last_ok:%Y-%m-%d %H:%M}Z)")
+    return problems
+
+
 def prunable(remote, prefix: str, include: Iterable[str]) -> list[str]:
     """Bucket keys under data/ and history/ that the rules no longer select."""
     include = tuple(include)
@@ -754,10 +800,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--expires-days", type=float, default=7,
                     help="share: link lifetime in days (max 7)")
     ap.add_argument("--root", type=Path, help="data root (default: the main checkout)")
+    ap.add_argument("--probe", action="store_true",
+                    help="check: also do a write/read round-trip against the bucket")
     a = ap.parse_args(argv)
     if (a.action == "share") != bool(a.files):
         ap.error("share takes one or more files; the other actions take none")
 
+    if a.action == "check":
+        root = (a.root or data_root()).resolve()
+        problems = freshness(root)
+        for p in problems:
+            print(f"offsite: STALE: {p}", file=sys.stderr)
+        if not problems:
+            print("ok — R2 copy is fresh (last push good, no unpushed ledger, "
+                  "full push under 36 h old)")
+        if not a.probe:
+            return 1 if problems else 0
+        rc = 1 if problems else 0
+    else:
+        rc = 0
     try:
         cfg = load_offsite_config()
         remote = S3Remote(cfg)
@@ -772,7 +833,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             n = remote.check()
             print(f"ok — {cfg.endpoint}/{cfg.bucket}: write/read round-trip passed, "
                   f"{n} data object(s) stored")
-            return 0
+            return rc
 
         if a.action == "prune":
             keys = prunable(remote, cfg.prefix, cfg.include)
