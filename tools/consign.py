@@ -4,6 +4,7 @@ the state of each item, what it is worth and what we owe.
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
     python -m lib.cli consign import CONSIGN-K01 -             # CSV/TSV on stdin
+    python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--apply]
     python -m lib.cli consign sync                             # dry run, every ledger
     python -m lib.cli consign sync CONSIGN-K01 --apply
     python -m lib.cli consign template                         # the standard empty ledger
@@ -1483,6 +1484,125 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
 
 
 # --------------------------------------------------------------------------- #
+# split
+# --------------------------------------------------------------------------- #
+# What a split-out row takes from its parent ledger row, and from the catalog
+# row that describes it. Money, state and eBay fields are never copied: the
+# new row starts at INTAKE with qty 1.
+SPLIT_FROM_PARENT = ("bin", "intake", "client_code")
+SPLIT_FROM_CATALOG = ("description", "photos", "inventory_folder")
+
+
+def catalog_row(ref: str, d: Path) -> tuple[str, dict]:
+    """`<path>/catalog.csv#NN` -> (its inventory/... key, the row). The path
+    may be absolute, or relative to the repo, to inventory/, to the intake
+    folder `d` or to here; NN matches the row's `no` (03 and 3 alike)."""
+    path, sep, no = ref.rpartition("#")
+    if not sep or not path or not no.strip().isdigit():
+        raise SystemExit(f"[X] --take {ref!r}: want <path>/catalog.csv#NN")
+    p = Path(path)
+    for c in (intake_dir(path), d / p, p):
+        if c.is_file():
+            p = c
+            break
+    else:
+        raise SystemExit(f"[X] --take {ref!r}: no such file {path}")
+    for r in dupe_guard.read_rows(p):
+        if (r.data.get("no") or "").strip().isdigit() and int(r.data["no"]) == int(no):
+            if not r.data.get("description"):
+                raise SystemExit(f"[X] --take {ref!r}: that catalog row has no description")
+            return r.key, r.data
+    raise SystemExit(f"[X] --take {ref!r}: no row {no} in {path}")
+
+
+def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
+               apply: bool = False, today: Optional[str] = None) -> list[dict]:
+    """Split objects out of one ledger row: one new row per catalog row in
+    `takes`, numbered after every row the client has, and the parent's qty
+    lowered by one for each. Refused, nothing written, when the parent is past
+    INTAKE or would be left with qty below 1, or when a catalog row's folder or
+    a frame of it is already on one of the client's rows. Written only with
+    `apply`; each new row then gets a SPLIT line in dupe_queue.csv. Returns
+    the new rows."""
+    today = today or date.today().isoformat()
+    code = intake_client(d)
+    if not code:
+        raise SystemExit(f"[X] {d.name} has no `client:`")
+    path = d / LEDGER_NAME
+    if not path.exists():
+        raise SystemExit(f"[X] no {LEDGER_NAME} in {d}")
+    if not takes:
+        raise SystemExit("[X] name at least one --take <catalog.csv#NN>")
+    rows, unknown = read_ledger(path)
+    if unknown:
+        raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    base = [dict(r) for r in rows]
+    migrate(rows, d, code)
+    parent_id = canonical_id(parent_id, code)
+    parent = next((r for r in rows if r["item_id"] == parent_id), None)
+    if parent is None:
+        raise SystemExit(f"[X] no row {parent_id} in {d.name}/{LEDGER_NAME}")
+    state = (parent["state"] or "INTAKE").upper()
+    if state != "INTAKE":
+        raise SystemExit(f"[X] {parent_id} is {state}: only an INTAKE row can be split")
+    qty_s = parent["qty"] or "1"
+    if not qty_s.isdigit():
+        raise SystemExit(f"[X] {parent_id} qty {parent['qty']!r} is not a whole number")
+    left = int(qty_s) - len(takes)
+    if left < 1:
+        raise SystemExit(f"[X] {parent_id} has qty {qty_s}: splitting out {len(takes)} "
+                         f"would leave {left}; it must keep at least 1")
+    refs = [catalog_row(t, d) for t in takes]
+    keys = [k for k, _ in refs]
+    if len(set(keys)) != len(keys):
+        raise SystemExit("[X] the same catalog row is taken twice")
+    everyone = list(rows)
+    for o in client_dirs(code):
+        if o.resolve() != d.resolve():
+            others = read_ledger(o / LEDGER_NAME)[0]
+            migrate(others, o, code)
+            everyone += others
+    # A catalog row already on record (its folder, or one of its frames, on
+    # any of the client's rows) was split out before: refuse a second row.
+    for key, cat in refs:
+        folder = norm_folder(cat.get("inventory_folder", ""))
+        shots = dupe_guard.frames(cat.get("photos", ""))
+        for r in everyone:
+            if folder and norm_folder(r["inventory_folder"]) == folder:
+                raise SystemExit(f"[X] --take {key}: its folder {folder} is already "
+                                 f"{r['item_id']}'s; nothing written")
+            shared = shots & dupe_guard.frames(r["photos"])
+            if shared:
+                raise SystemExit(f"[X] --take {key}: frame(s) {', '.join(sorted(shared))} "
+                                 f"already on {r['item_id']}; nothing written")
+    n = next_id(everyone)
+    new = []
+    for key, cat in refs:
+        rec = {c: "" for c in COLUMNS}
+        for c in SPLIT_FROM_PARENT:
+            rec[c] = parent[c]
+        for c in SPLIT_FROM_CATALOG:
+            rec[c] = cat.get(c, "")
+        rec["inventory_folder"] = norm_folder(rec["inventory_folder"])
+        rec["item_id"] = f"{code}-C{n:03d}"
+        rec["client_code"] = rec["client_code"] or code
+        rec["qty"] = "1"
+        rec["state"] = "INTAKE"
+        rec["why"] = f"split from {parent_id} {today}: {reason or key}"
+        new.append(rec)
+        n += 1
+    ids = ", ".join(r["item_id"] for r in new)
+    parent["qty"] = str(left)
+    parent["why"] = NOTE_SEP.join(p for p in (parent["why"], f"split out {ids}") if p)
+    if apply:
+        write_ledger(path, rows + new, base)
+        for rec in new:
+            dupe_guard.queue(d, "SPLIT", rec["item_id"], rec, [],
+                             f"split from {parent_id}", today)
+    return new
+
+
+# --------------------------------------------------------------------------- #
 # template and regenerate
 # --------------------------------------------------------------------------- #
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".heic", ".nef", ".dng", ".orf", ".raw")
@@ -2194,6 +2314,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--new", default="", metavar="REASON",
                    help="add every row, never attach one to a row already on "
                         "record; the reason goes in its `why`")
+    p = sub.add_parser("split", help="split objects out of one INTAKE row into new "
+                                     "rows, one per catalog row")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
+    p.add_argument("parent", help="the row to split, e.g. K01-C061")
+    p.add_argument("--take", action="append", required=True, metavar="CATALOG.CSV#NN",
+                   help="the catalog row describing one object split out (repeat)")
+    p.add_argument("--reason", default="",
+                   help="goes in each new row's `why` (default: the catalog row)")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
@@ -2235,6 +2364,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.client and args.client not in load_registry():
             print(f"  ! {args.client} is not in {SA._rel(registry_path())} yet: add a row "
                   f"(split defaults to 0.5 until then)")
+        return 0
+    if args.cmd == "split":
+        d = intake_dir(args.intake)
+        new = split_item(d, args.parent, args.take, args.reason, apply=args.apply)
+        for r in new:
+            print(f"  + {r['item_id']}  {r['description']}  ({r['why']})")
+        if not args.apply:
+            print(f"[DRY RUN] {len(new)} row(s) would be split out; nothing written. "
+                  f"Re-run with --apply to write {LEDGER_NAME} (backup first).")
+        else:
+            print(f"[OK] {d.name}: split {len(new)} row(s) out of {args.parent}; "
+                  f"SPLIT line(s) in {dupe_guard.QUEUE}")
         return 0
     if args.cmd == "template":
         print(f"[OK] wrote {write_template()}")

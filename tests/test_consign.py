@@ -1216,3 +1216,127 @@ def test_cloud_mode_writes_through_ledger_store_and_never_loses_another_write(
     with pytest.raises(SystemExit, match="changed since this run read it"):
         add("Brass bell")
     assert cloud.objects[key][0] == other
+
+
+# --------------------------------------------------------------------------- #
+# split
+# --------------------------------------------------------------------------- #
+CAT_FIELDS = ["no", "bin", "description", "qty", "marks", "condition", "photos",
+              "inventory_folder", "why"]
+
+
+def _split_shop(shop, parent_qty="3", parent_state="INTAKE"):
+    """K99's ledger with a bin row C061 (and C070 in an older intake), plus
+    the bin's catalog.csv describing two objects in it."""
+    d = _ledger(shop, "CONSIGN-K99", [
+        _row(item_id="K99-C061", bin="07", intake="2099-01-05", client_code="K99",
+             description="Box of brass", qty=parent_qty, state=parent_state,
+             why="bin walk-through", photos="P0001.JPG", est_low="10.00",
+             est_high="20.00", ask="25.00", store="junk", sku="jjjj0061",
+             listing_id="111", inventory_folder="inventory/CONSIGN-K99/bin-07")])
+    _ledger(shop, "CONSIGN-20990101", [_row(item_id="K99-C070")], "client: K99\n")
+    lot = shop / "inventory" / "tg7-20990105-1000"
+    lot.mkdir()
+    _csv(lot / "catalog.csv", CAT_FIELDS, [
+        dict(no="01", bin="99", description="Brass bell", qty="1",
+             photos="P0002.JPG", inventory_folder="tg7-20990105-1000/brass-bell",
+             why="own shots"),
+        dict(no="02", description="Brass candlestick", photos="P0003.JPG;P0004.JPG",
+             inventory_folder="inventory/tg7-20990105-1000/brass-candlestick")])
+    return d, lot / "catalog.csv"
+
+
+def test_split_adds_a_row_per_take_and_lowers_the_parent(shop, capsys):
+    d, cat = _split_shop(shop)
+    assert consign.main(["split", "CONSIGN-K99", "K99-C061", "--take", f"{cat}#01",
+                         "--take", "inventory/tg7-20990105-1000/catalog.csv#2",
+                         "--reason", "own shots", "--apply"]) == 0
+    rows = consign.read_ledger(d / "client_ledger.csv")[0]
+    parent, bell, stick = rows
+    today = date.today().isoformat()
+    assert (parent["qty"], parent["description"], parent["state"]) == ("1", "Box of brass",
+                                                                       "INTAKE")
+    assert parent["why"] == "bin walk-through | split out K99-C071, K99-C072"
+    assert parent["ask"] == "25.00" and parent["sku"] == "jjjj0061"
+    for r, n, desc, photos, folder in (
+            (bell, "K99-C071", "Brass bell", "P0002.JPG",
+             "inventory/tg7-20990105-1000/brass-bell"),
+            (stick, "K99-C072", "Brass candlestick", "P0003.JPG;P0004.JPG",
+             "inventory/tg7-20990105-1000/brass-candlestick")):
+        assert (r["item_id"], r["description"], r["photos"], r["inventory_folder"]) == (
+            n, desc, photos, folder)
+        assert (r["bin"], r["intake"], r["client_code"], r["state"], r["qty"]) == (
+            "07", "2099-01-05", "K99", "INTAKE", "1")
+        assert r["why"] == f"split from K99-C061 {today}: own shots"
+        for c in consign.MONEY + ("store", "sku", "listing_id", "order_id", "sold_at",
+                                  "state_note", "lot_id", "settlement_id"):
+            assert r[c] == "", c
+    assert len(list(d.glob("client_ledger.backup-*.csv"))) == 1
+    with (d / "dupe_queue.csv").open(newline="", encoding="utf-8") as f:
+        q = list(csv.DictReader(f))
+    assert [(x["action"], x["target"], x["candidate"], x["note"]) for x in q] == [
+        ("SPLIT", "K99-C071", "Brass bell", "split from K99-C061"),
+        ("SPLIT", "K99-C072", "Brass candlestick", "split from K99-C061")]
+    assert "K99-C071" in capsys.readouterr().out
+
+
+def test_split_reason_defaults_to_the_catalog_row(shop):
+    d, cat = _split_shop(shop)
+    new = consign.split_item(d, "C061", [f"{cat}#1"], apply=True, today="2099-02-01")
+    assert new[0]["why"] == ("split from K99-C061 2099-02-01: "
+                             "inventory/tg7-20990105-1000/catalog.csv#01")
+
+
+def test_split_without_apply_writes_nothing(shop, capsys):
+    d, cat = _split_shop(shop)
+    before = (d / "client_ledger.csv").read_bytes()
+    assert consign.main(["split", "CONSIGN-K99", "K99-C061", "--take", f"{cat}#01"]) == 0
+    assert "K99-C071" in capsys.readouterr().out
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not list(d.glob("client_ledger.backup-*.csv"))
+    assert not (d / "dupe_queue.csv").exists()
+
+
+@pytest.mark.parametrize("qty,state,takes,want", [
+    ("3", "SHOT", ["#01"], "is SHOT: only an INTAKE row"),
+    ("3", "LISTED", ["#01"], "is LISTED"),
+    ("2", "INTAKE", ["#01", "#02"], "would leave 0"),
+    ("", "INTAKE", ["#01"], "would leave 0"),
+    ("3", "INTAKE", ["#01", "#1"], "taken twice"),
+    ("3", "INTAKE", ["#09"], "no row 09"),
+    ("3", "INTAKE", ["#xx"], "want <path>/catalog.csv#NN"),
+])
+def test_split_refuses_and_writes_nothing(shop, qty, state, takes, want):
+    d, cat = _split_shop(shop, parent_qty=qty, parent_state=state)
+    before = (d / "client_ledger.csv").read_bytes()
+    with pytest.raises(SystemExit, match=want):
+        consign.split_item(d, "K99-C061", [f"{cat}{t}" for t in takes], apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not (d / "dupe_queue.csv").exists()
+
+
+def test_split_refuses_an_unknown_parent(shop):
+    d, cat = _split_shop(shop)
+    with pytest.raises(SystemExit, match="no row K99-C999"):
+        consign.split_item(d, "K99-C999", [f"{cat}#01"], apply=True)
+
+
+def test_split_refuses_a_catalog_row_already_on_record(shop):
+    # Running the same --take twice must not make a second row for it.
+    d, cat = _split_shop(shop)
+    consign.split_item(d, "K99-C061", [f"{cat}#01"], apply=True)
+    after = (d / "client_ledger.csv").read_bytes()
+    with pytest.raises(SystemExit, match="already K99-C071's; nothing written"):
+        consign.split_item(d, "K99-C061", [f"{cat}#01"], apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == after
+
+
+def test_split_refuses_a_frame_already_on_another_ledger(shop):
+    d, cat = _split_shop(shop)
+    other = shop / "inventory" / "CONSIGN-20990101" / "client_ledger.csv"
+    _csv(other, consign.COLUMNS, [_row(item_id="K99-C070", photos="P0003.JPG")])
+    before = (d / "client_ledger.csv").read_bytes()
+    with pytest.raises(SystemExit, match="P0003 already on K99-C070"):
+        consign.split_item(d, "K99-C061", [f"{cat}#02"], apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not (d / "dupe_queue.csv").exists()
