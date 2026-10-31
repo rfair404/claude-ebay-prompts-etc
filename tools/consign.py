@@ -4,7 +4,8 @@ the state of each item, what it is worth and what we owe.
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
     python -m lib.cli consign import CONSIGN-K01 -             # CSV/TSV on stdin
-    python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--apply]
+    python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--retire] [--apply]
+    python -m lib.cli consign describe CONSIGN-K01 K01-C127 [--text "..."] [--apply]
     python -m lib.cli consign sync                             # dry run, every ledger
     python -m lib.cli consign sync CONSIGN-K01 --apply
     python -m lib.cli consign template                         # the standard empty ledger
@@ -89,7 +90,8 @@ Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
 client share; its lot-mates follow its state with blank money fields.
 
-There is no `set` command: edit the CSV by hand, and `sync` validates it.
+There is no general `set` command (`describe` sets a description only): edit
+the CSV by hand, and `sync` validates it.
 """
 from __future__ import annotations
 
@@ -1491,6 +1493,12 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
 # new row starts at INTAKE with qty 1.
 SPLIT_FROM_PARENT = ("bin", "intake", "client_code")
 SPLIT_FROM_CATALOG = ("description", "photos", "inventory_folder")
+# A parent can be split while it is INTAKE or SHOT and none of these is set:
+# nothing listed, sold or paid on it yet.
+SPLIT_STATES = ("INTAKE", "SHOT")
+SPLIT_BLANK = ("sku", "listing_id", "order_id", "sold_at", "placed_at", "item_price",
+               "gross", "net", "client_share", "buyout_price", "settlement_id",
+               "paid_to_client_date")
 
 
 def catalog_row(ref: str, d: Path) -> tuple[str, dict]:
@@ -1515,15 +1523,30 @@ def catalog_row(ref: str, d: Path) -> tuple[str, dict]:
     raise SystemExit(f"[X] --take {ref!r}: no row {no} in {path}")
 
 
+def _drop_frames(photos: str, gone: set[str]) -> str:
+    """`photos` without the frames in `gone`, the rest space-separated."""
+    return " ".join(t for t in re.split(r"[\s;,]+", photos or "")
+                    if t and not dupe_guard.frames(t) & gone)
+
+
 def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
-               apply: bool = False, today: Optional[str] = None) -> list[dict]:
+               retire: bool = False, apply: bool = False,
+               today: Optional[str] = None) -> list[dict]:
     """Split objects out of one ledger row: one new row per catalog row in
-    `takes`, numbered after every row the client has, and the parent's qty
-    lowered by one for each. Refused, nothing written, when the parent is past
-    INTAKE or would be left with qty below 1, or when a catalog row's folder or
-    a frame of it is already on one of the client's rows. Written only with
-    `apply`; each new row then gets a SPLIT line in dupe_queue.csv. Returns
-    the new rows."""
+    `takes`, numbered after every row the client has. The parent's qty is
+    lowered by one for each, never below 1: what is left is one lot. A take's
+    frames that are on the parent move from its photos to the new row. With
+    `retire` every frame of the parent must be taken, and it becomes DISPOSED
+    with a state_note naming the new rows.
+
+    Refused, nothing written, unless the parent is an INTAKE or SHOT row with
+    every SPLIT_BLANK field empty (sync makes any row with a folder SHOT; a
+    DRAFTED parent's draft.md describes the whole box); when a catalog row's
+    folder, or a frame of it, is on one of the client's rows other than the
+    parent, or a frame is on two takes; when the parent would keep no frames
+    and is not retired; or when it is retired and would keep some. Written
+    only with `apply`; each new row then gets a SPLIT line in dupe_queue.csv.
+    Returns the new rows."""
     today = today or date.today().isoformat()
     code = intake_client(d)
     if not code:
@@ -1543,15 +1566,17 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
     if parent is None:
         raise SystemExit(f"[X] no row {parent_id} in {d.name}/{LEDGER_NAME}")
     state = (parent["state"] or "INTAKE").upper()
-    if state != "INTAKE":
-        raise SystemExit(f"[X] {parent_id} is {state}: only an INTAKE row can be split")
+    if state not in SPLIT_STATES:
+        raise SystemExit(f"[X] {parent_id} is {state}: only an INTAKE or SHOT row "
+                         f"can be split")
+    used = next((c for c in SPLIT_BLANK if parent[c]), "")
+    if used:
+        raise SystemExit(f"[X] {parent_id} has {used} set: only a row with no listing, "
+                         f"sale or payout can be split")
     qty_s = parent["qty"] or "1"
     if not qty_s.isdigit():
         raise SystemExit(f"[X] {parent_id} qty {parent['qty']!r} is not a whole number")
-    left = int(qty_s) - len(takes)
-    if left < 1:
-        raise SystemExit(f"[X] {parent_id} has qty {qty_s}: splitting out {len(takes)} "
-                         f"would leave {left}; it must keep at least 1")
+    left = max(1, int(qty_s) - len(takes))
     refs = [catalog_row(t, d) for t in takes]
     keys = [k for k, _ in refs]
     if len(set(keys)) != len(keys):
@@ -1564,17 +1589,37 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
             everyone += others
     # A catalog row already on record (its folder, or one of its frames, on
     # any of the client's rows) was split out before: refuse a second row.
+    # The parent's own frames are what is being split out, so those move.
+    parent_frames = dupe_guard.frames(parent["photos"])
+    moved: set[str] = set()
+    taken: dict[str, str] = {}
     for key, cat in refs:
         folder = norm_folder(cat.get("inventory_folder", ""))
         shots = dupe_guard.frames(cat.get("photos", ""))
+        twice = sorted(shots & taken.keys())
+        if twice:
+            raise SystemExit(f"[X] --take {key}: frame(s) {', '.join(twice)} also on "
+                             f"--take {taken[twice[0]]}; nothing written")
+        taken.update((f, key) for f in shots)
         for r in everyone:
             if folder and norm_folder(r["inventory_folder"]) == folder:
                 raise SystemExit(f"[X] --take {key}: its folder {folder} is already "
                                  f"{r['item_id']}'s; nothing written")
+            if r is parent:
+                continue
             shared = shots & dupe_guard.frames(r["photos"])
             if shared:
                 raise SystemExit(f"[X] --take {key}: frame(s) {', '.join(sorted(shared))} "
                                  f"already on {r['item_id']}; nothing written")
+        moved |= shots & parent_frames
+    kept = parent_frames - moved
+    if retire and kept:
+        raise SystemExit(f"[X] {parent_id} still has frame(s) {', '.join(sorted(kept))}: "
+                         f"take them too, or drop --retire and it keeps them as one "
+                         f"lot; nothing written")
+    if not retire and parent_frames and not kept:
+        raise SystemExit(f"[X] every frame of {parent_id} is taken: pass --retire to "
+                         f"retire it; nothing written")
     n = next_id(everyone)
     new = []
     for key, cat in refs:
@@ -1592,14 +1637,86 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
         new.append(rec)
         n += 1
     ids = ", ".join(r["item_id"] for r in new)
-    parent["qty"] = str(left)
-    parent["why"] = NOTE_SEP.join(p for p in (parent["why"], f"split out {ids}") if p)
+    note = f"split out {ids}" + (f", moved {len(moved)} frame(s)" if moved else "")
+    parent["why"] = NOTE_SEP.join(p for p in (parent["why"], note) if p)
+    if moved:
+        parent["photos"] = _drop_frames(parent["photos"], moved)
+    if retire:
+        parent["state"] = "DISPOSED"
+        parent["state_note"] = NOTE_SEP.join(
+            p for p in (parent["state_note"], f"retired {today}: split into {ids}") if p)
+    else:
+        parent["qty"] = str(left)
     if apply:
         write_ledger(path, rows + new, base)
         for rec in new:
             dupe_guard.queue(d, "SPLIT", rec["item_id"], rec, [],
                              f"split from {parent_id}", today)
     return new
+
+
+# --------------------------------------------------------------------------- #
+# describe
+# --------------------------------------------------------------------------- #
+_ITEM_BLOCK_RE = re.compile(r"^-{3}\s*Item\s+\d+\s*-{3}\s*$", re.M)
+_FIELD_RE = r"^\s*{}\s*:\s*(.+?)\s*$"
+
+
+def identify_description(text: str) -> str:
+    """A ledger description from identify.txt (prompts/identify.md): the one
+    item's Type, with its Brand in front when Type doesn't name it. Refused
+    when the file holds no item, or more than one, or the item has no Type."""
+    blocks = _ITEM_BLOCK_RE.split(text)[1:]
+    if len(blocks) != 1:
+        raise SystemExit(f"[X] identify.txt has {len(blocks)} items (want 1): pass --text")
+    block = blocks[0]
+    typ = re.search(_FIELD_RE.format("Type"), block, re.M | re.I)
+    if not typ:
+        raise SystemExit("[X] identify.txt's item has no `Type:` line: pass --text")
+    desc = typ.group(1)
+    brand = re.search(_FIELD_RE.format("Brand"), block, re.M | re.I)
+    name = re.sub(r"\s*[\[(].*?[\])]", "", brand.group(1)).strip() if brand else ""
+    if name and name.lower() != "unknown" and name.lower() not in desc.lower():
+        desc = f"{name} {desc}"
+    return desc
+
+
+def describe_item(d: Path, item_id: str, *, text: str = "", source: str = "",
+                  apply: bool = False) -> tuple[str, str]:
+    """Set one row's description, and nothing else, from `text`, or else from
+    identify.txt (`source`: the file or its folder; default the row's
+    inventory_folder). Written only with `apply` (backup first). Returns
+    (old, new)."""
+    code = intake_client(d)
+    path = d / LEDGER_NAME
+    if not path.exists():
+        raise SystemExit(f"[X] no {LEDGER_NAME} in {d}")
+    rows, unknown = read_ledger(path)
+    if unknown:
+        raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    base = [dict(r) for r in rows]
+    item_id = canonical_id(item_id, code)
+    row = next((r for r in rows if canonical_id(r["item_id"], code) == item_id), None)
+    if row is None:
+        raise SystemExit(f"[X] no row {item_id} in {d.name}/{LEDGER_NAME}")
+    new = " ".join(text.split())
+    if not new:
+        if source:
+            ident = intake_dir(source)
+        elif row["inventory_folder"]:
+            ident = REPO / norm_folder(row["inventory_folder"])
+        else:
+            raise SystemExit(f"[X] {item_id} has no inventory_folder: pass --from or --text")
+        if ident.is_dir():
+            ident = ident / "identify.txt"
+        if not ident.is_file():
+            raise SystemExit(f"[X] no {ident}")
+        new = identify_description(ident.read_text(encoding="utf-8", errors="ignore"))
+    old = row["description"]
+    if apply and new != old:
+        row["description"] = new
+        write_ledger(path, rows, base)
+    return old, new
 
 
 # --------------------------------------------------------------------------- #
@@ -2314,7 +2431,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--new", default="", metavar="REASON",
                    help="add every row, never attach one to a row already on "
                         "record; the reason goes in its `why`")
-    p = sub.add_parser("split", help="split objects out of one INTAKE row into new "
+    p = sub.add_parser("split", help="split objects out of one INTAKE or SHOT row into new "
                                      "rows, one per catalog row")
     p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
     p.add_argument("parent", help="the row to split, e.g. K01-C061")
@@ -2322,6 +2439,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="the catalog row describing one object split out (repeat)")
     p.add_argument("--reason", default="",
                    help="goes in each new row's `why` (default: the catalog row)")
+    p.add_argument("--retire", action="store_true",
+                   help="every frame of the parent is taken: make it DISPOSED, its "
+                        "state_note naming the new rows (default: it keeps one lot)")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
+    p = sub.add_parser("describe", help="set one row's description from its "
+                                        "identify.txt, or from --text")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
+    p.add_argument("item", help="the row, e.g. K01-C127")
+    src = p.add_mutually_exclusive_group()
+    src.add_argument("--text", default="", help="the description to set")
+    src.add_argument("--from", dest="source", default="", metavar="PATH",
+                     help="identify.txt, or its folder (default: the row's "
+                          "inventory_folder)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
@@ -2367,7 +2497,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if args.cmd == "split":
         d = intake_dir(args.intake)
-        new = split_item(d, args.parent, args.take, args.reason, apply=args.apply)
+        new = split_item(d, args.parent, args.take, args.reason, retire=args.retire,
+                         apply=args.apply)
         for r in new:
             print(f"  + {r['item_id']}  {r['description']}  ({r['why']})")
         if not args.apply:
@@ -2376,6 +2507,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             print(f"[OK] {d.name}: split {len(new)} row(s) out of {args.parent}; "
                   f"SPLIT line(s) in {dupe_guard.QUEUE}")
+        return 0
+    if args.cmd == "describe":
+        d = intake_dir(args.intake)
+        old, new = describe_item(d, args.item, text=args.text, source=args.source,
+                                 apply=args.apply)
+        print(f"  - {old}\n  + {new}")
+        if old == new:
+            print(f"[OK] {args.item}: description already says that; nothing written")
+        elif not args.apply:
+            print(f"[DRY RUN] nothing written. Re-run with --apply to write "
+                  f"{LEDGER_NAME} (backup first).")
+        else:
+            print(f"[OK] {d.name}: {args.item} description set")
         return 0
     if args.cmd == "template":
         print(f"[OK] wrote {write_template()}")
