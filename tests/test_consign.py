@@ -1225,15 +1225,15 @@ CAT_FIELDS = ["no", "bin", "description", "qty", "marks", "condition", "photos",
               "inventory_folder", "why"]
 
 
-def _split_shop(shop, parent_qty="3", parent_state="INTAKE"):
+def _split_shop(shop, parent_qty="3", parent_state="INTAKE", **parent):
     """K99's ledger with a bin row C061 (and C070 in an older intake), plus
     the bin's catalog.csv describing two objects in it."""
     d = _ledger(shop, "CONSIGN-K99", [
         _row(item_id="K99-C061", bin="07", intake="2099-01-05", client_code="K99",
              description="Box of brass", qty=parent_qty, state=parent_state,
              why="bin walk-through", photos="P0001.JPG", est_low="10.00",
-             est_high="20.00", ask="25.00", store="junk", sku="jjjj0061",
-             listing_id="111", inventory_folder="inventory/CONSIGN-K99/bin-07")])
+             est_high="20.00", ask="25.00", store="junk",
+             inventory_folder="inventory/CONSIGN-K99/bin-07", **parent)])
     _ledger(shop, "CONSIGN-20990101", [_row(item_id="K99-C070")], "client: K99\n")
     lot = shop / "inventory" / "tg7-20990105-1000"
     lot.mkdir()
@@ -1257,7 +1257,7 @@ def test_split_adds_a_row_per_take_and_lowers_the_parent(shop, capsys):
     assert (parent["qty"], parent["description"], parent["state"]) == ("1", "Box of brass",
                                                                        "INTAKE")
     assert parent["why"] == "bin walk-through | split out K99-C071, K99-C072"
-    assert parent["ask"] == "25.00" and parent["sku"] == "jjjj0061"
+    assert parent["ask"] == "25.00" and parent["store"] == "junk"
     for r, n, desc, photos, folder in (
             (bell, "K99-C071", "Brass bell", "P0002.JPG",
              "inventory/tg7-20990105-1000/brass-bell"),
@@ -1298,8 +1298,6 @@ def test_split_without_apply_writes_nothing(shop, capsys):
 
 
 @pytest.mark.parametrize("qty,state,takes,want", [
-    ("3", "SHOT", ["#01"], "is SHOT: only an INTAKE row"),
-    ("3", "LISTED", ["#01"], "is LISTED"),
     ("2", "INTAKE", ["#01", "#02"], "would leave 0"),
     ("", "INTAKE", ["#01"], "would leave 0"),
     ("3", "INTAKE", ["#01", "#1"], "taken twice"),
@@ -1340,3 +1338,31 @@ def test_split_refuses_a_frame_already_on_another_ledger(shop):
         consign.split_item(d, "K99-C061", [f"{cat}#02"], apply=True)
     assert (d / "client_ledger.csv").read_bytes() == before
     assert not (d / "dupe_queue.csv").exists()
+
+
+@pytest.mark.parametrize("state,field,want", [
+    ("INTAKE", "", None),
+    ("", "", None),
+    ("SHOT", "", None),
+    ("DRAFTED", "", "is DRAFTED: only an INTAKE or SHOT row"),
+    ("PREP", "", "is PREP"),
+    ("HOLD", "", "is HOLD"),
+    ("LISTED", "", "is LISTED"),
+    ("SOLD", "", "is SOLD"),
+    ("SETTLED", "", "is SETTLED"),
+    ("RETURNED", "", "is RETURNED"),
+    *[("SHOT", f, f"has {f} set") for f in consign.SPLIT_BLANK],
+    ("INTAKE", "sku", "has sku set"),
+])
+def test_split_parent_must_be_intake_or_shot_with_nothing_listed(shop, state, field,
+                                                                 want):
+    # sync makes a row with a folder SHOT, so a photographed bin still splits.
+    d, cat = _split_shop(shop, parent_state=state, **({field: "x"} if field else {}))
+    before = (d / "client_ledger.csv").read_bytes()
+    if want is None:
+        new = consign.split_item(d, "K99-C061", [f"{cat}#01"], apply=True)
+        assert [(r["item_id"], r["state"]) for r in new] == [("K99-C071", "INTAKE")]
+        return
+    with pytest.raises(SystemExit, match=want):
+        consign.split_item(d, "K99-C061", [f"{cat}#01"], apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == before
