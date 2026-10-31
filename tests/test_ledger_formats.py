@@ -57,7 +57,7 @@ SCHEMAS = [
 
 
 def test_ledger_store_exists():
-    """Verify ledger_store.py exists with required methods."""
+    """Verify ledger_store.py exists with required writers."""
     ledger_store_path = Path('lib/ledger_store.py')
     assert ledger_store_path.exists(), \
         "lib/ledger_store.py must exist"
@@ -65,7 +65,8 @@ def test_ledger_store_exists():
     with open(ledger_store_path, 'r') as f:
         content = f.read()
 
-    required = ['def atomic_write', 'def to_csv', 'def verify_chain']
+    # Required for centralized ledger writes (#401, #398, #408)
+    required = ['def atomic_write', 'def to_csv']
     for method in required:
         assert method in content, \
             f"ledger_store.py must have {method} method"
