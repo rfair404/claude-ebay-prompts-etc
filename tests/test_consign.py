@@ -1298,8 +1298,6 @@ def test_split_without_apply_writes_nothing(shop, capsys):
 
 
 @pytest.mark.parametrize("qty,state,takes,want", [
-    ("2", "INTAKE", ["#01", "#02"], "would leave 0"),
-    ("", "INTAKE", ["#01"], "would leave 0"),
     ("3", "INTAKE", ["#01", "#1"], "taken twice"),
     ("3", "INTAKE", ["#09"], "no row 09"),
     ("3", "INTAKE", ["#xx"], "want <path>/catalog.csv#NN"),
@@ -1366,3 +1364,173 @@ def test_split_parent_must_be_intake_or_shot_with_nothing_listed(shop, state, fi
     with pytest.raises(SystemExit, match=want):
         consign.split_item(d, "K99-C061", [f"{cat}#01"], apply=True)
     assert (d / "client_ledger.csv").read_bytes() == before
+
+
+@pytest.mark.parametrize("qty", ["", "1", "2"])
+def test_split_parent_keeps_one_lot_when_takes_reach_its_qty(shop, qty):
+    d, cat = _split_shop(shop, parent_qty=qty)
+    new = consign.split_item(d, "K99-C061", [f"{cat}#01", f"{cat}#02"], apply=True)
+    assert [r["item_id"] for r in new] == ["K99-C071", "K99-C072"]
+    parent = consign.read_ledger(d / "client_ledger.csv")[0][0]
+    assert (parent["qty"], parent["state"], parent["photos"]) == ("1", "INTAKE", "P0001.JPG")
+
+
+def _archive_shop(shop):
+    """K99-C061: one qty-1 archive with every frame on the row; the catalog
+    splits it into lots by those same frames (the K01-C126 case)."""
+    d = _ledger(shop, "CONSIGN-K99", [
+        _row(item_id="K99-C061", bin="tg7", intake="2099-01-05", client_code="K99",
+             description="Paper archive", qty="1", state="SHOT", why="possible value",
+             photos="ZZ261301.JPG ZZ261302.JPG ZZ261303.JPG ZZ261304.JPG ZZ261305.JPG",
+             inventory_folder="inventory/tg7/01-archive")])
+    _ledger(shop, "CONSIGN-20990101", [_row(item_id="K99-C070", photos="ZZ261309.JPG")],
+            "client: K99\n")
+    lot = shop / "inventory" / "tg7"
+    lot.mkdir()
+    _csv(lot / "lots.csv", CAT_FIELDS, [
+        dict(no="1", description="Grease promotion kit", photos="ZZ261301.JPG ZZ261302.JPG",
+             inventory_folder="tg7/02-grease-kit"),
+        dict(no="2", description="Bell Ringer magazines", photos="ZZ261303.JPG;ZZ261304.JPG",
+             inventory_folder="tg7/03-bell-ringer"),
+        dict(no="3", description="Plexiglas booklet", photos="ZZ261305.JPG",
+             inventory_folder="tg7/04-plexiglas"),
+        dict(no="4", description="Stray", photos="ZZ261309.JPG", inventory_folder="tg7/05-x"),
+        dict(no="5", description="Overlap", photos="ZZ261302.JPG", inventory_folder="tg7/06-y")])
+    return d, lot / "lots.csv"
+
+
+def test_split_moves_the_parents_frames_and_keeps_the_rest_as_one_lot(shop):
+    d, cat = _archive_shop(shop)
+    new = consign.split_item(d, "K99-C061", [f"{cat}#1", f"{cat}#2"], apply=True,
+                             today="2099-02-01")
+    rows = consign.read_ledger(d / "client_ledger.csv")[0]
+    parent = rows[0]
+    assert (parent["qty"], parent["state"], parent["photos"]) == ("1", "SHOT", "ZZ261305.JPG")
+    assert parent["why"] == ("possible value | split out K99-C071, K99-C072, "
+                             "moved 4 frame(s)")
+    assert parent["state_note"] == ""
+    assert [(r["item_id"], r["photos"], r["inventory_folder"]) for r in rows[1:]] == [
+        ("K99-C071", "ZZ261301.JPG ZZ261302.JPG", "inventory/tg7/02-grease-kit"),
+        ("K99-C072", "ZZ261303.JPG;ZZ261304.JPG", "inventory/tg7/03-bell-ringer")]
+    assert [r["item_id"] for r in new] == ["K99-C071", "K99-C072"]
+    assert consign.validate_all(consign.all_intakes()) == []
+
+
+def test_split_retire_takes_every_frame_and_disposes_the_parent(shop):
+    d, cat = _archive_shop(shop)
+    consign.split_item(d, "K99-C061", [f"{cat}#1", f"{cat}#2", f"{cat}#3"], retire=True,
+                       apply=True, today="2099-02-01")
+    rows = consign.read_ledger(d / "client_ledger.csv")[0]
+    parent = rows[0]
+    assert (parent["state"], parent["photos"], parent["qty"]) == ("DISPOSED", "", "1")
+    assert parent["state_note"] == ("retired 2099-02-01: split into K99-C071, K99-C072, "
+                                    "K99-C073")
+    assert [r["state"] for r in rows[1:]] == ["INTAKE"] * 3
+    assert consign.validate_all(consign.all_intakes()) == []
+
+
+@pytest.mark.parametrize("takes,retire,want", [
+    (["#1", "#2", "#3"], False, "every frame of K99-C061 is taken: pass --retire"),
+    (["#1", "#2"], True, r"still has frame\(s\) ZZ261305"),
+    (["#1", "#5"], False, "ZZ261302 also on --take"),
+    (["#4"], False, "ZZ261309 already on K99-C070"),
+])
+def test_split_moving_frames_refuses_and_writes_nothing(shop, takes, retire, want):
+    d, cat = _archive_shop(shop)
+    before = (d / "client_ledger.csv").read_bytes()
+    with pytest.raises(SystemExit, match=want):
+        consign.split_item(d, "K99-C061", [f"{cat}{t}" for t in takes], retire=retire,
+                           apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not (d / "dupe_queue.csv").exists()
+
+
+def test_split_cli_retire(shop):
+    d, cat = _archive_shop(shop)
+    assert consign.main(["split", "CONSIGN-K99", "K99-C061", "--take", f"{cat}#1",
+                         "--take", f"{cat}#2", "--take", f"{cat}#3", "--retire",
+                         "--apply"]) == 0
+    assert consign.read_ledger(d / "client_ledger.csv")[0][0]["state"] == "DISPOSED"
+
+
+IDENTIFY = """SHOOT SUMMARY
+Photos processed: 4 (ZZ261301-ZZ261304)
+Distinct items:   1
+
+--- Item 1 ---
+Unit type: lot
+Quantity: 26
+Category: embroidered patch / apparel logo emblem
+Brand: {brand}
+Type: {type}
+Era: 1970s-80s [ASSUMPTION]
+"""
+
+
+def _described_shop(shop, identify=None):
+    d = _ledger(shop, "CONSIGN-K99", [
+        _row(item_id="K99-C127", description="crocodile patches", qty="26", state="SHOT",
+             why="check count", photos="ZZ1.JPG", ask="40.00",
+             inventory_folder="inventory/tg7/02-croc"),
+        _row(item_id="K99-C128", description="other", qty="1")])
+    f = shop / "inventory" / "tg7" / "02-croc"
+    f.mkdir(parents=True)
+    if identify is not None:
+        (f / "identify.txt").write_text(identify, encoding="utf-8")
+    return d, f
+
+
+@pytest.mark.parametrize("brand,typ,want", [
+    ("Lacoste (per Russell, owner provenance)",
+     "Lacoste crocodile logo emblems, embroidered, loose",
+     "Lacoste crocodile logo emblems, embroidered, loose"),
+    ("Lacoste [BEST-CASE]", "crocodile logo emblems", "Lacoste crocodile logo emblems"),
+    ("Unknown", "crocodile logo emblems", "crocodile logo emblems"),
+])
+def test_describe_sets_only_the_description_from_identify(shop, capsys, brand, typ, want):
+    d, _ = _described_shop(shop, IDENTIFY.format(brand=brand, type=typ))
+    before = consign.read_ledger(d / "client_ledger.csv")[0]
+    assert consign.main(["describe", "CONSIGN-K99", "C127", "--apply"]) == 0
+    after = consign.read_ledger(d / "client_ledger.csv")[0]
+    assert after[0]["description"] == want
+    assert {k: v for k, v in after[0].items() if k != "description"} == {
+        k: v for k, v in before[0].items() if k != "description"}
+    assert after[1] == before[1]
+    assert len(list(d.glob("client_ledger.backup-*.csv"))) == 1
+    assert want in capsys.readouterr().out
+
+
+def test_describe_text_and_from_and_dry_run(shop, capsys):
+    d, _ = _described_shop(shop)
+    before = (d / "client_ledger.csv").read_bytes()
+    assert consign.main(["describe", "CONSIGN-K99", "K99-C127", "--text",
+                         "26 Lacoste  crocodile emblems"]) == 0
+    assert "[DRY RUN]" in capsys.readouterr().out
+    assert (d / "client_ledger.csv").read_bytes() == before
+    consign.describe_item(d, "K99-C127", text="26 Lacoste  crocodile emblems", apply=True)
+    assert consign.read_ledger(d / "client_ledger.csv")[0][0]["description"] == (
+        "26 Lacoste crocodile emblems")
+    other = shop / "inventory" / "elsewhere"
+    other.mkdir()
+    (other / "identify.txt").write_text(IDENTIFY.format(brand="Izod", type="alligator"),
+                                        encoding="utf-8")
+    consign.describe_item(d, "K99-C127", source="elsewhere", apply=True)
+    assert consign.read_ledger(d / "client_ledger.csv")[0][0]["description"] == (
+        "Izod alligator")
+
+
+@pytest.mark.parametrize("identify,item,want", [
+    (None, "K99-C127", "no .*identify.txt"),
+    ("SHOOT SUMMARY\n", "K99-C127", "has 0 items"),
+    (IDENTIFY + "\n--- Item 2 ---\nType: x\n", "K99-C127", "has 2 items"),
+    ("--- Item 1 ---\nBrand: Lacoste\n", "K99-C127", "no `Type:` line"),
+    ("", "K99-C999", "no row K99-C999"),
+    ("", "K99-C128", "has no inventory_folder"),
+])
+def test_describe_refuses_and_writes_nothing(shop, identify, item, want):
+    d, _ = _described_shop(shop, identify)
+    before = (d / "client_ledger.csv").read_bytes()
+    with pytest.raises(SystemExit, match=want):
+        consign.describe_item(d, item, apply=True)
+    assert (d / "client_ledger.csv").read_bytes() == before
+    assert not list(d.glob("client_ledger.backup-*.csv"))
