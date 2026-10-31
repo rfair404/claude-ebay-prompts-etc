@@ -4,7 +4,7 @@ the state of each item, what it is worth and what we owe.
 
     python -m lib.cli consign import CONSIGN-K01 roster.csv --client K01 --intake 2026-11-05
     python -m lib.cli consign import CONSIGN-K01 -             # CSV/TSV on stdin
-    python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--dry-run]
+    python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--apply]
     python -m lib.cli consign sync                             # dry run, every ledger
     python -m lib.cli consign sync CONSIGN-K01 --apply
     python -m lib.cli consign template                         # the standard empty ledger
@@ -1516,12 +1516,14 @@ def catalog_row(ref: str, d: Path) -> tuple[str, dict]:
 
 
 def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
-               apply: bool = True, today: Optional[str] = None) -> list[dict]:
+               apply: bool = False, today: Optional[str] = None) -> list[dict]:
     """Split objects out of one ledger row: one new row per catalog row in
     `takes`, numbered after every row the client has, and the parent's qty
     lowered by one for each. Refused, nothing written, when the parent is past
-    INTAKE or would be left with qty below 1. Each new row gets a SPLIT line in
-    dupe_queue.csv. Returns the new rows."""
+    INTAKE or would be left with qty below 1, or when a catalog row's folder or
+    a frame of it is already on one of the client's rows. Written only with
+    `apply`; each new row then gets a SPLIT line in dupe_queue.csv. Returns
+    the new rows."""
     today = today or date.today().isoformat()
     code = intake_client(d)
     if not code:
@@ -1560,6 +1562,19 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
             others = read_ledger(o / LEDGER_NAME)[0]
             migrate(others, o, code)
             everyone += others
+    # A catalog row already on record (its folder, or one of its frames, on
+    # any of the client's rows) was split out before: refuse a second row.
+    for key, cat in refs:
+        folder = norm_folder(cat.get("inventory_folder", ""))
+        shots = dupe_guard.frames(cat.get("photos", ""))
+        for r in everyone:
+            if folder and norm_folder(r["inventory_folder"]) == folder:
+                raise SystemExit(f"[X] --take {key}: its folder {folder} is already "
+                                 f"{r['item_id']}'s; nothing written")
+            shared = shots & dupe_guard.frames(r["photos"])
+            if shared:
+                raise SystemExit(f"[X] --take {key}: frame(s) {', '.join(sorted(shared))} "
+                                 f"already on {r['item_id']}; nothing written")
     n = next_id(everyone)
     new = []
     for key, cat in refs:
@@ -2307,7 +2322,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                    help="the catalog row describing one object split out (repeat)")
     p.add_argument("--reason", default="",
                    help="goes in each new row's `why` (default: the catalog row)")
-    p.add_argument("--dry-run", action="store_true", help="show the rows; write nothing")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
@@ -2352,11 +2367,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
     if args.cmd == "split":
         d = intake_dir(args.intake)
-        new = split_item(d, args.parent, args.take, args.reason, apply=not args.dry_run)
+        new = split_item(d, args.parent, args.take, args.reason, apply=args.apply)
         for r in new:
             print(f"  + {r['item_id']}  {r['description']}  ({r['why']})")
-        if args.dry_run:
-            print(f"[DRY RUN] {len(new)} row(s) would be split out; nothing written.")
+        if not args.apply:
+            print(f"[DRY RUN] {len(new)} row(s) would be split out; nothing written. "
+                  f"Re-run with --apply to write {LEDGER_NAME} (backup first).")
         else:
             print(f"[OK] {d.name}: split {len(new)} row(s) out of {args.parent}; "
                   f"SPLIT line(s) in {dupe_guard.QUEUE}")
