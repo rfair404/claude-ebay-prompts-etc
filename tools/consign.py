@@ -1491,6 +1491,12 @@ def import_rows(d: Path, incoming: list[dict], client: Optional[str],
 # new row starts at INTAKE with qty 1.
 SPLIT_FROM_PARENT = ("bin", "intake", "client_code")
 SPLIT_FROM_CATALOG = ("description", "photos", "inventory_folder")
+# A parent can be split while it is INTAKE or SHOT and none of these is set:
+# nothing listed, sold or paid on it yet.
+SPLIT_STATES = ("INTAKE", "SHOT")
+SPLIT_BLANK = ("sku", "listing_id", "order_id", "sold_at", "placed_at", "item_price",
+               "gross", "net", "client_share", "buyout_price", "settlement_id",
+               "paid_to_client_date")
 
 
 def catalog_row(ref: str, d: Path) -> tuple[str, dict]:
@@ -1519,8 +1525,10 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
                apply: bool = False, today: Optional[str] = None) -> list[dict]:
     """Split objects out of one ledger row: one new row per catalog row in
     `takes`, numbered after every row the client has, and the parent's qty
-    lowered by one for each. Refused, nothing written, when the parent is past
-    INTAKE or would be left with qty below 1, or when a catalog row's folder or
+    lowered by one for each. Refused, nothing written, unless the parent is an
+    INTAKE or SHOT row with every SPLIT_BLANK field empty (sync makes any row
+    with a folder SHOT; a DRAFTED parent's draft.md describes the whole box),
+    when it would be left with qty below 1, or when a catalog row's folder or
     a frame of it is already on one of the client's rows. Written only with
     `apply`; each new row then gets a SPLIT line in dupe_queue.csv. Returns
     the new rows."""
@@ -1543,8 +1551,13 @@ def split_item(d: Path, parent_id: str, takes: list[str], reason: str = "", *,
     if parent is None:
         raise SystemExit(f"[X] no row {parent_id} in {d.name}/{LEDGER_NAME}")
     state = (parent["state"] or "INTAKE").upper()
-    if state != "INTAKE":
-        raise SystemExit(f"[X] {parent_id} is {state}: only an INTAKE row can be split")
+    if state not in SPLIT_STATES:
+        raise SystemExit(f"[X] {parent_id} is {state}: only an INTAKE or SHOT row "
+                         f"can be split")
+    used = next((c for c in SPLIT_BLANK if parent[c]), "")
+    if used:
+        raise SystemExit(f"[X] {parent_id} has {used} set: only a row with no listing, "
+                         f"sale or payout can be split")
     qty_s = parent["qty"] or "1"
     if not qty_s.isdigit():
         raise SystemExit(f"[X] {parent_id} qty {parent['qty']!r} is not a whole number")
@@ -2314,7 +2327,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--new", default="", metavar="REASON",
                    help="add every row, never attach one to a row already on "
                         "record; the reason goes in its `why`")
-    p = sub.add_parser("split", help="split objects out of one INTAKE row into new "
+    p = sub.add_parser("split", help="split objects out of one INTAKE or SHOT row into new "
                                      "rows, one per catalog row")
     p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
     p.add_argument("parent", help="the row to split, e.g. K01-C061")
