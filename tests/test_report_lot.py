@@ -242,3 +242,23 @@ def test_pdf_failure_leaves_text_csv_and_html(estate, monkeypatch, capsys):
     wrote = next(ln for ln in out.out.splitlines() if ln.startswith("WROTE"))
     assert wrote.count(".txt") == wrote.count(".csv") == wrote.count(".html") == 1
     assert ".pdf" not in wrote and "FAILED pdf: no chromium" in out.err
+
+
+def test_consign_held_items_are_marked_and_listed(tmp_path, monkeypatch):
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    rows = [dict(base, item_id="K01-C001", description="Gold chain", state="SHOT",
+                 why="possible value [HOLD]: gold, needs recovery check"),
+            dict(base, item_id="K01-C002", description="Plain cup", state="SHOT")]
+    C.write_ledger(lot / C.LEDGER_NAME, rows)
+    text, out = RL.consign_account(lot, "K01", date(2026, 11, 2))
+    assert "HELD BACK" in text and "SHOT HOLD" in text
+    sec = text.split("HELD BACK")[1].split("INVENTORY LEDGER")[0]
+    assert "K01-C001" in sec and "K01-C002" not in sec
+    assert {r["item_id"]: r["hold"] for r in out} == {"K01-C001": "HOLD", "K01-C002": ""}

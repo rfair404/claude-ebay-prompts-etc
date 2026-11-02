@@ -325,6 +325,11 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
 # consignment account
 # --------------------------------------------------------------------------- #
 
+def _held(r: dict) -> bool:
+    """HOLD state, or [HOLD] written in the row's why or state_note."""
+    return r.get("state") == "HOLD" or any("[HOLD]" in (r.get(k) or "") for k in ("why", "state_note"))
+
+
 def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
@@ -358,8 +363,14 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
          f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}   Split {terms['split'] * 100:.0f}% of net to client",
          "", "SUMMARY (tools/consign.py report; states as of the last `consign sync --apply`)"]
     L += summary
+    held = [r for r in rows if _held(r)]
+    if held:
+        L += ["", "HELD BACK (marked HOLD; counted in the ledger and totals below)"]
+        for r in held:
+            why = re.sub(r"\s+", " ", r.get("state_note") or r.get("why") or "")
+            L.append(f"  {r['item_id']:<10}{_report.ascii_text(why)[:90]}")
     L += ["", "INVENTORY LEDGER"]
-    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<10}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
+    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<14}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
     L += [hdr, "-" * len(hdr)]
     out, fee_out, fees = [], [], []
     fee_lines = C.load_fee_lines()
@@ -367,7 +378,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         d = _report.ascii_text((r.get("description") or "").split(";")[0].replace("\n", " "))
         d = d if len(d) <= 52 else d[:51] + "~"
         L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:11]:<12}"
-                 f"{plan.get(r.get('cut') or '', '-'):<10}{r.get('state') or '':<10}{val(r):<13}"
+                 f"{plan.get(r.get('cut') or '', '-'):<10}{(r.get('state') or '') + (' HOLD' if _held(r) and r.get('state') != 'HOLD' else ''):<14}{val(r):<13}"
                  f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
         # fees go in their own section after the ledger, one block per sale
         bd = C.fee_breakdown(r, fee_lines)
@@ -375,7 +386,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
             fees.append((r, d, bd))
         out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
-                    "state": r.get("state") or "", "est_low": r.get("est_low") or "",
+                    "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
                     "buyout_price": r.get("buyout_price") or "", "store": r.get("store") or "",
                     "sku": r.get("sku") or "", "listing_id": r.get("listing_id") or "",
