@@ -279,3 +279,18 @@ def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert f"<td class=t>{long}</td>" in page
     assert page.count('<img src="data:image/jpeg;base64,') == 1
+
+
+def test_page_rows_carry_a_hover_card_with_every_photo(estate, monkeypatch):
+    from PIL import Image
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    for n in ("a", "b", "c"):
+        Image.new("RGB", (40, 30), "blue").save(estate / "candlesticks" / f"{n}.jpg")
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
+    page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
+    row = next(r for r in page.split("<tr ")[1:] if "candlesticks" in r and 'class="pop"' in r)
+    assert len(row.split('data-i="')[1].split('"')[0].split()) == 3
+    assert page.count('class="pop"') == len(items) and "<dt>status</dt>" in page

@@ -49,6 +49,7 @@ import base64
 import csv
 import html
 import io
+import json
 import re
 import os
 import tempfile
@@ -72,6 +73,7 @@ OUT_DIR = REPO / "reports" / "lots"
 PRINTER = "CannonBW"
 PDF_TIMEOUT = 60
 THUMB_PX = 120
+GALLERY_PX = 300
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
 STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
@@ -390,7 +392,8 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         if bd:
             fees.append((r, d, bd))
         out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
-                    "photos": r.get("photos") or "",
+                    "photos": r.get("photos") or "", "why": r.get("why") or "",
+                    "state_note": r.get("state_note") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
                     "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
@@ -451,62 +454,86 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
-def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
-    """The item's first listing photo: its own folder first, else the first
-    file named in the row's photos column."""
+def _images(row: dict, found: dict[str, Path]) -> list[Path]:
+    """Every photo of the item: its own folder first, else the files named in
+    the row's photos column."""
     folder = row.get("folder") or ""
     for base in (REPO, INVENTORY):
         d = base / folder
         if folder and d.is_dir():
             shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
             if shots:
-                return shots[0]
-    names = (row.get("photos") or "").split()
-    return found.get(names[0]) if names else None
+                return shots
+    return [found[n] for n in (row.get("photos") or "").split() if n in found]
 
 
-def _thumbs(rows: list[dict]) -> list[str]:
-    """One <img> data URI per row ("" when it has no photo), so the page and
-    its PDF are one self-contained file."""
+def _data_uri(src: Path, px: int, quality: int) -> str:
     from PIL import Image, ImageOps
-    wanted = {(r.get("photos") or "").split()[0] for r in rows if (r.get("photos") or "").split()}
+    try:
+        with Image.open(src) as im:
+            im.draft("RGB", (px * 2, px * 2))
+            im = ImageOps.exif_transpose(im).convert("RGB")
+            im.thumbnail((px, px))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=quality)
+    except (OSError, ValueError):
+        return ""
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _pictures(rows: list[dict], gallery: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Per row: a thumbnail data URI ("" without a photo) and the keys of its
+    photos in `gallery`, which holds each distinct photo once so the page and
+    its PDF are one self-contained file."""
+    wanted = {n for r in rows for n in (r.get("photos") or "").split()}
     found: dict[str, Path] = {}
     if wanted:
         for root, _, files in os.walk(INVENTORY):
             for f in files:
                 if f in wanted and f not in found:
                     found[f] = Path(root) / f
-    out = []
+    ids: dict[Path, str] = {}
+    thumbs, keys = [], []
     for r in rows:
-        src = _photo_for(r, found)
-        try:
-            if src is None:
-                raise OSError
-            with Image.open(src) as im:
-                im = ImageOps.exif_transpose(im).convert("RGB")
-                im.thumbnail((THUMB_PX, THUMB_PX))
-                buf = io.BytesIO()
-                im.save(buf, "JPEG", quality=70)
-            out.append("data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode())
-        except (OSError, ValueError):
-            out.append("")
-    return out
+        imgs = _images(r, found)
+        thumbs.append(_data_uri(imgs[0], THUMB_PX, 70) if imgs else "")
+        ks = []
+        for p in imgs:
+            if p not in ids:
+                uri = _data_uri(p, GALLERY_PX, 60)
+                ids[p] = f"i{len(ids)}" if uri else ""
+                if uri:
+                    gallery[ids[p]] = uri
+            if ids[p]:
+                ks.append(ids[p])
+        keys.append(" ".join(ks))
+    return thumbs, keys
 
 
-def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None) -> str:
+def _pop_html(r: dict) -> str:
+    """The hover card for one item: every filled field, then its photos."""
+    skip = {"line", "item", "photos"}
+    dl = "".join(f"<dt>{html.escape(k.replace('_', ' '))}</dt><dd>{html.escape(_report.ascii_text(str(v)))}</dd>"
+                 for k, v in r.items() if k not in skip and v not in ("", None))
+    return (f'<div class="pop"><b>{html.escape(_report.ascii_text(r.get("item") or ""))}</b>'
+            f'<dl>{dl}</dl><div class="g"></div></div>')
+
+
+def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None,
+                gallery: Optional[dict[str, str]] = None) -> str:
     spans = _split_columns([header] + body)
     cut = lambda line: [html.escape(line[a:b].strip()) for a, b in spans]  # noqa: E731
     num = re.compile(r"^(?:[-$\d,.]+|pending)$")
     cells = [cut(r) for r in body]
     heads = cut(header)
-    pics = [""] * len(cells)
+    pics, keys = [""] * len(cells), [""] * len(cells)
     if rows and len(rows) == len(cells):
         # the text cuts titles to fit its columns; the page shows them whole
         if "ITEM" in heads:
             col = heads.index("ITEM")
             for c, r in zip(cells, rows):
                 c[col] = html.escape(_report.ascii_text(r.get("item") or "")) or c[col]
-        pics = _thumbs(rows)
+        pics, keys = _pictures(rows, gallery if gallery is not None else {})
     if any(pics):
         heads.insert(0, "")
         for c, pic in zip(cells, pics):
@@ -517,8 +544,14 @@ def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None)
     right = right_pad + [bool(cells) and all(num.match(c[i + len(right_pad)]) or not c[i + len(right_pad)]
                                             for c in cells) for i in range(len(spans))]
     th = "".join(f'<th{" class=n" if right[i] else ""}>{c}</th>' for i, c in enumerate(heads))
-    trs = "".join("<tr>" + "".join(f'<td{" class=n" if right[i] else (" class=t" if heads[i] == "ITEM" else "")}>{c}</td>'
-                                   for i, c in enumerate(row)) + "</tr>" for row in cells)
+    if rows and len(rows) == len(cells):
+        for c, r in zip(cells, rows):
+            c[0] += _pop_html(r)
+    trs = ""
+    for n, row in enumerate(cells):
+        trs += f'<tr data-i="{keys[n]}">' if rows and len(rows) == len(cells) else "<tr>"
+        trs += "".join(f'<td{" class=n" if right[i] else (" class=t" if heads[i] == "ITEM" else "")}>{c}</td>'
+                       for i, c in enumerate(row)) + "</tr>"
     return f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
 
 
@@ -529,7 +562,7 @@ def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
     items = [r for r in (rows or []) if r.get("line", "item") == "item"]
-    out, pre, i = [], [], 1
+    out, pre, i, gallery = [], [], 1, {}
 
     def flush():
         if any(x.strip() for x in pre):
@@ -543,7 +576,7 @@ def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
             j = i + 2
             while j < len(lines) and lines[j].strip():
                 j += 1
-            out.append(_table_html(line, lines[i + 2:j], items if len(lines[i + 2:j]) == len(items) else None))
+            out.append(_table_html(line, lines[i + 2:j], items if len(lines[i + 2:j]) == len(items) else None, gallery))
             i = j
             continue
         if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):
@@ -562,15 +595,29 @@ body{{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding
 h1{{font-size:1.25rem;margin:0 0 12px}} h2{{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}}
 pre{{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}}
 .scroll{{overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:13px}}
-img{{display:block;width:60px;height:60px;object-fit:cover;border-radius:3px}}
+td>img{{display:block;width:60px;height:60px;object-fit:cover;border-radius:3px}}
+tbody tr[data-i]:hover{{background:#fff8e1}}
+.pop{{display:none;position:fixed;z-index:9;width:min(640px,92vw);max-height:80vh;overflow:auto;box-sizing:border-box;
+background:#fff;border:1px solid #888;border-radius:6px;box-shadow:0 6px 24px #0004;padding:10px;white-space:normal;text-align:left;font-weight:400}}
+tr:hover .pop{{display:block}} .pop dl{{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;margin:8px 0;font-size:12px}}
+.pop dt{{color:#666}} .pop dd{{margin:0;overflow-wrap:anywhere}} .g{{display:flex;flex-wrap:wrap;gap:4px}}
+.g img{{height:150px;width:auto;border-radius:3px}}
 th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
 td{{white-space:nowrap}} td.t{{white-space:normal;min-width:18em}}
 th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}
 @media print{{@page{{size:landscape;margin:12mm}}body{{max-width:none;padding:0;font-size:11px}}
-table{{font-size:10px}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
+table{{font-size:10px}}.pop{{display:none!important}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
 </style></head><body>
 <h1>{title}</h1>
 {"".join(out).replace("<table", '<div class="scroll"><table').replace("</table>", "</table></div>")}
+<script>
+const IMG={json.dumps(gallery)};
+document.querySelectorAll("tr[data-i]").forEach(tr=>{{let built=0;tr.addEventListener("mouseenter",()=>{{
+const p=tr.querySelector(".pop");if(!p)return;
+if(!built){{built=1;const g=p.querySelector(".g");tr.dataset.i.split(" ").forEach(k=>{{if(IMG[k]){{const i=new Image();i.src=IMG[k];g.appendChild(i)}}}})}}
+const r=tr.getBoundingClientRect();p.style.left=Math.max(8,Math.min(r.left+70,innerWidth-p.offsetWidth-8))+"px";
+p.style.top=Math.max(8,Math.min(r.top,innerHeight-p.offsetHeight-8))+"px"}})}});
+</script>
 </body></html>
 """
 
