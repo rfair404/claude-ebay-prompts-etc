@@ -7,7 +7,7 @@ each one stands, and a money summary.
     python tools/report_lot.py ES/<LOT> --print        # also print on CannonBW
 
 Writes reports/lots/<lot>-<date>.txt (plain text), .csv (one row per item),
-.html (web page) and .pdf (landscape, for paper) and writes the .txt to
+.html (web page, with photo thumbnails) and .pdf (landscape, for paper) and writes the .txt to
 stdout. The PDF is Chromium's print of the .html; if it fails the rest still
 land and the run says `FAILED pdf`. Paper only with --print, which is only for
 when Russell asks for it. Reads local ledgers only, never eBay, so
@@ -45,11 +45,14 @@ sale shows as "actuals pending".
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import html
 import io
 import re
+import os
 import tempfile
+import textwrap
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -68,6 +71,7 @@ INVENTORY = REPO / "inventory"
 OUT_DIR = REPO / "reports" / "lots"
 PRINTER = "CannonBW"
 PDF_TIMEOUT = 60
+THUMB_PX = 120
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
 STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
@@ -368,7 +372,8 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         L += ["", "HELD BACK (marked HOLD; counted in the ledger and totals below)"]
         for r in held:
             why = re.sub(r"\s+", " ", r.get("state_note") or r.get("why") or "")
-            L.append(f"  {r['item_id']:<10}{_report.ascii_text(why)[:90]}")
+            L += textwrap.wrap(_report.ascii_text(why), 118, initial_indent=f"  {r['item_id']:<10}",
+                               subsequent_indent=" " * 12)
     L += ["", "INVENTORY LEDGER"]
     hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<14}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
     L += [hdr, "-" * len(hdr)]
@@ -385,6 +390,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         if bd:
             fees.append((r, d, bd))
         out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
+                    "photos": r.get("photos") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
                     "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
@@ -445,25 +451,84 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
-def _table_html(header: str, body: list[str]) -> str:
+def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
+    """The item's first listing photo: its own folder first, else the first
+    file named in the row's photos column."""
+    folder = row.get("folder") or ""
+    for base in (REPO, INVENTORY):
+        d = base / folder
+        if folder and d.is_dir():
+            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
+            if shots:
+                return shots[0]
+    names = (row.get("photos") or "").split()
+    return found.get(names[0]) if names else None
+
+
+def _thumbs(rows: list[dict]) -> list[str]:
+    """One <img> data URI per row ("" when it has no photo), so the page and
+    its PDF are one self-contained file."""
+    from PIL import Image, ImageOps
+    wanted = {(r.get("photos") or "").split()[0] for r in rows if (r.get("photos") or "").split()}
+    found: dict[str, Path] = {}
+    if wanted:
+        for root, _, files in os.walk(INVENTORY):
+            for f in files:
+                if f in wanted and f not in found:
+                    found[f] = Path(root) / f
+    out = []
+    for r in rows:
+        src = _photo_for(r, found)
+        try:
+            if src is None:
+                raise OSError
+            with Image.open(src) as im:
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                im.thumbnail((THUMB_PX, THUMB_PX))
+                buf = io.BytesIO()
+                im.save(buf, "JPEG", quality=70)
+            out.append("data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode())
+        except (OSError, ValueError):
+            out.append("")
+    return out
+
+
+def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None) -> str:
     spans = _split_columns([header] + body)
     cut = lambda line: [html.escape(line[a:b].strip()) for a, b in spans]  # noqa: E731
     num = re.compile(r"^(?:[-$\d,.]+|pending)$")
     cells = [cut(r) for r in body]
-    right = [bool(cells) and all(num.match(c[i]) or not c[i] for c in cells)
-             for i in range(len(spans))]
-    th = "".join(f'<th{" class=n" if right[i] else ""}>{c}</th>' for i, c in enumerate(cut(header)))
-    trs = "".join("<tr>" + "".join(f'<td{" class=n" if right[i] else ""}>{c}</td>'
+    heads = cut(header)
+    pics = [""] * len(cells)
+    if rows and len(rows) == len(cells):
+        # the text cuts titles to fit its columns; the page shows them whole
+        if "ITEM" in heads:
+            col = heads.index("ITEM")
+            for c, r in zip(cells, rows):
+                c[col] = html.escape(_report.ascii_text(r.get("item") or "")) or c[col]
+        pics = _thumbs(rows)
+    if any(pics):
+        heads.insert(0, "")
+        for c, pic in zip(cells, pics):
+            c.insert(0, f'<img src="{pic}" alt="">' if pic else "")
+        right_pad = [False]
+    else:
+        right_pad = []
+    right = right_pad + [bool(cells) and all(num.match(c[i + len(right_pad)]) or not c[i + len(right_pad)]
+                                            for c in cells) for i in range(len(spans))]
+    th = "".join(f'<th{" class=n" if right[i] else ""}>{c}</th>' for i, c in enumerate(heads))
+    trs = "".join("<tr>" + "".join(f'<td{" class=n" if right[i] else (" class=t" if heads[i] == "ITEM" else "")}>{c}</td>'
                                    for i, c in enumerate(row)) + "</tr>" for row in cells)
     return f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
 
 
-def html_report(text: str) -> str:
+def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
     """The account as a web page: every all-caps heading line starts a
     section; a header line over a row of dashes becomes a real table and
     everything else stays preformatted, so the figures are the text's."""
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
+    items = [r for r in (rows or []) if r.get("line", "item") == "item"]
     out, pre, i = [], [], 1
 
     def flush():
@@ -478,7 +543,7 @@ def html_report(text: str) -> str:
             j = i + 2
             while j < len(lines) and lines[j].strip():
                 j += 1
-            out.append(_table_html(line, lines[i + 2:j]))
+            out.append(_table_html(line, lines[i + 2:j], items if len(lines[i + 2:j]) == len(items) else None))
             i = j
             continue
         if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):
@@ -497,7 +562,9 @@ body{{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding
 h1{{font-size:1.25rem;margin:0 0 12px}} h2{{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}}
 pre{{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}}
 .scroll{{overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:13px}}
+img{{display:block;width:60px;height:60px;object-fit:cover;border-radius:3px}}
 th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
+td{{white-space:nowrap}} td.t{{white-space:normal;min-width:18em}}
 th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}
 @media print{{@page{{size:landscape;margin:12mm}}body{{max-width:none;padding:0;font-size:11px}}
 table{{font-size:10px}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
@@ -524,11 +591,11 @@ def render_pdf(html_path: Path, pdf_path: Path) -> Optional[str]:
     return (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()[-1]
 
 
-def write_web(txt: Path, text: str) -> tuple[Path, Optional[Path], Optional[str]]:
+def write_web(txt: Path, text: str, rows: Optional[list[dict]] = None) -> tuple[Path, Optional[Path], Optional[str]]:
     """Web page and printer-friendly PDF beside the .txt. The PDF is None,
     with the reason, when Chromium could not render it."""
     page = txt.with_suffix(".html")
-    page.write_text(html_report(_report.ascii_text(text)), encoding="utf-8")
+    page.write_text(html_report(_report.ascii_text(text), rows), encoding="utf-8")
     pdf = txt.with_suffix(".pdf")
     pdf.unlink(missing_ok=True)
     why = render_pdf(page, pdf)
@@ -578,7 +645,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         text = estate_text(lot, keep, left_out, items, today)
         rows = [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
     txt, csv_path = write(lot, text, rows, today)
-    page, pdf, why = write_web(txt, text)
+    page, pdf, why = write_web(txt, text, rows)
     sys.stdout.write(text)
     print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in (txt, csv_path, page, pdf) if p))
     if why:

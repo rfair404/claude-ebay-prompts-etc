@@ -226,7 +226,7 @@ def test_html_turns_the_ledger_into_a_table_and_keeps_the_figures(estate, monkey
     page = RL.html_report(RL.estate_text(estate, keep, left_out, items, date(2026, 10, 26)))
     assert "<h2>SUMMARY</h2>" in page and "<h2>INVENTORY LEDGER</h2>" in page
     assert page.count("<tr>") == len(items) + 1
-    assert "<td>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in page
+    assert "<td class=t>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in page
     assert '<td class=n>1,250.00</td>' in page and "<td>LIVE</td>" in page
 
 
@@ -262,3 +262,20 @@ def test_consign_held_items_are_marked_and_listed(tmp_path, monkeypatch):
     sec = text.split("HELD BACK")[1].split("INVENTORY LEDGER")[0]
     assert "K01-C001" in sec and "K01-C002" not in sec
     assert {r["item_id"]: r["hold"] for r in out} == {"K01-C001": "HOLD", "K01-C002": ""}
+
+
+def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+    from PIL import Image
+    long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
+    monkeypatch.setattr(RL, "_all_listings", lambda: [
+        {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
+         "published_at": "2026-10-23", "listing_id": "206", "title": long}])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    Image.new("RGB", (400, 300), "red").save(estate / "candlesticks" / "a.jpg")
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
+    assert long not in text
+    page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
+    assert f"<td class=t>{long}</td>" in page
+    assert page.count('<img src="data:image/jpeg;base64,') == 1
