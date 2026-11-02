@@ -213,3 +213,69 @@ def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
     monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
     _, csv_path = RL.write(lot, text, rows, date(2026, 10, 25))
     assert b"DERIVED (fee / $40.00 base)" in csv_path.read_bytes()
+
+
+def test_html_turns_the_ledger_into_a_table_and_keeps_the_figures(estate, monkeypatch):
+    listings = [{"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md",
+                 "price": "1250", "published_at": "2026-10-23", "listing_id": "206",
+                 "title": "Pair of <Brass> Candlesticks, PHOTOS ONLY lookalike"}]
+    monkeypatch.setattr(RL, "_all_listings", lambda: listings)
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    page = RL.html_report(RL.estate_text(estate, keep, left_out, items, date(2026, 10, 26)))
+    assert "<h2>SUMMARY</h2>" in page and "<h2>INVENTORY LEDGER</h2>" in page
+    assert page.count("<tr>") == len(items) + 1
+    assert "<td class=t>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in page
+    assert '<td class=n>1,250.00</td>' in page and "<td>LIVE</td>" in page
+
+
+def test_pdf_failure_leaves_text_csv_and_html(estate, monkeypatch, capsys):
+    import subprocess
+    monkeypatch.setattr(RL, "OUT_DIR", estate.parent.parent.parent / "reports" / "lots")
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    monkeypatch.setattr(RL.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, 1, stdout="", stderr="no chromium"))
+    assert RL.main(["ES/BUY1"]) == 0
+    out = capsys.readouterr()
+    wrote = next(ln for ln in out.out.splitlines() if ln.startswith("WROTE"))
+    assert wrote.count(".txt") == wrote.count(".csv") == wrote.count(".html") == 1
+    assert ".pdf" not in wrote and "FAILED pdf: no chromium" in out.err
+
+
+def test_consign_held_items_are_marked_and_listed(tmp_path, monkeypatch):
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    rows = [dict(base, item_id="K01-C001", description="Gold chain", state="SHOT",
+                 why="possible value [HOLD]: gold, needs recovery check"),
+            dict(base, item_id="K01-C002", description="Plain cup", state="SHOT")]
+    C.write_ledger(lot / C.LEDGER_NAME, rows)
+    text, out = RL.consign_account(lot, "K01", date(2026, 11, 2))
+    assert "HELD BACK" in text and "SHOT HOLD" in text
+    sec = text.split("HELD BACK")[1].split("INVENTORY LEDGER")[0]
+    assert "K01-C001" in sec and "K01-C002" not in sec
+    assert {r["item_id"]: r["hold"] for r in out} == {"K01-C001": "HOLD", "K01-C002": ""}
+
+
+def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+    from PIL import Image
+    long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
+    monkeypatch.setattr(RL, "_all_listings", lambda: [
+        {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
+         "published_at": "2026-10-23", "listing_id": "206", "title": long}])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    Image.new("RGB", (400, 300), "red").save(estate / "candlesticks" / "a.jpg")
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
+    assert long not in text
+    page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
+    assert f"<td class=t>{long}</td>" in page
+    assert page.count('<img src="data:image/jpeg;base64,') == 1
