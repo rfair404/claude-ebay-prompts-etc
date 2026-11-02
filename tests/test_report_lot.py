@@ -213,3 +213,32 @@ def test_consign_account_shows_each_sales_fee_breakdown(tmp_path, monkeypatch):
     monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
     _, csv_path = RL.write(lot, text, rows, date(2026, 10, 25))
     assert b"DERIVED (fee / $40.00 base)" in csv_path.read_bytes()
+
+
+def test_html_turns_the_ledger_into_a_table_and_keeps_the_figures(estate, monkeypatch):
+    listings = [{"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md",
+                 "price": "1250", "published_at": "2026-10-23", "listing_id": "206",
+                 "title": "Pair of <Brass> Candlesticks, PHOTOS ONLY lookalike"}]
+    monkeypatch.setattr(RL, "_all_listings", lambda: listings)
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    page = RL.html_report(RL.estate_text(estate, keep, left_out, items, date(2026, 10, 26)))
+    assert "<h2>SUMMARY</h2>" in page and "<h2>INVENTORY LEDGER</h2>" in page
+    assert page.count("<tr>") == len(items) + 1
+    assert "<td>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in page
+    assert '<td class=n>1,250.00</td>' in page and "<td>LIVE</td>" in page
+
+
+def test_pdf_failure_leaves_text_csv_and_html(estate, monkeypatch, capsys):
+    import subprocess
+    monkeypatch.setattr(RL, "OUT_DIR", estate.parent.parent.parent / "reports" / "lots")
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    monkeypatch.setattr(RL.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+        a, 1, stdout="", stderr="no chromium"))
+    assert RL.main(["ES/BUY1"]) == 0
+    out = capsys.readouterr()
+    wrote = next(ln for ln in out.out.splitlines() if ln.startswith("WROTE"))
+    assert wrote.count(".txt") == wrote.count(".csv") == wrote.count(".html") == 1
+    assert ".pdf" not in wrote and "FAILED pdf: no chromium" in out.err

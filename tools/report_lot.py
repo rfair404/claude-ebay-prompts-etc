@@ -6,8 +6,10 @@ each one stands, and a money summary.
     python tools/report_lot.py CONSIGN-YYYYMMDD        # consignment intake
     python tools/report_lot.py ES/<LOT> --print        # also print on CannonBW
 
-Writes reports/lots/<lot>-<date>.txt (plain text) and .csv (one row per item)
-and writes the .txt to stdout. Paper only with --print, which is only for
+Writes reports/lots/<lot>-<date>.txt (plain text), .csv (one row per item),
+.html (web page) and .pdf (landscape, for paper) and writes the .txt to
+stdout. The PDF is Chromium's print of the .html; if it fails the rest still
+land and the run says `FAILED pdf`. Paper only with --print, which is only for
 when Russell asks for it. Reads local ledgers only, never eBay, so
 run the finance sync and `consign sync --apply` first for fresh sale figures.
 
@@ -44,8 +46,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import io
 import re
+import tempfile
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -63,6 +67,7 @@ import stores                                                   # noqa: E402
 INVENTORY = REPO / "inventory"
 OUT_DIR = REPO / "reports" / "lots"
 PRINTER = "CannonBW"
+PDF_TIMEOUT = 60
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
 STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
@@ -410,6 +415,126 @@ def write(lot: Path, text: str, rows: list[dict], today: date) -> tuple[Path, Pa
     return txt, csv_path
 
 
+def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
+    """Column spans of a fixed-width table: the runs between gaps of 2+
+    positions that are blank on every row (header included)."""
+    width = max(map(len, rows))
+    blank = [all(len(r) <= i or r[i] == " " for r in rows) for i in range(width)]
+    spans, start, gap = [], None, 0
+    for i, b in enumerate(blank + [True, True]):
+        if b:
+            gap += 1
+            if start is not None and gap == 2:
+                spans.append((start, i - 1))
+                start = None
+        else:
+            gap = 0
+            if start is None:
+                start = i
+    return spans
+
+
+def _table_html(header: str, body: list[str]) -> str:
+    spans = _split_columns([header] + body)
+    cut = lambda line: [html.escape(line[a:b].strip()) for a, b in spans]  # noqa: E731
+    num = re.compile(r"^(?:[-$\d,.]+|pending)$")
+    cells = [cut(r) for r in body]
+    right = [bool(cells) and all(num.match(c[i]) or not c[i] for c in cells)
+             for i in range(len(spans))]
+    th = "".join(f'<th{" class=n" if right[i] else ""}>{c}</th>' for i, c in enumerate(cut(header)))
+    trs = "".join("<tr>" + "".join(f'<td{" class=n" if right[i] else ""}>{c}</td>'
+                                   for i, c in enumerate(row)) + "</tr>" for row in cells)
+    return f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
+
+
+def html_report(text: str) -> str:
+    """The account as a web page: every all-caps heading line starts a
+    section; a header line over a row of dashes becomes a real table and
+    everything else stays preformatted, so the figures are the text's."""
+    lines = text.rstrip("\n").split("\n")
+    title = html.escape(lines[0])
+    out, pre, i = [], [], 1
+
+    def flush():
+        if any(x.strip() for x in pre):
+            out.append("<pre>" + html.escape("\n".join(pre).strip("\n")) + "</pre>")
+        pre.clear()
+
+    while i < len(lines):
+        line = lines[i]
+        if (i + 1 < len(lines) and re.fullmatch(r"-{20,}", lines[i + 1])):
+            flush()
+            j = i + 2
+            while j < len(lines) and lines[j].strip():
+                j += 1
+            out.append(_table_html(line, lines[i + 2:j]))
+            i = j
+            continue
+        if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):
+            flush()
+            out.append(f"<h2>{html.escape(line)}</h2>")
+        else:
+            pre.append(line)
+        i += 1
+    flush()
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+body{{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding:16px;color:#222;background:#fff}}
+h1{{font-size:1.25rem;margin:0 0 12px}} h2{{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}}
+pre{{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}}
+.scroll{{overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:13px}}
+th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
+th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}
+@media print{{@page{{size:landscape;margin:12mm}}body{{max-width:none;padding:0;font-size:11px}}
+table{{font-size:10px}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
+</style></head><body>
+<h1>{title}</h1>
+{"".join(out).replace("<table", '<div class="scroll"><table').replace("</table>", "</table></div>")}
+</body></html>
+"""
+
+
+def render_pdf(html_path: Path, pdf_path: Path) -> Optional[str]:
+    """Headless Chromium prints the page to PDF. Returns why it failed, or
+    None once the PDF exists (Chromium can log errors and still write one)."""
+    with tempfile.TemporaryDirectory() as prof:
+        try:
+            r = subprocess.run(["chromium", "--headless", "--disable-gpu", "--no-pdf-header-footer",
+                                f"--user-data-dir={prof}", f"--print-to-pdf={pdf_path}",
+                                html_path.as_uri()],
+                               capture_output=True, text=True, timeout=PDF_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return str(e)
+    if pdf_path.exists() and pdf_path.stat().st_size:
+        return None
+    return (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()[-1]
+
+
+def write_web(txt: Path, text: str) -> tuple[Path, Optional[Path], Optional[str]]:
+    """Web page and printer-friendly PDF beside the .txt. The PDF is None,
+    with the reason, when Chromium could not render it."""
+    page = txt.with_suffix(".html")
+    page.write_text(html_report(_report.ascii_text(text)), encoding="utf-8")
+    pdf = txt.with_suffix(".pdf")
+    pdf.unlink(missing_ok=True)
+    why = render_pdf(page, pdf)
+    return page, (None if why else pdf), why
+
+
+def print_file(path: Path) -> str:
+    """The PDF prints as rendered (landscape from its @page). Raises
+    RuntimeError when lp fails, so a sheet that never printed can't be
+    reported as printed."""
+    res = subprocess.run(["lp", "-d", PRINTER, "-t", path.stem, str(path)],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"lp exited {res.returncode}: {(res.stderr or res.stdout).strip()}")
+    return res.stdout.strip()
+
+
 def print_txt(path: Path) -> str:
     """Landscape at 12 cpi so the ~130-column ledger fits one line per item.
     Raises RuntimeError when lp fails, so a sheet that never printed can't be
@@ -425,7 +550,7 @@ def print_txt(path: Path) -> str:
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Full account of one lot: item ledger + summary.")
     ap.add_argument("lot", help="lot folder under inventory/, e.g. ES/<LOT> or CONSIGN-YYYYMMDD")
-    ap.add_argument("--print", action="store_true", help=f"also print the .txt on {PRINTER}")
+    ap.add_argument("--print", action="store_true", help=f"also print the PDF (the .txt if no PDF) on {PRINTER}")
     args = ap.parse_args(argv)
     today = date.today()
     lot = lot_dir(args.lot)
@@ -442,11 +567,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         text = estate_text(lot, keep, left_out, items, today)
         rows = [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
     txt, csv_path = write(lot, text, rows, today)
+    page, pdf, why = write_web(txt, text)
     sys.stdout.write(text)
-    print(f"\nWROTE {txt.relative_to(REPO)}  {csv_path.relative_to(REPO)}")
+    print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in (txt, csv_path, page, pdf) if p))
+    if why:
+        print(f"FAILED pdf: {why}", file=sys.stderr)
     if args.print:
         try:
-            print("PRINTED " + print_txt(txt))
+            print("PRINTED " + (print_file(pdf) if pdf else print_txt(txt)))
         except (RuntimeError, OSError) as e:
             print(f"FAILED print on {PRINTER}: {e}", file=sys.stderr)
             return 1
