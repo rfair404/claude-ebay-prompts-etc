@@ -674,8 +674,12 @@ def summary_md(rows: list[dict], today: date, *, stores_scanned: list[str],
     out += [f"- {r['item_id']} {r['sku']} {r['title'][:50]}: {r['reason']} "
             f"-> {r['shoot_dir'] or '(no shoot dir)'}" for r in q]
     held = [r for r in rows if r["status"] == HELD]
-    reasons = Counter(re.sub(r"\$[\d.,]+|\(until [^)]*\)", "", r["reason"]).strip()[:70]
-                      for r in held)
+    def _group(reason: str) -> str:
+        if reason.startswith(("$", "under $36")):
+            return reason  # the price-band rules read whole
+        return re.sub(r"\$[\d.,]+|\(until [^)]*\)", "", reason).strip()[:70]
+
+    reasons = Counter(_group(r["reason"]) for r in held)
     out += ["", f"## Held: {len(held)}", ""]
     out += [f"- {n} x {why}" for why, n in reasons.most_common()]
     named = [r for r in held if not r["reason"].startswith(("$", "under $36"))]
