@@ -321,7 +321,9 @@ def _reports(tmp_path):
         "store,sku,listing_id,title,last_cut,hold_until,excluded_reason\n"
         "default,p1,880009332259,Pfaff,,,\"Russell's price: Pfaff CPC test\"\n"
         "default,t1,2061,Turkey,never,2026-11-29,Fall/Thanksgiving hold\n"
-        "default,u1,2062,Mag,,,under $36 (Russell's rule)\n", encoding="utf-8")
+        "default,u1,2062,Mag,,,under $36 (Russell's rule)\n"
+        "default,k1,2063,Spoon,,,\"K01 consignment, cut -5% 10-27 (Russell's timing)\"\n",
+        encoding="utf-8")
     return r
 
 
@@ -340,7 +342,7 @@ def test_backfill_reads_applied_logs_and_last_cut_only(tmp_path):
         "73.00", "70.00", "50.00")
     assert applied["store"] == "default"
     held = {x["sku"] for x in L.read_csv(holds)}
-    assert held == {"p1", "t1"}                          # not "Russell's rule"
+    assert held == {"p1", "t1"}                  # not "Russell's rule", not K01
     assert added == 3 and h == 2
 
 

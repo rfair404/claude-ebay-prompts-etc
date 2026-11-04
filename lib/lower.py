@@ -419,7 +419,10 @@ def holds_from_aging_csv(path: Path) -> list[dict]:
     for r in read_csv(path):
         until = (r.get("hold_until") or "").strip()
         why = (r.get("excluded_reason") or "").strip()
-        russell = "Russell" in why and "Russell's rule" not in why
+        # K01 is proposed with a note, never held for being K01 (its timing
+        # rows say "Russell's timing" but are a past cut, not a standing hold)
+        russell = ("Russell" in why and "Russell's rule" not in why
+                   and not why.startswith("K01"))
         if until or russell:
             out.append({"sku": r.get("sku", ""), "item_id": r.get("listing_id", ""),
                         "store": r.get("store", ""), "until": until,
