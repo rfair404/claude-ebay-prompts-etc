@@ -256,6 +256,14 @@ def test_best_offer_floor_below_melt_is_held(tmp_path):
     assert row["status"] == L.HELD and "Best Offer floor" in row["reason"]
 
 
+def test_failed_getitem_read_is_held_not_proposed(tmp_path):
+    def boom(l):
+        raise RuntimeError("GetItem timeout")
+    row = L.evaluate(_listing(), _ctx(_shoot(tmp_path), floors=boom))
+    assert row["status"] == L.HELD and row["reason"] == "GetItem read failed"
+    assert not row["new_price"]
+
+
 def test_spot_unavailable_fails_closed(tmp_path):
     s = _shoot(tmp_path, tiers=("200", "250", "450"))
     row = L.evaluate(_listing(price="450", title=GOLD), _ctx(s, spot=lambda m: None))
@@ -489,3 +497,10 @@ def test_scan_uses_read_calls_only(tmp_path, monkeypatch):
     assert "Cat &amp; Dog" in html and "yes / no" in html
     md = L.summary_md(rows, TODAY, stores_scanned=["default"], spot_seen={}, max_reprice=10)
     assert "PROPOSED 1" in md
+
+
+def test_summary_keeps_dollar_amounts_in_held_reasons():
+    rows = [L.evaluate(_listing(price=p, sku=f"s{p}", item_id=p), _ctx())
+            for p in ("20", "33", "90")]
+    md = L.summary_md(rows, TODAY, stores_scanned=["default"], spot_seen={}, max_reprice=10)
+    assert "1 x $25 or under" in md and "1 x $30-35.99" in md

@@ -574,7 +574,10 @@ def evaluate(l: Listing, ctx: Ctx) -> dict:
     if info.stale:
         return done(STALE_PRICE, info.stale)
 
-    decline, accept = ctx.floors(l)
+    try:
+        decline, accept = ctx.floors(l)
+    except Exception:  # noqa: BLE001 — no floors means no safe cut
+        return done(HELD, "GetItem read failed")
     row["auto_decline"], row["auto_accept"] = money(decline), money(accept)
     cut = cut_math(l.price, t["recommended"], decline, accept)
     if cut.status != PROPOSED:
@@ -1045,7 +1048,7 @@ def cmd_scan(a) -> int:
             it = fetch_item(l.item_id, creds_by[l.store])
         except Exception as e:  # noqa: BLE001 — a failed read holds nothing up but its row
             print(f"  ! GetItem {l.item_id}: {e}", file=sys.stderr)
-            return None, None
+            raise
         return it["auto_decline"], it["auto_accept"]
 
     ctx = Ctx(today=today, log_rows=read_csv(a.log), holds=read_csv(a.holds),
