@@ -94,6 +94,9 @@ COMMANDS = {
     "ledger":       ("lib.ledger_store",
                      "ledgers in the cloud (#380): check (403 allowlist probe), pull, "
                      "push, seed/restore (dry run unless --apply), history"),
+    "lower":        ("lib.lower",
+                     "aging price steps: scan (read-only queue + review page), apply "
+                     "(dry run unless --confirm), backfill the price-change log"),
     "probe":        ("tools.probe",
                      "per-image PIL metadata + subject bbox/coverage, read-only (#74 item 4)"),
 }
@@ -104,11 +107,11 @@ COMMANDS = {
 STORE_AWARE = {
     "reconcile", "live-audit", "pick-list", "policy-sweep", "price-audit",
     "sales-report", "ad-report", "dashboard", "report", "promote", "listing", "status",
-    "freight",
+    "freight", "lower",
 }
 # Store-aware, but refuse --all-stores: each run can bulk-write to eBay or
 # spend money, so the store has to be typed, once, by name.
-SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "freight"}
+SINGLE_STORE_ONLY = {"policy-sweep", "listing", "promote", "freight", "lower"}
 
 
 def _pop_store_flags(args: list[str]) -> tuple[str | None, bool, list[str]]:

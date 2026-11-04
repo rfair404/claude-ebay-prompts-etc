@@ -1,6 +1,6 @@
 ---
-version: 5.1.0
-updated: 2026-10-29
+version: 5.2.0
+updated: 2026-11-03
 ---
 
 # RUN — v4 headless runbook
@@ -809,6 +809,21 @@ runs ONLY when the user asks (never as part of the automated pipeline):
 Withdraw/delete are destructive and **HARD-gated like publish**: confirm the
 exact target with the user (run the dry run first, show what it hits), and
 only pass `--confirm` on an explicit yes. Use `--offers` to find IDs.
+
+**Aging price steps (`lower`, `lib/lower.py`).** The markdown plan's tool.
+`python -m lib.cli lower scan` is read-only: it pulls every active listing
+in both stores, takes each one's last price change from
+`reports/lower/price_changes.csv` (else its eBay start date), and writes
+`reports/lower/<date>/queue.csv`, `queue.md` and `review.html` with one
+status per listing: PROPOSED, AT_TARGET, STALE_PRICE, HELD (with the reason)
+or SKIPPED. Seasonal holds and Russell's own prices sit in
+`reports/lower/holds.csv`. The rules (15 days between steps, $36+ only,
+Conservative, cost and live-spot melt floors, whole dollars) are in the
+module docstring. `lower apply --queue <queue.csv> --yes-skus a,b` dry-runs
+`listing --update --fields price,bestoffer` for the rows Russell said yes
+to; `--confirm` re-checks each live price, writes, and logs the change.
+It replaces the per-run `reports/*_apply.py` scripts. `lower backfill`
+seeded the log once from the old aging reports and is safe to re-run.
 
 Cross-cutting depth rules:
 - Condition analysis in IDENTIFY and INVESTIGATE uses
