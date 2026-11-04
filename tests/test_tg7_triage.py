@@ -172,6 +172,7 @@ def test_import_without_a_hint_passes_no_model(importer, tmp_path):
     args = (tmp_path / "claude.args").read_text().splitlines()
     assert "--model" not in args
     assert "first-pass" not in args[args.index("-p") + 1]
+    assert "tg7_next" not in args[args.index("-p") + 1]
 
 
 def test_a_hint_file_steers_one_import_then_is_used_up(importer, tmp_path):
@@ -185,6 +186,7 @@ def test_a_hint_file_steers_one_import_then_is_used_up(importer, tmp_path):
     prompt = args[args.index("-p") + 1]
     assert "first-pass triage only" in prompt and "client KBD" in prompt
     lot = next((main / "inventory").glob("tg7-*"))
+    assert f"Read inventory/_consign/tg7_next.used-{lot.name}.txt" in prompt
     assert not (hints / "tg7_next.txt").exists()
     assert (hints / f"tg7_next.used-{lot.name}.txt").exists()
     assert "hint used: client=KBD model=haiku" in (lot / "import.log").read_text()

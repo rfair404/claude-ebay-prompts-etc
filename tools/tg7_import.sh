@@ -12,7 +12,8 @@
 # One-shot hint: if inventory/_consign/tg7_next.txt exists (lines `client: KBD`
 # and/or `model: haiku`), this import is a first-pass triage for that
 # consignment client on that model (--model), with no IDENTIFY. The import
-# renames it tg7_next.used-<lot>.txt, so it applies to one import only.
+# renames it tg7_next.used-<lot>.txt, so it applies to one import only, and
+# tells the agent to read that file for any free-text notes in it.
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -50,6 +51,7 @@ if [ -f "$HINT" ]; then
   echo "hint used: client=${client:-none} model=${m:-default}"
   [ -n "$m" ] && model=(--model "$m")
   prompt+=" Hint for this import: first-pass triage only (\"Triage-only hint\" in that section)."
+  prompt+=" Read inventory/_consign/tg7_next.used-$LOT.txt for this import's notes and follow them."
   [ -n "$client" ] && prompt+=" This lot is a consigned bin for client $client: catalog with add --no-folder; consign import waits for an attended run."
 fi
 cd "$MAIN" && "$CLAUDE" --agent inventory-manager "${model[@]}" -p "$prompt" \
