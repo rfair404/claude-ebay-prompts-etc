@@ -25,6 +25,7 @@ assumed stale. These are how you check.
 | `offer_floor_audit.py` | Does each live listing's Best Offer floor match its price file? |
 | `price_audit.py` | Which listings are still asking above their own comp evidence. |
 | `price_vs_actual.py` | Did the PRICE stage's justified band survive contact with buyers? |
+| *(aging price steps)* | Not a script here: `python -m lib.cli lower scan` (read-only queue, `queue.md` and `review.html` under `reports/lower/<date>/`), then `lower apply --queue ... --yes-skus ...` (dry run unless `--confirm`). It replaces the per-run `reports/*_apply.py` scripts; don't write new ones. |
 | `prep_assess.py` | Read-only: is each listing sellable, and what state are its photos in? |
 
 ## PREP — batch photo work
