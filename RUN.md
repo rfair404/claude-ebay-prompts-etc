@@ -1,6 +1,6 @@
 ---
-version: 5.1.0
-updated: 2026-10-29
+version: 5.2.0
+updated: 2026-11-03
 ---
 
 # RUN — v4 headless runbook
