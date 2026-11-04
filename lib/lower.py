@@ -959,12 +959,11 @@ def apply_rows(rows: list[dict], yes: set[str], *, confirm: bool,
             out.append(Applied(r["item_id"], "", "manual",
                                f"no SKU: Seller Hub ${cur} -> ${new}"))
             continue
-        if confirm:
-            live = live_price(r)
-            if live is None or abs(live - cur) > Decimal("0.005"):
-                out.append(Applied(r["item_id"], r["sku"], "refused",
-                                   f"live price {live} is not the queue's {cur}: re-scan"))
-                continue
+        live = live_price(r)
+        if live is None or abs(live - cur) > Decimal("0.005"):
+            out.append(Applied(r["item_id"], r["sku"], "refused",
+                               f"live price {live} is not the queue's {cur}: re-scan"))
+            continue
         d = draft_for(r)
         if not d or not (d / "draft.md").exists():
             out.append(Applied(r["item_id"], r["sku"], "failed", "no draft (draft_rebuild failed)"))
@@ -972,7 +971,8 @@ def apply_rows(rows: list[dict], yes: set[str], *, confirm: bool,
         f = d / "draft.md"
         orig = f.read_text(encoding="utf-8")
         edited = set_draft_prices(orig, new, nd, na)
-        assert _title(edited) == _title(orig), "title_unchanged"
+        if _title(edited) != _title(orig):
+            raise RuntimeError("title_unchanged violated")
         fields = "price,bestoffer" if (nd is not None or na is not None) else "price"
         f.write_text(edited, encoding="utf-8")
         ok = False
