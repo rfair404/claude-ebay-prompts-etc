@@ -258,10 +258,11 @@ def test_consign_held_items_are_marked_and_listed(tmp_path, monkeypatch):
             dict(base, item_id="K01-C002", description="Plain cup", state="SHOT")]
     C.write_ledger(lot / C.LEDGER_NAME, rows)
     text, out = RL.consign_account(lot, "K01", date(2026, 11, 2))
-    assert "HELD BACK" in text and "SHOT HOLD" in text
-    sec = text.split("HELD BACK")[1].split("INVENTORY LEDGER")[0]
-    assert "K01-C001" in sec and "K01-C002" not in sec
-    assert {r["item_id"]: r["hold"] for r in out} == {"K01-C001": "HOLD", "K01-C002": ""}
+    ledger, sec = text.split("INVENTORY LEDGER")[1].split("HELD BACK")
+    assert "K01-C002" in ledger and "K01-C001" not in ledger
+    # held rows come last, one short line each: id and title, no reason
+    assert sec.strip().splitlines()[1:] == ["  K01-C001  Gold chain"]
+    assert [(r["item_id"], r["hold"]) for r in out] == [("K01-C002", ""), ("K01-C001", "HOLD")]
 
 
 def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
