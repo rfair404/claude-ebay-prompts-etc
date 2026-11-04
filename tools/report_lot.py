@@ -333,6 +333,12 @@ def _held(r: dict) -> bool:
     return r.get("state") == "HOLD" or any("[HOLD]" in (r.get(k) or "") for k in ("why", "state_note"))
 
 
+def _local(r: dict) -> bool:
+    """In the GAM case: LISTED on the mall channel with its GAM SKU and placed_at."""
+    return (r.get("state") == "LISTED" and (r.get("channel") or "").strip().lower() == "mall"
+            and bool(r.get("placed_at")) and bool(r.get("listing_id")))
+
+
 def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
@@ -366,12 +372,15 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
          f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}   Split {terms['split'] * 100:.0f}% of net to client",
          "", "SUMMARY (tools/consign.py report; states as of the last `consign sync --apply`)"]
     L += summary
+    local = sum(_local(r) for r in rows)
+    if local:
+        L.append(f"    of the listed, {local} AVAILABLE LOCALLY (confirmed in the GAM case, not on eBay)")
     # Held rows go last, one short line each, after the ledger and fees: they
     # are counted in the totals but are not for sale yet.
     held = [r for r in rows if _held(r)]
     rows = [r for r in rows if not _held(r)] + held
     L += ["", "INVENTORY LEDGER"]
-    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<14}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
+    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<19}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}{'FB':>5}"
     L += [hdr, "-" * len(hdr)]
     out, fee_out, fees = [], [], []
     fee_lines = C.load_fee_lines()
@@ -380,8 +389,9 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         d = d if len(d) <= 52 else d[:51] + "~"
         if not _held(r):
             L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:11]:<12}"
-                     f"{plan.get(r.get('cut') or '', '-'):<10}{r.get('state') or '':<14}{val(r):<13}"
-                     f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
+                     f"{plan.get(r.get('cut') or '', '-'):<10}{'AVAILABLE LOCALLY' if _local(r) else r.get('state') or '':<19}{val(r):<13}"
+                     f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}"
+                     f"{'yes' if r.get('fb_promoted') else '-':>5}")
         # fees go in their own section after the ledger, one block per sale
         bd = C.fee_breakdown(r, fee_lines)
         if bd:
@@ -389,7 +399,8 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
                     "photos": r.get("photos") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
-                    "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "", "est_low": r.get("est_low") or "",
+                    "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "",
+                    "available_locally": "yes" if _local(r) else "", "fb_promoted": r.get("fb_promoted") or "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
                     "buyout_price": r.get("buyout_price") or "", "store": r.get("store") or "",
                     "sku": r.get("sku") or "", "listing_id": r.get("listing_id") or "",

@@ -1,5 +1,5 @@
 ---
-version: 5.2.0
+version: 5.3.0
 updated: 2026-11-03
 ---
 
@@ -579,7 +579,10 @@ in `placed_at`. `sync` then keeps the row `LISTED`, the report counts it
 under listed at its `ask` (the booth tag), and the listing-window flag counts
 from `placed_at`. Off eBay, `listing_id` is never looked up in the eBay
 ledgers. `sync` refuses `placed_at` on an eBay row, or without a
-`listing_id`. A row with no `placed_at` stays on hand (`PREP`).
+`listing_id`. A row with no `placed_at` stays on hand (`PREP`). The lot report shows a
+placed row as `AVAILABLE LOCALLY` (in the GAM case) rather than `LISTED`.
+Type the date an item was posted to Facebook in `fb_promoted`; the report's
+`FB` column shows `yes` for it.
 
 **Floors and time limits.** These only raise flags. A row's `floor` (from
 Exhibit A; a lot's floor is the total of its rows) is checked against the ask

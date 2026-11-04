@@ -145,6 +145,8 @@ COLUMNS = [
     # placed_at: off eBay, the date the item went on the channel's floor (the
     # mall booth), with that channel's own item id (the GAM SKU) in listing_id.
     "placed_at",
+    # fb_promoted: the date the item was posted to Facebook, typed by hand.
+    "fb_promoted",
 ]
 MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded",
          "gross", "ebay_fee", "net_before_postage", "ad_fee", "actual_postage",
@@ -155,7 +157,7 @@ MONEY = ("est_low", "est_high", "ask", "item_price", "buyer_shipping", "refunded
 SALE_MONEY = tuple(k for k in MONEY
                    if k not in ("est_low", "est_high", "buyout_price", "floor"))
 DATES = ("sold_at", "cleared_on", "paid_to_client_date", "intake", "delivered_at",
-         "return_notice_sent", "funds_received", "placed_at")
+         "return_notice_sent", "funds_received", "placed_at", "fb_promoted")
 # Copied from the sales ledger row on every sync. ad_fee / actual_postage are
 # copied only when the sales ledger knows them: a blank there means "not read
 # yet", and a figure typed into the client ledger by hand is kept instead.
