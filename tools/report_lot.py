@@ -52,7 +52,6 @@ import io
 import re
 import os
 import tempfile
-import textwrap
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -71,7 +70,7 @@ INVENTORY = REPO / "inventory"
 OUT_DIR = REPO / "reports" / "lots"
 PRINTER = "CannonBW"
 PDF_TIMEOUT = 60
-THUMB_PX = 120
+THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
 STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
@@ -334,6 +333,77 @@ def _held(r: dict) -> bool:
     return r.get("state") == "HOLD" or any("[HOLD]" in (r.get(k) or "") for k in ("why", "state_note"))
 
 
+def _short(desc: str, n: int) -> str:
+    """A client-facing item name: the first clause, without parenthetical
+    notes or any clause naming Russell, cut at a word near n characters."""
+    d = _report.ascii_text((desc or "").split(";")[0].replace("\n", " "))
+    d = re.sub(r"\s*\([^)]*\)", "", d)
+    d = ", ".join(c for c in d.split(", ") if "Russell" not in c)
+    d = re.sub(r"\s+", " ", d).strip(" ,")
+    if len(d) <= n:
+        return d
+    cut = d[:n - 1].rsplit(" ", 1)[0].rstrip(",;:-")
+    return cut + "~"
+
+
+def _overview(C, f: dict, rows: list[dict]) -> list[str]:
+    """The summary as two tables: what the items are doing, then the money."""
+    m = C.money
+
+    def est(group):
+        lo, hi, _ = C.estimates(group)
+        return f"${m(C._sum(lo))}-{m(C._sum(hi))}" if lo else "-"
+
+    def ask(group):
+        return m(C._sum(C.dec(r["ask"]) for r in group)) if any(r["ask"] for r in group) else "-"
+    listed = f["listed"]
+    local = [r for r in listed if _local(r)]
+    ebay = [r for r in listed if not _local(r)]
+    hand = [r for r in f["hand"] if not _held(r)]
+    held = [r for r in f["hand"] if _held(r)]
+    sold, ex = f["sold"], f["excluded"]
+    gone = f["by_state"]["RETURNED"] + f["by_state"]["DISPOSED"]
+    share = C._sum(C.sold_share(r, f["split"], f["loss_rule"]) for r in sold)
+    groups = [("Sold", sold, "-", "-", m(f["sold_gross"]), m(f["sold_net"]), m(share)),
+              ("Listed on eBay", ebay, est(ebay), ask(ebay), "-", "-", "-"),
+              ("Available locally", local, est(local), ask(local), "-", "-", "-"),
+              ("On hand", hand, est(hand), "-", "-", "-", "-"),
+              ("Held back", held, "-", "-", "-", "-", "-"),
+              ("Bought by us", ex, "-", "-", "-", "-",
+               m(C._sum(C.dec(r["buyout_price"]) for r in ex))),
+              ("Returned / disposed", [None] * gone, "-", "-", "-", "-", "-")]
+    hdr = f"{'GROUP':<22}{'ITEMS':>6}  {'ESTIMATE':<20}{'LIST PRICE':>11}{'GROSS':>10}{'NET':>10}{'CLIENT':>10}"
+    L = ["", "OVERVIEW", hdr, "-" * len(hdr)]
+    for name, g, e, a, gross, net, cl in groups:
+        if g:
+            L.append(f"{name:<22}{len(g):>6}  {e:<20}{a:>11}{gross:>10}{net:>10}{cl:>10}")
+    hdr = f"{'MONEY':<26}{'AMOUNT':>10}  NOTE"
+    L += ["", "CLIENT MONEY", hdr, "-" * len(hdr)]
+    lines = [("Share owed now", f["owed"], "sold, cleared, not paid"),
+             ("Buyouts owed", C._sum(C.dec(r["buyout_price"]) for r in f["buyouts_owed"]),
+              f"{len(f['buyouts_owed'])} items we bought, not paid"),
+             ("Share pending", f["pending"], "sold, return window open"
+              + (" (upper bound)" if f["pending_upper"] else "")),
+             ("Handling kept", f["handling"], f"{f['handling_n']} sales, before the split"),
+             ("Paid to date", f["paid_total"], "")]
+    if f["adjustments"]:
+        lines.insert(3, ("Adjustments pending", C._sum(a for _, a in f["adjustments"]), ""))
+    for name, amt, note in lines:
+        L.append(f"{name:<26}{m(amt):>10}  {note or '-'}")
+    notes = []
+    if f["incomplete"]:
+        notes.append(f"{len(f['incomplete'])} sales provisional: ad fee or postage not known yet")
+    if f["flagged"]:
+        notes.append(f"{len(f['flagged'])} rows flagged by sync (see `consign sync`)")
+    return L + ([""] + notes if notes else [])
+
+
+def _local(r: dict) -> bool:
+    """In the GAM case: LISTED on the mall channel with its GAM SKU and placed_at."""
+    return (r.get("state") == "LISTED" and (r.get("channel") or "").strip().lower() == "mall"
+            and bool(r.get("placed_at")) and bool(r.get("listing_id")))
+
+
 def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
@@ -341,8 +411,9 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
     registry = C.load_registry()
     terms = C.client_terms(registry, client)
     settlements = C.read_settlements(client)
-    summary = C.client_summary([(r.get("intake") or lot.name, r) for r in rows],
-                               terms["split"], settlements, terms["loss_rule"], today)
+    figs = C.summary_figures([(r.get("intake") or lot.name, r) for r in rows],
+                             terms["split"], settlements, terms["loss_rule"], today)
+    figs.update(split=terms["split"], loss_rule=terms["loss_rule"])
     name = (registry.get(client) or {}).get("name") or client
     plan = {"LOT": "in a lot", "LIST": "single", "RETURN": "return"}
 
@@ -365,34 +436,33 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
 
     L = [f"LOT ACCOUNT - {label(lot)}   consignment, client {client} {name}   (as of {today.isoformat()})",
          f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}   Split {terms['split'] * 100:.0f}% of net to client",
-         "", "SUMMARY (tools/consign.py report; states as of the last `consign sync --apply`)"]
-    L += summary
+         "States as of the last `consign sync --apply`."]
+    L += _overview(C, figs, rows)
+    # Held rows go last, one short line each, after the ledger and fees: they
+    # are counted in the totals but are not for sale yet.
     held = [r for r in rows if _held(r)]
-    if held:
-        L += ["", "HELD BACK (marked HOLD; counted in the ledger and totals below)"]
-        for r in held:
-            why = re.sub(r"\s+", " ", r.get("state_note") or r.get("why") or "")
-            L += textwrap.wrap(_report.ascii_text(why), 118, initial_indent=f"  {r['item_id']:<10}",
-                               subsequent_indent=" " * 12)
+    rows = [r for r in rows if not _held(r)] + held
     L += ["", "INVENTORY LEDGER"]
-    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<14}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}"
+    hdr = f"{'#':<10}{'ITEM':<54}{'QTY':<12}{'PLAN':<10}{'STATE':<19}{'EST / ASK':<13}{'SOLD':>9}{'CLIENT':>9}{'FB':>5}"
     L += [hdr, "-" * len(hdr)]
     out, fee_out, fees = [], [], []
     fee_lines = C.load_fee_lines()
     for r in rows:
-        d = _report.ascii_text((r.get("description") or "").split(";")[0].replace("\n", " "))
-        d = d if len(d) <= 52 else d[:51] + "~"
-        L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:11]:<12}"
-                 f"{plan.get(r.get('cut') or '', '-'):<10}{(r.get('state') or '') + (' HOLD' if _held(r) and r.get('state') != 'HOLD' else ''):<14}{val(r):<13}"
-                 f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}")
+        d = _short(r.get("description") or "", 52)
+        if not _held(r):
+            L.append(f"{r['item_id']:<10}{d:<54}{_report.ascii_text(r.get('qty') or '')[:10]:<12}"
+                     f"{plan.get(r.get('cut') or '', '-'):<10}{'AVAILABLE LOCALLY' if _local(r) else r.get('state') or '':<19}{val(r):<13}"
+                     f"{r.get('item_price') or '-':>9}{r.get('client_share') or '-':>9}"
+                     f"{'yes' if r.get('fb_promoted') else '-':>5}")
         # fees go in their own section after the ledger, one block per sale
         bd = C.fee_breakdown(r, fee_lines)
         if bd:
             fees.append((r, d, bd))
-        out.append({"line": "item", "item_id": r["item_id"], "item": r.get("description") or "",
+        out.append({"line": "item", "item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
                     "photos": r.get("photos") or "",
                     "qty": r.get("qty") or "", "plan": plan.get(r.get("cut") or "", ""),
-                    "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "", "est_low": r.get("est_low") or "",
+                    "state": r.get("state") or "", "hold": "HOLD" if _held(r) else "",
+                    "available_locally": "yes" if _local(r) else "", "fb_promoted": r.get("fb_promoted") or "", "est_low": r.get("est_low") or "",
                     "est_high": r.get("est_high") or "", "ask": r.get("ask") or "",
                     "buyout_price": r.get("buyout_price") or "", "store": r.get("store") or "",
                     "sku": r.get("sku") or "", "listing_id": r.get("listing_id") or "",
@@ -411,7 +481,12 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
                   f"{'':<10}sold ${r.get('item_price') or '-'}   net ${r.get('net') or '-'}"
                   f"   client ${r.get('client_share') or '-'}"]
             L += C.fee_text(bd, indent=" " * 10)
-    return "\n".join(L) + "\n", out + fee_out
+    if held:
+        L += ["", f"HELD BACK ({len(held)} not for sale yet; counted in the totals above)"]
+        for r in held:
+            L.append(f"  {r['item_id']:<10}{_short(r.get('description') or '', 60)}")
+    # the client reads this: no names, ours or anyone's
+    return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out + fee_out
 
 
 # --------------------------------------------------------------------------- #
@@ -468,7 +543,7 @@ def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
 def _thumbs(rows: list[dict]) -> list[str]:
     """One <img> data URI per row ("" when it has no photo), so the page and
     its PDF are one self-contained file."""
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageFilter, ImageOps
     wanted = {(r.get("photos") or "").split()[0] for r in rows if (r.get("photos") or "").split()}
     found: dict[str, Path] = {}
     if wanted:
@@ -484,9 +559,10 @@ def _thumbs(rows: list[dict]) -> list[str]:
                 raise OSError
             with Image.open(src) as im:
                 im = ImageOps.exif_transpose(im).convert("RGB")
-                im.thumbnail((THUMB_PX, THUMB_PX))
+                im.thumbnail((THUMB_PX, THUMB_PX), Image.LANCZOS)
+                im = im.filter(ImageFilter.UnsharpMask(radius=1, percent=80, threshold=2))
                 buf = io.BytesIO()
-                im.save(buf, "JPEG", quality=70)
+                im.save(buf, "JPEG", quality=85)
             out.append("data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode())
         except (OSError, ValueError):
             out.append("")
@@ -528,7 +604,8 @@ def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
     everything else stays preformatted, so the figures are the text's."""
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
-    items = [r for r in (rows or []) if r.get("line", "item") == "item"]
+    # held rows are a plain list after the ledger table, not in it
+    items = [r for r in (rows or []) if r.get("line", "item") == "item" and not r.get("hold")]
     out, pre, i = [], [], 1
 
     def flush():
@@ -543,7 +620,8 @@ def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
             j = i + 2
             while j < len(lines) and lines[j].strip():
                 j += 1
-            out.append(_table_html(line, lines[i + 2:j], items if len(lines[i + 2:j]) == len(items) else None))
+            body = lines[i + 2:j]
+            out.append(_table_html(line, body, items if "ITEM" in line and len(body) == len(items) else None))
             i = j
             continue
         if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):
@@ -562,7 +640,7 @@ body{{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding
 h1{{font-size:1.25rem;margin:0 0 12px}} h2{{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}}
 pre{{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}}
 .scroll{{overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:13px}}
-img{{display:block;width:60px;height:60px;object-fit:cover;border-radius:3px}}
+img{{display:block;width:80px;height:80px;object-fit:cover;border-radius:3px}}
 th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
 td{{white-space:nowrap}} td.t{{white-space:normal;min-width:18em}}
 th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}

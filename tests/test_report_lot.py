@@ -1,3 +1,4 @@
+import re
 """tools/report_lot.py — which folders make up a lot, each item's status and
 the money summary. Fake folders in tmp_path; the ledgers are stubbed, so
 nothing reads the real inventory/ or calls eBay."""
@@ -258,10 +259,38 @@ def test_consign_held_items_are_marked_and_listed(tmp_path, monkeypatch):
             dict(base, item_id="K01-C002", description="Plain cup", state="SHOT")]
     C.write_ledger(lot / C.LEDGER_NAME, rows)
     text, out = RL.consign_account(lot, "K01", date(2026, 11, 2))
-    assert "HELD BACK" in text and "SHOT HOLD" in text
-    sec = text.split("HELD BACK")[1].split("INVENTORY LEDGER")[0]
-    assert "K01-C001" in sec and "K01-C002" not in sec
-    assert {r["item_id"]: r["hold"] for r in out} == {"K01-C001": "HOLD", "K01-C002": ""}
+    ledger, sec = text.split("INVENTORY LEDGER")[1].split("HELD BACK")
+    assert "K01-C002" in ledger and "K01-C001" not in ledger
+    # held rows come last, one short line each: id and title, no reason
+    assert sec.strip().splitlines()[1:] == ["  K01-C001  Gold chain"]
+    assert [(r["item_id"], r["hold"]) for r in out] == [("K01-C002", ""), ("K01-C001", "HOLD")]
+
+
+def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeypatch):
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    rows = [dict(base, item_id="K01-C001", description="Brass bell", state="LISTED", channel="mall",
+                 listing_id="BAXW4F", placed_at="2026-10-25", ask="20.00", fb_promoted="2026-11-01"),
+            dict(base, item_id="K01-C002", description="Tin sign", state="LISTED", listing_id="206", ask="30.00"),
+            dict(base, item_id="K01-C003", description="Oak box", state="LISTED", channel="mall", ask="15.00")]
+    C.write_ledger(lot / C.LEDGER_NAME, rows)
+    text, out = RL.consign_account(lot, "K01", date(2026, 11, 3))
+    line = {ln[:8]: ln for ln in text.splitlines() if ln.startswith("K01-C00")}
+    assert "AVAILABLE LOCALLY" in line["K01-C001"] and line["K01-C001"].endswith("yes")
+    # on eBay, or in the mall row without a GAM SKU and placed_at: plain LISTED, no FB
+    for k in ("K01-C002", "K01-C003"):
+        assert "AVAILABLE LOCALLY" not in line[k] and "LISTED" in line[k] and line[k].endswith("-")
+    overview = text.split("OVERVIEW")[1].split("CLIENT MONEY")[0]
+    assert re.search(r"Available locally +1 ", overview) and re.search(r"Listed on eBay +2 ", overview)
+    assert "Russell" not in text
+    assert [(r["available_locally"], r["fb_promoted"]) for r in out] == [
+        ("yes", "2026-11-01"), ("", ""), ("", "")]
 
 
 def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
