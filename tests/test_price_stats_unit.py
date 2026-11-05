@@ -123,6 +123,30 @@ def test_single_cohort_keeps_the_copies_and_drops_only_the_lots():
     assert sorted(r[0] for r in log.removed) == sorted(SINGLE_COPIES)
 
 
+# --- `--unit single`: Drueke cribbage board (MON1020-M/13, 2026-11-03) -----
+# Two one-board sold comps were dropped as lots: "Game Set" hit the bare
+# "set" word, and model "No 2050" next to "1950's" read as two years.
+BOARDS = [
+    "Vintage Drueke Cribbage Board Original Box",
+    "Drueke Cribbage Game Set Natural Finish",
+    "Druekes Natural Finish Hardwood Cribbage Board Game Set Original Box (J2)",
+    "1950's Drueke No 2050 Natural Finish HardWood Cribbage Board "
+    "Original Maroon Box",
+    "Drueke Model 2050 Cribbage Board Natural Finish Hardwood Original Box",
+]
+BOARD_LOTS = [
+    "Lot of 3 Drueke Cribbage Boards Original Box",
+    "Drueke Cribbage Board Set Pegs Cards Lot",
+    "Two Drueke Cribbage Game Sets 1950 and 1962",
+]
+
+
+def test_single_cohort_keeps_boxed_and_game_set_boards():
+    comps = [_comp(t) for t in BOARDS + BOARD_LOTS]
+    log = price_stats.filter_unit(comps, "single")
+    assert sorted(r[0] for r in log.removed) == sorted(BOARD_LOTS)
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

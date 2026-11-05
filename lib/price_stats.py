@@ -118,6 +118,14 @@ _MULTI_ITEM_WORDS = {
     "pair", "pairs", "group", "grouping", "joblot",
 }
 _YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+# A model/catalog number ("No. 2050", "Model 2050", "#2050") is not a year,
+# so it must not pair with a real year ("1950's ... No 2050") into a
+# multi-year lot. Stripped before years are counted.
+_MODEL_NO_RE = re.compile(r"(?:\b(?:no|nos|model)\.?|#)\s*#?\s*\d+",
+                          re.IGNORECASE)
+# "Game Set" names one game (a cribbage board with its pegs), not several
+# items. Removed before the bare "set" word check; "Game Sets" still flags.
+_SINGLE_SET_RE = re.compile(r"\bgame\s+set\b", re.IGNORECASE)
 # A digit that touches a quote/inch mark (7" x 6") or a length unit (6 in) is
 # a physical DIMENSION, not a quantity. Used to stop the x-multiplier count
 # patterns from false-positiving on eBay size strings.
@@ -309,6 +317,11 @@ def _run_meta(json_path: Union[str, Path]) -> dict:
 # Filters (each annotates comps in place and returns a FilterLog)
 # ---------------------------------------------------------------------------
 
+def _distinct_years(title: str) -> set:
+    """Years in a title, ignoring model/catalog numbers like "No 2050"."""
+    return set(_YEAR_RE.findall(_MODEL_NO_RE.sub(" ", title)))
+
+
 def looks_multi_item(title: str) -> bool:
     """True if a title reads as a multi-item listing (lot/set/bundle/N pcs).
 
@@ -333,16 +346,19 @@ def looks_multi_item(title: str) -> bool:
     False
     >>> looks_multi_item('Sterling Silver Spoon 8 inches Long')
     False
+    >>> looks_multi_item('Druekes Cribbage Board Game Set Original Box')
+    False
+    >>> looks_multi_item("1950's Drueke No 2050 Cribbage Board Original Box")
+    False
     """
-    t = title.lower()
+    t = _SINGLE_SET_RE.sub(" ", title.lower())
     words = set(re.findall(r"[a-z]+", t))
     if words & _MULTI_ITEM_WORDS:
         return True
     if _COUNT_RE.search(title):
         return True
     # Multiple DISTINCT years in one title → almost always a multi-year lot.
-    years = set(_YEAR_RE.findall(title))
-    if len(years) > 1:
+    if len(_distinct_years(title)) > 1:
         return True
     return False
 
@@ -413,7 +429,7 @@ def looks_pair_unit(title: str) -> bool:
         return False
     if _COUNT_RE.search(title):
         return False
-    if len(set(_YEAR_RE.findall(title))) > 1:
+    if len(_distinct_years(title)) > 1:
         return False
     return True
 
