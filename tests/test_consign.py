@@ -1010,7 +1010,7 @@ def test_client_report_and_lot_account_are_plain_ascii(shop, capsys, monkeypatch
     txt, csv_path = RL.write(d, text, rows, TODAY)
     body = txt.read_bytes()
     assert body.isascii() and csv_path.read_bytes().isascii()
-    assert b"-- see `consign sync`" in body
+    assert b"rows flagged by sync" in body
     line = next(ln for ln in body.decode().splitlines() if ln.startswith("K99-C001"))
     header = next(ln for ln in body.decode().splitlines() if ln.startswith("#"))
     assert line.index("$10.00-20.00") == header.index("EST / ASK")   # columns still line up

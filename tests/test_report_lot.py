@@ -1,3 +1,4 @@
+import re
 """tools/report_lot.py — which folders make up a lot, each item's status and
 the money summary. Fake folders in tmp_path; the ledgers are stubbed, so
 nothing reads the real inventory/ or calls eBay."""
@@ -285,7 +286,9 @@ def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeyp
     # on eBay, or in the mall row without a GAM SKU and placed_at: plain LISTED, no FB
     for k in ("K01-C002", "K01-C003"):
         assert "AVAILABLE LOCALLY" not in line[k] and "LISTED" in line[k] and line[k].endswith("-")
-    assert "1 AVAILABLE LOCALLY" in text.split("INVENTORY LEDGER")[0]
+    overview = text.split("OVERVIEW")[1].split("CLIENT MONEY")[0]
+    assert re.search(r"Available locally +1 ", overview) and re.search(r"Listed on eBay +2 ", overview)
+    assert "Russell" not in text
     assert [(r["available_locally"], r["fb_promoted"]) for r in out] == [
         ("yes", "2026-11-01"), ("", ""), ("", "")]
 

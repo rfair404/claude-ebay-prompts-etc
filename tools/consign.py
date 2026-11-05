@@ -2053,44 +2053,88 @@ def buyout_owed(r: dict) -> bool:
             and (dec(r["buyout_price"]) or Decimal(0)) > 0)
 
 
-def client_summary(items: list[tuple[str, dict]], split: Decimal,
-                   settlements: Optional[list[dict]] = None, loss_rule: str = "split",
-                   today: Optional[date] = None) -> list[str]:
+def estimates(group: list[dict]) -> tuple[list, list, int]:
+    """(lows, highs, unestimated): a blank bound takes the other one."""
+    lows, highs, none = [], [], 0
+    for r in group:
+        lo, hi = dec(r["est_low"]), dec(r["est_high"])
+        if lo is None and hi is None:
+            none += 1
+            continue
+        lows.append(lo if lo is not None else hi)
+        highs.append(hi if hi is not None else lo)
+    return lows, highs, none
+
+
+def sold_share(r: dict, split: Decimal, loss_rule: str = "split") -> Optional[Decimal]:
+    """A sold row's client share: the cleared figure once actuals are in, else
+    the provisional net's share (an upper bound while costs are unknown)."""
+    if r["actuals_complete"] == "yes":
+        return dec(r["client_share"])
+    pn = provisional_net(r)
+    return None if pn is None else share_of(pn, row_split(r, split), loss_rule)
+
+
+def summary_figures(items: list[tuple[str, dict]], split: Decimal,
+                    settlements: Optional[list[dict]] = None, loss_rule: str = "split",
+                    today: Optional[date] = None) -> dict:
+    """Every figure the client summary prints, for the text summary and for
+    the lot report's tables."""
     today = today or date.today()
     settlements = settlements or []
     rows = [r for _, r in items]
     mates = lot_plan(rows)
     units = [r for r in rows if r["item_id"] not in mates]   # a lot counts once
-    by_state = Counter(r["state"] or "INTAKE" for r in rows)
+    sold = [r for r in units if r["state"] in SOLD_STATES]
+    incomplete = [r for r in sold if r["actuals_complete"] != "yes"]
+    excluded = [r for r in rows if r["state"] == "EXCLUDED"]
+    pending_rows = [r for r in units if r["state"] == "SOLD"]
+    paid = [s for s in settlements if s["paid_date"]]
+
+    def paid_amount(s):
+        return dec(s["amount_paid"]) if s["amount_paid"] else settlement_due(s)
+    return {
+        "rows": rows, "mates": mates, "units": units,
+        "by_state": Counter(r["state"] or "INTAKE" for r in rows),
+        "sold": sold, "incomplete": incomplete,
+        "sold_net": _sum(dec(r["net"]) if r["actuals_complete"] == "yes" else provisional_net(r)
+                         for r in sold),
+        "sold_gross": _sum(dec(r["gross"]) for r in sold),
+        "listed": [r for r in units if r["state"] == "LISTED"],
+        "hand": [r for r in rows if (r["state"] or "INTAKE") in ON_HAND],
+        "excluded": excluded,
+        "handling": _sum(dec(r["handling"]) for r in sold),
+        "handling_n": sum(bool(dec(r["handling"])) for r in sold),
+        "owed": _sum(dec(r["client_share"]) for r in units
+                     if r["state"] == "CLEARED" and not r["paid_to_client_date"]),
+        "pending_rows": pending_rows,
+        "pending": _sum(sold_share(r, split, loss_rule) for r in pending_rows),
+        "pending_upper": any(r in incomplete for r in pending_rows),
+        "buyouts_owed": [r for r in excluded if buyout_owed(r)],
+        "adjustments": pending_adjustments(rows, settlements, split, loss_rule),
+        "open_settlements": [s for s in settlements if not s["paid_date"]],
+        "paid_year": _sum(paid_amount(s) for s in paid if s["paid_date"][:4] == str(today.year)),
+        "paid_total": _sum(paid_amount(s) for s in paid),
+        "year": today.year,
+        "flagged": [r["item_id"] for r in rows if FLAG in r["state_note"]],
+    }
+
+
+def client_summary(items: list[tuple[str, dict]], split: Decimal,
+                   settlements: Optional[list[dict]] = None, loss_rule: str = "split",
+                   today: Optional[date] = None) -> list[str]:
+    f = summary_figures(items, split, settlements, loss_rule, today)
+    mates, by_state, sold, incomplete = f["mates"], f["by_state"], f["sold"], f["incomplete"]
+    listed, hand, excluded, sold_net = f["listed"], f["hand"], f["excluded"], f["sold_net"]
     out = ["  by state: " + " | ".join(f"{s} {by_state[s]}" for s in STATES if by_state[s])]
     if mates:
         out.append(f"  lots: {len({lot for lot, _ in mates.values()})}, "
                    f"{len(mates)} lot-mate(s) valued with their lead row")
-
-    sold = [r for r in units if r["state"] in SOLD_STATES]
-    incomplete = [r for r in sold if r["actuals_complete"] != "yes"]
-    sold_net = _sum(dec(r["net"]) if r["actuals_complete"] == "yes" else provisional_net(r)
-                    for r in sold)
-    listed = [r for r in units if r["state"] == "LISTED"]
-    hand = [r for r in rows if (r["state"] or "INTAKE") in ON_HAND]
-
-    def estimates(group):
-        """(lows, highs, unestimated): a blank bound takes the other one."""
-        lows, highs, none = [], [], 0
-        for r in group:
-            lo, hi = dec(r["est_low"]), dec(r["est_high"])
-            if lo is None and hi is None:
-                none += 1
-                continue
-            lows.append(lo if lo is not None else hi)
-            highs.append(hi if hi is not None else lo)
-        return lows, highs, none
     # The client is quoted Conservative-Recommended (est_low-est_high), never
     # the Push-high ask a listing sits at; the ask shows only as list price.
     listed_lows, listed_highs, listed_none = estimates(listed)
     lows, highs, unpriced = estimates(hand)
     gone = by_state["RETURNED"] + by_state["DISPOSED"]
-    excluded = [r for r in rows if r["state"] == "EXCLUDED"]
 
     out.append("  value:")
     out.append(f"    sold     {len(sold):>3}  net ${money(sold_net)}"
@@ -2109,48 +2153,31 @@ def client_summary(items: list[tuple[str, dict]], split: Decimal,
     if gone:
         out.append(f"    returned/disposed {gone}")
 
-    owed = _sum(dec(r["client_share"]) for r in units
-                if r["state"] == "CLEARED" and not r["paid_to_client_date"])
-    pending_rows = [r for r in units if r["state"] == "SOLD"]
-    def pending_share(r):
-        if r["actuals_complete"] == "yes":
-            return dec(r["client_share"])
-        pn = provisional_net(r)
-        return None if pn is None else share_of(pn, row_split(r, split), loss_rule)
-    pending = _sum(pending_share(r) for r in pending_rows)
-    buyouts_owed = [r for r in excluded if buyout_owed(r)]
-    adjustments = pending_adjustments(rows, settlements, split, loss_rule)
-    paid = [s for s in settlements if s["paid_date"]]
-    def paid_amount(s):
-        return dec(s["amount_paid"]) if s["amount_paid"] else settlement_due(s)
-    paid_year = _sum(paid_amount(s) for s in paid if s["paid_date"][:4] == str(today.year))
-    open_settlements = [s for s in settlements if not s["paid_date"]]
     out.append("  totals:")
-    out.append(f"    sold gross ${money(_sum(dec(r['gross']) for r in sold))}"
+    out.append(f"    sold gross ${money(f['sold_gross'])}"
                f"  |  net ${money(sold_net)}" + ("  (provisional)" if incomplete else ""))
-    out.append(f"    handling kept         ${money(_sum(dec(r['handling']) for r in sold))}"
-               f"  ({sum(bool(dec(r['handling'])) for r in sold)} sale(s), taken before "
+    out.append(f"    handling kept         ${money(f['handling'])}"
+               f"  ({f['handling_n']} sale(s), taken before "
                f"the split)")
-    out.append(f"    client share owed     ${money(owed)}  (CLEARED, not paid)")
+    out.append(f"    client share owed     ${money(f['owed'])}  (CLEARED, not paid)")
     if excluded:
         out.append(f"    buyouts owed          "
-                   f"${money(_sum(dec(r['buyout_price']) for r in buyouts_owed))}  "
-                   f"(EXCLUDED, Russell buys, not paid: {len(buyouts_owed)})")
-    if adjustments:
-        out.append(f"    adjustments pending   ${money(_sum(a for _, a in adjustments))}  "
-                   f"({', '.join(i for i, _ in adjustments)})")
-    out.append(f"    client share pending  ${money(pending)}  (SOLD, return window "
+                   f"${money(_sum(dec(r['buyout_price']) for r in f['buyouts_owed']))}  "
+                   f"(EXCLUDED, Russell buys, not paid: {len(f['buyouts_owed'])})")
+    if f["adjustments"]:
+        out.append(f"    adjustments pending   ${money(_sum(a for _, a in f['adjustments']))}  "
+                   f"({', '.join(i for i, _ in f['adjustments'])})")
+    out.append(f"    client share pending  ${money(f['pending'])}  (SOLD, return window "
                f"or actuals still open)"
-               + ("  (upper bound)" if any(r in incomplete for r in pending_rows) else ""))
-    if open_settlements:
+               + ("  (upper bound)" if f["pending_upper"] else ""))
+    if f["open_settlements"]:
         out.append(f"    settlements unpaid    "
-                   f"${money(_sum(settlement_due(s) for s in open_settlements))}  "
-                   f"({', '.join(s['settlement_id'] for s in open_settlements)})")
-    out.append(f"    paid in {today.year}          ${money(paid_year)}  ({SETTLEMENTS_NAME})")
-    out.append(f"    paid to date          ${money(_sum(paid_amount(s) for s in paid))}")
-    flagged = [r["item_id"] for r in rows if FLAG in r["state_note"]]
-    if flagged:
-        out.append(f"  flagged ({len(flagged)}): {', '.join(flagged)}  -- see `consign sync`")
+                   f"${money(_sum(settlement_due(s) for s in f['open_settlements']))}  "
+                   f"({', '.join(s['settlement_id'] for s in f['open_settlements'])})")
+    out.append(f"    paid in {f['year']}          ${money(f['paid_year'])}  ({SETTLEMENTS_NAME})")
+    out.append(f"    paid to date          ${money(f['paid_total'])}")
+    if f["flagged"]:
+        out.append(f"  flagged ({len(f['flagged'])}): {', '.join(f['flagged'])}  -- see `consign sync`")
     return out
 
 
