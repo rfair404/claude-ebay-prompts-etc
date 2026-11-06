@@ -82,7 +82,6 @@ MARKS = {
     "channel-mall": (MALL, "channel is mall, not eBay"),
 }
 WRITE_CMDS = [
-    ["--record"],
     ["--review"],
     ["--sync"],
     ["--publish"],
@@ -117,7 +116,7 @@ def test_an_off_ebay_draft_never_reaches_ebay(tmp_path, ledger, api, monkeypatch
     assert not ledger.exists()
 
 
-@pytest.mark.parametrize("call", ["sync", "publish", "update", "record", "review"])
+@pytest.mark.parametrize("call", ["sync", "publish", "update", "review"])
 def test_the_library_functions_refuse_without_the_cli(tmp_path, ledger, api, call):
     """Other tools call these directly, so each one checks for itself."""
     draft = _mark(_write_single_draft(tmp_path, offer_id="OFFER-1"), INELIGIBLE)
@@ -125,13 +124,35 @@ def test_the_library_functions_refuse_without_the_cli(tmp_path, ledger, api, cal
         "sync": lambda: L.create_or_update_listing(draft, creds=_Creds()),
         "publish": lambda: L.publish_offer(draft, creds=_Creds(), confirm=True),
         "update": lambda: L.update_listing_fields(draft, ["price"], creds=_Creds()),
-        "record": lambda: L.record_draft(draft),
         "review": lambda: L.build_review_card(draft, creds=_Creds()),
     }[call]
     with _patch_sync_collaborators(), pytest.raises(L.EbayIneligibleError, match="4278"):
         run()
     assert api == []
     assert not ledger.exists()
+
+
+@pytest.mark.parametrize("mark", MARKS, ids=list(MARKS))
+def test_record_stamps_the_sku_on_an_off_ebay_draft_without_a_ledger_row(
+        tmp_path, ledger, api, monkeypatch, capsys, mark):
+    """A mall item needs a SKU for its booth row (inventory/_htm/assign.csv);
+    --record gives it one, writes no listings-ledger row, and the draft still
+    can't sync."""
+    lines, why = MARKS[mark]
+    draft = _mark(_write_single_draft(tmp_path), lines)
+
+    code, out, err = _cli(monkeypatch, capsys, "--record", str(draft.parent))
+
+    assert code == 0, err
+    sku = L.parse_draft(draft).get("meta.ebay_inventory_sku")
+    assert sku == L._sku_for(L.parse_draft(draft))
+    assert f"[OK] stamped sku {sku}" in out and why in out and "no ledger row" in out
+    assert L.record_draft(draft) == (sku, None)
+    assert not ledger.exists()
+    assert api == []
+    with _patch_sync_collaborators(), pytest.raises(L.EbayIneligibleError):
+        L.create_or_update_listing(draft, creds=_Creds())
+    assert api == []
 
 
 @pytest.mark.parametrize("mark", MARKS, ids=list(MARKS))

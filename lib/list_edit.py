@@ -65,7 +65,7 @@ verifies and lists that account's own policy IDs.
 ----- CLI -----
 
     python list_edit.py --validate <shoot-dir|draft.md>   # no creds needed
-    python list_edit.py --record <shoot-dir|draft.md>     # DRAFT-time: stamp SKU + ledger record (DRAFTED), no creds
+    python list_edit.py --record <shoot-dir|draft.md>     # DRAFT-time: stamp SKU + ledger record (DRAFTED), no creds; off-eBay (mall) drafts: SKU only
     python list_edit.py --preflight <shoot-dir|draft.md>  # check/auto-fix condition+shipping vs category
     python list_edit.py --review <shoot-dir|draft.md>     # record + preflight + build the REVIEW card (stops; no publish)
     python list_edit.py --setup-check                      # verify creds + policies
@@ -550,9 +550,14 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
     moment a title is chosen; sync/publish later update the same row.
     `store` selects which store's ledger file the row lands in (GH #158).
     Returns (sku, ledger_path). Creating that row is the point, so a failed
-    ledger write raises LedgerWriteError."""
+    ledger write raises LedgerWriteError.
+
+    An off-eBay draft (meta.channel "mall", or meta.ebay_eligible false) gets
+    its SKU stamped but no ledger row, and returns (sku, None): the listings
+    ledger tracks eBay listings, and the booth record (inventory/_htm/
+    assign.csv) is keyed by the SKU alone. If the draft later goes to eBay,
+    a plain --record creates the DRAFTED row under the same SKU."""
     draft_path = _resolve_draft_path(draft_path)
-    _refuse_off_ebay(draft_path)
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids
     if norm["changed"]:
         print(f"  [normalize] {norm['note']}")
@@ -561,6 +566,8 @@ def record_draft(draft_path: Path, *, store: Optional[str] = None) -> tuple[str,
     _refuse_voided(sku, store)
     if str(draft.get("meta.ebay_inventory_sku") or "") != sku:
         update_meta(draft_path, {"ebay_inventory_sku": sku})
+    if ebay_block_reason(draft.frontmatter):
+        return sku, None
     ledger = upsert_listing(sku, "DRAFTED", title=str(draft.get("title") or ""),
                             price=_to_decimal_str(draft.get("price")) or "", store=store,
                             strict=True)
@@ -3070,7 +3077,7 @@ def _cli() -> None:
     ap.add_argument("--validate", metavar="TARGET", help="Validate a draft.md or shoot dir (no creds).")
     ap.add_argument("--status", metavar="TARGET", help="Read-only: resolve a draft's REAL eBay state by SKU via the API — never from meta or the ledger. TARGET is a draft.md, a shoot dir, or a tree (bulk triage). GH #40.")
     ap.add_argument("--repair-meta", metavar="TARGET", help="--status plus: write the true ebay_offer_id/ebay_listing_id back into any draft whose meta is stale. No-op on already-correct drafts. GH #40.")
-    ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds.")
+    ap.add_argument("--record", metavar="TARGET", help="DRAFT-time: stamp the SKU into the draft + create its ledger record (DRAFTED). No creds. An off-eBay draft (channel mall, ebay_eligible false) gets the SKU only, no ledger row.")
     ap.add_argument("--normalize", metavar="TARGET", help="Migrate a legacy url-style SKU to canonical 8-hex + clear orphaned offer/listing ids in a draft.md or shoot dir. No creds.")
     ap.add_argument("--preflight", metavar="TARGET", help="Check (and auto-correct) condition + shipping against the eBay category (needs creds).")
     ap.add_argument("--set-hero", nargs=2, metavar=("TARGET", "PHOTO"),
@@ -3103,7 +3110,7 @@ def _cli() -> None:
     try:
         # Off-eBay drafts are refused before credentials load, so the refusal
         # is the same line on every machine. The functions check again.
-        write_target = (args.record or args.review or args.sync or args.publish
+        write_target = (args.review or args.sync or args.publish
                         or args.list_target or args.update)
         if write_target:
             _refuse_off_ebay(_resolve_draft_path(write_target))
@@ -3152,6 +3159,10 @@ def _cli() -> None:
         if args.record:
             sku, ledger = record_draft(Path(args.record),
                                        store=_resolve_store(args.record, args.store))
+            if ledger is None:
+                why = ebay_block_reason(parse_draft(_resolve_draft_path(Path(args.record))).frontmatter)
+                print(f"[OK] stamped sku {sku} (off-eBay: {why}; no ledger row)")
+                return
             print(f"[OK] recorded DRAFTED — sku {sku}")
             if ledger:
                 print(f"  ledger: {ledger}")
