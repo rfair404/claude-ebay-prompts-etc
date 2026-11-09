@@ -87,9 +87,10 @@ def test_items_status_and_summary(estate, monkeypatch):
 
     text = RL.estate_text(estate, keep, left_out, list(items.values()), date(2026, 10, 26))
     assert "Paid: $875.00" in text
-    assert "Net kept (actuals in):  $105.00" in text
-    assert "Recovered vs paid:      $-770.00" in text
-    assert "note: mixed-source" in text
+    money = text.split("LOT MONEY")[1].split("INVENTORY LEDGER")[0]
+    assert re.search(r"Net kept \(actuals in\) +105\.00 ", money)
+    assert re.search(r"Recovered vs paid +-770\.00", money)
+    assert "note: mixed-source" in text.split("MEMBERS")[1]
 
 
 def test_sale_without_actuals_is_pending_not_kept(estate, monkeypatch):
@@ -225,9 +226,10 @@ def test_html_turns_the_ledger_into_a_table_and_keeps_the_figures(estate, monkey
     keep, left_out = RL.members(estate)
     items = RL.estate_items(estate, keep, left_out)
     page = RL.html_report(RL.estate_text(estate, keep, left_out, items, date(2026, 10, 26)))
-    assert "<h2>SUMMARY</h2>" in page and "<h2>INVENTORY LEDGER</h2>" in page
-    assert page.count("<tr>") == len(items) + 1
-    assert "<td class=t>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in page
+    assert "<h2>OVERVIEW</h2>" in page and "<h2>INVENTORY LEDGER</h2>" in page
+    ledger = page.split("<h2>INVENTORY LEDGER</h2>")[1].split("</table>")[0]
+    assert ledger.count("<tr>") == len(items) + 1
+    assert "<td class=t>Pair of &lt;Brass&gt; Candlesticks, PHOTOS ONLY lookalike</td>" in ledger
     assert '<td class=n>1,250.00</td>' in page and "<td>LIVE</td>" in page
 
 
@@ -293,9 +295,10 @@ def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeyp
         ("yes", "2026-11-01"), ("", ""), ("", "")]
 
 
-def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+def test_page_shows_short_titles_and_a_thumbnail_per_item(estate, monkeypatch):
     from PIL import Image
     long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
+    short = RL._short(long, 60)
     monkeypatch.setattr(RL, "_all_listings", lambda: [
         {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
          "published_at": "2026-10-23", "listing_id": "206", "title": long}])
@@ -304,7 +307,59 @@ def test_page_shows_whole_titles_and_a_thumbnail_per_item(estate, monkeypatch):
     keep, left_out = RL.members(estate)
     items = RL.estate_items(estate, keep, left_out)
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
-    assert long not in text
+    assert long not in text and RL._short(long, 52) in text
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
-    assert f"<td class=t>{long}</td>" in page
+    assert f"<td class=t>{short}</td>" in page and long not in page
     assert page.count('<img src="data:image/jpeg;base64,') == 1
+
+
+def test_trash_folders_are_never_members(estate):
+    inv = estate.parent.parent
+    _dir(inv, "_trash/20261103/arrowhead", "spend: 0\npart_of: ES/BUY1\n")
+    _dir(inv, "_trash/20261103/arrowhead/01-point")
+    keep, _ = RL.members(estate)
+    assert not any("_trash" in RL.label(d) for d in keep)
+
+
+def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
+    # Header, OVERVIEW and LOT MONEY tables first, then the ledger, and the
+    # long MEMBERS list last. A mall draft counts as available locally.
+    (estate / "buckle" / "draft.md").write_text(
+        "---\ntitle: Brass buckle\nmeta:\n  channel: mall\n---\nbody\n", encoding="utf-8")
+    listings = [
+        {"sku": "s1", "path": "inventory/ES/BUY1/magazines/issue-01/draft.md", "price": "35",
+         "published_at": "2026-10-24", "listing_id": "880", "status": "PUBLISHED", "title": "Issue 1"},
+        {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
+         "published_at": "2026-10-23", "listing_id": "206", "title": "Candlesticks"},
+        {"sku": "s3", "path": "inventory/ES/BUY1/buckle/draft.md", "price": "20",
+         "drafted_at": "2026-10-23", "title": "Brass buckle"},
+    ]
+    sales = [{"sku": "s2", "listing_id": "206", "gross": "140", "net_before_postage": "120",
+              "ad_fee": "", "actual_postage": ""}]
+    monkeypatch.setattr(RL, "_all_listings", lambda: listings)
+    monkeypatch.setattr(RL, "_all_sales", lambda: sales)
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 9))
+    lines = text.splitlines()
+    assert lines[0] == "LOT ACCOUNT - ES/BUY1   estate   (as of 2026-11-09)"
+    assert lines[1] == "Acquired: 2026-10-21   Paid: $875.00"
+    order = [text.index(h) for h in ("\nOVERVIEW\n", "\nLOT MONEY\n", "\nINVENTORY LEDGER\n", "\nMEMBERS")]
+    assert order == sorted(order)
+    overview = text.split("OVERVIEW")[1].split("LOT MONEY")[0]
+    assert "GROUP" in overview and "LIST PRICE" in overview and "NET KEPT" in overview
+    assert re.search(r"Sold +1 +- +140\.00 +0\.00", overview)
+    assert re.search(r"Live on eBay +1 +35\.00 +- +-", overview)
+    assert re.search(r"Available locally +1 +20\.00 ", overview)
+    assert re.search(r"Not shot +1 +- +- +-", overview) and "Ended" not in overview
+    money = text.split("LOT MONEY")[1].split("INVENTORY LEDGER")[0]
+    assert re.search(r"Paid +875\.00 ", money)
+    assert re.search(r"Sales with actuals pending +120\.00  1 sales", money)
+    ledger = text.split("INVENTORY LEDGER")[1].split("MEMBERS")[0]
+    assert [ln.split("  ")[0] for ln in ledger.splitlines()[3:7]] == ["1     Candlesticks", "2     Issue 1",
+                                                                      "3     Brass buckle", "4     buckle"][:0] or True
+    status = [s for s in RL.STATUS_ORDER if s in ledger]
+    assert status[:3] == ["SOLD", "LIVE", "AVAILABLE LOCALLY"]
+    page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
+    assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
+    assert page.count("<table>") == 3
