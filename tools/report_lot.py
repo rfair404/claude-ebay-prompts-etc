@@ -254,6 +254,8 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
                       for s in sales_here)
         kept = (nbp - sum(_f(s.get("ad_fee")) or 0.0 for s in sales_here)
                 - sum(_f(s.get("actual_postage")) or 0.0 for s in sales_here)) if sales_here else None
+        if not best and sales_here:      # sold, but no listing row survived: use the sale's ids
+            best = {k: sales_here[0].get(k) or "" for k in ("title", "sku", "listing_id", "_store")}
         out.append({
             "item": best.get("title") or _title_from(d),
             "folder": d.relative_to(INVENTORY).as_posix() if INVENTORY in d.parents else str(d),
