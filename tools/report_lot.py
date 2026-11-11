@@ -37,7 +37,11 @@ from both stores' ledgers merged with the drafts on disk (lib/report.collect).
 Status, best first: SOLD (a sales-ledger row), LIVE (published and not ended),
 ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY, NOT SHOT
 (an empty folder: the item is filed, typically with its cost share, but has
-no photos yet).
+no photos yet). An unsold, not-live item whose draft.md says
+`meta.channel: mall` is AVAILABLE LOCALLY (in the booth). The ledger lists
+them in the overview's order: sold, live, local, queued/draft, photos only,
+not shot, ended. Folders under `_trash/` (or any `_`/`.` folder) are never
+members.
 Net kept per sale = net_before_postage - ad_fee - actual_postage, counted only
 once both actuals are in (the accountant's 2026-10-22 ruling); until then the
 sale shows as "actuals pending".
@@ -73,7 +77,8 @@ PDF_TIMEOUT = 60
 THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
-STATUS_ORDER = ["SOLD", "LIVE", "ENDED", "QUEUED", "DRAFT", "PHOTOS ONLY", "NOT SHOT"]
+STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
+                "NOT SHOT", "ENDED"]
 
 
 # --------------------------------------------------------------------------- #
@@ -123,9 +128,13 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
             left_out.append((d, f"part of {k['part_of']}"))
         else:
             keep.append(d)
+    inv = INVENTORY.resolve()              # a worktree's inventory/ is a link
     for ctx in sorted(INVENTORY.rglob("context.txt")):
         d = ctx.parent.resolve()
         if d in keep or lot in d.parents or SR._is_backup_path(d.as_posix()):
+            continue
+        # _trash/, _returned/ and hidden folders are not inventory
+        if inv in d.parents and any(_skip(Path(p)) for p in d.relative_to(inv).parts):
             continue
         if extra_keys(d).get("part_of") == me:
             keep.append(d)
@@ -193,6 +202,16 @@ def _all_sales() -> list[dict]:
     return rows
 
 
+def _mall(d: Path) -> bool:
+    """The item's draft says meta.channel: mall (sells in the booth, not on eBay)."""
+    from draft_io import DraftParseError, draft_channel, parse_draft
+    f = d / "draft.md"
+    try:
+        return f.is_file() and draft_channel(parse_draft(f).frontmatter) == "mall"
+    except (OSError, ValueError, DraftParseError):
+        return False
+
+
 def _title_from(d: Path) -> str:
     return re.sub(r"^\d+[-_]", "", d.name).replace("-", " ").replace("_", " ")
 
@@ -248,6 +267,8 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
         else:
             lvl = _rank(best)[0]
             status = {4: "LIVE", 3: "ENDED", 2: "QUEUED", 1: "DRAFT"}[lvl]
+        if status not in ("SOLD", "LIVE") and _mall(d):
+            status = "AVAILABLE LOCALLY"
         gross = sum(_f(s.get("gross")) or 0.0 for s in sales_here)
         nbp = sum(_f(s.get("net_before_postage")) or 0.0 for s in sales_here)
         actuals = all((s.get("ad_fee") or "").strip() and (s.get("actual_postage") or "").strip()
@@ -256,8 +277,10 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
                 - sum(_f(s.get("actual_postage")) or 0.0 for s in sales_here)) if sales_here else None
         if not best and sales_here:      # sold, but no listing row survived: use the sale's ids
             best = {k: sales_here[0].get(k) or "" for k in ("title", "sku", "listing_id", "_store")}
+        title = best.get("title") or _title_from(d)
         out.append({
-            "item": best.get("title") or _title_from(d),
+            "item": _short(title, 60),
+            "title": title,
             "folder": d.relative_to(INVENTORY).as_posix() if INVENTORY in d.parents else str(d),
             "member": label(m),
             "status": status,
@@ -282,47 +305,64 @@ def _m(v) -> str:
 
 def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
                 items: list[dict], today: date) -> str:
+    """Laid out like the consignment account: overview and money tables,
+    then the ledger, then the member folders (the long list) last."""
     ctx = SR.load_context(lot)
     spends = [(m, SR.load_context(m)["spend"]) for m in keep]
     paid = sum(s for _, s in spends if s is not None)
-    L = [f"LOT ACCOUNT - {label(lot)}   (as of {today.isoformat()})",
-         f"Acquired: {ctx['acquired'] or 'not recorded'}   Paid: ${paid:,.2f}", ""]
-    L.append("MEMBERS (folders counted in this lot)")
-    for m, s in spends:
+    L = [f"LOT ACCOUNT - {label(lot)}   estate   (as of {today.isoformat()})",
+         f"Acquired: {ctx['acquired'] or 'not recorded'}   Paid: ${paid:,.2f}"]
+
+    def of(*status):
+        return [i for i in items if i["status"] in status]
+
+    def ask(group):
+        return _m(sum(i["ask"] or 0 for i in group)) if any(i["ask"] for i in group) else "-"
+    sold = of("SOLD")
+    gross = sum(i["gross"] or 0 for i in sold)
+    kept = sum(i["net_kept"] for i in sold if i["net_kept"] is not None)
+    pend = [i for i in sold if i["actuals_pending"]]
+    groups = [("Sold", sold, "-", _m(gross) if sold else "-", _m(kept) if sold else "-"),
+              ("Live on eBay", of("LIVE"), ask(of("LIVE")), "-", "-"),
+              ("Available locally", of("AVAILABLE LOCALLY"), ask(of("AVAILABLE LOCALLY")), "-", "-"),
+              ("Queued/draft", of("QUEUED", "DRAFT"), ask(of("QUEUED", "DRAFT")), "-", "-"),
+              ("Photos only", of("PHOTOS ONLY"), "-", "-", "-"),
+              ("Not shot", of("NOT SHOT"), "-", "-", "-"),
+              ("Ended", of("ENDED"), "-", "-", "-")]
+    hdr = f"{'GROUP':<22}{'ITEMS':>6}{'LIST PRICE':>12}{'GROSS':>10}{'NET KEPT':>10}"
+    L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
+    for name, g, a, gr, k in groups:
+        if g:
+            L.append(f"{name:<22}{len(g):>6}{a:>12}{gr:>10}{k:>10}")
+
+    hdr = f"{'MONEY':<26}{'AMOUNT':>10}  NOTE"
+    L += ["", "LOT MONEY", hdr, "-" * len(hdr)]
+    lines = [("Paid", paid, f"{len(keep)} member folders"),
+             ("Net kept (actuals in)", kept, f"{len(sold) - len(pend)} sales"),
+             ("Sales with actuals pending", sum(i["net_before_postage"] or 0 for i in pend),
+              f"{len(pend)} sales, net before postage; ad fee or postage not in yet"),
+             ("Recovered vs paid", kept - paid, "paid back" if kept >= paid else "")]
+    for name, amt, note in lines:
+        L.append(f"{name:<26}{_m(amt):>10}  {note or '-'}")
+
+    L += ["", "INVENTORY LEDGER"]
+    hdr = (f"{'#':<6}{'ITEM':<54}{'STATUS':<19}{'STORE':<7}{'ASK':>10}{'SOLD':>10}"
+           f"{'NET KEPT':>10}  {'SKU':<10}{'LISTING':<14}")
+    L += [hdr, "-" * len(hdr)]
+    for n, i in enumerate(items, 1):
+        kept_s = "pending" if i["actuals_pending"] else _m(i["net_kept"])
+        L.append(f"{n:<6}{_short(i['title'], 52):<54}{i['status']:<19}{i['store']:<7}{_m(i['ask']):>10}"
+                 f"{_m(i['gross']):>10}{kept_s:>10}  {i['sku']:<10}{i['listing_id']:<14}".rstrip())
+    L += ["", "Note: QUEUED = offer on eBay, not published. AVAILABLE LOCALLY = draft set to sell in the mall booth.",
+          "Net kept counts a sale once its ad fee and postage are in."]
+
+    L += ["", "MEMBERS (folders counted in this lot)"]
+    for m, sp in spends:
         note = extra_keys(m).get("note")
-        L.append(f"  {label(m):<44} spend {'not set' if s is None else f'${s:,.2f}'}"
+        L.append(f"  {label(m):<44} spend {'not set' if sp is None else f'${sp:,.2f}'}"
                  + (f"   note: {note}" if note else ""))
     for d, why in left_out:
         L.append(f"  {label(d):<44} LEFT OUT: {why}")
-    L.append("")
-
-    counts = {s: sum(1 for i in items if i["status"] == s) for s in STATUS_ORDER}
-    live_ask = sum(i["ask"] or 0 for i in items if i["status"] == "LIVE")
-    pend_ask = sum(i["ask"] or 0 for i in items if i["status"] in ("QUEUED", "DRAFT"))
-    sold = [i for i in items if i["status"] == "SOLD"]
-    gross = sum(i["gross"] or 0 for i in sold)
-    nbp = sum(i["net_before_postage"] or 0 for i in sold)
-    kept = sum(i["net_kept"] or 0 for i in sold if i["net_kept"] is not None)
-    pending = sum(1 for i in sold if i["actuals_pending"])
-    L += ["SUMMARY",
-          f"  Items: {len(items)}   " + "   ".join(f"{s.lower()} {n}" for s, n in counts.items() if n),
-          f"  Live asking total:      ${live_ask:,.2f}",
-          f"  Queued/draft asking:    ${pend_ask:,.2f}",
-          f"  Sold: {len(sold)}   gross ${gross:,.2f}   net before postage ${nbp:,.2f}",
-          f"  Net kept (actuals in):  ${kept:,.2f}" + (f"   ({pending} sale(s) actuals pending)" if pending else ""),
-          f"  Recovered vs paid:      ${kept - paid:,.2f}" + ("  (paid back)" if kept >= paid else ""),
-          ""]
-
-    L.append("INVENTORY LEDGER")
-    hdr = f"{'#':<4}{'ITEM':<54}{'STATUS':<13}{'STORE':<7}{'ASK':>10}{'SOLD':>10}{'NET KEPT':>11}  {'SKU':<10}{'LISTING':<14}"
-    L += [hdr, "-" * len(hdr)]
-    for n, i in enumerate(items, 1):
-        t = _report.ascii_text(i["item"])
-        t = t if len(t) <= 52 else t[:51] + "~"
-        kept_s = "pending" if i["actuals_pending"] else _m(i["net_kept"])
-        L.append(f"{n:<4}{t:<54}{i['status']:<13}{i['store']:<7}{_m(i['ask']):>10}"
-                 f"{_m(i['gross']):>10}{kept_s:>11}  {i['sku']:<10}{i['listing_id']:<14}")
-    L += ["", "QUEUED = offer on eBay, not published. Net kept counts a sale once its ad fee and postage are in."]
     return "\n".join(L) + "\n"
 
 
