@@ -136,7 +136,7 @@ def test_move_is_a_timed_nudge_that_always_stops(cam):
     amcrest.ptz_move(CFG, "left", secs=0.3, speed=2, sleep=waited.append)
     assert waited == [0.3]
     assert [(p["action"], p["code"], p["arg2"]) for _, p in cam] == [("start", "Left", 2), ("stop", "Left", 0)]
-    assert all(s == "ptz.cgi" and p["channel"] == 1 for s, p in cam)
+    assert all(s == "ptz.cgi" and p["channel"] == 0 for s, p in cam)
 
     cam.clear()
     def boom(_):

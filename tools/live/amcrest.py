@@ -211,9 +211,15 @@ def parse_kv(body: str) -> dict:
     return out
 
 
+def ptz_channel(cfg: dict) -> int:
+    """ptz.cgi counts channels from 0; the RTSP stream counts from 1. Channel 1
+    sent to ptz.cgi answers OK and moves nothing (IP2M-841B, 2026-11-11)."""
+    return int(cfg["channel"]) - 1
+
+
 def ptz_caps(cfg: dict) -> dict:
     return parse_kv(cgi(cfg, "ptz.cgi", {"action": "getCurrentProtocolCaps",
-                                         "channel": int(cfg["channel"])}))
+                                         "channel": ptz_channel(cfg)}))
 
 
 def has_zoom(caps: dict) -> bool:
@@ -230,7 +236,7 @@ def ptz_info(cfg: dict) -> str:
 
 
 def _action(cfg: dict, action: str, code: str, arg2: int) -> None:
-    cgi(cfg, "ptz.cgi", {"action": action, "channel": int(cfg["channel"]), "code": code,
+    cgi(cfg, "ptz.cgi", {"action": action, "channel": ptz_channel(cfg), "code": code,
                          "arg1": 0, "arg2": int(arg2), "arg3": 0})
 
 
