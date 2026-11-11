@@ -363,3 +363,61 @@ def test_copy_ads_moves_active_ads_minus_k01_and_reports_failures(k01_lot, tmp_p
         return r
     monkeypatch.setattr(ebay_client, "api_send", refuse)
     assert promote.copy_ads("OLD", "NEW", True) is False
+
+
+def test_draft_with_promoted_false_goes_into_neither_campaign():
+    """Russell 2026-11-10 (KBD C090/C091): `promoted: false` on the draft
+    means no ads, even for a client whose lot is not excluded."""
+    send, calls = _fake(cpc=KEYED)
+    msg = AP.promote_new_listing("111", "95.00", store="default", api_send=send,
+                                 config={}, promoted=False)
+    assert msg.startswith("not promoted: draft says promoted: false")
+    assert not _adds(calls)
+
+
+def test_template_promoted_flags_and_a_missing_block_still_promote():
+    """The template's {general: false, priority: false} is on nearly every
+    draft, so it must not stop the normal ads."""
+    for promoted in ({"general": False, "priority": False}, None, ""):
+        send, calls = _fake(cpc=KEYED)
+        msg = AP.promote_new_listing("111", "95.00", store="default", api_send=send,
+                                     config={}, promoted=promoted)
+        assert msg == "promoted in 'Revenue Seasoned 15d'; promoted in 'All Items $25-5000 CPC keyed'"
+        assert len(_adds(calls)) == 2
+
+
+def test_bulk_adds_skip_a_listing_whose_draft_says_promoted_false(tmp_path, monkeypatch,
+                                                                  capsys):
+    """tools/promote.add_ads and promote_seasoned (both via excluded_listings)
+    leave out a listing whose draft says `promoted: false`, matched by its
+    listing id or by SKU through the listings ledger; template flags don't."""
+    import config
+    import consign
+    import ebay_client
+    sys.path.insert(0, str(REPO / "tools"))
+    import promote
+    inv = tmp_path / "inventory"
+    for name, lid, sku, block in (
+            ("C090", "880000000090", "402a7ea9", "promoted: false\n"),
+            ("C091", "", "402a7eaa", "promoted: false\n"),
+            ("C092", "880000000092", "402a7eab", "promoted:\n  general: false\n  priority: false\n")):
+        d = inv / "CONSIGN-KBD" / name
+        d.mkdir(parents=True)
+        (d / "draft.md").write_text(
+            f"---\ntitle: \"Pitcher\"\n{block}meta:\n  ebay_listing_id: \"{lid}\"\n"
+            f"  ebay_inventory_sku: \"{sku}\"\n---\nbody\n", encoding="utf-8")
+    monkeypatch.setattr(consign, "INVENTORY", inv)
+    monkeypatch.setattr(config, "load_config", lambda: {})
+    ledger = tmp_path / "listings_ledger.csv"
+    ledger.write_text("sku,status,listing_id\n402a7eaa,PUBLISHED,880000000091\n",
+                      encoding="utf-8")
+    monkeypatch.setenv("EBAYBIZ_LISTINGS_LEDGER", str(ledger))
+    assert AP.excluded_listings(["880000000090", "880000000091", "880000000092"]) == {
+        "880000000090": "draft says promoted: false",
+        "880000000091": "draft says promoted: false"}
+    sent = []
+    monkeypatch.setattr(ebay_client, "api_send",
+                        lambda m, p, b=None, **k: sent.append(b) or {"responses": []})
+    promote.add_ads("C1", ["880000000090", "880000000091", "880000000092"], True)
+    assert sent == [{"requests": [{"listingId": "880000000092"}]}]
+    assert "skip 880000000090: not promoted: draft says promoted: false" in capsys.readouterr().out
