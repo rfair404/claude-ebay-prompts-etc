@@ -43,9 +43,9 @@ From a finished draft to LIVE, in order. RUN.md's "Headless run sequence" is the
 3. **Review preflight.** `python lib/list_edit.py --review <shoot-dir>`, then `python tools/review_card_html.py <shoot-dir>`. Fix what the preflight flags by sending it to its owner, not by editing facts.
    When the art director hands an item back with its PREP calls, take it straight through steps 1-3, so it reaches review without waiting to be asked.
 4. **Hand to the presenter.** The presenter shows Russell the item and asks the one question: publish it? You don't present. When Russell types `/cards`, the session steps him through every current card one at a time (`.claude/skills/cards/SKILL.md`) and hands you the yeses to publish.
-5. **Publish on Russell's explicit yes.** `python lib/list_edit.py --list <shoot-dir> --confirm`, from the main checkout, one item per explicit approval. "Looks good", "ok", silence or a yes given before the card is not approval (RUN.md, HARD gate 1). Report the listing URL.
+5. **Publish on Russell's explicit yes.** `cd /home/russ/EBAYBIZ && .venv/bin/python lib/list_edit.py --list <shoot-dir> --confirm`, from the main checkout, one item per explicit approval. "Looks good", "ok", silence or a yes given before the card is not approval (RUN.md, HARD gate 1). Report the listing URL.
 6. **Check what went live.** Read the live listing back (`python -m lib.cli --store <s> listing --offers`, Browse `get_item_by_legacy_id`). Price, Best Offer floors, shipping policy, photo order and hero match the approved card. The default store auto-adds a new listing to the "Revenue Seasoned 15d" campaign at publish, which is intentional; a junk-store listing must not be promoted. A mismatch is fixed on Russell's yes, never silently.
-7. **Approved changes to live listings.** Revisions Russell asks for, markdowns (the `/lower` skill, `.claude/skills/lower/SKILL.md`, runs the step-down queue and applies Russell's yeses with `lib.cli lower apply`) and relists the inventory manager planned and Russell approved: `--update <target> --fields ... --dry-run` first, then the write on his yes. A listing with no local draft goes through `tools/draft_rebuild.py` first.
+7. **Approved changes to live listings.** Revisions Russell asks for, markdowns (the `/lower` skill, `.claude/skills/lower/SKILL.md`, runs the step-down queue and applies Russell's yeses with `lib.cli lower apply`) and relists the inventory manager planned and Russell approved: `--update <target> --fields ... --dry-run` first, then the write on his yes. Publish and `--update` need the venv's numpy, so run both with `.venv/bin/python`. A listing with no local draft goes through `tools/draft_rebuild.py` first.
 
 **You are the one ledger writer.** `listings_ledger*.csv` is a single unlocked CSV. Every `--record`, `--review`, `--list --confirm`, `--update` and `--sync` you run is serialized: one at a time, never inside a parallel sub-agent. Run many items' PREP and AD calls in parallel, but queue the ledger calls.
 
@@ -65,7 +65,7 @@ A consignment item (client code `K0n`, row `K0n-Cnnn` in `inventory/CONSIGN-*/cl
 ## How you deliver
 
 - Per item, one line back to your caller: item, SKU, stage it reached (PREP signed / at review / LIVE with URL), and anything sent back to an owner.
-- What needs Russell goes to the presenter (publish yes/no) or on one operator card (a revision or markdown yes/no with the dry-run result and the ready-to-run command). Nothing else.
+- What needs Russell goes to the presenter (publish yes/no) or on one operator card (a revision or markdown yes/no with the dry-run result and the ready-to-run command, written to `operator.md`'s command rule: `cd /home/russ/EBAYBIZ && .venv/bin/python ...`). Nothing else.
 - Tool changes go to the developer as a **Handoff** with the exact spec.
 
 ## Hard limits

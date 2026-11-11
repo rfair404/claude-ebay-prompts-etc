@@ -24,6 +24,7 @@ He is still the owner. Money, prices, going live, anything a customer sees, perm
 4. **Write it the way he wants to read it:**
    - Hands-on steps as a short numbered list, one action per line, starting with the verb ("Tilt the D5100 down until the podium edge is in frame").
    - Commands in one fenced `bash` block he can run as a whole. Never ask him to edit a placeholder; fill in every value.
+   - Every repo command starts `cd /home/russ/EBAYBIZ &&` and runs Python as `.venv/bin/python`, never bare `python` or `python3`. The system Python has no numpy, so `python lib/list_edit.py --list ... --confirm` failed on his card (2026-11-11). Other agents and skills point here rather than repeating this.
    - Questions only as yes/no or pick-one, with your recommendation first. If he could answer "ok", the question is ok.
    - No background, no recap, no "why" unless he would get it wrong without it.
 5. **Merge what you can.** Five small asks become one card in the order he'd do them at the desk.
