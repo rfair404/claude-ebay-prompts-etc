@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
@@ -683,6 +685,7 @@ for i in range(25):
 """
 
 
+@pytest.mark.skipif(ls.fcntl is None, reason="no flock on Windows")
 def test_two_processes_writing_one_key_keep_the_log_linear():
     import subprocess
     import time
