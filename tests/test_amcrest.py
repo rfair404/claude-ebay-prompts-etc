@@ -49,6 +49,7 @@ def test_file_then_env_override_host(cfg_file, monkeypatch):
     assert "@cam.lan:554/" in amcrest.rtsp_url(amcrest.load())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no POSIX file modes")
 def test_save_is_owner_only(cfg_file):
     path = amcrest.save({"password": "pw"})
     assert path == cfg_file
