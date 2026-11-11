@@ -35,6 +35,11 @@ WHAT IT WILL AND WON'T DO
   A campaign that picks listings by itself (a Smart cost-per-click campaign,
   an auto-select rule) can still promote it, and the API can't take it back
   out, so the outcome then names the campaign and the Seller Hub step.
+* A draft whose whole `promoted:` block is `false` (`promoted: false`) gets
+  no ad in either campaign: a per-item "no ads" call (Russell 2026-11-10,
+  KBD C090/C091). Only that scalar counts. The template's
+  `promoted: {general: false, priority: false}` is on nearly every draft,
+  including the ones promoted every day, so it can't mean "no ads".
 
 CONFIG (per store, #156)
 
@@ -227,14 +232,24 @@ def _still_promoted(listing_id, price, api_send, creds) -> str:
             f"Stop it by hand: {SELLER_HUB_STOP}")
 
 
+def draft_opts_out(promoted) -> bool:
+    """True when a draft's `promoted:` value is the scalar `false` (or
+    no/off/none): the item gets no ads. A dict, blank or missing block keeps
+    the store's normal promotion; see the module docstring for why."""
+    if promoted is False:
+        return True
+    return isinstance(promoted, str) and promoted.strip().lower() in {"false", "no", "off", "none"}
+
+
 def promote_new_listing(listing_id: str, price, creds=None, *,
                         store: Optional[str] = None, api_send=None,
                         config: Optional[dict] = None, sku: str = "",
-                        folder=None) -> str:
+                        folder=None, promoted=None) -> str:
     """Add `listing_id` to the store's auto-promote campaign, and to its
     key-based cost-per-click campaign when one is named. Returns a one-line
     outcome for the caller to print. Never raises. `sku` and
-    `folder` (the draft's item folder) find a consignment lot."""
+    `folder` (the draft's item folder) find a consignment lot; `promoted` is
+    the draft's `promoted:` value (see draft_opts_out)."""
     try:
         if api_send is None:
             from ebay_client import api_send
@@ -242,6 +257,9 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         s = settings(store, config)
         if not s["enabled"] or not s.get("campaign"):
             return "auto-promote off for this store"
+        if draft_opts_out(promoted):
+            return ("not promoted: draft says promoted: false"
+                    + _still_promoted(listing_id, price, api_send, creds))
         why = consignment_excluded(s, sku=sku, listing_id=listing_id, folder=folder)
         if why:
             return f"not promoted: {why}" + (_still_promoted(listing_id, price, api_send, creds)
