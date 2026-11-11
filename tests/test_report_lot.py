@@ -295,30 +295,43 @@ def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeyp
         ("yes", "2026-11-01"), ("", ""), ("", "")]
 
 
-def test_page_shows_short_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+def test_page_shows_the_draft_title_whole_and_a_thumbnail_per_item(estate, monkeypatch, tmp_path):
+    # The page names each item by its draft's title, uncut, even when the
+    # ledger kept an older one. An item with no local photo gets its first
+    # eBay photo from the draft's meta.ebay_image_urls.
     from PIL import Image
     long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
-    short = RL._short(long, 60)
+    (estate / "candlesticks" / "draft.md").write_text(f"---\ntitle: {long}\n---\nbody\n", encoding="utf-8")
+    (estate / "tools" / "chainsaw" / "draft.md").write_text(
+        "---\ntitle: Chainsaw\nmeta:\n  ebay_image_urls:\n"
+        "  - \"https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1\"\n---\nbody\n", encoding="utf-8")
     monkeypatch.setattr(RL, "_all_listings", lambda: [
         {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
-         "published_at": "2026-10-23", "listing_id": "206", "title": long}])
+         "published_at": "2026-10-23", "listing_id": "206", "title": "Old ledger title"}])
     monkeypatch.setattr(RL, "_all_sales", lambda: [])
     Image.new("RGB", (400, 300), "red").save(estate / "candlesticks" / "a.jpg")
+    remote = tmp_path / "remote.jpg"
+    Image.new("RGB", (300, 225), "blue").save(remote)
+    asked = []
+    monkeypatch.setattr(RL, "_fetched", lambda url: asked.append(url) or (remote if url else None))
     keep, left_out = RL.members(estate)
     items = RL.estate_items(estate, keep, left_out)
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
     assert long not in text and RL._short(long, 52) in text
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
-    assert f"<td class=t>{short}</td>" in page and long not in page
-    assert page.count('<img src="data:image/jpeg;base64,') == 1
+    assert f"<td class=t>{long}</td>" in page and "Old ledger title" not in page
+    assert [u for u in asked if u] == ["https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1"]
+    assert page.count('<img src="data:image/jpeg;base64,') == 2
 
 
 def test_trash_folders_are_never_members(estate):
     inv = estate.parent.parent
     _dir(inv, "_trash/20261103/arrowhead", "spend: 0\npart_of: ES/BUY1\n")
     _dir(inv, "_trash/20261103/arrowhead/01-point")
+    _dir(inv, "_rebuilt/abc123", "part_of: ES/BUY1\n")
     keep, _ = RL.members(estate)
     assert not any("_trash" in RL.label(d) for d in keep)
+    assert any("_rebuilt/abc123" in RL.label(d) for d in keep)
 
 
 def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):

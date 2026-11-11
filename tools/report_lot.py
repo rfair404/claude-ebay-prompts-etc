@@ -77,6 +77,7 @@ PDF_TIMEOUT = 60
 THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
+NOT_INVENTORY = {"_trash", "_returned"}
 STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
                 "NOT SHOT", "ENDED"]
 
@@ -132,9 +133,11 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
         d = ctx.parent.resolve()
         if d in keep or lot in d.parents or SR._is_backup_path(d.as_posix()):
             continue
-        # _trash/, _returned/ and hidden folders are not inventory
+        # _trash/, _returned/ and hidden folders are not inventory; _rebuilt/
+        # (drafts rebuilt from eBay after the 2026-10 wipe) is
         inv = INVENTORY.resolve()          # a worktree's inventory/ is a link
-        if inv in d.parents and any(_skip(Path(p)) for p in d.relative_to(inv).parts):
+        if inv in d.parents and any(p in NOT_INVENTORY or p.startswith(".")
+                                    for p in d.relative_to(inv).parts):
             continue
         if extra_keys(d).get("part_of") == me:
             keep.append(d)
@@ -216,6 +219,43 @@ def _title_from(d: Path) -> str:
     return re.sub(r"^\d+[-_]", "", d.name).replace("-", " ").replace("_", " ")
 
 
+def _draft_info(d: Path) -> tuple[str, list[str], list[str]]:
+    """(title, eBay photo URLs, SKU/listing ids) from the item's draft, else
+    from the RECOVERED.md left after the 2026-10 wipe (title and ids only)."""
+    for name in ("draft.md", "draft_group.md"):
+        f = d / name
+        if f.is_file():
+            fm = _report._draft_header(f.read_text(encoding="utf-8", errors="replace"), f)
+            meta = fm.get("meta") if isinstance(fm.get("meta"), dict) else {}
+            urls = meta.get("ebay_image_urls") or []
+            title = fm.get("title") if isinstance(fm.get("title"), str) else ""
+            return (title.strip(), [u for u in urls if isinstance(u, str)] if isinstance(urls, list) else [], [])
+    rec = d / "RECOVERED.md"
+    if rec.is_file():
+        t = rec.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"^- title:\s*(.+)$", t, re.M)
+        keys = re.findall(r"^- (?:sku|ebay_listing_id):\s*(\S+)", t, re.M)
+        return (m.group(1).strip() if m else ""), [], keys
+    return "", [], []
+
+
+def _urls_by_key() -> dict[str, list[str]]:
+    """eBay photo URLs of every draft on disk, keyed by SKU and listing id,
+    for an item whose own folder holds only a RECOVERED.md."""
+    out: dict[str, list[str]] = {}
+    for f in INVENTORY.rglob("draft*.md"):
+        if f.name not in ("draft.md", "draft_group.md") or SR._is_backup_path(f.as_posix()):
+            continue
+        fm = _report._draft_header(f.read_text(encoding="utf-8", errors="replace"), f)
+        meta = fm.get("meta") if isinstance(fm.get("meta"), dict) else {}
+        urls = meta.get("ebay_image_urls")
+        if isinstance(urls, list) and urls:
+            for k in (meta.get("ebay_inventory_sku"), meta.get("ebay_listing_id")):
+                if isinstance(k, str) and k:
+                    out.setdefault(k, urls)
+    return out
+
+
 def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) -> list[dict]:
     stop = set(keep) | {d for d, _ in left_out}
     items: list[tuple[Path, Path]] = []                   # (item dir, member)
@@ -255,6 +295,7 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             sold.setdefault(d, []).append(s)
 
     out = []
+    by_key: Optional[dict[str, list[str]]] = None
     for d, m in items:
         rows = sorted(by_item[d].values(), key=_rank, reverse=True)
         best = rows[0] if rows else {}
@@ -277,7 +318,13 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
                 - sum(_f(s.get("actual_postage")) or 0.0 for s in sales_here)) if sales_here else None
         if not best and sales_here:      # sold, but no listing row survived: use the sale's ids
             best = {k: sales_here[0].get(k) or "" for k in ("title", "sku", "listing_id", "_store")}
-        title = best.get("title") or _title_from(d)
+        draft_title, urls, keys = _draft_info(d)
+        keys += [best.get("sku") or "", best.get("listing_id") or ""]
+        if not urls and any(keys):
+            if by_key is None:
+                by_key = _urls_by_key()
+            urls = next((by_key[k] for k in keys if k in by_key), [])
+        title = draft_title or best.get("title") or _title_from(d)
         out.append({
             "item": _short(title, 60),
             "title": title,
@@ -294,6 +341,7 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             "net_kept": kept if sales_here and actuals else None,
             "actuals_pending": bool(sales_here) and not actuals,
             "listings": len(rows),
+            "image_url": urls[0] if urls else "",
         })
     out.sort(key=lambda r: (STATUS_ORDER.index(r["status"]), -(r["ask"] or 0)))
     return out
@@ -579,7 +627,31 @@ def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
             if shots:
                 return shots[0]
     names = (row.get("photos") or "").split()
-    return found.get(names[0]) if names else None
+    if names and names[0] in found:
+        return found[names[0]]
+    return _fetched(row.get("image_url") or "")
+
+
+def _fetched(url: str) -> Optional[Path]:
+    """The listing's first eBay photo at 300px, cached under reports/lots/.thumbs
+    so a rerun doesn't fetch it again; None when it can't be fetched."""
+    import hashlib
+    import urllib.request
+    if not url.startswith("https://i.ebayimg.com/"):
+        return None
+    small = re.sub(r"\$_\d+\.(JPG|jpg|PNG|png)", r"$_35.\1", url.split("?")[0])
+    cache = REPO / "reports" / "lots" / ".thumbs" / (hashlib.sha1(small.encode()).hexdigest()[:16] + ".jpg")
+    if cache.is_file():
+        return cache
+    try:
+        with urllib.request.urlopen(urllib.request.Request(small, headers={"User-Agent": "report-lot"}),
+                                    timeout=10) as r:
+            data = r.read()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
+        return cache
+    except (OSError, ValueError):
+        return None
 
 
 def _thumbs(rows: list[dict]) -> list[str]:
@@ -623,7 +695,7 @@ def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None)
         if "ITEM" in heads:
             col = heads.index("ITEM")
             for c, r in zip(cells, rows):
-                c[col] = html.escape(_report.ascii_text(r.get("item") or "")) or c[col]
+                c[col] = html.escape(_report.ascii_text(r.get("title") or r.get("item") or "")) or c[col]
         pics = _thumbs(rows)
     if any(pics):
         heads.insert(0, "")
