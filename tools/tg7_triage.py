@@ -22,7 +22,9 @@ row on record has the same item folder, or a frame no other row has, the
 object is that row: its frames go onto it and no row is made. Otherwise the
 row (and its folder with intake.txt) is made, with a POSSIBLE_DUPE line in
 dupe_queue.csv when a row reads alike. `--new "<reason>"` never attaches;
-`--attach <key>` attaches to the row named.
+`--attach <key>` attaches to the row named. It never attaches across
+owners: a frame or folder already on another consignment client's row (or
+house stock's) refuses the add, nothing written.
 
 It never deletes or overwrites a file, and it moves only within inventory/.
 """

@@ -1,6 +1,6 @@
 ---
-version: 1.0.1
-updated: 2026-10-29
+version: 1.2.0
+updated: 2026-11-10
 ---
 
 # Live-streaming machine setup (eBay Live + OBS)
@@ -19,6 +19,7 @@ Built and verified 2026-10-13/14 on Parrot 7.3 (Debian 13 base), kernel
 | Nikon D5100 webcam feed | `tools/d5100_webcam.sh` (what `show_flow.py feed start` runs) |
 | OM System TG-7 Wi-Fi control | `tools/live/tg7cam` |
 | OBS remote control, no GUI | `tools/live/obsctl.py` |
+| Amcrest Wi-Fi camera (RTSP) as an OBS source | `tools/live/amcrest.py` (section 5a) |
 | Show views, refocus, go live | `tools/live/show_flow.py`, skill `.claude/skills/live-show/` |
 | Interactive photo shoot (stills, per-item log) | `tools/live/shoot.py`, skill `.claude/skills/photo-shoot/` |
 | Tool sale: one numbered draft per lot from the D5 frame | `tools/live/tool_lot.py` (section 6, "Tool sale lots") |
@@ -250,6 +251,58 @@ Then: **user** — camera menu Wi-Fi/Bluetooth Settings > Device Connection
 shows the SSID/password; `tg7cam connect <SSID>` prompts for the password;
 `tg7cam probe`. The camera's own controls lock while a computer is connected.
 During a show, `show_flow.py tg7 start` runs the stream (section 6).
+
+## 5a. Amcrest Wi-Fi camera (RTSP)
+
+An Amcrest (Dahua OEM) camera on the LAN at 192.168.1.232, RTSP on port 554:
+`rtsp://USER:PASS@HOST:554/cam/realmonitor?channel=1&subtype=0` (main stream;
+`subtype=1` is the low-res sub stream). With OBS running and its websocket on
+(section 6), **user**, once:
+
+```bash
+python tools/live/amcrest.py setup
+```
+
+It asks for the camera password without echoing it (the one set in the Amcrest
+app; the user is `admin`), stores it in `~/.ebaybiz/amcrest.json` (mode 600,
+outside the repo; the repo is public), and adds the OBS Media Source `Amcrest`
+in its own scene `Amcrest camera`, so nothing on air changes. The source is RTSP over
+TCP with hardware decode, a 1 MB buffer, low-delay flags and a 2 s reconnect.
+`setup --password` asks again after a password change; `setup --sub` uses the
+sub stream; `amcrest.py url` prints the URL with the password redacted.
+`AMCREST_HOST` / `AMCREST_USER` / `AMCREST_PASSWORD` override the file.
+
+- **DHCP:** give the camera (MAC `3c:ef:8c:60:2b:4e`) a DHCP reservation on
+  the router so it keeps 192.168.1.232. If it moves, set `"host"` in
+  `~/.ebaybiz/amcrest.json` and run `setup` again.
+- The URL with the password is also stored in OBS's own scene collection
+  (Flatpak config dir). Never copy that collection back into
+  `tools/live/obs/scenes/`; a test fails if a tracked template holds a URL
+  login, and `obsctl.py call` redacts URL logins from what it prints.
+
+**Verify:** `python tools/live/obsctl.py shot Amcrest` writes a frame of the
+camera's view.
+
+**Pan, tilt and zoom from OBS.** The camera is an IP2M-841B: it pans, tilts, zooms and keeps
+presets 1-25 (zoom softens at full zoom-in). PTZ uses ptz.cgi channel 0; the stream is channel 1.
+`amcrest.py ptz` drives it over the camera's HTTP CGI with the same login:
+`ptz info` (model and caps), `ptz left|right|up|down` (a short nudge;
+`--secs`, `--speed 1-8`), `ptz in|out` (zoom), `ptz stop`, `ptz goto N`, `ptz save N`. The CGI
+login is checked, unlike RTSP, which this camera serves without one; a refused
+login means the stored password is wrong, so run `setup --password` with the
+password of the camera's web page. Don't retry it in a loop: the camera locks
+the account for a while after a few failures.
+
+For buttons in OBS, start the dock server (it binds 127.0.0.1 only, and the
+login never reaches the page):
+
+```bash
+python tools/live/amcrest.py ptz dock
+```
+
+Then once, in OBS: Docks > Custom Browser Docks, name `Amcrest`, URL
+`http://127.0.0.1:8457/`. Arrows nudge, + and − zoom, the square stops, 1-4 go to a preset;
+tick Save, then a number, to store the current view there.
 
 ## 6. Running the show without the OBS window
 

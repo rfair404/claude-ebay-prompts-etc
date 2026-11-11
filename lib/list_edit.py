@@ -2723,7 +2723,8 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
         from auto_promote import promote_new_listing
         # this module's api_send, so a test that fakes publish fakes this too
         promotion = promote_new_listing(listing_id, price, creds, api_send=api_send,
-                                        sku=sku, folder=draft_path.parent)
+                                        sku=sku, folder=draft_path.parent,
+                                        promoted=draft.get("promoted"))
     return PublishResult(dry_run=False, offer_id=offer_id, title=title, price=price,
                          status_before=status, listing_id=listing_id or None,
                          listing_url=(f"https://www.ebay.com/itm/{listing_id}" if listing_id else None),
