@@ -130,13 +130,13 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
             left_out.append((d, f"part of {k['part_of']}"))
         else:
             keep.append(d)
+    inv = INVENTORY.resolve()              # a worktree's inventory/ is a link
     for ctx in sorted(INVENTORY.rglob("context.txt")):
         d = ctx.parent.resolve()
         if d in keep or lot in d.parents or SR._is_backup_path(d.as_posix()):
             continue
         # _trash/, _returned/ and hidden folders are not inventory; _rebuilt/
         # (drafts rebuilt from eBay after the 2026-10 wipe) is
-        inv = INVENTORY.resolve()          # a worktree's inventory/ is a link
         if inv in d.parents and any(p in NOT_INVENTORY or p.startswith(".")
                                     for p in d.relative_to(inv).parts):
             continue

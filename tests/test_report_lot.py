@@ -375,10 +375,7 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     assert re.search(r"Paid +875\.00 ", money)
     assert re.search(r"Sales with actuals pending +120\.00  1 sales", money)
     ledger = text.split("INVENTORY LEDGER")[1].split("MEMBERS")[0]
-    assert [ln.split("  ")[0] for ln in ledger.splitlines()[3:7]] == ["1     Candlesticks", "2     Issue 1",
-                                                                      "3     Brass buckle", "4     buckle"][:0] or True
-    status = [s for s in RL.STATUS_ORDER if s in ledger]
-    assert status[:3] == ["SOLD", "LIVE", "AVAILABLE LOCALLY"]
+    assert [re.split(r" {2,}", ln)[2] for ln in ledger.splitlines()[3:6]] == ["SOLD", "LIVE", "AVAILABLE LOCALLY"]
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
     assert page.count("<table>") == 3
