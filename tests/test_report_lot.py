@@ -25,6 +25,12 @@ def _dir(root: Path, rel: str, context: str = "", files=()) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def _no_ebay(monkeypatch):
+    # no test asks eBay for photos unless it says so
+    monkeypatch.setattr(RL, "_ebay_photo_url", lambda row: "")
+
+
 @pytest.fixture
 def estate(tmp_path, monkeypatch):
     inv = tmp_path / "inventory"
@@ -376,3 +382,32 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
     assert page.count("<table>") == 3
+
+
+def test_ebay_photo_url_asks_the_inventory_api_once_per_sku(tmp_path, monkeypatch):
+    # A sold item with no draft left still has its photos on eBay's
+    # inventory item; the URL is cached so a rerun doesn't ask again.
+    import types
+    monkeypatch.undo()
+    monkeypatch.setattr(RL, "_URL_CACHE", tmp_path / "ebay_urls.json")
+    monkeypatch.setattr(RL, "_EBAY_DOWN", False)
+    calls = []
+
+    class Missing(Exception):
+        status = 404
+
+    def api_send(method, path, creds=None, marketplace=None):
+        calls.append((path, creds))
+        if path.endswith("/gone"):
+            raise Missing("HTTP 404")
+        return {"product": {"imageUrls": ["https://i.ebayimg.com/a/$_12.JPG", "https://i.ebayimg.com/b"]}}
+
+    fake = types.SimpleNamespace(api_send=api_send, load_credentials=lambda store: f"creds:{store}")
+    monkeypatch.setitem(sys.modules, "ebay_client", fake)
+    row = {"sku": "eb5df699", "store": "main"}
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "gone", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "store": "junk"}) == ""
+    assert calls == [("/sell/inventory/v1/inventory_item/eb5df699", "creds:default"),
+                     ("/sell/inventory/v1/inventory_item/gone", "creds:junk")]

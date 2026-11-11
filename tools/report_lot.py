@@ -56,6 +56,7 @@ import io
 import re
 import os
 import tempfile
+import urllib.parse
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -629,7 +630,50 @@ def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
     names = (row.get("photos") or "").split()
     if names and names[0] in found:
         return found[names[0]]
-    return _fetched(row.get("image_url") or "")
+    return _fetched(row.get("image_url") or "") or _fetched(_ebay_photo_url(row))
+
+
+_URL_CACHE = REPO / "reports" / "lots" / ".thumbs" / "ebay_urls.json"
+_EBAY_DOWN = False
+
+
+def _ebay_photo_url(row: dict) -> str:
+    """First photo URL eBay still holds for the row's SKU (the Inventory API
+    keeps a sold item's photos), cached by store and SKU in ebay_urls.json so
+    a rerun doesn't ask again. "" with no SKU or when eBay can't be asked."""
+    import json
+    sku = (row.get("sku") or "").strip()
+    if not sku:
+        return ""
+    store = {"main": "default", "": "default"}.get(row.get("store") or "", row.get("store"))
+    key = f"{store}:{sku}"
+    try:
+        cache = json.loads(_URL_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if key in cache:
+        return cache[key]
+    global _EBAY_DOWN
+    if _EBAY_DOWN:
+        return ""
+    try:
+        import ebay_client as E
+        item = E.api_send("GET", "/sell/inventory/v1/inventory_item/"
+                          + urllib.parse.quote(sku, safe=""),
+                          creds=E.load_credentials(store), marketplace=None)
+        urls = (item.get("product") or {}).get("imageUrls") or []
+        url = urls[0] if urls else ""
+    except Exception as e:                      # no creds, offline, SKU gone: no thumbnail
+        if getattr(e, "status", None) == 404:
+            url = ""                            # eBay has no such SKU: remember that
+        else:
+            _EBAY_DOWN = True                   # don't ask again this run
+            print(f"report_lot: eBay photos skipped ({str(e).splitlines()[0][:120]})", file=sys.stderr)
+            return ""
+    cache[key] = url
+    _URL_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    _URL_CACHE.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    return url
 
 
 def _fetched(url: str) -> Optional[Path]:
