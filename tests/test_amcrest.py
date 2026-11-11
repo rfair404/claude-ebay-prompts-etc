@@ -81,18 +81,18 @@ def test_add_source_creates_own_scene_then_updates():
     c = FakeClient(scenes=["Product"])
     assert amcrest.add_source(c, "rtsp://u:p@h/x") == "added"
     reqs = [r for r, _ in c.calls]
-    assert ("CreateScene", {"sceneName": "Amcrest"}) in c.calls
+    assert ("CreateScene", {"sceneName": "Amcrest camera"}) in c.calls
     create = next(d for r, d in c.calls if r == "CreateInput")
-    assert create["sceneName"] == "Amcrest" and create["inputKind"] == "ffmpeg_source"
+    assert create["sceneName"] == "Amcrest camera" and create["inputKind"] == "ffmpeg_source"
     assert "SetCurrentProgramScene" not in reqs  # never changes what is on air
 
-    c = FakeClient(scenes=["Amcrest"], inputs={"Amcrest": "ffmpeg_source"})
+    c = FakeClient(scenes=["Amcrest camera"], inputs={"Amcrest": "ffmpeg_source"})
     assert amcrest.add_source(c, "rtsp://u:p@h/x") == "updated"
     assert [r for r, _ in c.calls if r.startswith("Create")] == []
 
 
 def test_add_source_refuses_a_same_named_other_kind():
-    c = FakeClient(scenes=["Amcrest"], inputs={"Amcrest": "v4l2_input"})
+    c = FakeClient(scenes=["Amcrest camera"], inputs={"Amcrest": "v4l2_input"})
     with pytest.raises(obsctl.ObsError, match="v4l2_input"):
         amcrest.add_source(c, "rtsp://u:p@h/x")
 

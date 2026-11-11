@@ -266,7 +266,7 @@ python tools/live/amcrest.py setup
 It asks for the camera password without echoing it (the one set in the Amcrest
 app; the user is `admin`), stores it in `~/.ebaybiz/amcrest.json` (mode 600,
 outside the repo; the repo is public), and adds the OBS Media Source `Amcrest`
-in its own scene `Amcrest`, so nothing on air changes. The source is RTSP over
+in its own scene `Amcrest camera`, so nothing on air changes. The source is RTSP over
 TCP with hardware decode, a 1 MB buffer, low-delay flags and a 2 s reconnect.
 `setup --password` asks again after a password change; `setup --sub` uses the
 sub stream; `amcrest.py url` prints the URL with the password redacted.

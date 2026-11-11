@@ -8,8 +8,8 @@
 
 `setup` stores the camera login in ~/.ebaybiz/amcrest.json (mode 600, outside
 the repo, which is public) and creates or updates the OBS input "Amcrest" in
-its own scene "Amcrest", so it never lands on a show page or changes what is
-on air. Add it to a page in OBS, or `obsctl.py fit Amcrest --scene Amcrest`.
+its own scene "Amcrest camera", so it never lands on a show page or changes what is
+on air. Add it to a page in OBS, or `obsctl.py fit Amcrest --scene "Amcrest camera"`.
 
 The source is ffmpeg over RTSP/TCP (no UDP packet loss on Wi-Fi), with
 hardware decode, a 1 MB buffer, low-delay flags and a 2 s reconnect.
@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import obsctl  # noqa: E402
 
 NAME = "Amcrest"   # the OBS input
-SCENE = "Amcrest"  # its own scene: setting it up never touches a show page
+SCENE = "Amcrest camera"  # its own scene (OBS scenes and inputs share one namespace): setting it up never touches a show page
 DEFAULTS = {"host": "192.168.1.232", "user": "admin", "port": 554, "channel": 1, "subtype": 0}
 ENV = {"host": "AMCREST_HOST", "user": "AMCREST_USER", "password": "AMCREST_PASSWORD"}
 
