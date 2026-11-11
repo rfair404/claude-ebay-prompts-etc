@@ -845,6 +845,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = ap.parse_args(argv)
     if bool(args.lot) == args.all:
         ap.error("give a lot folder or --all")
+    if args.all and args.print:
+        ap.error("--all makes only the web page; print one lot at a time")
     today = date.today()
     if args.all:
         return write_all(today)
