@@ -384,9 +384,10 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     assert page.count("<table>") == 3
 
 
-def test_ebay_photo_url_asks_the_inventory_api_once_per_sku(tmp_path, monkeypatch):
-    # A sold item with no draft left still has its photos on eBay's
-    # inventory item; the URL is cached so a rerun doesn't ask again.
+def test_ebay_photo_url_asks_ebay_once_per_item(tmp_path, monkeypatch):
+    # A sold item with no draft left still has its photos on eBay: the
+    # inventory item by SKU, else GetItem by listing id (a Live lot has no
+    # SKU). The URL is cached so a rerun doesn't ask again.
     import types
     monkeypatch.undo()
     monkeypatch.setattr(RL, "_URL_CACHE", tmp_path / "ebay_urls.json")
@@ -402,12 +403,21 @@ def test_ebay_photo_url_asks_the_inventory_api_once_per_sku(tmp_path, monkeypatc
             raise Missing("HTTP 404")
         return {"product": {"imageUrls": ["https://i.ebayimg.com/a/$_12.JPG", "https://i.ebayimg.com/b"]}}
 
-    fake = types.SimpleNamespace(api_send=api_send, load_credentials=lambda store: f"creds:{store}")
+    def pictures(lid, creds):
+        calls.append((lid, creds))
+        return ["https://i.ebayimg.com/live/$_12.JPG"] if lid == "206" else []
+
+    fake = types.SimpleNamespace(api_send=api_send, get_item_picture_urls=pictures,
+                                 load_credentials=lambda store: f"creds:{store}")
     monkeypatch.setitem(sys.modules, "ebay_client", fake)
     row = {"sku": "eb5df699", "store": "main"}
     assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
     assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
-    assert RL._ebay_photo_url({"sku": "gone", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "206", "store": "default"}) \
+        == "https://i.ebayimg.com/live/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "gone", "listing_id": "880", "store": "junk"}) == ""
     assert RL._ebay_photo_url({"sku": "", "store": "junk"}) == ""
     assert calls == [("/sell/inventory/v1/inventory_item/eb5df699", "creds:default"),
-                     ("/sell/inventory/v1/inventory_item/gone", "creds:junk")]
+                     ("206", "creds:default"),
+                     ("/sell/inventory/v1/inventory_item/gone", "creds:junk"),
+                     ("880", "creds:junk")]

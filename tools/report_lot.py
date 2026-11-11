@@ -638,38 +638,45 @@ _EBAY_DOWN = False
 
 
 def _ebay_photo_url(row: dict) -> str:
-    """First photo URL eBay still holds for the row's SKU (the Inventory API
-    keeps a sold item's photos), cached by store and SKU in ebay_urls.json so
-    a rerun doesn't ask again. "" with no SKU or when eBay can't be asked."""
+    """First photo URL eBay still holds for the row: the Inventory API's
+    inventory item for its SKU (kept after a sale), else Trading GetItem for
+    its listing id (a lot listed without a SKU, such as an eBay Live lot).
+    Cached by store and id in ebay_urls.json so a rerun doesn't ask again;
+    "" with no id or when eBay can't be asked."""
     import json
     sku = (row.get("sku") or "").strip()
-    if not sku:
+    lid = (row.get("listing_id") or "").strip()
+    if not (sku or lid):
         return ""
     store = {"main": "default", "": "default"}.get(row.get("store") or "", row.get("store"))
-    key = f"{store}:{sku}"
+    key = f"{store}:{sku or lid}"
     try:
         cache = json.loads(_URL_CACHE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         cache = {}
-    if key in cache:
+    if cache.get(key):
         return cache[key]
     global _EBAY_DOWN
     if _EBAY_DOWN:
         return ""
+    url = ""
     try:
         import ebay_client as E
-        item = E.api_send("GET", "/sell/inventory/v1/inventory_item/"
-                          + urllib.parse.quote(sku, safe=""),
-                          creds=E.load_credentials(store), marketplace=None)
-        urls = (item.get("product") or {}).get("imageUrls") or []
-        url = urls[0] if urls else ""
-    except Exception as e:                      # no creds, offline, SKU gone: no thumbnail
-        if getattr(e, "status", None) == 404:
-            url = ""                            # eBay has no such SKU: remember that
-        else:
-            _EBAY_DOWN = True                   # don't ask again this run
-            print(f"report_lot: eBay photos skipped ({str(e).splitlines()[0][:120]})", file=sys.stderr)
-            return ""
+        creds = E.load_credentials(store)
+        if sku:
+            try:
+                item = E.api_send("GET", "/sell/inventory/v1/inventory_item/"
+                                  + urllib.parse.quote(sku, safe=""), creds=creds, marketplace=None)
+                url = next(iter((item.get("product") or {}).get("imageUrls") or []), "")
+            except Exception as e:
+                if getattr(e, "status", None) != 404:
+                    raise
+        if not url and lid:
+            url = next(iter(E.get_item_picture_urls(lid, creds)), "")
+    except Exception as e:                      # no creds, offline: no thumbnails this run
+        _EBAY_DOWN = True
+        print(f"report_lot: eBay photos skipped ({str(e).splitlines()[0][:120]})", file=sys.stderr)
+        return ""
     cache[key] = url
     _URL_CACHE.parent.mkdir(parents=True, exist_ok=True)
     _URL_CACHE.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
