@@ -40,6 +40,8 @@ WHAT IT WILL AND WON'T DO
   KBD C090/C091). Only that scalar counts. The template's
   `promoted: {general: false, priority: false}` is on nearly every draft,
   including the ones promoted every day, so it can't mean "no ads".
+  `excluded_listings()` applies it to the bulk adds too (tools/promote.py,
+  tools/promote_seasoned.py), matching the draft by listing id or SKU.
 
 CONFIG (per store, #156)
 
@@ -68,6 +70,7 @@ those: it adds every live listing at or above the floor that has no ad yet.
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
@@ -151,16 +154,52 @@ def excluded_listings(listing_ids: Iterable, store: Optional[str] = None,
     add (tools/promote.add_ads). A listing id is matched in the consignment
     ledgers directly and through its SKU in `store`'s listings ledger."""
     s = settings(store, config)
-    if not s["exclude_consignment"]:
+    ids = [str(x) for x in listing_ids]
+    opted = opted_out_drafts()
+    if not s["exclude_consignment"] and not opted:
         return {}
     import sync_actuals
     sku_of = {str(r.get("listing_id") or ""): str(r.get("sku") or "")
               for r in sync_actuals.load_listings_ledger(store)}
     out = {}
-    for lid in map(str, listing_ids):
-        why = consignment_excluded(s, sku=sku_of.get(lid, ""), listing_id=lid)
+    for lid in ids:
+        if lid in opted or (sku_of.get(lid) and sku_of[lid] in opted):
+            out[lid] = "draft says promoted: false"
+            continue
+        why = consignment_excluded(s, sku=sku_of.get(lid, ""), listing_id=lid) \
+            if s["exclude_consignment"] else None
         if why:
             out[lid] = why
+    return out
+
+
+_OPT_OUT_LINE = re.compile(r"^promoted:[ \t]*['\"]?(false|no|off|none)['\"]?[ \t]*(#.*)?$",
+                           re.I | re.M)
+
+
+def opted_out_drafts(inventory: Optional[Path] = None) -> set[str]:
+    """Listing ids and SKUs of every draft under inventory/ that says
+    `promoted: false`, for the bulk adds (tools/promote.py,
+    tools/promote_seasoned.py). A text scan picks the candidates; only those
+    are parsed. Empty when inventory/ isn't there."""
+    root = Path(inventory) if inventory else _consign().INVENTORY
+    if not root.is_dir():
+        return set()
+    from draft_io import parse_draft
+    out = set()
+    for path in root.rglob("draft.md"):
+        try:
+            if not _OPT_OUT_LINE.search(path.read_text(encoding="utf-8")):
+                continue
+            d = parse_draft(path)
+        except Exception:                                            # noqa: BLE001
+            continue
+        if not draft_opts_out(d.get("promoted")):
+            continue
+        for key in ("meta.ebay_listing_id", "meta.ebay_inventory_sku"):
+            v = str(d.get(key) or "").strip()
+            if v and v.lower() not in {"none", "null"}:
+                out.add(v)
     return out
 
 
