@@ -363,3 +363,23 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
     assert page.count("<table>") == 3
+
+
+def test_all_puts_every_lot_on_one_page_and_names_a_failed_one(estate, monkeypatch, capsys):
+    _dir(estate.parent.parent, "CONSIGN-BAD", "client: BAD\n")
+    out_dir = estate.parent.parent.parent / "reports" / "lots"
+    monkeypatch.setattr(RL, "OUT_DIR", out_dir)
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+
+    def broken(*a):
+        raise ValueError("ledger missing")
+    monkeypatch.setattr(RL, "consign_account", broken)
+    assert RL.main(["--all"]) == 1
+    page = next(out_dir.glob("lots-*.html")).read_text(encoding="utf-8")
+    # consignments first, one picker option and one section per lot
+    assert re.findall(r'<option value="([^"]+)"', page) == ["CONSIGN-BAD", "ES_BUY1"]
+    assert re.findall(r'<section class="lot" id="([^"]+)"', page) == ["CONSIGN-BAD", "ES_BUY1"]
+    assert "FAILED: ValueError(&#x27;ledger missing&#x27;)" in page
+    assert "<h2>INVENTORY LEDGER</h2>" in page.split('id="ES_BUY1"')[1]
+    assert "FAILED CONSIGN-BAD" in capsys.readouterr().err
