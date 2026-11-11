@@ -513,7 +513,8 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
         L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
                  f"{CLIENT_STATUS[_place(r)]}".rstrip())
         out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
-                    "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or ""})
+                    "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
+                    "listing_id": r.get("listing_id") or ""})
     return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
 
 
@@ -640,30 +641,59 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
 
 
 def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
-    """The item's first listing photo: its own folder first, else the first
-    file named in the row's photos column."""
+    """The item's first photo: its own folder first, else the first file named
+    in the row's photos column (with or without its extension), else the
+    listing's main photo from eBay (cached in inventory/_ebay_photos/)."""
     folder = row.get("folder") or ""
     for base in (REPO, INVENTORY):
         d = base / folder
         if folder and d.is_dir():
-            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
+            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in WEB_EXT)
             if shots:
                 return shots[0]
-    names = (row.get("photos") or "").split()
-    return found.get(names[0]) if names else None
+    for name in (row.get("photos") or "").split():
+        hit = found.get(Path(name).stem.lower())
+        if hit:
+            return hit
+    return _ebay_photo(row.get("listing_id") or "")
+
+
+WEB_EXT = {".jpg", ".jpeg", ".png"}
+_FRAME_RE = re.compile(r"[a-z]*\d+")   # the camera frame id at the front of a crop name
+
+
+def _ebay_photo(listing_id: str) -> Optional[Path]:
+    """tools/pick_list_html.py's cached eBay main-photo lookup. Off under
+    tests (EBAY_PHOTOS), so a render never calls eBay there."""
+    if not (EBAY_PHOTOS and listing_id.isdigit()):
+        return None
+    import pick_list_html as PL
+    PL.EBAY_PHOTOS = True
+    return PL._ebay_photo_path(listing_id)
+
+
+EBAY_PHOTOS = False   # the command line turns it on
 
 
 def _thumbs(rows: list[dict]) -> list[str]:
     """One <img> data URI per row ("" when it has no photo), so the page and
     its PDF are one self-contained file."""
     from PIL import Image, ImageFilter, ImageOps
-    wanted = {(r.get("photos") or "").split()[0] for r in rows if (r.get("photos") or "").split()}
+    wanted = {Path(n).stem.lower() for r in rows for n in (r.get("photos") or "").split()}
     found: dict[str, Path] = {}
     if wanted:
         for root, _, files in os.walk(INVENTORY):
             for f in files:
-                if f in wanted and f not in found:
-                    found[f] = Path(root) / f
+                p = Path(f)
+                if p.suffix.lower() not in WEB_EXT:
+                    continue
+                # a review crop (<frame>_t.jpg, <frame>-tools.jpg) stands in
+                # when the frame itself is gone; the frame wins when both exist
+                stem = p.stem.lower()
+                m = _FRAME_RE.match(stem)
+                key = stem if stem in wanted else (m.group(0) if m else "")
+                if key in wanted and (key not in found or stem == key):
+                    found[key] = Path(root) / f
     out = []
     for r in rows:
         src = _photo_for(r, found)
@@ -864,4 +894,5 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    EBAY_PHOTOS = True      # a real run fills missing photos from eBay; tests stay offline
     sys.exit(main())

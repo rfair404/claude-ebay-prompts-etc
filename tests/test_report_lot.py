@@ -433,3 +433,17 @@ def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path
     shared = stem.with_suffix(".txt").read_text() + stem.with_suffix(".html").read_text()
     assert "items in our care" in shared and "CLIENT MONEY" not in shared and "$" not in shared
     assert "CLIENT MONEY" in stem.with_name(stem.name + "-account.txt").read_text()
+
+
+def test_thumbnail_falls_back_to_a_named_frame_or_its_review_crop(tmp_path, monkeypatch):
+    from PIL import Image
+    inv = tmp_path / "inventory"
+    (inv / "_review" / "crops").mkdir(parents=True)
+    Image.new("RGB", (10, 10)).save(inv / "_review" / "crops" / "ZZ220246_t.jpg")
+    Image.new("RGB", (10, 10)).save(inv / "ZZ220250.JPG")
+    monkeypatch.setattr(RL, "INVENTORY", inv)
+    monkeypatch.setattr(RL, "REPO", tmp_path)
+    pics = RL._thumbs([{"photos": "ZZ220246"}, {"photos": "ZZ220250.JPG"}, {"photos": "ZZ999999"},
+                       {"listing_id": "206656147219"}])
+    # a frame named with or without its extension, or its crop; never eBay under test
+    assert [bool(p) for p in pics] == [True, True, False, False]
