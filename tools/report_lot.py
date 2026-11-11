@@ -28,7 +28,11 @@ beside it on the summary, for things such as a mixed-source lot.
 
 A lot whose context.txt says `client:` is a consignment. Its items and money
 come from its client_ledger.csv and the summary is tools/consign.py's
-per-client account, so the two can never disagree.
+per-client account, so the two can never disagree. For a consignment the
+.txt/.html/.pdf are the client's copy ("<client>: items in our care": item,
+qty, bin, plain status, no money or internals); the money account goes to
+stdout, the .csv and <lot>-<date>-account.txt. Both ledgers sort sold,
+listed, available locally, drafted, shot, then the rest (CONSIGN_ORDER).
 
 ESTATE ITEM STATUS
 
@@ -446,6 +450,73 @@ def _local(r: dict) -> bool:
             and bool(r.get("placed_at")) and bool(r.get("listing_id")))
 
 
+# Ledger order (Russell, 2026-11-11): sold first, then listed, available
+# locally, drafted, shot, and the rest last. Within a state, item number.
+CONSIGN_ORDER = ["SOLD", "LISTED", "LOCAL", "DRAFTED", "SHOT", "PREP", "INTAKE", "HOLD",
+                 "EXCLUDED", "RETURNED", "DISPOSED"]
+# What the client reads for each place in that order.
+CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed for sale", "LOCAL": "At our booth",
+                 "DRAFTED": "Being listed", "SHOT": "Photographed", "PREP": "Photographed",
+                 "INTAKE": "In inventory", "HOLD": "Set aside for now",
+                 "EXCLUDED": "Kept by The Fair Hand", "RETURNED": "Returned to you",
+                 "DISPOSED": "Disposed"}
+
+
+def _place(r: dict) -> str:
+    """The row's place in CONSIGN_ORDER."""
+    state = r.get("state") or ""
+    if state in ("SOLD", "CLEARED", "SETTLED"):
+        return "SOLD"
+    if _held(r):
+        return "HOLD"
+    if _local(r):
+        return "LOCAL"
+    return state if state in CONSIGN_ORDER else "INTAKE"
+
+
+def _consign_sorted(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda r: (CONSIGN_ORDER.index(_place(r)), r.get("item_id") or ""))
+
+
+def _client_qty(q: str) -> str:
+    """The count, without our notes: parentheticals go, and a qty that points
+    at another line or lot (`in C006 line`, `split into ...`) shows blank."""
+    q = re.sub(r"\s*\([^)]*\)", "", _report.ascii_text(q or "")).strip()
+    return "" if re.search(r"C\d{3}|split|\blots?\b|uncounted|\best\b|PRICE", q, re.I) else q
+
+
+def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
+    """The client's copy: their belongings and where each one is. No money,
+    terms, estimates, prices, fees or internal notes (Russell, 2026-10-27 and
+    2026-11-11). Returns the text and one row per ledger line, in table order,
+    for the page's photos."""
+    import consign as C
+    rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
+    C.migrate(rows, lot, client)
+    name = (C.load_registry().get(client) or {}).get("name") or client
+    rows = _consign_sorted(rows)
+    received = C.folder_date(lot) or C.default_intake(lot)
+    L = [f"{name}: items in our care",
+         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
+    hdr = f"{'STATUS':<24}{'ITEMS':>6}"
+    L += ["", "SUMMARY", hdr, "-" * 30]
+    counts: dict[str, int] = {}                  # rows are sorted, so this keeps the order
+    for r in rows:
+        counts[CLIENT_STATUS[_place(r)]] = counts.get(CLIENT_STATUS[_place(r)], 0) + 1
+    L += [f"{status:<24}{n:>6}" for status, n in counts.items()]
+    L += ["", "YOUR ITEMS"]
+    hdr = f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<22}"
+    L += [hdr, "-" * len(hdr)]
+    out = []
+    for r in rows:
+        d = _short(r.get("description") or "", 52)
+        L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
+                 f"{CLIENT_STATUS[_place(r)]}".rstrip())
+        out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
+                    "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or ""})
+    return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
+
+
 def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
@@ -477,11 +548,11 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         return "-"
 
     L = [f"LOT ACCOUNT - {label(lot)}   consignment, client {client} {name}   (as of {today.isoformat()})",
-         f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}   Split {terms['split'] * 100:.0f}% of net to client",
-         "States as of the last `consign sync --apply`."]
+         f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}"]
     L += _overview(C, figs, rows)
     # Held rows go last, one short line each, after the ledger and fees: they
     # are counted in the totals but are not for sale yet.
+    rows = _consign_sorted(rows)
     held = [r for r in rows if _held(r)]
     rows = [r for r in rows if not _held(r)] + held
     L += ["", "INVENTORY LEDGER"]
@@ -640,10 +711,11 @@ def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None)
     return f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
 
 
-def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
+def html_report(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> str:
     """The account as a web page: every all-caps heading line starts a
     section; a header line over a row of dashes becomes a real table and
-    everything else stays preformatted, so the figures are the text's."""
+    everything else stays preformatted, so the figures are the text's.
+    A client copy (`client`) sets its prose as paragraphs, not monospace."""
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
     # held rows are a plain list after the ledger table, not in it
@@ -652,7 +724,8 @@ def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
 
     def flush():
         if any(x.strip() for x in pre):
-            out.append("<pre>" + html.escape("\n".join(pre).strip("\n")) + "</pre>")
+            body = html.escape("\n".join(pre).strip("\n"))
+            out.append(f'<p class="sub">{body}</p>' if client else f"<pre>{body}</pre>")
         pre.clear()
 
     while i < len(lines):
@@ -686,6 +759,7 @@ img{{display:block;width:80px;height:80px;object-fit:cover;border-radius:3px}}
 th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
 td{{white-space:nowrap}} td.t{{white-space:normal;min-width:18em}}
 th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}
+p.sub{{color:#555;margin:0 0 8px;white-space:pre-line}}
 @media print{{@page{{size:landscape;margin:12mm}}body{{max-width:none;padding:0;font-size:11px}}
 table{{font-size:10px}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
 </style></head><body>
@@ -711,11 +785,12 @@ def render_pdf(html_path: Path, pdf_path: Path) -> Optional[str]:
     return (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()[-1]
 
 
-def write_web(txt: Path, text: str, rows: Optional[list[dict]] = None) -> tuple[Path, Optional[Path], Optional[str]]:
+def write_web(txt: Path, text: str, rows: Optional[list[dict]] = None,
+              client: bool = False) -> tuple[Path, Optional[Path], Optional[str]]:
     """Web page and printer-friendly PDF beside the .txt. The PDF is None,
     with the reason, when Chromium could not render it."""
     page = txt.with_suffix(".html")
-    page.write_text(html_report(_report.ascii_text(text), rows), encoding="utf-8")
+    page.write_text(html_report(_report.ascii_text(text), rows, client=client), encoding="utf-8")
     pdf = txt.with_suffix(".pdf")
     pdf.unlink(missing_ok=True)
     why = render_pdf(page, pdf)
@@ -756,18 +831,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"no context.txt in {lot}; a lot is a folder with one", file=sys.stderr)
         return 2
     client = extra_keys(lot).get("client")
+    account = None
     if client:
+        # The shared .txt/.html/.pdf are the client's copy. The money account
+        # is for us: it goes to stdout, the .csv and <stem>-account.txt.
         with redirect_stdout(io.StringIO()):
-            text, rows = consign_account(lot, client, today)
+            account, rows = consign_account(lot, client, today)
+            text, web_rows = consign_client(lot, client, today)
     else:
         keep, left_out = members(lot)
         items = estate_items(lot, keep, left_out)
         text = estate_text(lot, keep, left_out, items, today)
-        rows = [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
+        rows = web_rows = [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
     txt, csv_path = write(lot, text, rows, today)
-    page, pdf, why = write_web(txt, text, rows)
-    sys.stdout.write(text)
-    print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in (txt, csv_path, page, pdf) if p))
+    wrote = [txt, csv_path]
+    if account is not None:
+        acct = txt.with_name(txt.stem + "-account.txt")
+        acct.write_text(_report.ascii_text(account), encoding="ascii")
+        wrote.append(acct)
+    page, pdf, why = write_web(txt, text, web_rows, client=bool(client))
+    sys.stdout.write(account if account is not None else text)
+    print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in wrote + [page, pdf] if p))
     if why:
         print(f"FAILED pdf: {why}", file=sys.stderr)
     if args.print:
