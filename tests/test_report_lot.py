@@ -417,6 +417,7 @@ def test_ebay_photo_url_asks_ebay_once_per_item(tmp_path, monkeypatch):
         == "https://i.ebayimg.com/live/$_12.JPG"
     assert RL._ebay_photo_url({"sku": "gone", "listing_id": "880", "store": "junk"}) == ""
     assert RL._ebay_photo_url({"sku": "", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "4Q9BEV", "store": "default"}) == ""
     assert calls == [("/sell/inventory/v1/inventory_item/eb5df699", "creds:default"),
                      ("206", "creds:default"),
                      ("/sell/inventory/v1/inventory_item/gone", "creds:junk"),

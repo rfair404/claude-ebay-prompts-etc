@@ -646,7 +646,7 @@ def _ebay_photo_url(row: dict) -> str:
     import json
     sku = (row.get("sku") or "").strip()
     lid = (row.get("listing_id") or "").strip()
-    if not (sku or lid):
+    if not (sku or lid.isdigit()):
         return ""
     store = {"main": "default", "": "default"}.get(row.get("store") or "", row.get("store"))
     key = f"{store}:{sku or lid}"
@@ -671,8 +671,12 @@ def _ebay_photo_url(row: dict) -> str:
             except Exception as e:
                 if getattr(e, "status", None) != 404:
                     raise
-        if not url and lid:
-            url = next(iter(E.get_item_picture_urls(lid, creds)), "")
+        if not url and lid.isdigit():            # a mall SKU sits here for booth items
+            try:
+                url = next(iter(E.get_item_picture_urls(lid, creds)), "")
+            except Exception as e:
+                if "returned" not in str(e):     # eBay answered "no such item": just this one
+                    raise
     except Exception as e:                      # no creds, offline: no thumbnails this run
         _EBAY_DOWN = True
         print(f"report_lot: eBay photos skipped ({str(e).splitlines()[0][:120]})", file=sys.stderr)
