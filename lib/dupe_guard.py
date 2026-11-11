@@ -23,6 +23,13 @@ Everything else makes the row as before. Words can only flag it:
 A score of POSSIBLE or more (or two rows with hard evidence) writes a
 POSSIBLE_DUPE line to dupe_queue.csv for the inventory manager.
 
+Attach never crosses owners: a row made for one consignment client (or
+for house stock) never takes another client's row's frames or folder. The
+owner is the top folder under inventory/ (`CONSIGN-<client>`, else house);
+a tg7-* camera lot belongs to nobody, so its catalog takes the owner of the
+candidate's folder. Hard evidence on another owner's row refuses the add,
+nothing written (GH: KBD bin-07 frames attached to K01-C188, 2026-11-10).
+
 `--new` (force_new) never attaches, and says so in the row's `why`.
 Plain csv and re only; nothing here calls eBay or deletes anything.
 """
@@ -328,6 +335,30 @@ def queue(folder: Path, action: str, target: str, cand: dict, matches: list,
     return path
 
 
+def owner(path) -> Optional[str]:
+    """Whose stock an inventory/ path is: `CONSIGN-<client>`, "" for house
+    stock, None for a tg7-* camera lot (nobody's yet) or a path outside it."""
+    parts = rel(Path(path)).split("/") if str(path) else []
+    if len(parts) < 2 or parts[0] != "inventory":
+        return None
+    top = parts[1]
+    if top.upper().startswith("CONSIGN-"):
+        return top.upper()
+    return None if top.startswith("tg7-") else ""
+
+
+def _clash(a: Optional[str], b: Optional[str]) -> bool:
+    return a is not None and b is not None and a != b
+
+
+def _hard(m: Match) -> bool:
+    return bool(m.reasons) and m.reasons[0].startswith(("same folder", "shoot frame"))
+
+
+def _who(o: str) -> str:
+    return o or "house stock"
+
+
 def slug(text: str, words: int = 5) -> str:
     w = [t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t not in STOP]
     return "-".join(w[:words]) or "item"
@@ -354,14 +385,31 @@ def add_catalog_row(catalog: Path, cand: dict, scope: list[Path], *,
     rows = [r for p in files for r in loaded[p]]
     decision = decide(cand, rows)
     target = rel(catalog)
+    mine = owner(catalog)
+    if mine is None and cand.get("inventory_folder"):
+        mine = owner(norm_folder(cand["inventory_folder"]))
 
     if attach_to:
         pick = [r for r in rows if attach_to in r.aliases()]
         if len(pick) != 1:
             raise SystemExit(f"--attach {attach_to}: no single row with that key")
+        if _clash(mine, owner(pick[0].source)):
+            raise SystemExit(f"--attach {attach_to}: that row is "
+                             f"{_who(owner(pick[0].source))}'s, this add is "
+                             f"{_who(mine)}'s; nothing written")
         decision = Decision("attach", [Match(1.0, pick[0], ["--attach"])])
     elif force_new:
         decision = Decision("new", decision.matches)
+    else:
+        foreign = [m for m in decision.matches
+                   if _hard(m) and _clash(mine, owner(m.row.source))]
+        if foreign:
+            raise SystemExit(
+                f"refused, nothing written: this add is {_who(mine)}'s, but "
+                + "; ".join(f"{m.reasons[0]} is on {m.row.key} "
+                            f"({_who(owner(m.row.source))})" for m in foreign)
+                + ". Leave those frames off, or --new \"<reason>\" if it is "
+                  "a different object.")
 
     if decision.action == "attach":
         row = decision.best.row

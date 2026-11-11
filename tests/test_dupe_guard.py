@@ -294,6 +294,47 @@ def test_attach_flag_puts_the_frames_on_the_row_named(inv):
     assert not (d / "catalog.csv").exists()
 
 
+PHONE = dict(  # the K01-C188 shape: a K01 item shot on its own
+    item_id="K01-C188", bin="12", state="INTAKE",
+    description="Brass candlestick telephone, rotary dial in base, black receiver",
+    photos="ZZ102299 ZZ102300 ZZ102301 ZZ102302 ZZ102303",
+    inventory_folder="inventory/CONSIGN-K01/C188-candlestick-telephone")
+
+
+@pytest.mark.parametrize("extra", [[], ["--folder", PHONE["inventory_folder"]]])
+def test_another_clients_shoot_frames_never_attach_to_their_row(inv, capsys, extra):
+    # 2026-11-10: a KBD bin-07 import took in ZZ102300-303, which were already
+    # K01-C188's own shoot. `add` on the KBD catalog attached them to K01's
+    # row and wrote a false "second shoot folder" note into K01's ledger.
+    path = ledger(inv, PHONE)
+    before = path.read_bytes()
+    cat = inv / "CONSIGN-KBD" / "bin-07" / "catalog.csv"
+    with pytest.raises(SystemExit) as e:
+        add(cat, "Brass candlestick telephone, rotary dial", "ZZ102300 ZZ102301 "
+            "ZZ102302 ZZ102303", "--bin", "bin-07", *extra)
+    assert "K01-C188" in str(e.value) and "CONSIGN-KBD" in str(e.value)
+    assert path.read_bytes() == before                     # K01 ledger untouched
+    assert not list(inv.parent.rglob("client_ledger.backup-*"))
+    assert not cat.exists() and not (cat.parent / "dupe_queue.csv").exists()
+
+
+def test_attach_flag_to_another_clients_row_is_refused(inv):
+    path = ledger(inv, PHONE)
+    before = path.read_bytes()
+    with pytest.raises(SystemExit, match="nothing written"):
+        add(inv / "CONSIGN-KBD" / "bin-07" / "catalog.csv", "Telephone",
+            "ZZ102310", "--attach", "K01-C188")
+    assert path.read_bytes() == before
+
+
+def test_same_clients_shoot_frames_still_attach_from_their_bin(inv, capsys):
+    path = ledger(inv, PHONE)
+    add(inv / "CONSIGN-K01" / "bin-12" / "catalog.csv", "Candlestick telephone",
+        "ZZ102300 ZZ102304")
+    assert capsys.readouterr().out.startswith("ATTACH K01-C188")
+    assert "ZZ102304" in by_id(path)["K01-C188"]["photos"]
+
+
 def test_a_lot_mates_shared_folder_is_not_proof(inv):
     path = ledger(inv, dict(OPENER, lot_id="L1"), dict(HARDWARE, lot_id="L1",
                   inventory_folder=OPENER["inventory_folder"]))
