@@ -1178,15 +1178,8 @@ def upload_site_hosted_picture(image_bytes: bytes, picture_name: str = "photo",
 _HOLD_ERROR_CODE = "21920397"
 
 
-def get_listing_hold(listing_id: str,
-                     creds: Optional[EbayCredentials] = None) -> Optional[str]:
-    """Trading GetItem -> why eBay has this listing on hold, or None if it isn't.
-
-    The Inventory API refuses revisions to a held listing (a bare HTTP 500,
-    errorId 25001), so a writer asks this first. Raises EbayAPIError when
-    GetItem fails for any other reason: a caller that writes only on None
-    then fails closed.
-    """
+def _trading_get_item(listing_id: str, creds: Optional[EbayCredentials] = None) -> str:
+    """Raw Trading GetItem response body for one listing (live or ended)."""
     creds = creds or load_credentials()
     if not creds.dev_id:
         raise EbayAuthError("GetItem via the Trading API needs ebay.dev_id (Dev ID) in config.")
@@ -1214,6 +1207,31 @@ def get_listing_hold(listing_id: str,
                            e.read().decode("utf-8", errors="replace")) from e
     except urllib.error.URLError as e:
         raise EbayAPIError(0, f"GetItem {listing_id} → network error: {e}", None) from e
+    return body_text
+
+
+def get_item_picture_urls(listing_id: str,
+                          creds: Optional[EbayCredentials] = None) -> list[str]:
+    """The listing's photo URLs from Trading GetItem. Works for ended and sold
+    listings too, so it covers items listed without a SKU (eBay Live lots)."""
+    body_text = _trading_get_item(listing_id, creds)
+    ack = _xml_tag(body_text, "Ack") or ""
+    if ack.lower() not in ("success", "warning"):
+        raise EbayAPIError(0, f"GetItem {listing_id} returned {ack or 'no Ack'}", body_text)
+    return [html.unescape(u.strip()) for u in
+            re.findall(r"<(?:\w+:)?PictureURL>(.*?)</(?:\w+:)?PictureURL>", body_text, re.DOTALL)]
+
+
+def get_listing_hold(listing_id: str,
+                     creds: Optional[EbayCredentials] = None) -> Optional[str]:
+    """Trading GetItem -> why eBay has this listing on hold, or None if it isn't.
+
+    The Inventory API refuses revisions to a held listing (a bare HTTP 500,
+    errorId 25001), so a writer asks this first. Raises EbayAPIError when
+    GetItem fails for any other reason: a caller that writes only on None
+    then fails closed.
+    """
+    body_text = _trading_get_item(listing_id, creds)
 
     for block in re.findall(r"<(?:\w+:)?Errors>(.*?)</(?:\w+:)?Errors>", body_text, re.DOTALL):
         values = [v.strip() for v in

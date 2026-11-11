@@ -25,6 +25,12 @@ def _dir(root: Path, rel: str, context: str = "", files=()) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def _no_ebay(monkeypatch):
+    # no test asks eBay for photos unless it says so
+    monkeypatch.setattr(RL, "_ebay_photo_url", lambda row: "")
+
+
 @pytest.fixture
 def estate(tmp_path, monkeypatch):
     inv = tmp_path / "inventory"
@@ -295,30 +301,43 @@ def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeyp
         ("yes", "2026-11-01"), ("", ""), ("", "")]
 
 
-def test_page_shows_short_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+def test_page_shows_the_draft_title_whole_and_a_thumbnail_per_item(estate, monkeypatch, tmp_path):
+    # The page names each item by its draft's title, uncut, even when the
+    # ledger kept an older one. An item with no local photo gets its first
+    # eBay photo from the draft's meta.ebay_image_urls.
     from PIL import Image
     long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
-    short = RL._short(long, 60)
+    (estate / "candlesticks" / "draft.md").write_text(f"---\ntitle: {long}\n---\nbody\n", encoding="utf-8")
+    (estate / "tools" / "chainsaw" / "draft.md").write_text(
+        "---\ntitle: Chainsaw\nmeta:\n  ebay_image_urls:\n"
+        "  - \"https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1\"\n---\nbody\n", encoding="utf-8")
     monkeypatch.setattr(RL, "_all_listings", lambda: [
         {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
-         "published_at": "2026-10-23", "listing_id": "206", "title": long}])
+         "published_at": "2026-10-23", "listing_id": "206", "title": "Old ledger title"}])
     monkeypatch.setattr(RL, "_all_sales", lambda: [])
     Image.new("RGB", (400, 300), "red").save(estate / "candlesticks" / "a.jpg")
+    remote = tmp_path / "remote.jpg"
+    Image.new("RGB", (300, 225), "blue").save(remote)
+    asked = []
+    monkeypatch.setattr(RL, "_fetched", lambda url: asked.append(url) or (remote if url else None))
     keep, left_out = RL.members(estate)
     items = RL.estate_items(estate, keep, left_out)
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
     assert long not in text and RL._short(long, 52) in text
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
-    assert f"<td class=t>{short}</td>" in page and long not in page
-    assert page.count('<img src="data:image/jpeg;base64,') == 1
+    assert f"<td class=t>{long}</td>" in page and "Old ledger title" not in page
+    assert [u for u in asked if u] == ["https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1"]
+    assert page.count('<img src="data:image/jpeg;base64,') == 2
 
 
 def test_trash_folders_are_never_members(estate):
     inv = estate.parent.parent
     _dir(inv, "_trash/20261103/arrowhead", "spend: 0\npart_of: ES/BUY1\n")
     _dir(inv, "_trash/20261103/arrowhead/01-point")
+    _dir(inv, "_rebuilt/abc123", "part_of: ES/BUY1\n")
     keep, _ = RL.members(estate)
     assert not any("_trash" in RL.label(d) for d in keep)
+    assert any("_rebuilt/abc123" in RL.label(d) for d in keep)
 
 
 def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
@@ -360,3 +379,43 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
     assert page.count("<table>") == 3
+
+
+def test_ebay_photo_url_asks_ebay_once_per_item(tmp_path, monkeypatch):
+    # A sold item with no draft left still has its photos on eBay: the
+    # inventory item by SKU, else GetItem by listing id (a Live lot has no
+    # SKU). The URL is cached so a rerun doesn't ask again.
+    import types
+    monkeypatch.undo()
+    monkeypatch.setattr(RL, "_URL_CACHE", tmp_path / "ebay_urls.json")
+    monkeypatch.setattr(RL, "_EBAY_DOWN", False)
+    calls = []
+
+    class Missing(Exception):
+        status = 404
+
+    def api_send(method, path, creds=None, marketplace=None):
+        calls.append((path, creds))
+        if path.endswith("/gone"):
+            raise Missing("HTTP 404")
+        return {"product": {"imageUrls": ["https://i.ebayimg.com/a/$_12.JPG", "https://i.ebayimg.com/b"]}}
+
+    def pictures(lid, creds):
+        calls.append((lid, creds))
+        return ["https://i.ebayimg.com/live/$_12.JPG"] if lid == "206" else []
+
+    fake = types.SimpleNamespace(api_send=api_send, get_item_picture_urls=pictures,
+                                 load_credentials=lambda store: f"creds:{store}")
+    monkeypatch.setitem(sys.modules, "ebay_client", fake)
+    row = {"sku": "eb5df699", "store": "main"}
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "206", "store": "default"}) \
+        == "https://i.ebayimg.com/live/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "gone", "listing_id": "880", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "4Q9BEV", "store": "default"}) == ""
+    assert calls == [("/sell/inventory/v1/inventory_item/eb5df699", "creds:default"),
+                     ("206", "creds:default"),
+                     ("/sell/inventory/v1/inventory_item/gone", "creds:junk"),
+                     ("880", "creds:junk")]
