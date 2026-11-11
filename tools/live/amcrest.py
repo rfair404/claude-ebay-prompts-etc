@@ -7,7 +7,7 @@
     python tools/live/amcrest.py url              # the RTSP URL, password redacted
     python tools/live/amcrest.py ptz info         # model and pan/tilt/zoom/preset caps
     python tools/live/amcrest.py ptz left|right|up|down [--secs 0.4] [--speed 4]
-    python tools/live/amcrest.py ptz in|out       # zoom (only if the camera has optical zoom)
+    python tools/live/amcrest.py ptz in|out       # zoom (refused if the camera reports no zoom)
     python tools/live/amcrest.py ptz stop
     python tools/live/amcrest.py ptz goto 1 | save 1   # presets
     python tools/live/amcrest.py ptz dock         # buttons for an OBS Custom Browser Dock
@@ -28,8 +28,8 @@ also ends up in OBS's own scene collection, under the Flatpak config dir;
 never copy that collection back into tools/live/obs/scenes/.
 
 PTZ goes over the camera's HTTP CGI (Dahua/Amcrest HTTP API, ptz.cgi), with
-the same login. The IP2M-841B pans and tilts and has numbered presets; its
-lens is fixed, so `in`/`out` refuse unless the camera reports zoom. Moves are
+the same login. The IP2M-841B pans and tilts, zooms and has presets 1-25;
+zoom softens at full zoom-in; `in`/`out` refuse on a camera that reports no zoom. Moves are
 timed nudges (start, wait, stop), so a lost click never leaves it turning.
 `ptz dock` serves a button page on 127.0.0.1 only; the login stays in this
 process and never reaches the page or OBS.
@@ -231,7 +231,7 @@ def ptz_info(cfg: dict) -> str:
     caps = ptz_caps(cfg)
     yes = lambda k: "yes" if caps.get(k, "").lower() == "true" else "no"  # noqa: E731
     # "Tile" is the camera's own spelling of tilt
-    return (f"{model}: pan {yes('Pan')}, tilt {yes('Tile')}, optical zoom {yes('Zoom')}, "
+    return (f"{model}: pan {yes('Pan')}, tilt {yes('Tile')}, zoom {yes('Zoom')}, "
             f"presets {caps.get('PresetMin', '?')}-{caps.get('PresetMax', '?')}")
 
 

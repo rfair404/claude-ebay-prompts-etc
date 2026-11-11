@@ -165,7 +165,7 @@ def test_presets_and_info(cam):
     assert [(p["code"], p["arg2"]) for _, p in cam] == [("GotoPreset", 2), ("SetPreset", 3)]
     with pytest.raises(obsctl.ObsError):
         amcrest.ptz_preset(CFG, "goto", 0)
-    assert amcrest.ptz_info(CFG) == "IP2M-841B: pan yes, tilt yes, optical zoom no, presets 1-255"
+    assert amcrest.ptz_info(CFG) == "IP2M-841B: pan yes, tilt yes, zoom no, presets 1-255"
 
 
 def test_cgi_401_says_rerun_setup_and_hides_password(monkeypatch):

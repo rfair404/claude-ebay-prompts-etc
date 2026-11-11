@@ -283,11 +283,11 @@ sub stream; `amcrest.py url` prints the URL with the password redacted.
 **Verify:** `python tools/live/obsctl.py shot Amcrest` writes a frame of the
 camera's view.
 
-**Pan/tilt from OBS.** The camera is an IP2M-841B: it pans and tilts and keeps
-numbered presets; the lens is fixed, so there is no optical zoom (crop in OBS).
+**Pan, tilt and zoom from OBS.** The camera is an IP2M-841B: it pans, tilts, zooms and keeps
+presets 1-25 (zoom softens at full zoom-in). PTZ uses ptz.cgi channel 0; the stream is channel 1.
 `amcrest.py ptz` drives it over the camera's HTTP CGI with the same login:
 `ptz info` (model and caps), `ptz left|right|up|down` (a short nudge;
-`--secs`, `--speed 1-8`), `ptz stop`, `ptz goto N`, `ptz save N`. The CGI
+`--secs`, `--speed 1-8`), `ptz in|out` (zoom), `ptz stop`, `ptz goto N`, `ptz save N`. The CGI
 login is checked, unlike RTSP, which this camera serves without one; a refused
 login means the stored password is wrong, so run `setup --password` with the
 password of the camera's web page. Don't retry it in a loop: the camera locks
@@ -301,7 +301,7 @@ python tools/live/amcrest.py ptz dock
 ```
 
 Then once, in OBS: Docks > Custom Browser Docks, name `Amcrest`, URL
-`http://127.0.0.1:8457/`. Arrows nudge, the square stops, 1-4 go to a preset;
+`http://127.0.0.1:8457/`. Arrows nudge, + and − zoom, the square stops, 1-4 go to a preset;
 tick Save, then a number, to store the current view there.
 
 ## 6. Running the show without the OBS window
