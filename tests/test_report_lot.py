@@ -461,7 +461,7 @@ def test_thumbnail_falls_back_to_a_named_frame_or_its_review_crop(tmp_path, monk
     monkeypatch.setattr(RL, "REPO", tmp_path)
     pics = RL._thumbs([{"photos": "ZZ220246"}, {"photos": "ZZ220250.JPG"}, {"photos": "ZZ999999"},
                        {"listing_id": "206656147219"}])
-    # a frame named with or without its extension, or its crop; never eBay under test
+    # a frame named with or without its extension, or its crop; eBay is stubbed out
     assert [bool(p) for p in pics] == [True, True, False, False]
 
 
