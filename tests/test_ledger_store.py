@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 
@@ -658,3 +660,45 @@ def test_verify_cli_drift_fails_only_when_strict():
 def test_verify_with_no_logs_is_clean():
     rc, out = _verify_cli(Path(tempfile.mkdtemp()))
     assert rc == 0 and "no event logs" in out
+
+
+# --------------------------------------------------------------------------
+# concurrent writers (GH #428): the per-key flock keeps the log linear
+# --------------------------------------------------------------------------
+
+WRITER = """
+import os, sys, time
+from pathlib import Path
+sys.path.insert(0, {lib!r})
+import ledger_store as ls
+root, tag, go = Path(sys.argv[1]), sys.argv[2], float(sys.argv[3])
+st = ls.LedgerStore(root=root, mirror=lambda p: None, out=open(os.devnull, "w"))
+def add(i):
+    def fn(rows):
+        time.sleep(0.002)            # widen read -> write, where the race was
+        return rows + [{{"order_id": f"{{tag}}{{i}}", "sku": "s", "price": "1"}}]
+    return fn
+while time.time() < go:
+    time.sleep(0.001)
+for i in range(25):
+    st.update("sales", add(i), backup=False)
+"""
+
+
+@pytest.mark.skipif(ls.fcntl is None, reason="no flock on Windows")
+def test_two_processes_writing_one_key_keep_the_log_linear():
+    import subprocess
+    import time
+    st, root, _ = _store(None, {"sales_ledger.csv": HEADER + b"A,s,1\r\n"})
+    st.update("sales", lambda rows: rows)                     # genesis
+    script = WRITER.format(lib=str(ROOT / "lib"))
+    go = str(time.time() + 1.0)
+    procs = [subprocess.Popen([sys.executable, "-c", script, str(root), tag, go])
+             for tag in ("P", "Q")]
+    assert all(p.wait(timeout=120) == 0 for p in procs)
+    want = sorted(["A"] + [f"{t}{i}" for t in "PQ" for i in range(25)])
+    assert sorted(_ids((root / "sales_ledger.csv").read_bytes())) == want   # no row lost
+    rp = ls.replay(st.chain_path("sales_ledger.csv"), "sales_ledger.csv")
+    assert rp.broken is None, rp.broken                       # no forked link
+    assert rp.events == 51                                    # genesis + 50 changes, no drift
+    assert _rebuilt(st) == want

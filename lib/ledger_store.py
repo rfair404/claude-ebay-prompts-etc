@@ -39,7 +39,9 @@ any past event breaks every link after it. The first event is a genesis
 snapshot of the rows as found. A write made outside update() (another
 machine, a hand edit, a tool not converted yet) shows up as a `drift` event
 on the next update(), so the log still replays to exactly what is on disk.
-Replaying the log rebuilds every table, which is how the D1 tables become
+Each write holds an exclusive flock on reports/ledger_chain/<key>.lock from
+reading the CSV to appending its event (GH #428), so two writers on this
+machine can't fork the log or lose a row. Replaying the log rebuilds every table, which is how the D1 tables become
 views over it later. The ledger CSVs themselves are unchanged.
 `ebz ledger verify` walks each log from its first event and names the first
 broken link. The log is local to this checkout until it moves behind the
@@ -59,6 +61,7 @@ and clients.csv (client names) are deliberately not on it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import io
@@ -73,6 +76,11 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
+
+try:
+    import fcntl
+except ImportError:                    # Windows: no flock; writes stay unlocked
+    fcntl = None
 
 LIB = Path(__file__).resolve().parent
 if str(LIB) not in sys.path:
@@ -121,6 +129,7 @@ PROBE_KEY = "inventory_sheet.csv"      # never allowlisted: `check` expects 403
 TIMEOUT = 20
 CHAIN_DIR = Path("reports") / "ledger_chain"   # under root; reports/ is gitignored
 CHAIN_SUFFIX = ".jsonl"
+LOCK_SUFFIX = ".lock"
 CHAIN_VERSION = 1
 GENESIS_PREV = "0" * 64
 
@@ -530,6 +539,21 @@ class LedgerStore:
     def chain_path(self, key: str) -> Path:
         return self.chain_dir / (key + CHAIN_SUFFIX)
 
+    @contextlib.contextmanager
+    def _locked(self, key: str):
+        """Hold an exclusive flock on <chain_dir>/<key>.lock (GH #428). Not
+        re-entrant: never call update() on the same key from inside fn."""
+        if fcntl is None:
+            yield
+            return
+        self.chain_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.chain_dir / (key + LOCK_SUFFIX), "a") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
     def _chain(self, key: str, before: tuple[list[str], list[dict]], data: bytes) -> None:
         """Log a write already on disk. Never fails the write: a log that
         can't be extended says so, and verify names the break."""
@@ -612,38 +636,41 @@ class LedgerStore:
                 continue                      # someone else wrote; re-read, re-apply
             if p.status not in (200, 201):
                 raise LedgerStoreError(f"PUT {key}: HTTP {p.status} {p.body[:200]!r}")
-            atomic_write(path, data)
-            self._set_etag(key, p.headers.get("etag"), clear_pending=True)
-            self._chain(key, (fields, rows), data)
+            with self._locked(key):
+                atomic_write(path, data)
+                self._set_etag(key, p.headers.get("etag"), clear_pending=True)
+                self._chain(key, (fields, rows), data)
             self.mirror(path)
             return new
         raise Conflict(f"{key}: still conflicting after {MAX_ATTEMPTS} attempts; "
                        f"nothing written — run it again")
 
     def _local(self, key: str, path: Path, fn, *, backup: bool = True) -> list[dict]:
-        fields, rows = _read(path)
-        new = _apply(fn, rows)
-        if backup and path.exists():
-            stamp = time.strftime("%Y%m%d-%H%M%S")
-            path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
-                path.read_bytes())
-        data = to_csv(fields, new)
-        atomic_write(path, data)
-        self._chain(key, (fields, rows), data)
+        with self._locked(key):              # read -> apply -> write -> log, one writer
+            fields, rows = _read(path)
+            new = _apply(fn, rows)
+            if backup and path.exists():
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}").write_bytes(
+                    path.read_bytes())
+            data = to_csv(fields, new)
+            atomic_write(path, data)
+            self._chain(key, (fields, rows), data)
         self.mirror(path)
         return new
 
     def _offline(self, key: str, path: Path, fn) -> list[dict]:
-        fields, rows = _read(path)
-        new = _apply(fn, rows)
-        data = to_csv(fields, new)
-        atomic_write(path, data)
-        self._chain(key, (fields, rows), data)
-        s = self.state()
-        # Keep the ETag of the FIRST offline write: that is what the cache
-        # was based on, and what the cloud must still be at for push.
-        s["pending"].setdefault(key, s["etags"].get(key))
-        self._save(s)
+        with self._locked(key):
+            fields, rows = _read(path)
+            new = _apply(fn, rows)
+            data = to_csv(fields, new)
+            atomic_write(path, data)
+            self._chain(key, (fields, rows), data)
+            s = self.state()
+            # Keep the ETag of the FIRST offline write: that is what the cache
+            # was based on, and what the cloud must still be at for push.
+            s["pending"].setdefault(key, s["etags"].get(key))
+            self._save(s)
         self.mirror(path)
         print(f"[ledger] offline: {key} saved locally, pending — "
               f"run `python -m lib.cli ledger push` once back online", file=self.out)
