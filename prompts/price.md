@@ -1,5 +1,5 @@
 ---
-version: 1.1.0
+version: 1.2.0
 updated: 2026-10-25
 ---
 
@@ -195,8 +195,10 @@ Escalate only as each stage dries up; never stop to ask.
    URLs.
 
    `--parse <textfile>` is the no-JS fallback (no URLs/thumbnails).
-   `Best offer accepted` on a comp ⇒ the ask wasn't the clearing price — treat
-   as a **soft** ceiling. Do NOT "simplify" the extractor's anti-scrape guards
+   `Best offer accepted` on a comp ⇒ the row shows the ASK, not the sale
+   price. `price_stats.py` drops these rows from the median and ceiling (named
+   in its filter log); a row is a usable comp only once its item page is
+   opened and the accepted price logged. Do NOT "simplify" the extractor's anti-scrape guards
    (fake-id placeholder cards, reversed `derosnopS` sponsored tag, welded
    spans — see [reference/price-notes.md](reference/price-notes.md)).
 

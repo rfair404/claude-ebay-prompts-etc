@@ -13,7 +13,9 @@ moves it.
 Run:  python tests/test_competitor_charm_pricing.py
   or: pytest tests/test_competitor_charm_pricing.py
 """
+import json
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,8 +25,25 @@ sys.path.insert(0, str(ROOT / "lib"))
 import price_stats  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "price_stats_pair"
-BM = FIX / "best_match.json"
-PH = FIX / "price_high.json"
+
+
+def _without_best_offer(src: Path) -> Path:
+    """Copy a fixture run with every bo_accepted flag cleared.
+
+    price_stats drops accepted-Best-Offer rows (their price is the ask), which
+    leaves this fixture too thin for tiers. These tests are about tier
+    rounding, so they need the full cohort.
+    """
+    data = json.loads(src.read_text(encoding="utf-8"))
+    for c in data.get("comps", []):
+        c["bo_accepted"] = False
+    out = Path(tempfile.mkdtemp()) / src.name
+    out.write_text(json.dumps(data), encoding="utf-8")
+    return out
+
+
+BM = _without_best_offer(FIX / "best_match.json")
+PH = _without_best_offer(FIX / "price_high.json")
 
 
 def _report(**kw):
