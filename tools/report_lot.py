@@ -5,6 +5,11 @@ each one stands, and a money summary.
     python tools/report_lot.py ES/<LOT>                # estate buy
     python tools/report_lot.py CONSIGN-YYYYMMDD        # consignment intake
     python tools/report_lot.py ES/<LOT> --print        # also print on CannonBW
+    python tools/report_lot.py --all                   # every lot on one page
+
+--all writes only reports/lots/lots-<date>.html: every lot's account (the
+consignments, then ES/* and ESTATES/*) with a picker at the top to switch
+between them. The link opens on the lot picked last (or the one in #hash).
 
 Writes reports/lots/<lot>-<date>.txt (plain text), .csv (one row per item),
 .html (web page, with photo thumbnails) and .pdf (landscape, for paper) and writes the .txt to
@@ -55,6 +60,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import functools
 import html
 import io
 import re
@@ -194,6 +200,7 @@ def _rank(r: dict) -> tuple:
     return (lvl, r.get("published_at") or r.get("synced_at") or r.get("drafted_at") or "")
 
 
+@functools.cache  # --all asks once per lot; the ledgers don't change mid-run
 def _all_listings() -> list[dict]:
     rows = []
     for name in stores.configured_stores():
@@ -202,6 +209,7 @@ def _all_listings() -> list[dict]:
     return rows
 
 
+@functools.cache
 def _all_sales() -> list[dict]:
     rows = []
     for name in stores.configured_stores():
@@ -853,10 +861,25 @@ def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None)
     return f"<table><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>"
 
 
-def html_report(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> str:
-    """The account as a web page: every all-caps heading line starts a
-    section; a header line over a row of dashes becomes a real table and
-    everything else stays preformatted, so the figures are the text's.
+STYLE = """
+body{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding:16px;color:#222;background:#fff}
+h1{font-size:1.25rem;margin:0 0 12px} h2{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}
+pre{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}
+.scroll{overflow-x:auto} table{border-collapse:collapse;width:100%;font-size:13px}
+img{display:block;width:80px;height:80px;object-fit:cover;border-radius:3px}
+th,td{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
+td{white-space:nowrap} td.t{white-space:normal;min-width:18em}
+th{background:#f2f2f2} .n{text-align:right;white-space:nowrap}
+p.sub{color:#555;margin:0 0 8px;white-space:pre-line}
+@media print{@page{size:landscape;margin:12mm}body{max-width:none;padding:0;font-size:11px}
+table{font-size:10px}tr{break-inside:avoid}thead{display:table-header-group}}
+"""
+
+
+def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> tuple[str, str]:
+    """(title, body) of the account as HTML: every all-caps heading line
+    starts a section; a header line over a row of dashes becomes a real table
+    and everything else stays preformatted, so the figures are the text's.
     A client copy (`client`) sets its prose as paragraphs, not monospace."""
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
@@ -888,27 +911,65 @@ def html_report(text: str, rows: Optional[list[dict]] = None, client: bool = Fal
             pre.append(line)
         i += 1
     flush()
+    return title, "".join(out).replace("<table", '<div class="scroll"><table').replace("</table>", "</table></div>")
+
+
+def _page(title: str, body: str, style: str = "") -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<style>
-body{{font:15px/1.45 system-ui,sans-serif;margin:0 auto;max-width:1100px;padding:16px;color:#222;background:#fff}}
-h1{{font-size:1.25rem;margin:0 0 12px}} h2{{font-size:1rem;margin:22px 0 6px;border-bottom:1px solid #bbb}}
-pre{{font:13px/1.4 ui-monospace,monospace;white-space:pre-wrap;margin:6px 0}}
-.scroll{{overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:13px}}
-img{{display:block;width:80px;height:80px;object-fit:cover;border-radius:3px}}
-th,td{{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}}
-td{{white-space:nowrap}} td.t{{white-space:normal;min-width:18em}}
-th{{background:#f2f2f2}} .n{{text-align:right;white-space:nowrap}}
-p.sub{{color:#555;margin:0 0 8px;white-space:pre-line}}
-@media print{{@page{{size:landscape;margin:12mm}}body{{max-width:none;padding:0;font-size:11px}}
-table{{font-size:10px}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}
-</style></head><body>
-<h1>{title}</h1>
-{"".join(out).replace("<table", '<div class="scroll"><table').replace("</table>", "</table></div>")}
+<style>{STYLE}{style}</style></head><body>
+{body}
 </body></html>
 """
+
+
+def html_report(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> str:
+    title, body = html_body(text, rows, client)
+    return _page(title, f"<h1>{title}</h1>\n{body}")
+
+
+def all_lots() -> list[Path]:
+    """Every lot folder: the consignments first, then the estate buys."""
+    pats = ["CONSIGN-*", "ES/*", "ESTATES/*"]
+    return [d for p in pats for d in sorted(INVENTORY.glob(p)) if (d / "context.txt").is_file()]
+
+
+# The picker shows one lot at a time; #<id> or the last lot picked opens first.
+PICKER_JS = """
+const sel = document.getElementById('lot');
+function show(id) {
+  if (!document.getElementById(id)) id = sel.options[0].value;
+  for (const s of document.querySelectorAll('section.lot')) s.hidden = s.id !== id;
+  sel.value = id;
+  try { localStorage.setItem('lot', id); } catch (e) {}
+}
+sel.onchange = () => { location.hash = sel.value; };
+addEventListener('hashchange', () => show(location.hash.slice(1)));
+let first = location.hash.slice(1);
+try { first = first || localStorage.getItem('lot'); } catch (e) {}
+show(first);
+"""
+
+
+def lots_page(accounts: list[tuple[str, str, list[dict]]], today: date) -> str:
+    """One page with every lot's account and a picker to switch between them.
+    accounts: (lot label, account text, rows)."""
+    opts, sections = [], []
+    for name, text, rows in accounts:
+        sid = re.sub(r"[^A-Za-z0-9-]", "_", name)
+        title, body = html_body(_report.ascii_text(text), rows)
+        opts.append(f'<option value="{sid}">{html.escape(name)}</option>')
+        sections.append(f'<section class="lot" id="{sid}"><h1>{title}</h1>\n{body}</section>')
+    bar = (f'<header><select id="lot" aria-label="Lot">{"".join(opts)}</select>'
+           f'<span>as of {today.isoformat()}</span></header>')
+    style = ("header{position:sticky;top:0;background:#fff;padding:8px 0;margin-bottom:8px;"
+             "border-bottom:2px solid #222;display:flex;gap:12px;align-items:center;flex-wrap:wrap}"
+             "header select{font-size:1.1rem;padding:6px;max-width:100%}"
+             "@media print{header{display:none}}")
+    return _page(f"Lot reports {today.isoformat()}",
+                 bar + "\n" + "\n".join(sections) + f"\n<script>{PICKER_JS}</script>", style)
 
 
 def render_pdf(html_path: Path, pdf_path: Path) -> Optional[str]:
@@ -962,12 +1023,50 @@ def print_txt(path: Path) -> str:
     return res.stdout.strip()
 
 
+def lot_account(lot: Path, today: date) -> tuple[str, list[dict]]:
+    """(account text, rows) for one lot, consignment or estate."""
+    client = extra_keys(lot).get("client")
+    if client:
+        with redirect_stdout(io.StringIO()):
+            return consign_account(lot, client, today)
+    keep, left_out = members(lot)
+    items = estate_items(lot, keep, left_out)
+    text = estate_text(lot, keep, left_out, items, today)
+    return text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
+
+
+def write_all(today: date) -> int:
+    """reports/lots/lots-<date>.html. A lot that fails shows its error in its
+    own section, is named on stderr, and the run exits 1."""
+    accounts, failed = [], []
+    for lot in all_lots():
+        try:
+            text, rows = lot_account(lot, today)
+        except Exception as e:  # one broken lot must not hide the others
+            failed.append(label(lot))
+            print(f"FAILED {label(lot)}: {e!r}", file=sys.stderr)
+            text, rows = f"LOT ACCOUNT - {label(lot)}\nFAILED: {e!r}\n", []
+        accounts.append((label(lot), text, rows))
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    page = OUT_DIR / f"lots-{today.isoformat()}.html"
+    page.write_text(lots_page(accounts, today), encoding="utf-8")
+    print(f"WROTE {page.relative_to(REPO)}  ({len(accounts)} lots)")
+    return 1 if failed else 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Full account of one lot: item ledger + summary.")
-    ap.add_argument("lot", help="lot folder under inventory/, e.g. ES/<LOT> or CONSIGN-YYYYMMDD")
+    ap.add_argument("lot", nargs="?", help="lot folder under inventory/, e.g. ES/<LOT> or CONSIGN-YYYYMMDD")
+    ap.add_argument("--all", action="store_true", help="every lot on one page with a lot picker")
     ap.add_argument("--print", action="store_true", help=f"also print the PDF (the .txt if no PDF) on {PRINTER}")
     args = ap.parse_args(argv)
+    if bool(args.lot) == args.all:
+        ap.error("give a lot folder or --all")
+    if args.all and args.print:
+        ap.error("--all makes only the web page; print one lot at a time")
     today = date.today()
+    if args.all:
+        return write_all(today)
     lot = lot_dir(args.lot)
     if not (lot / "context.txt").is_file():
         print(f"no context.txt in {lot}; a lot is a folder with one", file=sys.stderr)

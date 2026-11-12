@@ -58,6 +58,18 @@ Then share the .txt, .html and .pdf from the main checkout (three links):
 
     for ext in txt html pdf; do .venv/bin/python -m lib.cli offsite share reports/lots/<lot>-<date>.$ext; done
 
+## Every lot on one page
+
+When Russell asks for all the lots, or to switch between lots, sync each
+`CONSIGN-*` folder as in step 2, then:
+
+    .claude/skills/report-lot/run.sh --all
+
+It writes only `reports/lots/lots-<date>.html`: every lot's account with a
+picker at the top (consignments first). Share that one file and reply with
+the link. A lot that fails shows its error in its own section and is named
+on a `FAILED` line; pass that line on.
+
 ## 3. Which folders count (estates)
 
 The tool's docstring has the rules. In short, an estate's items are its own
