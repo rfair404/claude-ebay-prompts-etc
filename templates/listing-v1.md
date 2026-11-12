@@ -188,6 +188,9 @@ returns_policy_id: ""
 # --- PROMOTED LISTING ----------------------------------------------------
 # eBay form fields [63][64]. Default OFF — promoted listings cost extra
 # and are opt-in per item.
+# These two flags do not stop auto-promote at publish (lib/auto_promote).
+# For an item that must get no ads at all, replace the block with
+#   promoted: false
 promoted:
   general:  false              # CPC-style sponsored
   priority: false              # premium placement

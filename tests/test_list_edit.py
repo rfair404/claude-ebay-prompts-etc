@@ -554,6 +554,27 @@ def test_publish_offer_never_promotes_a_k01_consignment_listing(tmp_path, monkey
     assert not [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
 
 
+def test_publish_offer_skips_ads_when_the_draft_says_promoted_false():
+    """A draft with `promoted: false` publishes with no ad in either campaign."""
+    send, calls = _fake_api({
+        "/offer/OFFER-1/publish": {"listingId": "999888777"},
+        "/offer/OFFER-1": {"status": "UNPUBLISHED", "sku": "abc12300",
+                           "pricingSummary": {"price": {"value": "95.00"}}},
+        "get_campaign_by_name": {"campaignId": "C1", "campaignStatus": "RUNNING",
+                                 "fundingStrategy": {"fundingModel": "COST_PER_SALE"}},
+        "bulk_create_ads_by_listing_id": {"responses": [{"statusCode": 201}]},
+    })
+    with tempfile.TemporaryDirectory() as td:
+        draft_path = _write_single_draft(Path(td), sku="abc12300", offer_id="OFFER-1")
+        draft_path.write_text(draft_path.read_text().replace(
+            "meta:\n", "promoted: false\nmeta:\n", 1), encoding="utf-8")
+        with _patched(L, get_listing_hold=_not_held, api_send=send), _ledger_at(Path(td)):
+            res = L.publish_offer(draft_path, creds=_Creds(), confirm=True)
+    assert res.listing_id == "999888777"
+    assert res.promotion.startswith("not promoted: draft says promoted: false")
+    assert not [c for c in calls if c[1].endswith("bulk_create_ads_by_listing_id")]
+
+
 def test_publish_succeeds_when_promotion_fails():
     """The listing is live before promotion runs; an ad error must not turn a
     successful publish into a failure."""
