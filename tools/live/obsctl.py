@@ -42,6 +42,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -299,6 +300,8 @@ def _output_cmd(kind: str):
 # Stream settings carry secrets: eBay's WHIP URL has the key in its path, and
 # Twitch/YouTube have a stream key. Never print them.
 SECRET_FIELDS = {"key", "server", "bearer_token", "password", "username"}
+# A media source URL can carry a login (the Amcrest RTSP feed): user:pass@host.
+URL_LOGIN = re.compile(r"(\w+://[^/:@\s]*:)[^@\s]+@")
 
 
 def redact(obj):
@@ -307,6 +310,8 @@ def redact(obj):
                     and v and not v.startswith("auto") else redact(v)) for k, v in obj.items()}
     if isinstance(obj, list):
         return [redact(v) for v in obj]
+    if isinstance(obj, str):
+        return URL_LOGIN.sub(r"\1<redacted>@", obj)
     return obj
 
 

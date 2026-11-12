@@ -25,6 +25,12 @@ def _dir(root: Path, rel: str, context: str = "", files=()) -> Path:
     return d
 
 
+@pytest.fixture(autouse=True)
+def _no_ebay(monkeypatch):
+    # no test asks eBay for photos unless it says so
+    monkeypatch.setattr(RL, "_ebay_photo_url", lambda row: "")
+
+
 @pytest.fixture
 def estate(tmp_path, monkeypatch):
     inv = tmp_path / "inventory"
@@ -291,34 +297,48 @@ def test_consign_case_items_show_available_locally_and_fb_flag(tmp_path, monkeyp
     overview = text.split("OVERVIEW")[1].split("CLIENT MONEY")[0]
     assert re.search(r"Available locally +1 ", overview) and re.search(r"Listed on eBay +2 ", overview)
     assert "Russell" not in text
-    assert [(r["available_locally"], r["fb_promoted"]) for r in out] == [
-        ("yes", "2026-11-01"), ("", ""), ("", "")]
+    # listed on eBay sorts ahead of available locally
+    assert [(r["item_id"], r["available_locally"], r["fb_promoted"]) for r in out] == [
+        ("K01-C002", "", ""), ("K01-C003", "", ""), ("K01-C001", "yes", "2026-11-01")]
 
 
-def test_page_shows_short_titles_and_a_thumbnail_per_item(estate, monkeypatch):
+def test_page_shows_the_draft_title_whole_and_a_thumbnail_per_item(estate, monkeypatch, tmp_path):
+    # The page names each item by its draft's title, uncut, even when the
+    # ledger kept an older one. An item with no local photo gets its first
+    # eBay photo from the draft's meta.ebay_image_urls.
     from PIL import Image
     long = "Pair of antique brass candlesticks with hand chased bases and removable bobeches"
-    short = RL._short(long, 60)
+    (estate / "candlesticks" / "draft.md").write_text(f"---\ntitle: {long}\n---\nbody\n", encoding="utf-8")
+    (estate / "tools" / "chainsaw" / "draft.md").write_text(
+        "---\ntitle: Chainsaw\nmeta:\n  ebay_image_urls:\n"
+        "  - \"https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1\"\n---\nbody\n", encoding="utf-8")
     monkeypatch.setattr(RL, "_all_listings", lambda: [
         {"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
-         "published_at": "2026-10-23", "listing_id": "206", "title": long}])
+         "published_at": "2026-10-23", "listing_id": "206", "title": "Old ledger title"}])
     monkeypatch.setattr(RL, "_all_sales", lambda: [])
     Image.new("RGB", (400, 300), "red").save(estate / "candlesticks" / "a.jpg")
+    remote = tmp_path / "remote.jpg"
+    Image.new("RGB", (300, 225), "blue").save(remote)
+    asked = []
+    monkeypatch.setattr(RL, "_fetched", lambda url: asked.append(url) or (remote if url else None))
     keep, left_out = RL.members(estate)
     items = RL.estate_items(estate, keep, left_out)
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 2))
     assert long not in text and RL._short(long, 52) in text
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
-    assert f"<td class=t>{short}</td>" in page and long not in page
-    assert page.count('<img src="data:image/jpeg;base64,') == 1
+    assert f"<td class=t>{long}</td>" in page and "Old ledger title" not in page
+    assert [u for u in asked if u] == ["https://i.ebayimg.com/00/s/x/z/abc/$_12.JPG?set_id=1"]
+    assert page.count('<img src="data:image/jpeg;base64,') == 2
 
 
 def test_trash_folders_are_never_members(estate):
     inv = estate.parent.parent
     _dir(inv, "_trash/20261103/arrowhead", "spend: 0\npart_of: ES/BUY1\n")
     _dir(inv, "_trash/20261103/arrowhead/01-point")
+    _dir(inv, "_rebuilt/abc123", "part_of: ES/BUY1\n")
     keep, _ = RL.members(estate)
     assert not any("_trash" in RL.label(d) for d in keep)
+    assert any("_rebuilt/abc123" in RL.label(d) for d in keep)
 
 
 def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
@@ -360,6 +380,129 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     page = RL.html_report(text, [{k: ("" if v is None else v) for k, v in i.items()} for i in items])
     assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>LOT MONEY</h2>") < page.index("<h2>MEMBERS")
     assert page.count("<table>") == 3
+
+
+def _consign_lot(tmp_path, monkeypatch, rows):
+    import consign as C
+    monkeypatch.setattr(C, "REPO", tmp_path)
+    monkeypatch.setattr(C, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(C, "load_registry", lambda: {"K01": {"name": "Client Name"}})
+    monkeypatch.setattr(C, "read_settlements", lambda code: [])
+    monkeypatch.setattr(C, "load_fee_lines", lambda: [])
+    lot = _dir(tmp_path / "inventory", "CONSIGN-20261022", "client: K01\n")
+    base = {k: "" for k in C.COLUMNS}
+    C.write_ledger(lot / C.LEDGER_NAME, [dict(base, **r) for r in rows])
+    return lot
+
+
+SORT_ROWS = [
+    {"item_id": "K01-C001", "description": "Shot cup", "state": "SHOT", "est_low": "10.00"},
+    {"item_id": "K01-C002", "description": "Drafted bowl", "state": "DRAFTED", "ask": "40.00"},
+    {"item_id": "K01-C003", "description": "Booth bell", "state": "LISTED", "channel": "mall",
+     "listing_id": "BAX", "placed_at": "2026-10-25", "ask": "20.00"},
+    {"item_id": "K01-C004", "description": "Listed sign", "state": "LISTED", "listing_id": "206",
+     "ask": "30.00"},
+    {"item_id": "K01-C005", "description": "Sold saw", "state": "SOLD", "item_price": "75.00",
+     "net": "60.00", "client_share": "30.00"},
+    {"item_id": "K01-C006", "description": "Stapler", "state": "EXCLUDED", "buyout_price": "5.00",
+     "qty": "in C006 line"},
+    {"item_id": "K01-C007", "description": "Box of odds", "state": "INTAKE",
+     "qty": "~10 (count at PRICE)", "bin": "bin-03"},
+]
+
+
+def test_consign_ledgers_sort_sold_listed_local_drafted_shot_then_the_rest(tmp_path, monkeypatch):
+    # Russell 2026-11-11: sold first, then listed, available locally, drafted, shot, the rest last
+    lot = _consign_lot(tmp_path, monkeypatch, list(reversed(SORT_ROWS)))
+    want = ["K01-C005", "K01-C004", "K01-C003", "K01-C002", "K01-C001", "K01-C007", "K01-C006"]
+    _, out = RL.consign_account(lot, "K01", date(2026, 11, 11))
+    assert [r["item_id"] for r in out if r["line"] == "item"] == want
+    _, client_rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
+    assert [r["item_id"] for r in client_rows] == want
+
+
+def test_client_copy_names_belongings_not_money_or_internals(tmp_path, monkeypatch):
+    lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
+    text, _ = RL.consign_client(lot, "K01", date(2026, 11, 11))
+    assert text.startswith("Client Name: items in our care\n")
+    for word in ("$", "split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
+                 "LOT ACCOUNT", "SOLD", "LISTED", "EXCLUDED", "in C006"):
+        assert word not in text, word
+    line = {ln[:8]: ln for ln in text.splitlines() if ln.startswith("K01-C00")}
+    assert line["K01-C005"].endswith("Sold") and line["K01-C003"].endswith("At our booth")
+    assert line["K01-C006"].endswith("Kept by The Fair Hand")
+    assert "~10" in line["K01-C007"] and "bin-03" in line["K01-C007"]
+    summary = text.split("SUMMARY")[1].split("YOUR ITEMS")[0]
+    assert re.search(r"Listed for sale +1\n", summary) and re.search(r"Sold +1\n", summary)
+
+
+def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path, monkeypatch, capsys):
+    lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
+    monkeypatch.setattr(RL, "REPO", tmp_path)
+    monkeypatch.setattr(RL, "INVENTORY", tmp_path / "inventory")
+    monkeypatch.setattr(RL, "OUT_DIR", tmp_path / "reports" / "lots")
+    monkeypatch.setattr(RL, "render_pdf", lambda page, pdf: "no chromium in tests")
+    assert RL.main([str(lot)]) == 0
+    out = capsys.readouterr().out
+    assert "CLIENT MONEY" in out                       # the session still sees the money
+    stem = tmp_path / "reports" / "lots" / f"CONSIGN-20261022-{date.today().isoformat()}"
+    shared = stem.with_suffix(".txt").read_text() + stem.with_suffix(".html").read_text()
+    assert "items in our care" in shared and "CLIENT MONEY" not in shared and "$" not in shared
+    assert "CLIENT MONEY" in stem.with_name(stem.name + "-account.txt").read_text()
+
+
+def test_thumbnail_falls_back_to_a_named_frame_or_its_review_crop(tmp_path, monkeypatch):
+    from PIL import Image
+    inv = tmp_path / "inventory"
+    (inv / "_review" / "crops").mkdir(parents=True)
+    Image.new("RGB", (10, 10)).save(inv / "_review" / "crops" / "ZZ220246_t.jpg")
+    Image.new("RGB", (10, 10)).save(inv / "ZZ220250.JPG")
+    monkeypatch.setattr(RL, "INVENTORY", inv)
+    monkeypatch.setattr(RL, "REPO", tmp_path)
+    pics = RL._thumbs([{"photos": "ZZ220246"}, {"photos": "ZZ220250.JPG"}, {"photos": "ZZ999999"},
+                       {"listing_id": "206656147219"}])
+    # a frame named with or without its extension, or its crop; eBay is stubbed out
+    assert [bool(p) for p in pics] == [True, True, False, False]
+
+
+def test_ebay_photo_url_asks_ebay_once_per_item(tmp_path, monkeypatch):
+    # A sold item with no draft left still has its photos on eBay: the
+    # inventory item by SKU, else GetItem by listing id (a Live lot has no
+    # SKU). The URL is cached so a rerun doesn't ask again.
+    import types
+    monkeypatch.undo()
+    monkeypatch.setattr(RL, "_URL_CACHE", tmp_path / "ebay_urls.json")
+    monkeypatch.setattr(RL, "_EBAY_DOWN", False)
+    calls = []
+
+    class Missing(Exception):
+        status = 404
+
+    def api_send(method, path, creds=None, marketplace=None):
+        calls.append((path, creds))
+        if path.endswith("/gone"):
+            raise Missing("HTTP 404")
+        return {"product": {"imageUrls": ["https://i.ebayimg.com/a/$_12.JPG", "https://i.ebayimg.com/b"]}}
+
+    def pictures(lid, creds):
+        calls.append((lid, creds))
+        return ["https://i.ebayimg.com/live/$_12.JPG"] if lid == "206" else []
+
+    fake = types.SimpleNamespace(api_send=api_send, get_item_picture_urls=pictures,
+                                 load_credentials=lambda store: f"creds:{store}")
+    monkeypatch.setitem(sys.modules, "ebay_client", fake)
+    row = {"sku": "eb5df699", "store": "main"}
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url(row) == "https://i.ebayimg.com/a/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "206", "store": "default"}) \
+        == "https://i.ebayimg.com/live/$_12.JPG"
+    assert RL._ebay_photo_url({"sku": "gone", "listing_id": "880", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "store": "junk"}) == ""
+    assert RL._ebay_photo_url({"sku": "", "listing_id": "4Q9BEV", "store": "default"}) == ""
+    assert calls == [("/sell/inventory/v1/inventory_item/eb5df699", "creds:default"),
+                     ("206", "creds:default"),
+                     ("/sell/inventory/v1/inventory_item/gone", "creds:junk"),
+                     ("880", "creds:junk")]
 
 
 def test_all_puts_every_lot_on_one_page_and_names_a_failed_one(estate, monkeypatch, capsys):

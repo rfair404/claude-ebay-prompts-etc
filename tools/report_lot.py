@@ -33,7 +33,11 @@ beside it on the summary, for things such as a mixed-source lot.
 
 A lot whose context.txt says `client:` is a consignment. Its items and money
 come from its client_ledger.csv and the summary is tools/consign.py's
-per-client account, so the two can never disagree.
+per-client account, so the two can never disagree. For a consignment the
+.txt/.html/.pdf are the client's copy ("<client>: items in our care": item,
+qty, bin, plain status, no money or internals); the money account goes to
+stdout, the .csv and <lot>-<date>-account.txt. Both ledgers sort sold,
+listed, available locally, drafted, shot, then the rest (CONSIGN_ORDER).
 
 ESTATE ITEM STATUS
 
@@ -62,6 +66,7 @@ import io
 import re
 import os
 import tempfile
+import urllib.parse
 import subprocess
 import sys
 from contextlib import redirect_stdout
@@ -83,6 +88,7 @@ PDF_TIMEOUT = 60
 THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
+NOT_INVENTORY = {"_trash", "_returned"}
 STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
                 "NOT SHOT", "ENDED"]
 
@@ -139,8 +145,10 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
         d = ctx.parent.resolve()
         if d in keep or lot in d.parents or SR._is_backup_path(d.as_posix()):
             continue
-        # _trash/, _returned/ and hidden folders are not inventory
-        if inv in d.parents and any(_skip(Path(p)) for p in d.relative_to(inv).parts):
+        # _trash/, _returned/ and hidden folders are not inventory; _rebuilt/
+        # (drafts rebuilt from eBay after the 2026-10 wipe) is
+        if inv in d.parents and any(p in NOT_INVENTORY or p.startswith(".")
+                                    for p in d.relative_to(inv).parts):
             continue
         if extra_keys(d).get("part_of") == me:
             keep.append(d)
@@ -224,6 +232,43 @@ def _title_from(d: Path) -> str:
     return re.sub(r"^\d+[-_]", "", d.name).replace("-", " ").replace("_", " ")
 
 
+def _draft_info(d: Path) -> tuple[str, list[str], list[str]]:
+    """(title, eBay photo URLs, SKU/listing ids) from the item's draft, else
+    from the RECOVERED.md left after the 2026-10 wipe (title and ids only)."""
+    for name in ("draft.md", "draft_group.md"):
+        f = d / name
+        if f.is_file():
+            fm = _report._draft_header(f.read_text(encoding="utf-8", errors="replace"), f)
+            meta = fm.get("meta") if isinstance(fm.get("meta"), dict) else {}
+            urls = meta.get("ebay_image_urls") or []
+            title = fm.get("title") if isinstance(fm.get("title"), str) else ""
+            return (title.strip(), [u for u in urls if isinstance(u, str)] if isinstance(urls, list) else [], [])
+    rec = d / "RECOVERED.md"
+    if rec.is_file():
+        t = rec.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"^- title:\s*(.+)$", t, re.M)
+        keys = re.findall(r"^- (?:sku|ebay_listing_id):\s*(\S+)", t, re.M)
+        return (m.group(1).strip() if m else ""), [], keys
+    return "", [], []
+
+
+def _urls_by_key() -> dict[str, list[str]]:
+    """eBay photo URLs of every draft on disk, keyed by SKU and listing id,
+    for an item whose own folder holds only a RECOVERED.md."""
+    out: dict[str, list[str]] = {}
+    for f in INVENTORY.rglob("draft*.md"):
+        if f.name not in ("draft.md", "draft_group.md") or SR._is_backup_path(f.as_posix()):
+            continue
+        fm = _report._draft_header(f.read_text(encoding="utf-8", errors="replace"), f)
+        meta = fm.get("meta") if isinstance(fm.get("meta"), dict) else {}
+        urls = meta.get("ebay_image_urls")
+        if isinstance(urls, list) and urls:
+            for k in (meta.get("ebay_inventory_sku"), meta.get("ebay_listing_id")):
+                if isinstance(k, str) and k:
+                    out.setdefault(k, urls)
+    return out
+
+
 def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) -> list[dict]:
     stop = set(keep) | {d for d, _ in left_out}
     items: list[tuple[Path, Path]] = []                   # (item dir, member)
@@ -263,6 +308,7 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             sold.setdefault(d, []).append(s)
 
     out = []
+    by_key: Optional[dict[str, list[str]]] = None
     for d, m in items:
         rows = sorted(by_item[d].values(), key=_rank, reverse=True)
         best = rows[0] if rows else {}
@@ -285,7 +331,13 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
                 - sum(_f(s.get("actual_postage")) or 0.0 for s in sales_here)) if sales_here else None
         if not best and sales_here:      # sold, but no listing row survived: use the sale's ids
             best = {k: sales_here[0].get(k) or "" for k in ("title", "sku", "listing_id", "_store")}
-        title = best.get("title") or _title_from(d)
+        draft_title, urls, keys = _draft_info(d)
+        keys += [best.get("sku") or "", best.get("listing_id") or ""]
+        if not urls and any(keys):
+            if by_key is None:
+                by_key = _urls_by_key()
+            urls = next((by_key[k] for k in keys if k in by_key), [])
+        title = draft_title or best.get("title") or _title_from(d)
         out.append({
             "item": _short(title, 60),
             "title": title,
@@ -302,6 +354,7 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             "net_kept": kept if sales_here and actuals else None,
             "actuals_pending": bool(sales_here) and not actuals,
             "listings": len(rows),
+            "image_url": urls[0] if urls else "",
         })
     out.sort(key=lambda r: (STATUS_ORDER.index(r["status"]), -(r["ask"] or 0)))
     return out
@@ -454,6 +507,74 @@ def _local(r: dict) -> bool:
             and bool(r.get("placed_at")) and bool(r.get("listing_id")))
 
 
+# Ledger order (Russell, 2026-11-11): sold first, then listed, available
+# locally, drafted, shot, and the rest last. Within a state, item number.
+CONSIGN_ORDER = ["SOLD", "LISTED", "LOCAL", "DRAFTED", "SHOT", "PREP", "INTAKE", "HOLD",
+                 "EXCLUDED", "RETURNED", "DISPOSED"]
+# What the client reads for each place in that order.
+CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed for sale", "LOCAL": "At our booth",
+                 "DRAFTED": "Being listed", "SHOT": "Photographed", "PREP": "Photographed",
+                 "INTAKE": "In inventory", "HOLD": "Set aside for now",
+                 "EXCLUDED": "Kept by The Fair Hand", "RETURNED": "Returned to you",
+                 "DISPOSED": "Disposed"}
+
+
+def _place(r: dict) -> str:
+    """The row's place in CONSIGN_ORDER."""
+    state = r.get("state") or ""
+    if state in ("SOLD", "CLEARED", "SETTLED"):
+        return "SOLD"
+    if _held(r):
+        return "HOLD"
+    if _local(r):
+        return "LOCAL"
+    return state if state in CONSIGN_ORDER else "INTAKE"
+
+
+def _consign_sorted(rows: list[dict]) -> list[dict]:
+    return sorted(rows, key=lambda r: (CONSIGN_ORDER.index(_place(r)), r.get("item_id") or ""))
+
+
+def _client_qty(q: str) -> str:
+    """The count, without our notes: parentheticals go, and a qty that points
+    at another line or lot (`in C006 line`, `split into ...`) shows blank."""
+    q = re.sub(r"\s*\([^)]*\)", "", _report.ascii_text(q or "")).strip()
+    return "" if re.search(r"C\d{3}|split|\blots?\b|uncounted|\best\b|PRICE", q, re.I) else q
+
+
+def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
+    """The client's copy: their belongings and where each one is. No money,
+    terms, estimates, prices, fees or internal notes (Russell, 2026-10-27 and
+    2026-11-11). Returns the text and one row per ledger line, in table order,
+    for the page's photos."""
+    import consign as C
+    rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
+    C.migrate(rows, lot, client)
+    name = (C.load_registry().get(client) or {}).get("name") or client
+    rows = _consign_sorted(rows)
+    received = C.folder_date(lot) or C.default_intake(lot)
+    L = [f"{name}: items in our care",
+         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
+    hdr = f"{'STATUS':<24}{'ITEMS':>6}"
+    L += ["", "SUMMARY", hdr, "-" * 30]
+    counts: dict[str, int] = {}                  # rows are sorted, so this keeps the order
+    for r in rows:
+        counts[CLIENT_STATUS[_place(r)]] = counts.get(CLIENT_STATUS[_place(r)], 0) + 1
+    L += [f"{status:<24}{n:>6}" for status, n in counts.items()]
+    L += ["", "YOUR ITEMS"]
+    hdr = f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<22}"
+    L += [hdr, "-" * len(hdr)]
+    out = []
+    for r in rows:
+        d = _short(r.get("description") or "", 52)
+        L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
+                 f"{CLIENT_STATUS[_place(r)]}".rstrip())
+        out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
+                    "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
+                    "listing_id": r.get("listing_id") or ""})
+    return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
+
+
 def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
@@ -485,11 +606,11 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         return "-"
 
     L = [f"LOT ACCOUNT - {label(lot)}   consignment, client {client} {name}   (as of {today.isoformat()})",
-         f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}   Split {terms['split'] * 100:.0f}% of net to client",
-         "States as of the last `consign sync --apply`."]
+         f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}"]
     L += _overview(C, figs, rows)
     # Held rows go last, one short line each, after the ledger and fees: they
     # are counted in the totals but are not for sale yet.
+    rows = _consign_sorted(rows)
     held = [r for r in rows if _held(r)]
     rows = [r for r in rows if not _held(r)] + held
     L += ["", "INVENTORY LEDGER"]
@@ -577,30 +698,122 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
 
 
 def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
-    """The item's first listing photo: its own folder first, else the first
-    file named in the row's photos column."""
+    """The item's first photo: its own folder first, else the first file named
+    in the row's photos column (with or without its extension) or its review
+    crop, else the listing's first photo on eBay (cached in reports/lots/.thumbs)."""
     folder = row.get("folder") or ""
     for base in (REPO, INVENTORY):
         d = base / folder
         if folder and d.is_dir():
-            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
+            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in WEB_EXT)
             if shots:
                 return shots[0]
-    names = (row.get("photos") or "").split()
-    return found.get(names[0]) if names else None
+    for name in (row.get("photos") or "").split():
+        hit = found.get(Path(name).stem.lower())
+        if hit:
+            return hit
+    return _fetched(row.get("image_url") or "") or _fetched(_ebay_photo_url(row))
+
+
+WEB_EXT = {".jpg", ".jpeg", ".png"}
+_FRAME_RE = re.compile(r"[a-z]*\d+")   # the camera frame id at the front of a crop name
+
+
+_URL_CACHE = REPO / "reports" / "lots" / ".thumbs" / "ebay_urls.json"
+_EBAY_DOWN = False
+
+
+def _ebay_photo_url(row: dict) -> str:
+    """First photo URL eBay still holds for the row: the Inventory API's
+    inventory item for its SKU (kept after a sale), else Trading GetItem for
+    its listing id (a lot listed without a SKU, such as an eBay Live lot).
+    Cached by store and id in ebay_urls.json so a rerun doesn't ask again;
+    "" with no id or when eBay can't be asked."""
+    import json
+    sku = (row.get("sku") or "").strip()
+    lid = (row.get("listing_id") or "").strip()
+    if not (sku or lid.isdigit()):
+        return ""
+    store = {"main": "default", "": "default"}.get(row.get("store") or "", row.get("store"))
+    key = f"{store}:{sku or lid}"
+    try:
+        cache = json.loads(_URL_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if cache.get(key):
+        return cache[key]
+    global _EBAY_DOWN
+    if _EBAY_DOWN:
+        return ""
+    url = ""
+    try:
+        import ebay_client as E
+        creds = E.load_credentials(store)
+        if sku:
+            try:
+                item = E.api_send("GET", "/sell/inventory/v1/inventory_item/"
+                                  + urllib.parse.quote(sku, safe=""), creds=creds, marketplace=None)
+                url = next(iter((item.get("product") or {}).get("imageUrls") or []), "")
+            except Exception as e:
+                if getattr(e, "status", None) != 404:
+                    raise
+        if not url and lid.isdigit():            # a mall SKU sits here for booth items
+            try:
+                url = next(iter(E.get_item_picture_urls(lid, creds)), "")
+            except Exception as e:
+                if "returned" not in str(e):     # eBay answered "no such item": just this one
+                    raise
+    except Exception as e:                      # no creds, offline: no thumbnails this run
+        _EBAY_DOWN = True
+        print(f"report_lot: eBay photos skipped ({str(e).splitlines()[0][:120]})", file=sys.stderr)
+        return ""
+    cache[key] = url
+    _URL_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    _URL_CACHE.write_text(json.dumps(cache, indent=0, sort_keys=True), encoding="utf-8")
+    return url
+
+
+def _fetched(url: str) -> Optional[Path]:
+    """The listing's first eBay photo at 300px, cached under reports/lots/.thumbs
+    so a rerun doesn't fetch it again; None when it can't be fetched."""
+    import hashlib
+    import urllib.request
+    if not url.startswith("https://i.ebayimg.com/"):
+        return None
+    small = re.sub(r"\$_\d+\.(JPG|jpg|PNG|png)", r"$_35.\1", url.split("?")[0])
+    cache = REPO / "reports" / "lots" / ".thumbs" / (hashlib.sha1(small.encode()).hexdigest()[:16] + ".jpg")
+    if cache.is_file():
+        return cache
+    try:
+        with urllib.request.urlopen(urllib.request.Request(small, headers={"User-Agent": "report-lot"}),
+                                    timeout=10) as r:
+            data = r.read()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
+        return cache
+    except (OSError, ValueError):
+        return None
 
 
 def _thumbs(rows: list[dict]) -> list[str]:
     """One <img> data URI per row ("" when it has no photo), so the page and
     its PDF are one self-contained file."""
     from PIL import Image, ImageFilter, ImageOps
-    wanted = {(r.get("photos") or "").split()[0] for r in rows if (r.get("photos") or "").split()}
+    wanted = {Path(n).stem.lower() for r in rows for n in (r.get("photos") or "").split()}
     found: dict[str, Path] = {}
     if wanted:
         for root, _, files in os.walk(INVENTORY):
             for f in files:
-                if f in wanted and f not in found:
-                    found[f] = Path(root) / f
+                p = Path(f)
+                if p.suffix.lower() not in WEB_EXT:
+                    continue
+                # a review crop (<frame>_t.jpg, <frame>-tools.jpg) stands in
+                # when the frame itself is gone; the frame wins when both exist
+                stem = p.stem.lower()
+                m = _FRAME_RE.match(stem)
+                key = stem if stem in wanted else (m.group(0) if m else "")
+                if key in wanted and (key not in found or stem == key):
+                    found[key] = Path(root) / f
     out = []
     for r in rows:
         src = _photo_for(r, found)
@@ -631,7 +844,7 @@ def _table_html(header: str, body: list[str], rows: Optional[list[dict]] = None)
         if "ITEM" in heads:
             col = heads.index("ITEM")
             for c, r in zip(cells, rows):
-                c[col] = html.escape(_report.ascii_text(r.get("item") or "")) or c[col]
+                c[col] = html.escape(_report.ascii_text(r.get("title") or r.get("item") or "")) or c[col]
         pics = _thumbs(rows)
     if any(pics):
         heads.insert(0, "")
@@ -657,15 +870,17 @@ img{display:block;width:80px;height:80px;object-fit:cover;border-radius:3px}
 th,td{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
 td{white-space:nowrap} td.t{white-space:normal;min-width:18em}
 th{background:#f2f2f2} .n{text-align:right;white-space:nowrap}
+p.sub{color:#555;margin:0 0 8px;white-space:pre-line}
 @media print{@page{size:landscape;margin:12mm}body{max-width:none;padding:0;font-size:11px}
 table{font-size:10px}tr{break-inside:avoid}thead{display:table-header-group}}
 """
 
 
-def html_body(text: str, rows: Optional[list[dict]] = None) -> tuple[str, str]:
+def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> tuple[str, str]:
     """(title, body) of the account as HTML: every all-caps heading line
     starts a section; a header line over a row of dashes becomes a real table
-    and everything else stays preformatted, so the figures are the text's."""
+    and everything else stays preformatted, so the figures are the text's.
+    A client copy (`client`) sets its prose as paragraphs, not monospace."""
     lines = text.rstrip("\n").split("\n")
     title = html.escape(lines[0])
     # held rows are a plain list after the ledger table, not in it
@@ -674,7 +889,8 @@ def html_body(text: str, rows: Optional[list[dict]] = None) -> tuple[str, str]:
 
     def flush():
         if any(x.strip() for x in pre):
-            out.append("<pre>" + html.escape("\n".join(pre).strip("\n")) + "</pre>")
+            body = html.escape("\n".join(pre).strip("\n"))
+            out.append(f'<p class="sub">{body}</p>' if client else f"<pre>{body}</pre>")
         pre.clear()
 
     while i < len(lines):
@@ -709,8 +925,8 @@ def _page(title: str, body: str, style: str = "") -> str:
 """
 
 
-def html_report(text: str, rows: Optional[list[dict]] = None) -> str:
-    title, body = html_body(text, rows)
+def html_report(text: str, rows: Optional[list[dict]] = None, client: bool = False) -> str:
+    title, body = html_body(text, rows, client)
     return _page(title, f"<h1>{title}</h1>\n{body}")
 
 
@@ -772,11 +988,12 @@ def render_pdf(html_path: Path, pdf_path: Path) -> Optional[str]:
     return (r.stderr or r.stdout or f"exit {r.returncode}").strip().splitlines()[-1]
 
 
-def write_web(txt: Path, text: str, rows: Optional[list[dict]] = None) -> tuple[Path, Optional[Path], Optional[str]]:
+def write_web(txt: Path, text: str, rows: Optional[list[dict]] = None,
+              client: bool = False) -> tuple[Path, Optional[Path], Optional[str]]:
     """Web page and printer-friendly PDF beside the .txt. The PDF is None,
     with the reason, when Chromium could not render it."""
     page = txt.with_suffix(".html")
-    page.write_text(html_report(_report.ascii_text(text), rows), encoding="utf-8")
+    page.write_text(html_report(_report.ascii_text(text), rows, client=client), encoding="utf-8")
     pdf = txt.with_suffix(".pdf")
     pdf.unlink(missing_ok=True)
     why = render_pdf(page, pdf)
@@ -806,7 +1023,7 @@ def print_txt(path: Path) -> str:
     return res.stdout.strip()
 
 
-def account(lot: Path, today: date) -> tuple[str, list[dict]]:
+def lot_account(lot: Path, today: date) -> tuple[str, list[dict]]:
     """(account text, rows) for one lot, consignment or estate."""
     client = extra_keys(lot).get("client")
     if client:
@@ -824,7 +1041,7 @@ def write_all(today: date) -> int:
     accounts, failed = [], []
     for lot in all_lots():
         try:
-            text, rows = account(lot, today)
+            text, rows = lot_account(lot, today)
         except Exception as e:  # one broken lot must not hide the others
             failed.append(label(lot))
             print(f"FAILED {label(lot)}: {e!r}", file=sys.stderr)
@@ -854,11 +1071,28 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not (lot / "context.txt").is_file():
         print(f"no context.txt in {lot}; a lot is a folder with one", file=sys.stderr)
         return 2
-    text, rows = account(lot, today)
+    client = extra_keys(lot).get("client")
+    account = None
+    if client:
+        # The shared .txt/.html/.pdf are the client's copy. The money account
+        # is for us: it goes to stdout, the .csv and <stem>-account.txt.
+        with redirect_stdout(io.StringIO()):
+            account, rows = consign_account(lot, client, today)
+            text, web_rows = consign_client(lot, client, today)
+    else:
+        keep, left_out = members(lot)
+        items = estate_items(lot, keep, left_out)
+        text = estate_text(lot, keep, left_out, items, today)
+        rows = web_rows = [{k: ("" if v is None else v) for k, v in i.items()} for i in items]
     txt, csv_path = write(lot, text, rows, today)
-    page, pdf, why = write_web(txt, text, rows)
-    sys.stdout.write(text)
-    print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in (txt, csv_path, page, pdf) if p))
+    wrote = [txt, csv_path]
+    if account is not None:
+        acct = txt.with_name(txt.stem + "-account.txt")
+        acct.write_text(_report.ascii_text(account), encoding="ascii")
+        wrote.append(acct)
+    page, pdf, why = write_web(txt, text, web_rows, client=bool(client))
+    sys.stdout.write(account if account is not None else text)
+    print("\nWROTE " + "  ".join(str(p.relative_to(REPO)) for p in wrote + [page, pdf] if p))
     if why:
         print(f"FAILED pdf: {why}", file=sys.stderr)
     if args.print:

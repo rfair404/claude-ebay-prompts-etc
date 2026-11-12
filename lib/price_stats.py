@@ -191,6 +191,18 @@ _HALF_PAIR_RE = re.compile(
 # naming that noun; a shorter title ending mid-word was not truncated.
 _TRUNCATED_TITLE_MIN = 60
 
+# A two-item unit spelled out: "Set of 2", "Lot of 2", "2 pcs", "2-piece".
+# Stripped before the lot/count checks, so it reads as one pair.
+_TWO_UNIT_RE = re.compile(
+    r"\b(?:(?:set|lot)\s+of\s*(?:2|two)|(?:2|two)\s*-?\s*(?:pcs?|pieces?))\b",
+    re.IGNORECASE,
+)
+# "Pair Lot" / "Lot Pair": the one lot is the pair itself, not several.
+_PAIR_LOT_RE = re.compile(r"\bpairs?\s+lot\b|\blot\s+pairs?\b", re.IGNORECASE)
+# Two named things joined by &/and ("Raggedy Ann & Andy", "Salt and Pepper").
+# Next to a bare "set"/"matching" it makes the listing a two-item set.
+_TWO_NAMES_RE = re.compile(r"\b[a-z]+\s*(?:&|\band\b)\s*[a-z]+\b", re.IGNORECASE)
+
 # unit_type → does this unit WANT multi-item listings? `pair` is listed for
 # completeness but never reaches this branch: filter_unit handles it off the
 # item noun instead (see looks_pair_unit).
@@ -415,10 +427,23 @@ def looks_pair_unit(title: str) -> bool:
     False
     >>> looks_pair_unit('Single 14K SOLID GOLD Solitaire Stud Earring 10K Back Round CZ')
     False
+    >>> looks_pair_unit('Vintage Raggedy Ann & Andy Dolls 1970s Knickerbocker - All Original SET')
+    True
+    >>> looks_pair_unit('Knickerbocker Raggedy Ann & Andy 15in Cloth Doll Pair Lot 1970s Taiwan')
+    True
+    >>> looks_pair_unit('Lot of 5 Raggedy Ann & Andy Dolls')
+    False
     """
+    # A spelled-out two-item unit and a "pair lot" are one pair; strip them
+    # so the lot/count checks below only see real multi-item wording.
+    title = _PAIR_LOT_RE.sub(" pair ", _TWO_UNIT_RE.sub(" pair ", title))
     t = title.lower()
     words = set(re.findall(r"[a-z]+", t))
-    paired = names_paired_item(title) or bool(words & {"pair", "pairs"})
+    # Two named things sold as a "set" ("Raggedy Ann & Andy ... Set") is a
+    # two-item set: a pair, word "pair" or not.
+    two_item_set = bool(words & {"set", "matching"}) and bool(_TWO_NAMES_RE.search(t))
+    paired = (names_paired_item(title) or bool(words & {"pair", "pairs"})
+              or two_item_set)
     if not paired:
         return False
     if words & _PAIR_LOT_WORDS:
