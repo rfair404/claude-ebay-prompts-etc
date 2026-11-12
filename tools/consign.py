@@ -475,14 +475,25 @@ def _as_read(rows: list[dict]) -> list[dict]:
 
 def write_ledger(path: Path, rows: list[dict],
                  base: Optional[list[dict]] = None) -> Optional[Path]:
-    """Write one client ledger. Local mode: `_write_csv` (backup beside it).
-    Cloud mode: through ledger_store.update(), and refused, nothing written,
-    when the stored ledger is no longer `base` (the rows as this run read
-    them), so a write from another machine or session is never lost. Returns
-    the backup path (local mode only)."""
+    """Write one client ledger through ledger_store.update(), so the write
+    lands in its event log (GH #394; writing the CSV directly here left
+    client_ledger-K01 drifting from 2026-11-09). Refused, nothing written,
+    when the ledger is no longer `base` (the rows as this run read them), so
+    a write from another session or machine is never lost. Local mode keeps
+    a timestamped backup beside it and returns its path; cloud mode returns
+    None. A folder that names no client has no ledger key and gets the plain
+    CSV write."""
     st = _ledgers()
+    backup = None
     if not st.cloud:
-        return _write_csv(path, COLUMNS, rows)
+        if not intake_client(path.parent):
+            return _write_csv(path, COLUMNS, rows)
+        if not path.exists() or not path.read_bytes().strip():
+            _write_csv(path, COLUMNS, [])     # a new ledger starts with the header
+        else:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup = path.with_name(f"{path.stem}.backup-{stamp}{path.suffix}")
+            backup.write_bytes(path.read_bytes())
     out = [{c: r.get(c, "") for c in COLUMNS} for r in rows]
 
     def replace(current: list[dict]) -> list[dict]:
@@ -493,10 +504,10 @@ def write_ledger(path: Path, rows: list[dict],
         return out
 
     try:
-        st.update(ledger_store.CLIENT_LEDGER, replace, intake=path.parent)
+        st.update(ledger_store.CLIENT_LEDGER, replace, intake=path.parent, backup=False)
     except ledger_store.LedgerStoreError as e:
         raise SystemExit(f"[X] {e}") from None
-    return None
+    return backup
 
 
 def _context(d: Path) -> str:
