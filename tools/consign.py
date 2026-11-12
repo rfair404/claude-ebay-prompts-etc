@@ -460,8 +460,7 @@ def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> Optional[Pat
 
 def _ledgers() -> "ledger_store.LedgerStore":
     """The ledger store config.yaml asks for (GH #380). With no
-    `ledger_store:` block it is local mode and write_ledger is the plain CSV
-    write it always was."""
+    `ledger_store:` block it is local mode."""
     try:
         return ledger_store.open_store(root=REPO)
     except ledger_store.LedgerStoreError as e:
@@ -476,8 +475,7 @@ def _as_read(rows: list[dict]) -> list[dict]:
 def write_ledger(path: Path, rows: list[dict],
                  base: Optional[list[dict]] = None) -> Optional[Path]:
     """Write one client ledger through ledger_store.update(), so the write
-    lands in its event log (GH #394; writing the CSV directly here left
-    client_ledger-K01 drifting from 2026-11-09). Refused, nothing written,
+    lands in its event log. Refused, nothing written,
     when the ledger is no longer `base` (the rows as this run read them), so
     a write from another session or machine is never lost. Local mode keeps
     a timestamped backup beside it and returns its path; cloud mode returns
@@ -506,6 +504,8 @@ def write_ledger(path: Path, rows: list[dict],
     try:
         st.update(ledger_store.CLIENT_LEDGER, replace, intake=path.parent, backup=False)
     except ledger_store.LedgerStoreError as e:
+        if backup:
+            backup.unlink(missing_ok=True)
         raise SystemExit(f"[X] {e}") from None
     return backup
 

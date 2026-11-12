@@ -1561,3 +1561,37 @@ def test_local_mode_writes_land_in_the_event_log(shop):
                          "--intake", "2099-03-01"]) == 0
     ok, clean, report = st.verify(["client_ledger-K01.csv"])
     assert ok and clean, report                 # the drift is recorded, then the change
+
+
+@pytest.mark.parametrize("folder, existing, base, written, logged", [
+    # stale read: the ledger moved since this run read it -> refused, untouched
+    ("CONSIGN-K01", [dict(item_id="K01-C001", description="Tin cup")], [], False, False),
+    # new ledger: header-only bootstrap, then the write, both in the log
+    ("CONSIGN-K01", None, [], True, True),
+    # a dated folder names no client: no ledger key, plain CSV write
+    ("CONSIGN-20990301", [dict(item_id="X-C001", description="Tin cup")], None, True, False),
+])
+def test_write_ledger_local_mode(shop, folder, existing, base, written, logged):
+    d = shop / "inventory" / folder
+    if existing is None:
+        d.mkdir()
+    else:
+        _ledger(shop, folder, existing)
+    path = d / "client_ledger.csv"
+    before = path.read_bytes() if path.exists() else None
+    rows = [_row(item_id="K01-C002", description="Wood spool")]
+    if written:
+        consign.write_ledger(path, rows, base=base)
+        fields, got = ledger_store.parse_csv(path.read_bytes())
+        assert fields == consign.COLUMNS
+        assert [r["item_id"] for r in got] == ["K01-C002"]
+    else:
+        with pytest.raises(SystemExit, match="changed since this run read it"):
+            consign.write_ledger(path, rows, base=base)
+        assert path.read_bytes() == before
+        assert not list(d.glob("client_ledger.backup-*"))
+    chains = list((shop / "reports" / "ledger_chain").glob("*.jsonl"))
+    assert bool(chains) == logged
+    if logged:
+        ok, clean, report = consign._ledgers().verify()
+        assert ok and clean, report
