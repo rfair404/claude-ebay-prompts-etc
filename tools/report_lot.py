@@ -10,6 +10,8 @@ each one stands, and a money summary.
 --all writes only reports/lots/lots-<date>.html: every lot's account (the
 consignments, then ES/* and ESTATES/*) with a picker at the top to switch
 between them. The link opens on the lot picked last (or the one in #hash).
+The --all page is internal: it shows each consignment's money account. Never
+send it to a client; a client gets the per-lot client copy.
 
 Writes reports/lots/<lot>-<date>.txt (plain text), .csv (one row per item),
 .html (web page, with photo thumbnails) and .pdf (landscape, for paper) and writes the .txt to
@@ -1057,7 +1059,7 @@ def write_all(today: date) -> int:
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Full account of one lot: item ledger + summary.")
     ap.add_argument("lot", nargs="?", help="lot folder under inventory/, e.g. ES/<LOT> or CONSIGN-YYYYMMDD")
-    ap.add_argument("--all", action="store_true", help="every lot on one page with a lot picker")
+    ap.add_argument("--all", action="store_true", help="every lot on one page with a lot picker; internal, never send to a client")
     ap.add_argument("--print", action="store_true", help=f"also print the PDF (the .txt if no PDF) on {PRINTER}")
     args = ap.parse_args(argv)
     if bool(args.lot) == args.all:
