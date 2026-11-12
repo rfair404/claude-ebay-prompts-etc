@@ -1534,3 +1534,30 @@ def test_describe_refuses_and_writes_nothing(shop, identify, item, want):
         consign.describe_item(d, item, apply=True)
     assert (d / "client_ledger.csv").read_bytes() == before
     assert not list(d.glob("client_ledger.backup-*.csv"))
+
+
+def test_local_mode_writes_land_in_the_event_log(shop):
+    """Every local consign write goes through ledger_store.update(), so the
+    event log keeps up with the CSV and `ledger verify --strict` stays clean
+    (GH #394: client_ledger-K01 drifted when write_ledger wrote the CSV
+    directly)."""
+    path = consign.new_client_ledger("K01")
+    roster = shop / "roster.csv"
+    for desc in ("Tin cup", "Wood spool"):
+        roster.write_text(f"description,bin\n{desc},03\n", encoding="utf-8")
+        assert consign.main(["import", "CONSIGN-K01", str(roster),
+                             "--intake", "2099-03-01"]) == 0
+    assert ledger_store.parse_csv(path.read_bytes())[0] == consign.COLUMNS
+    st = consign._ledgers()
+    ok, clean, report = st.verify(["client_ledger-K01.csv"])
+    assert ok and clean, report
+    assert "2 rows" in report[0]
+
+    with path.open("a", encoding="utf-8") as f:              # a hand edit
+        f.write("K01-C999" + "," * (len(consign.COLUMNS) - 1) + "\n")
+    assert not st.verify(["client_ledger-K01.csv"])[1]
+    roster.write_text("description,bin\nBrass bell,03\n", encoding="utf-8")
+    assert consign.main(["import", "CONSIGN-K01", str(roster),
+                         "--intake", "2099-03-01"]) == 0
+    ok, clean, report = st.verify(["client_ledger-K01.csv"])
+    assert ok and clean, report                 # the drift is recorded, then the change
