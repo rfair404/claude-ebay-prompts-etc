@@ -227,6 +227,7 @@ class Comp:
     listing_type: Optional[str] = None
     bids_count: Optional[int] = None
     seller_feedback_score: Optional[int] = None
+    bo_accepted: bool = False     # sold via accepted Best Offer: price is the ASK
     source: str = "best_match"    # which run sort this came from
     is_row0: bool = False         # flagged first price_high row (kept, surfaced)
     drop_reason: Optional[str] = None  # set when a filter excludes it
@@ -307,6 +308,7 @@ def _load_comps(json_path: Union[str, Path], source: str,
             listing_type=c.get("listing_type"),
             bids_count=c.get("bids_count"),
             seller_feedback_score=c.get("seller_feedback_score"),
+            bo_accepted=bool(c.get("bo_accepted")),
             source=source,
             is_row0=(source == "price_high" and i == 0),
             cohort=_condition_cohort(c.get("condition")),
@@ -527,14 +529,28 @@ def filter_condition(comps: list["Comp"], target: Optional[str],
     return log, cohort_used
 
 
+BO_ACCEPTED_REASON = ("Best Offer accepted: eBay's results row shows the ASK, "
+                      "not the accepted price (open the item page for the real one)")
+
+
 def filter_exclusions(comps: list["Comp"]) -> FilterLog:
-    """Tier-C exclusions: single-bid auctions, sub-threshold-feedback sellers."""
+    """Tier-C exclusions: accepted Best Offers, single-bid auctions,
+    sub-threshold-feedback sellers.
+
+    An accepted-Best-Offer row is dropped because its price is the seller's
+    asking price, not what it sold for (K01-C188, 2026-11-11: item
+    128163328916 read $100, accepted at $80). Kept in, every such row pushes
+    the median and the ceiling up. Opening each item page for the real price
+    trips eBay's rate limit, so the row is excluded and logged instead.
+    """
     log = FilterLog("exclusions")
     for c in comps:
         if c.dropped:
             continue
         lt = (c.listing_type or "").lower()
-        if "auction" in lt and c.bids_count is not None and c.bids_count <= 1:
+        if c.bo_accepted:
+            log.add(c, BO_ACCEPTED_REASON)
+        elif "auction" in lt and c.bids_count is not None and c.bids_count <= 1:
             log.add(c, "single-bid auction (one bidder set the price)")
         elif (c.seller_feedback_score is not None
               and c.seller_feedback_score < MIN_SELLER_FEEDBACK):

@@ -717,7 +717,8 @@ def _cli() -> None:
               f"auctions {s['auctions']}")
         if s["bo_accepted"]:
             print(f"  NOTE: {s['bo_accepted']} comp(s) sold via ACCEPTED Best Offer — "
-                  f"their ASK was not the clearing price; soft ceiling.")
+                  f"the row shows the ASK, not the sale price; price_stats "
+                  f"drops them from the median and ceiling.")
         print(f"Saved results: {path}")
         print(f"Next: python lib/price_stats.py "
               f"--{args.sort.replace('_', '-')} {path} --price-field total")

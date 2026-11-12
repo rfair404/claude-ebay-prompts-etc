@@ -48,6 +48,9 @@ HEADER = [
     "sold_date", "condition", "listing_type", "url", "note",
 ]
 VALID_STAGES = {"A", "B", "C"}
+# listing_type for a sold row that went by accepted Best Offer. eBay's results
+# row shows the ask, not the accepted price, so the price column overstates it.
+BO_ACCEPTED = "Best Offer accepted"
 
 
 def _csv_path(shoot_dir: Union[str, Path]) -> Path:
@@ -115,9 +118,12 @@ def from_apify_json(shoot_dir: Union[str, Path], json_path: Union[str, Path],
             "query": query, "price": c.get("sold_price", ""),
             "title": c.get("title", ""), "sold_date": c.get("sold_date", "") or "",
             "condition": c.get("condition", "") or "",
-            "listing_type": c.get("listing_type", "") or "",
+            "listing_type": (BO_ACCEPTED if c.get("bo_accepted")
+                             else c.get("listing_type", "") or ""),
             "url": c.get("url", ""),
-            "note": f"apify run {data.get('run_id','')}",
+            "note": f"apify run {data.get('run_id','')}"
+                    + ("; price is the ASK, accepted offer was lower"
+                       if c.get("bo_accepted") else ""),
         })
     return append_rows(shoot_dir, rows)
 

@@ -54,11 +54,15 @@ def test_second_item_class_is_not_a_pair():
 
 
 def test_pair_cohort_matches_the_single_cohort_on_this_shoot():
-    """The regression: pair used to give n=1 (the $80.70 set) here."""
+    """The regression: pair used to give n=1 (the $80.70 set) here.
+
+    The $48.74 Blue Goldstone pair sold by accepted Best Offer, so its price
+    is the ask and the exclusions filter drops it; two earring pairs remain.
+    """
     pair = _report("pair")["distribution"]
     single = _report("single")["distribution"]
-    assert pair["n"] == 3, pair
-    assert pair["median"] == single["median"] == 35.95
+    assert pair["n"] == 2, pair
+    assert pair["median"] == single["median"] == 25.59
 
 
 def test_the_necklace_set_is_the_comp_that_gets_dropped():
@@ -67,7 +71,7 @@ def test_the_necklace_set_is_the_comp_that_gets_dropped():
     assert log["removed_count"] == 1, log
     assert log["removed"][0]["title"] == NECKLACE_SET
     # ...and every kept comp is a plain earring pair.
-    assert len(pair["kept_comps"]) == 3
+    assert len(pair["kept_comps"]) == 2
     for c in pair["kept_comps"]:
         assert "necklace" not in c["title"].lower()
 
