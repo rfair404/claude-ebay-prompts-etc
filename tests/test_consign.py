@@ -1589,6 +1589,7 @@ def test_write_ledger_local_mode(shop, folder, existing, base, written, logged):
         with pytest.raises(SystemExit, match="changed since this run read it"):
             consign.write_ledger(path, rows, base=base)
         assert path.read_bytes() == before
+        assert not list(d.glob("client_ledger.backup-*"))
     chains = list((shop / "reports" / "ledger_chain").glob("*.jsonl"))
     assert bool(chains) == logged
     if logged:
