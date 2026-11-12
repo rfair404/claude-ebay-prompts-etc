@@ -47,6 +47,13 @@ terminal, then ends with a `WROTE` line (and a `PRINTED request id is
 CannonBW-NN` line with `--print`, which prints the PDF). If Chromium fails
 the run says `FAILED pdf: <why>` and the other files still land; report it.
 
+For a consignment, the .txt, .html and .pdf are the client's copy, titled
+"<client>: items in our care": photo, item, quantity, bin and a plain
+status, with no money, terms, estimates or internal notes (Russell,
+2026-11-11). The money account (overview, client money, fees) is written to
+`<lot>-<date>-account.txt` and the .csv, and printed to the terminal. Never
+share the account file. Read the reply's figures from the terminal output.
+
 Then share the .txt, .html and .pdf from the main checkout (three links):
 
     for ext in txt html pdf; do .venv/bin/python -m lib.cli offsite share reports/lots/<lot>-<date>.$ext; done
