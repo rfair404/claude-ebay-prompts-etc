@@ -74,7 +74,7 @@ ITEM = {
         "imageUrls": ["https://i.ebayimg.com/a.jpg", "https://i.ebayimg.com/b.jpg"],
         "aspects": {"Brand": ["1847 Rogers Bros."], "Pattern": ["Reflection"],
                     "Type": ["Serving Spoon"], "Material": ["Silverplate", "Brass"],
-                    "Composition": ["Silverplate"]},
+                    "Composition": ["Silverplate"], "Country of Origin": ["United States"]},
     },
 }
 OFFER = {
@@ -259,7 +259,8 @@ def test_multi_value_aspects_survive():
         frontmatter = {"item_specifics": {"material": ["Silverplate", "Brass"],
                                           "extra": {"Features": ["Boxed", " "], "Era": "1960s"}}}
     assert L._build_aspects(D()) == {"Material": ["Silverplate", "Brass"],
-                                     "Features": ["Boxed"], "Era": ["1960s"]}
+                                     "Features": ["Boxed"], "Era": ["1960s"],
+                                     "Country of Origin": ["Unknown"]}
 
 
 # ---------------------------------------------------------------------------

@@ -163,12 +163,21 @@ _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".tiff", ".bmp"}
 # draft item_specifics key -> eBay aspect display name
 _ASPECT_NAMES = {
     "brand": "Brand", "type": "Type", "material": "Material", "color": "Color",
-    "country_of_origin": "Country/Region of Manufacture", "pattern": "Pattern",
+    "country_of_origin": "Country of Origin", "pattern": "Pattern",
     "theme": "Theme", "style": "Style", "size": "Size", "subject": "Subject",
     "collection": "Collection", "character_family": "Character Family",
     "occasion": "Occasion", "time_period_manufactured": "Time Period Manufactured",
     "finish": "Finish", "department": "Department",
 }
+
+# Origin is never left blank. On a listing that ships Worldwide (the default
+# store's policy, so eBay International Shipping applies) eBay fills an empty
+# "Country of Origin" with the seller's country and shows buyers "United
+# States" (206693377676, 2026-11-11). Any value we send wins, so an unknown
+# origin goes out as "Unknown". eBay renamed "Country/Region of Manufacture"
+# to "Country of Origin" and stores either name under the new one.
+UNKNOWN_ORIGIN = "Unknown"
+_ORIGIN_ASPECTS = ("Country of Origin", "Country/Region of Manufacture")
 
 
 @dataclass
@@ -867,6 +876,8 @@ def _build_aspects(draft: Draft) -> dict[str, list[str]]:
         vals = _aspect_values(v)
         if vals:
             aspects[str(k)] = vals
+    if not any(n in aspects for n in _ORIGIN_ASPECTS):
+        aspects[_ASPECT_NAMES["country_of_origin"]] = [UNKNOWN_ORIGIN]
     return aspects
 
 
