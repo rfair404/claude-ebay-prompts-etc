@@ -367,7 +367,8 @@ def test_build_inventory_item_golden():
             "title": "Vintage Widget MPN-100",
             "description": "<h2>Heading</h2>\n<p>Some <strong>bold</strong> body text.</p>",
             "imageUrls": ["https://eps/a.jpg"],
-            "aspects": {"Brand": ["Acme"], "Type": ["Widget"], "MPN": ["MPN-100"]},
+            "aspects": {"Brand": ["Acme"], "Type": ["Widget"], "MPN": ["MPN-100"],
+                        "Country of Origin": ["Unknown"]},
             "upc": ["012345678905"],
         },
         "packageWeightAndSize": {
@@ -376,6 +377,35 @@ def test_build_inventory_item_golden():
             "packageType": "PACKAGE_THICK_ENVELOPE",
         },
     }
+
+
+def _origin_aspects(item_specifics):
+    draft = Draft(path=Path("/fake/x/draft.md"), frontmatter={
+        "title": "Acrylic Candy Ornaments", "condition": "USED_GOOD", "quantity": 1,
+        "item_specifics": item_specifics}, body=_BODY)
+    return L._build_inventory_item(draft, image_urls=[])["product"]["aspects"]
+
+
+def test_unknown_origin_is_sent_as_unknown():
+    """A blank origin must reach eBay as "Unknown": left empty, eBay fills in
+    "Country of Origin: United States" on Worldwide listings (206693377676)."""
+    for spec in ({"brand": "Unbranded", "country_of_origin": ""},
+                 {"brand": "Unbranded", "country_of_origin": "  "},
+                 {"brand": "Unbranded"},
+                 {}):
+        assert _origin_aspects(spec)["Country of Origin"] == ["Unknown"], spec
+
+
+def test_known_origin_is_sent_under_country_of_origin():
+    aspects = _origin_aspects({"country_of_origin": "Italy"})
+    assert aspects["Country of Origin"] == ["Italy"]
+    assert "Country/Region of Manufacture" not in aspects
+
+
+def test_origin_in_extra_is_not_overridden():
+    for name in ("Country of Origin", "Country/Region of Manufacture"):
+        aspects = _origin_aspects({"extra": {name: "Japan"}})
+        assert aspects == {name: ["Japan"]}, aspects
 
 
 def test_build_inventory_item_condition_description_dropped_for_new():
