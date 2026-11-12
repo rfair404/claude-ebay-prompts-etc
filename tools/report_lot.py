@@ -692,8 +692,8 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
 
 def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
     """The item's first photo: its own folder first, else the first file named
-    in the row's photos column (with or without its extension), else the
-    listing's first eBay photo (by SKU, then listing id; cached under .thumbs)."""
+    in the row's photos column (with or without its extension) or its review
+    crop, else the listing's first photo on eBay (cached in reports/lots/.thumbs)."""
     folder = row.get("folder") or ""
     for base in (REPO, INVENTORY):
         d = base / folder
