@@ -90,7 +90,7 @@ PRINTER = "CannonBW"
 PDF_TIMEOUT = 60
 THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
-_LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
+_LINE_RE = re.compile(r"^\s*(client|part_of|note|address)\s*:\s*(.*?)\s*$", re.I)
 NOT_INVENTORY = {"_trash", "_returned"}
 STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
                 "NOT SHOT", "ENDED"]
@@ -112,7 +112,7 @@ def label(d: Path) -> str:
 
 
 def extra_keys(d: Path) -> dict:
-    """`client:`, `part_of:` and `note:` from a context.txt (first wins)."""
+    """`client:`, `part_of:`, `note:` and `address:` from a context.txt (first wins)."""
     out: dict = {}
     f = d / "context.txt"
     if not f.is_file():
@@ -122,6 +122,16 @@ def extra_keys(d: Path) -> dict:
         if m and m.group(2) and m.group(1).lower() not in out:
             out[m.group(1).lower()] = m.group(2).strip().strip("/")
     return out
+
+
+def lot_heading(lot: Path) -> str:
+    """"Lot K01 · <address>" for the top of every copy (Russell 2026-11-12):
+    the context.txt `client:` code (the lot's label for an estate) and its
+    `address:` line, which lives only in the gitignored context.txt. No
+    address line, no address."""
+    keys = extra_keys(lot)
+    addr = keys.get("address", "")
+    return f"Lot {keys.get('client') or label(lot)}" + (f" \u00b7 {addr}" if addr else "")
 
 
 def _skip(p: Path) -> bool:
@@ -374,7 +384,7 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
     ctx = SR.load_context(lot)
     spends = [(m, SR.load_context(m)["spend"]) for m in keep]
     paid = sum(s for _, s in spends if s is not None)
-    L = [f"LOT ACCOUNT - {label(lot)}   estate   (as of {today.isoformat()})",
+    L = [f"LOT ACCOUNT - {label(lot)}   estate   (as of {today.isoformat()})", lot_heading(lot),
          f"Acquired: {ctx['acquired'] or 'not recorded'}   Paid: ${paid:,.2f}"]
 
     def of(*status):
@@ -587,7 +597,7 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     name = (C.load_registry().get(client) or {}).get("name") or client
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
-    L = [f"{name}: items in our care",
+    L = [f"{name}: items in our care", lot_heading(lot),
          f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else "."),
          "", "YOUR ITEMS"]
     hdr = (f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<18}"
@@ -644,6 +654,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         return "-"
 
     L = [f"LOT ACCOUNT - {label(lot)}   consignment, client {client} {name}   (as of {today.isoformat()})",
+         lot_heading(lot),
          f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}"]
     L += _overview(C, figs, rows)
     # Held rows go last, one short line each, after the ledger and fees: they

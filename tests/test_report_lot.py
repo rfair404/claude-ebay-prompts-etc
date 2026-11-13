@@ -363,7 +363,7 @@ def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 9))
     lines = text.splitlines()
     assert lines[0] == "LOT ACCOUNT - ES/BUY1   estate   (as of 2026-11-09)"
-    assert lines[1] == "Acquired: 2026-10-21   Paid: $875.00"
+    assert lines[1] == "Lot ES/BUY1" and lines[2] == "Acquired: 2026-10-21   Paid: $875.00"
     order = [text.index(h) for h in ("\nOVERVIEW\n", "\nLOT MONEY\n", "\nINVENTORY LEDGER\n", "\nMEMBERS")]
     assert order == sorted(order)
     overview = text.split("OVERVIEW")[1].split("LOT MONEY")[0]
@@ -438,7 +438,7 @@ def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch
     assert re.search(r"At our booth +\$20$", line["K01-C003"])          # ask only
     pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
     text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
-    assert re.search(r"Sold +\$75 +pending$", text2.splitlines()[6])
+    assert re.search(r"Sold +\$75 +pending$", text2.splitlines()[7])
     assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
     assert line["K01-C001"].endswith("Photographed")                    # estimate stays out
     assert "~10" in line["K01-C007"] and "bin-03" in line["K01-C007"]
@@ -446,6 +446,24 @@ def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch
     assert re.search(r"\$90 +\$75 +\$35$", total)
     page = RL.html_report(text, rows, client=True)
     assert page.count("<table>") == 1 and "<th class=n>CREDITED</th>" in page
+
+
+def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):
+    # Russell 2026-11-12: lot code and property address at the top; read from
+    # the lot's context.txt, left out when it has no address line
+    lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
+    assert RL.consign_client(lot, "K01", date(2026, 11, 11))[0].splitlines()[1] == "Lot K01"
+    (lot / "context.txt").write_text("client: K01\naddress: 12 Example Lane\n", encoding="utf-8")
+    text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
+    account, _ = RL.consign_account(lot, "K01", date(2026, 11, 11))
+    assert text.splitlines()[1] == account.splitlines()[1] == "Lot K01 \u00b7 12 Example Lane"
+    assert "Lot K01 \u00b7 12 Example Lane" in RL.html_report(text, rows, client=True)
+
+
+def test_estate_heading_uses_its_label_and_any_address(estate, monkeypatch):
+    assert RL.lot_heading(estate) == "Lot ES/BUY1"
+    (estate / "context.txt").write_text("kind: event\naddress: 9 Sample Road\n", encoding="utf-8")
+    assert RL.lot_heading(estate) == "Lot ES/BUY1 \u00b7 9 Sample Road"
 
 
 def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path, monkeypatch, capsys):
