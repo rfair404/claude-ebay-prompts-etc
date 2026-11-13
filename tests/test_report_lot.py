@@ -439,7 +439,7 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
         assert word not in text, word
     ov = _section(text, "OVERVIEW")
     assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nKept +1 +\$5\n", ov)
-    assert re.search(r"\nTOTAL +7 +\$90 +\$75 +\$35$", ov)
+    assert re.search(r"\nTOTAL +7 +\$35$", ov)
     sold = _section(text, "SOLD").splitlines()
     assert re.search(r"ASK +SOLD +CREDITED$", sold[0])
     assert [ln[:8] for ln in sold[2:]] == ["K01-C005", "TOTAL   "]
@@ -466,6 +466,27 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
     assert page.count("<table>") == 4 and "<h2>SOLD</h2>" in page
     sold_html = page.split("<h2>SOLD</h2>")[1].split("<h2>FOR SALE</h2>")[0]
     assert "Sold saw" in sold_html and "Listed sign" not in sold_html
+
+
+def test_client_overview_total_and_closed_rows_show_no_ask(tmp_path, monkeypatch):
+    # Russell 2026-11-13 "how is asks higher than sold?": the overview total
+    # counts items and credit only; kept, returned and disposed rows show no ask
+    rows = SORT_ROWS + [
+        {"item_id": "K01-C008", "description": "Returned lamp", "state": "RETURNED", "ask": "60.00"},
+        {"item_id": "K01-C010", "description": "Broken jar", "state": "DISPOSED", "ask": "12.00"},
+    ]
+    rows[5] = dict(rows[5], ask="25.00")                # the kept stapler had an ask
+    text, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, rows), "K01", date(2026, 11, 13))
+    ov = {ln.split("  ")[0]: ln for ln in _section(text, "OVERVIEW").splitlines()[2:]}
+    assert re.fullmatch(r"TOTAL +9 +\$35", ov["TOTAL"])
+    assert re.fullmatch(r"Kept +1 +\$5", ov["Kept"])
+    assert re.fullmatch(r"Returned to you +1", ov["Returned to you"])
+    assert re.fullmatch(r"Disposed +1", ov["Disposed"])
+    assert re.search(r"Sold +1 +\$75 +\$30$", ov["Sold"])          # per-status rows unchanged
+    rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
+    assert rest["K01-C008"].endswith("Returned to you") and rest["K01-C010"].endswith("Disposed")
+    assert re.search(r"Kept +\$5$", rest["K01-C006"]) and "$25" not in rest["K01-C006"]
+    assert re.search(r"^TOTAL +\$40 +\$5$", rest["TOTAL   "])       # drafted bowl's ask only
 
 
 def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):
