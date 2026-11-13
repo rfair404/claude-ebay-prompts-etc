@@ -341,6 +341,25 @@ def test_trash_folders_are_never_members(estate):
     assert any("_rebuilt/abc123" in RL.label(d) for d in keep)
 
 
+def test_event_lot_with_loose_frames_counts_its_nested_items(estate):
+    # L1112 layout: source frames + contact sheet in the lot folder, each item
+    # in its own numbered folder with draft/intake and a listing/ of photos
+    inv = estate.parent.parent
+    lot = _dir(inv, "L1112", "kind: event\n", files=["ZZ1.JPG", "contact_sheet.jpg"])
+    for n in ("01-bracelet", "02-ring"):
+        _dir(inv, f"L1112/{n}", files=["draft.md", "intake.txt", "a.JPG"])
+        _dir(inv, f"L1112/{n}/listing", files=["a.jpg"])
+    _dir(inv, "L1112/03-pendant", files=["intake.txt", "a.JPG"])
+    got = [d.name for d in RL.item_dirs(lot, set())]
+    assert got == ["01-bracelet", "02-ring", "03-pendant"]
+    # a folder with its own draft stays one item, whatever is under it
+    assert RL.item_dirs(lot / "01-bracelet", set()) == [lot / "01-bracelet"]
+    # loose photos over plain subfolders (no draft/intake) stay one item
+    plain = _dir(inv, "ES/BUY2", files=["a.jpg"])
+    _dir(inv, "ES/BUY2/extra", files=["b.jpg"])
+    assert RL.item_dirs(plain, set()) == [plain]
+
+
 def test_estate_account_reads_like_the_consignment_one(estate, monkeypatch):
     # Header, OVERVIEW and LOT MONEY tables first, then the ledger, and the
     # long MEMBERS list last. A mall draft counts as available locally.
