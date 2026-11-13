@@ -36,7 +36,7 @@ beside it on the summary, for things such as a mixed-source lot.
 A lot whose context.txt says `client:` is a consignment. Its items and money
 come from its client_ledger.csv and the summary is tools/consign.py's
 per-client account, so the two can never disagree. For a consignment the
-.txt/.html/.pdf are the client's copy ("<client>: items in our care": item,
+.txt/.html/.pdf are the client's copy ("<client>: consignment report": item,
 qty, bin, plain status, ask, sold and credited in one table; no terms,
 estimates, fees or internals, Russell 2026-11-12); the money account goes to
 stdout, the .csv and <lot>-<date>-account.txt. Both ledgers sort sold,
@@ -597,7 +597,7 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     name = (C.load_registry().get(client) or {}).get("name") or client
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
-    L = [f"{name}: items in our care", lot_heading(lot),
+    L = [f"{name}: consignment report", lot_heading(lot),
          f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else "."),
          "", "YOUR ITEMS"]
     hdr = (f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<18}"

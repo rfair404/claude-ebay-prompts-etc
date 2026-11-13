@@ -425,7 +425,7 @@ def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch
     # Russell 2026-11-12: one table with ask, sold and credited; "Kept"
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
     text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
-    assert text.startswith("Client Name: items in our care\n")
+    assert text.startswith("Client Name: consignment report\n")
     assert "SUMMARY" not in text and text.count("YOUR ITEMS") == 1
     for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
                  "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
@@ -477,7 +477,7 @@ def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path
     assert "CLIENT MONEY" in out                       # the session still sees the money
     stem = tmp_path / "reports" / "lots" / f"CONSIGN-20261022-{date.today().isoformat()}"
     shared = stem.with_suffix(".txt").read_text() + stem.with_suffix(".html").read_text()
-    assert "items in our care" in shared and "CLIENT MONEY" not in shared and "split" not in shared
+    assert "consignment report" in shared and "CLIENT MONEY" not in shared and "split" not in shared
     assert "CLIENT MONEY" in stem.with_name(stem.name + "-account.txt").read_text()
 
 

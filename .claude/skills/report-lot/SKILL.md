@@ -48,7 +48,7 @@ CannonBW-NN` line with `--print`, which prints the PDF). If Chromium fails
 the run says `FAILED pdf: <why>` and the other files still land; report it.
 
 For a consignment, the .txt, .html and .pdf are the client's copy, titled
-"<client>: items in our care": one table of photo, item, quantity, bin,
+"<client>: consignment report": one table of photo, item, quantity, bin,
 plain status, ask, sold price and amount credited, with a totals row. No
 terms, split, estimates, fees, handling or internal notes (Russell,
 2026-11-12). The money account (overview, client money, fees) is written to
