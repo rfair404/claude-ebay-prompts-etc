@@ -44,7 +44,9 @@ listed, available locally, drafted, shot, then the rest (CONSIGN_ORDER).
 
 ESTATE ITEM STATUS
 
-An item is the shallowest folder holding a draft or photos. Its listings come
+An item is the shallowest folder holding a draft or photos; a folder of loose
+source frames over nested item folders (drafts or intake.txt) is not an item,
+its nested folders are. Its listings come
 from both stores' ledgers merged with the drafts on disk (lib/report.collect).
 Status, best first: SOLD (a sales-ledger row), LIVE (published and not ended),
 ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY, NOT SHOT
@@ -171,18 +173,27 @@ def members(lot: Path) -> tuple[list[Path], list[tuple[Path, str]]]:
 def item_dirs(bucket: Path, stop: set[Path]) -> list[Path]:
     """Shallowest folders under `bucket` holding a draft or photos, plus empty
     leaf folders (items filed but not shot). Doesn't descend into another
-    member or left-out bucket (`stop`)."""
-    def has_item(d: Path) -> bool:
+    member or left-out bucket (`stop`). A folder with loose photos but no
+    draft, whose subfolders hold drafts or intake.txt (an event lot like
+    L1112: source frames plus 01-19 item folders), is not an item itself;
+    its nested item folders are."""
+    def has(d: Path, names: tuple[str, ...], photos: bool) -> bool:
         try:
-            return any(f.is_file() and (f.name in ("draft.md", "draft_group.md")
-                                         or f.suffix.lower() in PHOTO_EXT)
+            return any(f.is_file() and (f.name in names
+                                         or (photos and f.suffix.lower() in PHOTO_EXT))
                        for f in d.iterdir())
         except OSError:
             return False
 
-    if has_item(bucket):
-        return [bucket]
+    def has_item(d: Path) -> bool:
+        return has(d, ("draft.md", "draft_group.md"), True)
+
     subs = [p for p in sorted(bucket.iterdir()) if p.is_dir() and not _skip(p)]
+    if has_item(bucket):
+        if has(bucket, ("draft.md", "draft_group.md"), False) or not any(
+                has(d, ("draft.md", "draft_group.md", "intake.txt"), False)
+                for d in subs if d not in stop):
+            return [bucket]
     if not subs:
         return [bucket]                     # an empty folder is an item not shot yet
     out = []
