@@ -232,6 +232,7 @@ class Comp:
     is_row0: bool = False         # flagged first price_high row (kept, surfaced)
     drop_reason: Optional[str] = None  # set when a filter excludes it
     cohort: Optional[str] = None  # "new" / "used" bucket
+    comp_source: Optional[str] = None  # "chrome" / "compsapi" in a merged run
 
     @property
     def dropped(self) -> bool:
@@ -281,6 +282,10 @@ def _load_comps(json_path: Union[str, Path], source: str,
     a price_high run is flagged is_row0 (often out of order — kept, surfaced).
     """
     data = json.loads(Path(json_path).read_text(encoding="utf-8"))
+    # A merged run (compsapi_sold.py --with-chrome) is already reduced to the
+    # condition cohort. Its Chrome rows carry no per-row condition, so without
+    # this a few verified CompsAPI rows would push them out of the cohort.
+    reduced = (data.get("exact_match") or {}).get("condition_cohort")
     comps: list[Comp] = []
     for i, c in enumerate(data.get("comps", [])):
         sold = c.get("sold_price")
@@ -311,7 +316,10 @@ def _load_comps(json_path: Union[str, Path], source: str,
             bo_accepted=bool(c.get("bo_accepted")),
             source=source,
             is_row0=(source == "price_high" and i == 0),
-            cohort=_condition_cohort(c.get("condition")),
+            cohort=(reduced if reduced in ("new", "used")
+                    and _condition_cohort(c.get("condition")) == "unknown"
+                    else _condition_cohort(c.get("condition"))),
+            comp_source=c.get("comp_source"),
         ))
     return comps
 
@@ -1003,7 +1011,7 @@ def price_from_runs(
         "kept_comps": [
             {"title": c.title, "price": c.price, "url": c.url,
              "condition": c.condition, "sold_date": c.sold_date,
-             "source": c.source}
+             "source": c.source, "comp_source": c.comp_source}
             for c in sorted(kept, key=lambda x: x.price)
         ],
     }

@@ -1,10 +1,15 @@
-"""ebaybiz — Stage B fallback: eBay SOLD comps from CompsAPI (compsapi.com).
+"""ebaybiz — Stage B secondary source: eBay SOLD comps from CompsAPI.
 
 The logged-in Chrome path (`ebay_sold_browse.py`) stays PRICE's primary Stage
-B source. This module is the selectable fallback for when Chrome isn't
-available (a cloud session, a challenge page, a headless run). It is a paid
-REST vendor with a Bearer key, NOT Apify: Apify stays retired (lib/README.md).
+B source. CompsAPI runs AFTER it as the secondary source: `--with-chrome`
+merges its rows into the Chrome best_match run, drops any item_id Chrome
+already has, and cuts both sources to exact matches with price_stats' own
+filters before any stats. A CompsAPI row with no condition can't be verified
+and is dropped. It is a paid REST vendor with a Bearer key, NOT Apify: Apify
+stays retired (lib/README.md).
 
+    python lib/compsapi_sold.py "<query>" --with-chrome <bm.json> --condition used \\
+        --require-tokens <tok>...                   # secondary source, merged run
     python lib/compsapi_sold.py "<query>"            # one /v1/sold page -> run JSON
     python lib/compsapi_sold.py --usage              # free quota read
     python lib/compsapi_sold.py --compare-recent 5   # vs the last 5 browser runs
@@ -22,8 +27,9 @@ API facts (read off https://compsapi.com/docs, 2026-11-12):
     per-minute rate (Retry-After). Failed searches don't count.
 
 Quota rule: check /v1/usage before every search and FAIL CLOSED — any error
-raises CompsAPIError with a plain message and exits non-zero. Nothing here
-falls through to another source silently; switching sources is PRICE's call.
+raises CompsAPIError with a plain message and exits non-zero. In
+`--with-chrome` mode the same errors (and a missing key) skip CompsAPI
+instead: the merged run keeps the Chrome rows and the output says so.
 
 Best Offer: the vendor says `price` on a `best_offer: true` row is the
 ACCEPTED amount, unlike eBay's results page. That is unverified, so those rows
@@ -269,12 +275,190 @@ def compare_run(browser_run: dict, comps: list[CompRecord]) -> dict:
             "best_offer": bo_checks}
 
 
+# ---------------------------------------------------------------------------
+# Secondary source: merge into a Chrome run, exact matches only
+# ---------------------------------------------------------------------------
+
+CHROME, COMPSAPI = "chrome", "compsapi"
+NO_CONDITION_REASON = "CompsAPI row has no condition to verify"
+
+
+def _stats_comp(d: dict):
+    """A row dict -> price_stats.Comp, just enough for its match filters."""
+    import price_stats
+    sold = float(d.get("sold_price") or 0)
+    return price_stats.Comp(
+        title=str(d.get("title") or ""), price=sold, sold_price=sold,
+        total_price=d.get("total_price"), url=str(d.get("url") or ""),
+        condition=d.get("condition"),
+        cohort=price_stats._condition_cohort(d.get("condition")))
+
+
+def exact_match_reduce(chrome_rows: list[dict], api_rows: list[dict], *,
+                       unit: str, require_tokens: list[str],
+                       condition: Optional[str]) -> tuple[list[dict], list[dict]]:
+    """Keep only exact matches from both sources -> (kept, dropped).
+
+    Runs price_stats' own match filters (unit, core tokens, condition cohort);
+    there is no second matcher here. Chrome rows get price_stats' usual
+    condition rule (the search URL already filtered condition, so a missing
+    per-row condition is pooled the same way price_stats pools it). CompsAPI
+    rows are held to the stricter rule: the row must carry a condition in the
+    target cohort, or it is dropped as unverifiable. The live test returned
+    parts listings for a whole machine with `condition: null`.
+    """
+    import price_stats
+    pairs = [(d, _stats_comp(d)) for d in chrome_rows + api_rows]
+    comps = [c for _, c in pairs]
+    price_stats.filter_unit(comps, unit)
+    price_stats.filter_tokens(comps, require_tokens)
+
+    n_chrome = len(chrome_rows)
+    price_stats.filter_condition(comps[:n_chrome], condition)
+    target = price_stats._condition_cohort(condition)
+    for c in comps[n_chrome:]:
+        if c.dropped:
+            continue
+        if c.cohort == "unknown":
+            c.drop_reason = NO_CONDITION_REASON
+        elif c.cohort != target:
+            c.drop_reason = f"condition '{c.condition}' not in {target} cohort"
+
+    kept, dropped = [], []
+    for d, c in pairs:
+        if c.dropped:
+            dropped.append({"title": d.get("title"), "item_id": d.get("item_id"),
+                            "comp_source": d.get("comp_source"),
+                            "reason": c.drop_reason})
+        else:
+            kept.append(d)
+    return kept, dropped
+
+
+def merge_with_chrome(chrome_run: dict, api_comps: Optional[list[dict]], *,
+                      unit: str, require_tokens: list[str], condition: Optional[str],
+                      compsapi_note: Optional[str] = None) -> dict:
+    """Chrome run + CompsAPI comp dicts (comp_to_dict shape) -> one
+    exact-match run payload.
+
+    `api_comps=None` means CompsAPI was skipped (quota, key, network); the
+    Chrome rows still stand and `sources.compsapi.note` says why. CompsAPI
+    rows whose item_id is already in the Chrome run are dropped as duplicates.
+    Every kept row carries `comp_source`: "chrome" or "compsapi".
+    """
+    chrome_rows = [{**r, "comp_source": CHROME} for r in chrome_run.get("comps") or []]
+    seen = {str(r["item_id"]) for r in chrome_rows if r.get("item_id")}
+    api_rows, dupes = [], 0
+    for c in api_comps or []:
+        iid = str(c["item_id"]) if c.get("item_id") else None
+        if iid and iid in seen:
+            dupes += 1
+            continue
+        if iid:
+            seen.add(iid)
+        api_rows.append({**c, "comp_source": COMPSAPI})
+
+    kept, dropped = exact_match_reduce(chrome_rows, api_rows, unit=unit,
+                                       require_tokens=require_tokens,
+                                       condition=condition)
+    n_kept = {s: sum(1 for r in kept if r["comp_source"] == s) for s in (CHROME, COMPSAPI)}
+    return {
+        "source": "merged:chrome+compsapi",
+        "queries": list(chrome_run.get("queries") or []),
+        "n_comps": len(kept),
+        "charm_price_share": chrome_run.get("charm_price_share"),
+        "currency_leak_suspected": chrome_run.get("currency_leak_suspected"),
+        "exact_match": {"unit": unit, "require_tokens": list(require_tokens),
+                        "condition": condition,
+                        "condition_cohort": _cohort(condition)},
+        "sources": {
+            CHROME: {"run_id": chrome_run.get("run_id"), "n_raw": len(chrome_rows),
+                     "n_kept": n_kept[CHROME]},
+            COMPSAPI: {"status": "skipped" if api_comps is None else "ok",
+                       "note": compsapi_note, "n_raw": len(api_comps or []),
+                       "n_duplicate": dupes, "n_kept": n_kept[COMPSAPI]},
+        },
+        "comps": kept,
+        "dropped": dropped,
+        "raw_items": [],
+    }
+
+
+def _cohort(condition: Optional[str]) -> str:
+    import price_stats
+    return price_stats._condition_cohort(condition)
+
+
+def save_merged_run(payload: dict, save_dir=None) -> str:
+    base = Path(save_dir) if save_dir else default_runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    run_id = f"merged-chrome-compsapi-{stamp}"
+    path = base / f"apify_run_{stamp}_{run_id}.json"
+    out = {"run_id": run_id, "actor": payload["source"], "saved_at_utc": stamp, **payload}
+    path.write_text(json.dumps(out, indent=2, default=str), encoding="utf-8")
+    return str(path)
+
+
+def merge_line(payload: dict) -> str:
+    s = payload["sources"]
+    line = (f"Exact matches: {payload['n_comps']} "
+            f"(chrome {s[CHROME]['n_kept']}/{s[CHROME]['n_raw']}, "
+            f"compsapi {s[COMPSAPI]['n_kept']}/{s[COMPSAPI]['n_raw']}, "
+            f"{s[COMPSAPI]['n_duplicate']} duplicate of chrome)")
+    if s[COMPSAPI]["status"] == "skipped":
+        line += f"\n  CompsAPI skipped: {s[COMPSAPI]['note']} Chrome results stand."
+    else:
+        unverified = sum(1 for d in payload["dropped"]
+                         if d["reason"] == NO_CONDITION_REASON)
+        if unverified:
+            line += f"\n  {unverified} CompsAPI row(s) dropped: no condition to verify."
+    return line
+
+
 def _client_from_config() -> CompsAPIClient:
     from config import ConfigError, get_compsapi_key
     try:
         return CompsAPIClient(get_compsapi_key())
     except ConfigError as e:
         raise CompsAPIError(str(e)) from e
+
+
+def _api_rows_for_merge(query: str, args) -> tuple[Optional[list[dict]], Optional[str]]:
+    """Today's cached CompsAPI run, else one fresh search. Any CompsAPI
+    failure -> (None, reason): the caller keeps the Chrome rows."""
+    parts = (query.lower(), args.condition or "any", args.days)
+    if not args.fresh:
+        hit = read_cache.get(_CACHE_NS, *parts)
+        if hit.hit and isinstance(hit.value, dict) and Path(hit.value.get("path", "")).exists():
+            run = json.loads(Path(hit.value["path"]).read_text(encoding="utf-8"))
+            return run.get("comps") or [], "today's cached run, no request spent"
+    try:
+        comps, data, u = fetch_comps(_client_from_config(), query,
+                                     days=args.days, condition=args.condition)
+    except CompsAPIError as e:
+        return None, str(e).split(" Use the Chrome path")[0]
+    path = save_compsapi_run(comps, query, data.get("items") or [], args.save_dir)
+    read_cache.put(_CACHE_NS, *parts, value={"n": len(comps), "path": path})
+    return [comp_to_dict(c) for c in comps], usage_line(u)
+
+
+def _merge_cli(args, query: str) -> None:
+    chrome_run = json.loads(Path(args.with_chrome).read_text(encoding="utf-8"))
+    query = query or (chrome_run.get("queries") or [""])[0]
+    if not query:
+        raise CompsAPIError("No query given and the Chrome run has none.")
+    api_rows, note = _api_rows_for_merge(query, args)
+    payload = merge_with_chrome(chrome_run, api_rows, unit=args.unit,
+                                require_tokens=args.require_tokens,
+                                condition=args.condition, compsapi_note=note)
+    path = save_merged_run(payload, args.save_dir)
+    print(merge_line(payload))
+    if api_rows is not None and note:
+        print(f"  {note}")
+    print(f"Saved results: {path}")
+    print(f"Next: python lib/price_stats.py --best-match {path} --unit {args.unit} "
+          f"--condition {args.condition} --price-field total")
 
 
 def _cli() -> None:
@@ -284,8 +468,8 @@ def _cli() -> None:
     except Exception:
         pass
     ap = argparse.ArgumentParser(
-        description="Stage B fallback: eBay sold comps from CompsAPI -> run JSON "
-                    "for price_stats.py. Chrome (ebay_sold_browse.py) stays primary.")
+        description="Stage B secondary source: eBay sold comps from CompsAPI, "
+                    "merged after the Chrome run (ebay_sold_browse.py) with --with-chrome.")
     ap.add_argument("query", nargs="*", help="Search keywords.")
     ap.add_argument("--days", type=int, default=DEFAULT_DAYS,
                     help=f"Look-back window, 1-{MAX_DAYS} (default {DEFAULT_DAYS}).")
@@ -295,6 +479,14 @@ def _cli() -> None:
     ap.add_argument("--fresh", action="store_true",
                     help="Bypass the same-day cache and spend a request anyway.")
     ap.add_argument("--usage", action="store_true", help="Print quota (free call) and exit.")
+    ap.add_argument("--with-chrome", metavar="RUN_JSON",
+                    help="Secondary-source mode: merge into this Chrome best_match run, "
+                         "dedupe by item_id and keep exact matches only. Needs "
+                         "--condition. A quota/key error leaves the Chrome rows.")
+    ap.add_argument("--unit", default="single",
+                    help="With --with-chrome: unit being priced (single/pair/set/lot).")
+    ap.add_argument("--require-tokens", nargs="*", default=[],
+                    help="With --with-chrome: core tokens every comp title must carry.")
     ap.add_argument("--compare-recent", type=int, metavar="N",
                     help="Re-run the last N browser-run queries through CompsAPI "
                          "and report item-id/price agreement (costs N requests).")
@@ -323,6 +515,12 @@ def _cli() -> None:
                 for iid, ask, a, flagged in r["best_offer"]:
                     print(f"    Best Offer {iid}: browser ask ${ask} vs api ${a}"
                           f"{'' if flagged else '  (api did NOT flag it)'}")
+            return
+
+        if args.with_chrome:
+            if not args.condition:
+                ap.error("--with-chrome needs --condition (exact match includes condition)")
+            _merge_cli(args, query)
             return
 
         if not query:
