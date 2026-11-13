@@ -37,7 +37,8 @@ A lot whose context.txt says `client:` is a consignment. Its items and money
 come from its client_ledger.csv and the summary is tools/consign.py's
 per-client account, so the two can never disagree. For a consignment the
 .txt/.html/.pdf are the client's copy ("<client>: items in our care": item,
-qty, bin, plain status, no money or internals); the money account goes to
+qty, bin, plain status, ask, sold and credited in one table; no terms,
+estimates, fees or internals, Russell 2026-11-12); the money account goes to
 stdout, the .csv and <lot>-<date>-account.txt. Both ledgers sort sold,
 listed, available locally, drafted, shot, then the rest (CONSIGN_ORDER).
 
@@ -517,7 +518,7 @@ CONSIGN_ORDER = ["SOLD", "LISTED", "LOCAL", "DRAFTED", "SHOT", "PREP", "INTAKE",
 CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed for sale", "LOCAL": "At our booth",
                  "DRAFTED": "Being listed", "SHOT": "Photographed", "PREP": "Photographed",
                  "INTAKE": "In inventory", "HOLD": "Set aside for now",
-                 "EXCLUDED": "Kept by The Fair Hand", "RETURNED": "Returned to you",
+                 "EXCLUDED": "Kept", "RETURNED": "Returned to you",
                  "DISPOSED": "Disposed"}
 
 
@@ -544,11 +545,42 @@ def _client_qty(q: str) -> str:
     return "" if re.search(r"C\d{3}|split|\blots?\b|uncounted|\best\b|PRICE", q, re.I) else q
 
 
+def _whole(v) -> str:
+    """$40 for 40.00, $40.50 for 40.50, -$1.03 for -1.03; "" for blank."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(str(v).replace("$", "").replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return ""
+    sign, d = ("-" if d < 0 else ""), abs(d)
+    return sign + (f"${d:,.0f}" if d == d.to_integral_value() else f"${d:,.2f}")
+
+
+def _client_money(r: dict) -> tuple[str, str, str]:
+    """(ask, sold, credited) as the account file counts them: the ask, the
+    sale price on sold rows, and client_share on sold and kept (EXCLUDED)
+    rows, where a buyout is the client's share (tools/consign.py sync_row).
+    A sale whose share isn't worked out yet credits "" here, shown as
+    "pending" and left out of the total, as the account's ledger leaves it."""
+    place = _place(r)
+    sold = r.get("item_price") or "" if place == "SOLD" else ""
+    credited = ""
+    if place == "SOLD":
+        credited = r.get("client_share") or ""
+    elif place == "EXCLUDED":
+        credited = r.get("client_share") or r.get("buyout_price") or ""
+    return r.get("ask") or "", sold, credited
+
+
 def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
-    """The client's copy: their belongings and where each one is. No money,
-    terms, estimates, prices, fees or internal notes (Russell, 2026-10-27 and
-    2026-11-11). Returns the text and one row per ledger line, in table order,
-    for the page's photos."""
+    """The client's copy: one table of their belongings, where each one is,
+    and its ask, sale price and the amount credited to them. Russell
+    2026-11-12 reversed the no-money rule (2026-10-27, 2026-11-11) for these
+    figures only: the terms/split, estimates, fees, handling, internal notes
+    and contact details stay out, so the copy shows what sold and what they
+    get, not how we work it out. Returns the text and one row per ledger
+    line, in table order, for the page's photos."""
+    from decimal import Decimal
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
     C.migrate(rows, lot, client)
@@ -556,24 +588,28 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
     L = [f"{name}: items in our care",
-         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
-    hdr = f"{'STATUS':<24}{'ITEMS':>6}"
-    L += ["", "SUMMARY", hdr, "-" * 30]
-    counts: dict[str, int] = {}                  # rows are sorted, so this keeps the order
-    for r in rows:
-        counts[CLIENT_STATUS[_place(r)]] = counts.get(CLIENT_STATUS[_place(r)], 0) + 1
-    L += [f"{status:<24}{n:>6}" for status, n in counts.items()]
-    L += ["", "YOUR ITEMS"]
-    hdr = f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<22}"
+         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else "."),
+         "", "YOUR ITEMS"]
+    hdr = (f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<18}"
+           f"{'ASK':>12}{'SOLD':>11}{'CREDITED':>11}")
     L += [hdr, "-" * len(hdr)]
     out = []
+    tot = [Decimal(0)] * 3
     for r in rows:
         d = _short(r.get("description") or "", 52)
+        money = _client_money(r)
+        for i, v in enumerate(money):
+            tot[i] += C.dec(v) or Decimal(0)
+        ask, sold, credited = (_whole(v) for v in money)
+        if _place(r) == "SOLD" and not credited:
+            credited = "pending"                 # share not worked out yet: fees still open
         L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
-                 f"{CLIENT_STATUS[_place(r)]}".rstrip())
+                 f"{CLIENT_STATUS[_place(r)]:<18}{ask:>12}{sold:>11}{credited:>11}".rstrip())
         out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
                     "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
                     "listing_id": r.get("listing_id") or ""})
+    L.append(f"{'TOTAL':<12}{'':<54}{'':<20}{'':<10}{'':<18}"
+             f"{_whole(tot[0]):>12}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
     return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
 
 
@@ -903,7 +939,9 @@ def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False
             while j < len(lines) and lines[j].strip():
                 j += 1
             body = lines[i + 2:j]
-            out.append(_table_html(line, body, items if "ITEM" in line and len(body) == len(items) else None))
+            # a TOTAL line under the items gets an empty row (no photo)
+            fit = items + [{}] if body and body[-1].startswith("TOTAL") else items
+            out.append(_table_html(line, body, fit if "ITEM" in line and len(body) == len(fit) else None))
             i = j
             continue
         if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):

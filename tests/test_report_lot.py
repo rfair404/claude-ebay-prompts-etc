@@ -421,19 +421,31 @@ def test_consign_ledgers_sort_sold_listed_local_drafted_shot_then_the_rest(tmp_p
     assert [r["item_id"] for r in client_rows] == want
 
 
-def test_client_copy_names_belongings_not_money_or_internals(tmp_path, monkeypatch):
+def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch):
+    # Russell 2026-11-12: one table with ask, sold and credited; "Kept"
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
-    text, _ = RL.consign_client(lot, "K01", date(2026, 11, 11))
+    text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
     assert text.startswith("Client Name: items in our care\n")
-    for word in ("$", "split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
-                 "LOT ACCOUNT", "SOLD", "LISTED", "EXCLUDED", "in C006"):
+    assert "SUMMARY" not in text and text.count("YOUR ITEMS") == 1
+    for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
+                 "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
         assert word not in text, word
+    hdr = next(ln for ln in text.splitlines() if ln.startswith("#"))
+    assert re.search(r"STATUS +ASK +SOLD +CREDITED$", hdr)
     line = {ln[:8]: ln for ln in text.splitlines() if ln.startswith("K01-C00")}
-    assert line["K01-C005"].endswith("Sold") and line["K01-C003"].endswith("At our booth")
-    assert line["K01-C006"].endswith("Kept by The Fair Hand")
+    assert re.search(r"Sold +\$75 +\$30$", line["K01-C005"])          # sold, client_share
+    assert re.search(r"Kept +\$5$", line["K01-C006"])                  # buyout is the credit
+    assert re.search(r"At our booth +\$20$", line["K01-C003"])          # ask only
+    pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
+    text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
+    assert re.search(r"Sold +\$75 +pending$", text2.splitlines()[6])
+    assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
+    assert line["K01-C001"].endswith("Photographed")                    # estimate stays out
     assert "~10" in line["K01-C007"] and "bin-03" in line["K01-C007"]
-    summary = text.split("SUMMARY")[1].split("YOUR ITEMS")[0]
-    assert re.search(r"Listed for sale +1\n", summary) and re.search(r"Sold +1\n", summary)
+    total = next(ln for ln in text.splitlines() if ln.startswith("TOTAL"))
+    assert re.search(r"\$90 +\$75 +\$35$", total)
+    page = RL.html_report(text, rows, client=True)
+    assert page.count("<table>") == 1 and "<th class=n>CREDITED</th>" in page
 
 
 def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path, monkeypatch, capsys):
@@ -447,7 +459,7 @@ def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path
     assert "CLIENT MONEY" in out                       # the session still sees the money
     stem = tmp_path / "reports" / "lots" / f"CONSIGN-20261022-{date.today().isoformat()}"
     shared = stem.with_suffix(".txt").read_text() + stem.with_suffix(".html").read_text()
-    assert "items in our care" in shared and "CLIENT MONEY" not in shared and "$" not in shared
+    assert "items in our care" in shared and "CLIENT MONEY" not in shared and "split" not in shared
     assert "CLIENT MONEY" in stem.with_name(stem.name + "-account.txt").read_text()
 
 
