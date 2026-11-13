@@ -525,11 +525,11 @@ def _local(r: dict) -> bool:
 CONSIGN_ORDER = ["SOLD", "LISTED", "LOCAL", "DRAFTED", "SHOT", "PREP", "INTAKE", "HOLD",
                  "EXCLUDED", "RETURNED", "DISPOSED"]
 # What the client reads for each place in that order.
-CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed for sale", "LOCAL": "At our booth",
-                 "DRAFTED": "Being listed", "SHOT": "Photographed", "PREP": "Photographed",
-                 "INTAKE": "In inventory", "HOLD": "Set aside for now",
-                 "EXCLUDED": "Kept", "RETURNED": "Returned to you",
-                 "DISPOSED": "Disposed"}
+CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed on eBay", "LOCAL": "Available locally",
+                 "DRAFTED": "Being listed", "SHOT": "Pending", "PREP": "Pending",
+                 "INTAKE": "Pending", "HOLD": "Pending",
+                 "EXCLUDED": "Purchased", "RETURNED": "Unavailable",
+                 "DISPOSED": "Unavailable"}
 
 
 def _place(r: dict) -> str:
@@ -609,8 +609,8 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     name = (C.load_registry().get(client) or {}).get("name") or client
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
-    L = [f"{name}: consignment report", lot_heading(lot),
-         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
+    L = ["The Fair Hand", f"{name} \u00b7 {lot_heading(lot)}",
+         (f"Received {received} \u00b7 " if received else "") + f"Modified {today.isoformat()}"]
     dec = lambda v: C.dec(v) or Decimal(0)  # noqa: E731
     money = lambda v: _whole(v) if v else ""  # noqa: E731
 
@@ -803,16 +803,16 @@ def _split_columns(rows: list[str]) -> list[tuple[int, int]]:
 
 
 def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
-    """The item's first photo: its own folder first, else the first file named
+    """The item's hero shot: its own folder first, else the first file named
     in the row's photos column (with or without its extension) or its review
     crop, else the listing's first photo on eBay (cached in reports/lots/.thumbs)."""
     folder = row.get("folder") or ""
     for base in (REPO, INVENTORY):
         d = base / folder
         if folder and d.is_dir():
-            shots = sorted(p for p in d.rglob("*") if p.suffix.lower() in WEB_EXT)
-            if shots:
-                return shots[0]
+            hit = _hero(d)
+            if hit:
+                return hit
     for name in (row.get("photos") or "").split():
         hit = found.get(Path(name).stem.lower())
         if hit:
@@ -821,6 +821,31 @@ def _photo_for(row: dict, found: dict[str, Path]) -> Optional[Path]:
 
 
 WEB_EXT = {".jpg", ".jpeg", ".png"}
+_SHEET_RE = re.compile(r"sheet|montage|contact|index|rotation", re.I)   # never a thumbnail
+
+
+def _hero(d: Path) -> Optional[Path]:
+    """The item's hero shot, never a contact sheet: the review card's `hero`
+    line, else the first photo its draft lists, else the first frame in
+    listing/, else the first plain photo in the folder (sheets and .prep
+    output skipped)."""
+    def pick(rel: str) -> Optional[Path]:
+        p = d / rel.strip().strip("\"'")
+        return p if p.is_file() and p.suffix.lower() in WEB_EXT and not _SHEET_RE.search(p.stem) else None
+    for name, rx in (("review_card.md", r"^\s*hero\s+(\S+)"), ("draft.md", r"^\s*-\s+[\"']?(listing/[^\"'\s#]+)")):
+        f = d / name
+        if f.is_file():
+            m = re.search(rx, f.read_text(encoding="utf-8", errors="ignore"), re.M)
+            if m and pick(m.group(1)):
+                return pick(m.group(1))
+    frames = sorted(q for q in (d / "listing").glob("*") if pick(q.relative_to(d).as_posix())) \
+        if (d / "listing").is_dir() else []
+    if frames:
+        return frames[0]
+    shots = sorted(q for q in d.rglob("*") if q.suffix.lower() in WEB_EXT
+                   and not _SHEET_RE.search(q.stem)
+                   and not any(x.startswith(".") for x in q.relative_to(d).parts))
+    return shots[0] if shots else None
 _FRAME_RE = re.compile(r"[a-z]*\d+")   # the camera frame id at the front of a crop name
 
 
