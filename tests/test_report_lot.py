@@ -403,7 +403,7 @@ SORT_ROWS = [
     {"item_id": "K01-C004", "description": "Listed sign", "state": "LISTED", "listing_id": "206",
      "ask": "30.00"},
     {"item_id": "K01-C005", "description": "Sold saw", "state": "SOLD", "item_price": "75.00",
-     "net": "60.00", "client_share": "30.00"},
+     "net": "60.00", "client_share": "30.00", "ebay_fee": "9.75", "ad_fee": "1.50", "actual_postage": "6.25"},
     {"item_id": "K01-C006", "description": "Stapler", "state": "EXCLUDED", "buyout_price": "5.00",
      "qty": "in C006 line"},
     {"item_id": "K01-C007", "description": "Box of odds", "state": "INTAKE",
@@ -431,35 +431,36 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
     # REVIEW / HELD / REJECTED; ask, sold and credited shown; "Kept"
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
     text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
-    assert text.startswith("Client Name: consignment report\n")
+    assert text.splitlines()[:2] == ["The Fair Hand", "Client Name \u00b7 Lot K01"]
+    assert text.splitlines()[2].endswith("Modified 2026-11-11")
     order = ["OVERVIEW", "SOLD", "FOR SALE", "REVIEW / HELD / REJECTED"]
     assert [text.index(f"\n{t}\n") for t in order] == sorted(text.index(f"\n{t}\n") for t in order)
-    for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
-                 "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
+    for word in ("split", "Split", "sync", "owed", "ebay_fee", "net", "estimate", "PRICE",
+                 "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling", "postage"):
         assert word not in text, word
     ov = _section(text, "OVERVIEW")
-    assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nKept +1 +\$5\n", ov)
+    assert re.search(r"\nSold +1 +\$75 +\$17.50 +\$30\n", ov) and re.search(r"\nPurchased +1 +\$5\n", ov)
     assert re.search(r"\nTOTAL +7 +\$35$", ov)
     sold = _section(text, "SOLD").splitlines()
-    assert re.search(r"ASK +SOLD +CREDITED$", sold[0])
+    assert re.search(r"ASK +SOLD +FEES +CREDITED$", sold[0])
     assert [ln[:8] for ln in sold[2:]] == ["K01-C005", "TOTAL   "]
-    assert re.search(r"\$75 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$30$", sold[3])
+    assert re.search(r"\$75 +\$17.50 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$17.50 +\$30$", sold[3])
     sale = _section(text, "FOR SALE").splitlines()
     assert re.search(r"LOCATION +ASK$", sale[0])
     assert re.search(r"^K01-C004.*EBAY +\$30$", sale[2])
     assert re.search(r"^K01-C003.*ANTIQUE MALL +\$20$", sale[3])
     assert re.search(r"^TOTAL +\$50$", sale[4])
     rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
-    assert re.search(r"Kept +\$5$", rest["K01-C006"])                   # buyout is the credit
+    assert re.search(r"Purchased +\$5$", rest["K01-C006"])                   # buyout is the credit
     assert re.search(r"Being listed +\$40$", rest["K01-C002"])
-    assert rest["K01-C001"].endswith("Photographed")                    # estimate stays out
+    assert rest["K01-C001"].endswith("Pending")                    # estimate stays out
     assert "~10" in rest["K01-C007"] and "bin-03" in rest["K01-C007"]
     # photo rows follow the tables in order
     assert [r["item_id"] for r in rows] == ["K01-C005", "K01-C004", "K01-C003", "K01-C002",
                                             "K01-C001", "K01-C007", "K01-C006"]
     pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
     text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
-    assert re.search(r"\$75 +pending$", _section(text2, "SOLD").splitlines()[2])
+    assert re.search(r"\$75 +\$17.50 +pending$", _section(text2, "SOLD").splitlines()[2])
     assert "\nFOR SALE\nNone.\n" in text2
     assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
     page = RL.html_report(text, rows, client=True)
@@ -479,13 +480,12 @@ def test_client_overview_total_and_closed_rows_show_no_ask(tmp_path, monkeypatch
     text, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, rows), "K01", date(2026, 11, 13))
     ov = {ln.split("  ")[0]: ln for ln in _section(text, "OVERVIEW").splitlines()[2:]}
     assert re.fullmatch(r"TOTAL +9 +\$35", ov["TOTAL"])
-    assert re.fullmatch(r"Kept +1 +\$5", ov["Kept"])
-    assert re.fullmatch(r"Returned to you +1", ov["Returned to you"])
-    assert re.fullmatch(r"Disposed +1", ov["Disposed"])
-    assert re.search(r"Sold +1 +\$75 +\$30$", ov["Sold"])          # per-status rows unchanged
+    assert re.fullmatch(r"Purchased +1 +\$5", ov["Purchased"])
+    assert re.fullmatch(r"Unavailable +2", ov["Unavailable"])    # returned + disposed, no ask
+    assert re.search(r"Sold +1 +\$75 +\$17.50 +\$30$", ov["Sold"])          # per-status rows unchanged
     rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
-    assert rest["K01-C008"].endswith("Returned to you") and rest["K01-C010"].endswith("Disposed")
-    assert re.search(r"Kept +\$5$", rest["K01-C006"]) and "$25" not in rest["K01-C006"]
+    assert rest["K01-C008"].endswith("Unavailable") and rest["K01-C010"].endswith("Unavailable")
+    assert re.search(r"Purchased +\$5$", rest["K01-C006"]) and "$25" not in rest["K01-C006"]
     assert re.search(r"^TOTAL +\$40 +\$5$", rest["TOTAL   "])       # drafted bowl's ask only
 
 
@@ -493,11 +493,11 @@ def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):
     # Russell 2026-11-12: lot code and property address at the top; read from
     # the lot's context.txt, left out when it has no address line
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
-    assert RL.consign_client(lot, "K01", date(2026, 11, 11))[0].splitlines()[1] == "Lot K01"
+    assert RL.consign_client(lot, "K01", date(2026, 11, 11))[0].splitlines()[1].endswith("Lot K01")
     (lot / "context.txt").write_text("client: K01\naddress: 12 Example Lane\n", encoding="utf-8")
     text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
     account, _ = RL.consign_account(lot, "K01", date(2026, 11, 11))
-    assert text.splitlines()[1] == account.splitlines()[1] == "Lot K01 \u00b7 12 Example Lane"
+    assert text.splitlines()[1].endswith("Lot K01 \u00b7 12 Example Lane") and account.splitlines()[1] == "Lot K01 \u00b7 12 Example Lane"
     assert "Lot K01 \u00b7 12 Example Lane" in RL.html_report(text, rows, client=True)
 
 
@@ -518,7 +518,7 @@ def test_consign_run_shares_the_client_copy_and_keeps_the_account_aside(tmp_path
     assert "CLIENT MONEY" in out                       # the session still sees the money
     stem = tmp_path / "reports" / "lots" / f"CONSIGN-20261022-{date.today().isoformat()}"
     shared = stem.with_suffix(".txt").read_text() + stem.with_suffix(".html").read_text()
-    assert "consignment report" in shared and "CLIENT MONEY" not in shared and "split" not in shared
+    assert "The Fair Hand" in shared and "CLIENT MONEY" not in shared and "split" not in shared
     assert "CLIENT MONEY" in stem.with_name(stem.name + "-account.txt").read_text()
 
 
@@ -594,3 +594,10 @@ def test_all_puts_every_lot_on_one_page_and_names_a_failed_one(estate, monkeypat
     assert "FAILED: ValueError(&#x27;ledger missing&#x27;)" in page
     assert "<h2>INVENTORY LEDGER</h2>" in page.split('id="ES_BUY1"')[1]
     assert "FAILED CONSIGN-BAD" in capsys.readouterr().err
+
+
+def test_live_row_with_a_stale_hold_marker_is_for_sale():
+    # K01-C187 went live 2026-11-12 but its notes still said [HOLD]
+    row = {"item_id": "K01-C187", "state": "LISTED", "state_note": "[HOLD] possible value | LIVE"}
+    assert RL._place(row) == "LISTED"
+    assert RL._place(dict(row, state="PREP")) == "HOLD"
