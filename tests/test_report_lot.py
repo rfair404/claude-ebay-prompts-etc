@@ -594,3 +594,10 @@ def test_all_puts_every_lot_on_one_page_and_names_a_failed_one(estate, monkeypat
     assert "FAILED: ValueError(&#x27;ledger missing&#x27;)" in page
     assert "<h2>INVENTORY LEDGER</h2>" in page.split('id="ES_BUY1"')[1]
     assert "FAILED CONSIGN-BAD" in capsys.readouterr().err
+
+
+def test_live_row_with_a_stale_hold_marker_is_for_sale():
+    # K01-C187 went live 2026-11-12 but its notes still said [HOLD]
+    row = {"item_id": "K01-C187", "state": "LISTED", "state_note": "[HOLD] possible value | LIVE"}
+    assert RL._place(row) == "LISTED"
+    assert RL._place(dict(row, state="PREP")) == "HOLD"

@@ -445,7 +445,11 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
 # --------------------------------------------------------------------------- #
 
 def _held(r: dict) -> bool:
-    """HOLD state, or [HOLD] written in the row's why or state_note."""
+    """HOLD state, or [HOLD] written in the row's why or state_note. A row
+    that is live or sold is never held: a [HOLD] left in its notes is history
+    (K01-C187, published 2026-11-12, still carried one)."""
+    if r.get("state") in ("LISTED", "SOLD", "CLEARED", "SETTLED"):
+        return False
     return r.get("state") == "HOLD" or any("[HOLD]" in (r.get(k) or "") for k in ("why", "state_note"))
 
 
