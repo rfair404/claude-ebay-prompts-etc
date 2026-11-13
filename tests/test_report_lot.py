@@ -403,7 +403,7 @@ SORT_ROWS = [
     {"item_id": "K01-C004", "description": "Listed sign", "state": "LISTED", "listing_id": "206",
      "ask": "30.00"},
     {"item_id": "K01-C005", "description": "Sold saw", "state": "SOLD", "item_price": "75.00",
-     "net": "60.00", "client_share": "30.00"},
+     "net": "60.00", "client_share": "30.00", "ebay_fee": "9.75", "ad_fee": "1.50", "actual_postage": "6.25"},
     {"item_id": "K01-C006", "description": "Stapler", "state": "EXCLUDED", "buyout_price": "5.00",
      "qty": "in C006 line"},
     {"item_id": "K01-C007", "description": "Box of odds", "state": "INTAKE",
@@ -435,16 +435,16 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
     assert text.splitlines()[2].endswith("Modified 2026-11-11")
     order = ["OVERVIEW", "SOLD", "FOR SALE", "REVIEW / HELD / REJECTED"]
     assert [text.index(f"\n{t}\n") for t in order] == sorted(text.index(f"\n{t}\n") for t in order)
-    for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
-                 "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
+    for word in ("split", "Split", "sync", "owed", "ebay_fee", "net", "estimate", "PRICE",
+                 "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling", "postage"):
         assert word not in text, word
     ov = _section(text, "OVERVIEW")
-    assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nPurchased +1 +\$5\n", ov)
-    assert re.search(r"\nTOTAL +7 +\$90 +\$75 +\$35$", ov)
+    assert re.search(r"\nSold +1 +\$75 +\$17.50 +\$30\n", ov) and re.search(r"\nPurchased +1 +\$5\n", ov)
+    assert re.search(r"\nTOTAL +7 +\$35$", ov)
     sold = _section(text, "SOLD").splitlines()
-    assert re.search(r"ASK +SOLD +CREDITED$", sold[0])
+    assert re.search(r"ASK +SOLD +FEES +CREDITED$", sold[0])
     assert [ln[:8] for ln in sold[2:]] == ["K01-C005", "TOTAL   "]
-    assert re.search(r"\$75 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$30$", sold[3])
+    assert re.search(r"\$75 +\$17.50 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$17.50 +\$30$", sold[3])
     sale = _section(text, "FOR SALE").splitlines()
     assert re.search(r"LOCATION +ASK$", sale[0])
     assert re.search(r"^K01-C004.*EBAY +\$30$", sale[2])
@@ -460,13 +460,33 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
                                             "K01-C001", "K01-C007", "K01-C006"]
     pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
     text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
-    assert re.search(r"\$75 +pending$", _section(text2, "SOLD").splitlines()[2])
+    assert re.search(r"\$75 +\$17.50 +pending$", _section(text2, "SOLD").splitlines()[2])
     assert "\nFOR SALE\nNone.\n" in text2
     assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
     page = RL.html_report(text, rows, client=True)
     assert page.count("<table>") == 4 and "<h2>SOLD</h2>" in page
     sold_html = page.split("<h2>SOLD</h2>")[1].split("<h2>FOR SALE</h2>")[0]
     assert "Sold saw" in sold_html and "Listed sign" not in sold_html
+
+
+def test_client_overview_total_and_closed_rows_show_no_ask(tmp_path, monkeypatch):
+    # Russell 2026-11-13 "how is asks higher than sold?": the overview total
+    # counts items and credit only; kept, returned and disposed rows show no ask
+    rows = SORT_ROWS + [
+        {"item_id": "K01-C008", "description": "Returned lamp", "state": "RETURNED", "ask": "60.00"},
+        {"item_id": "K01-C010", "description": "Broken jar", "state": "DISPOSED", "ask": "12.00"},
+    ]
+    rows[5] = dict(rows[5], ask="25.00")                # the kept stapler had an ask
+    text, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, rows), "K01", date(2026, 11, 13))
+    ov = {ln.split("  ")[0]: ln for ln in _section(text, "OVERVIEW").splitlines()[2:]}
+    assert re.fullmatch(r"TOTAL +9 +\$35", ov["TOTAL"])
+    assert re.fullmatch(r"Purchased +1 +\$5", ov["Purchased"])
+    assert re.fullmatch(r"Unavailable +2", ov["Unavailable"])    # returned + disposed, no ask
+    assert re.search(r"Sold +1 +\$75 +\$17.50 +\$30$", ov["Sold"])          # per-status rows unchanged
+    rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
+    assert rest["K01-C008"].endswith("Unavailable") and rest["K01-C010"].endswith("Unavailable")
+    assert re.search(r"Purchased +\$5$", rest["K01-C006"]) and "$25" not in rest["K01-C006"]
+    assert re.search(r"^TOTAL +\$40 +\$5$", rest["TOTAL   "])       # drafted bowl's ask only
 
 
 def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):

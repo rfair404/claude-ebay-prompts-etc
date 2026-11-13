@@ -566,12 +566,17 @@ def _whole(v) -> str:
     return sign + (f"${d:,.0f}" if d == d.to_integral_value() else f"${d:,.2f}")
 
 
+NO_ASK = ("EXCLUDED", "RETURNED", "DISPOSED")
+
+
 def _client_money(r: dict) -> tuple[str, str, str]:
     """(ask, sold, credited) as the account file counts them: the ask, the
     sale price on sold rows, and client_share on sold and kept (EXCLUDED)
     rows, where a buyout is the client's share (tools/consign.py sync_row).
     A sale whose share isn't worked out yet credits "" here, shown as
-    "pending" and left out of the total, as the account's ledger leaves it."""
+    "pending" and left out of the total, as the account's ledger leaves it.
+    A row that is no longer for sale (kept, returned, disposed) has no ask
+    (Russell 2026-11-13)."""
     place = _place(r)
     sold = r.get("item_price") or "" if place == "SOLD" else ""
     credited = ""
@@ -579,7 +584,21 @@ def _client_money(r: dict) -> tuple[str, str, str]:
         credited = r.get("client_share") or ""
     elif place == "EXCLUDED":
         credited = r.get("client_share") or r.get("buyout_price") or ""
-    return r.get("ask") or "", sold, credited
+    ask = "" if place in NO_ASK else r.get("ask") or ""
+    return ask, sold, credited
+
+
+def _client_fees(r: dict) -> str:
+    """eBay's fees, the ad fee and the postage paid on a sold row, summed
+    ("" when none is known yet); handling stays out of the client copy.
+    Russell 2026-11-13: a FEES column beside SOLD."""
+    from decimal import Decimal
+    import consign as C
+    if _place(r) != "SOLD":
+        return ""
+    vals = [C.dec(r.get(k)) for k in ("ebay_fee", "ad_fee", "actual_postage")]
+    vals = [v for v in vals if v is not None]
+    return str(sum(vals, Decimal(0))) if vals else ""
 
 
 def _location(r: dict) -> str:
@@ -615,19 +634,23 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     money = lambda v: _whole(v) if v else ""  # noqa: E731
 
     # Overview: the sections' figures by status, plus a total
-    tot = [Decimal(0)] * 3
+    tot = [Decimal(0)] * 4
     by_status: dict[str, list] = {}              # rows are sorted, so this keeps the order
     for r in rows:
-        st = by_status.setdefault(CLIENT_STATUS[_place(r)], [0] + [Decimal(0)] * 3)
+        st = by_status.setdefault(CLIENT_STATUS[_place(r)], [0] + [Decimal(0)] * 4)
         st[0] += 1
-        for i, v in enumerate(_client_money(r)):
+        ask, sold, credited = _client_money(r)
+        for i, v in enumerate((ask, sold, _client_fees(r), credited)):
             tot[i] += dec(v)
             st[i + 1] += dec(v)
-    hdr = f"{'STATUS':<22}{'ITEMS':>6}{'ASK':>13}{'SOLD':>11}{'CREDITED':>11}"
+    hdr = f"{'STATUS':<22}{'ITEMS':>6}{'ASK':>13}{'SOLD':>11}{'FEES':>10}{'CREDITED':>11}"
     L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
     for status, (n, *m) in by_status.items():
-        L.append(f"{status:<22}{n:>6}{money(m[0]):>13}{money(m[1]):>11}{money(m[2]):>11}".rstrip())
-    L.append(f"{'TOTAL':<22}{len(rows):>6}{_whole(tot[0]):>13}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+        L.append(f"{status:<22}{n:>6}{money(m[0]):>13}{money(m[1]):>11}{money(m[2]):>10}{money(m[3]):>11}".rstrip())
+    # The total compares like with like (Russell 2026-11-13): an ask over
+    # every item set against the sale price of a few read as asks beating
+    # sales, so only the count and the credit are totalled here.
+    L.append(f"{'TOTAL':<22}{len(rows):>6}{'':>13}{'':>11}{'':>10}{_whole(tot[3]):>11}")
 
     out = []
     head = lambda r: (f"{r['item_id']:<12}{_short(r.get('description') or '', 52):<54}"  # noqa: E731
@@ -641,10 +664,10 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
         if not part:
             L.append("None.")
             return
-        hdr = lead + "".join(f"{c:>{w}}" if c in ("ASK", "SOLD", "CREDITED") else f"{c:<{w}}"
+        hdr = lead + "".join(f"{c:>{w}}" if c in ("ASK", "SOLD", "FEES", "CREDITED") else f"{c:<{w}}"
                              for c, w in cols)
         L.extend([hdr, "-" * len(hdr)])
-        sums = {c: Decimal(0) for c, _ in cols if c in ("ASK", "SOLD", "CREDITED")}
+        sums = {c: Decimal(0) for c, _ in cols if c in ("ASK", "SOLD", "FEES", "CREDITED")}
         for r in part:
             vals = cells(r)
             L.append((head(r) + "".join(f"{vals[c][1]:>{w}}" if c in sums else f"{vals[c][1]:<{w}}"
@@ -659,7 +682,9 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
 
     def sold_cells(r):
         ask, sold, credited = _client_money(r)
+        fees = _client_fees(r)
         return {"ASK": (ask, money(ask)), "SOLD": (sold, money(sold)),
+                "FEES": (fees, money(fees)),
                 "CREDITED": (credited, money(credited) or "pending")}  # share not worked out yet
 
     def sale_cells(r):
@@ -671,7 +696,7 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
                 "CREDITED": (credited, money(credited))}
 
     section("SOLD", [r for r in rows if _place(r) == "SOLD"],
-            [("ASK", 12), ("SOLD", 11), ("CREDITED", 11)], sold_cells)
+            [("ASK", 12), ("SOLD", 11), ("FEES", 10), ("CREDITED", 11)], sold_cells)
     section("FOR SALE", [r for r in rows if _place(r) in FOR_SALE],
             [("LOCATION", 16), ("ASK", 12)], sale_cells)
     section("REVIEW / HELD / REJECTED", [r for r in rows if _place(r) not in FOR_SALE + ("SOLD",)],
