@@ -236,7 +236,7 @@ def get_lens_actor() -> str:
 
 
 def get_compsapi_key() -> str:
-    """CompsAPI key for lib/compsapi_sold.py (Stage B fallback). Precedence:
+    """CompsAPI key for lib/compsapi_sold.py (Stage B secondary source). Precedence:
     env var > config file > error. Same contract as get_apify_token().
 
     Raises:
@@ -679,7 +679,7 @@ def _cli() -> None:
         for name, getter, note in (
             ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
             ("GEMINI_API_KEY", get_gemini_api_key, "fine_inspect.py only"),
-            ("COMPSAPI_API_KEY", get_compsapi_key, "compsapi_sold.py Stage B fallback"),
+            ("COMPSAPI_API_KEY", get_compsapi_key, "compsapi_sold.py Stage B secondary source"),
         ):
             try:
                 getter()

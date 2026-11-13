@@ -1,5 +1,5 @@
 ---
-version: 1.0.0
+version: 1.1.0
 updated: 2026-11-12
 ---
 
@@ -136,21 +136,36 @@ Supporting modules on the same path:
 | `comps_core.py` | The `CompRecord` shape and the shared parsing/normalizing helpers, extracted from `apify_ebay.py` when Stage B moved. |
 | `price_stats.py` | The deterministic half of PRICE — filtering, distribution statistics, tier placement. See [`../docs/price-strategy-v2.md`](../docs/price-strategy-v2.md). |
 | `read_cache.py` | Generic on-disk read cache, keyed query+date. |
-| `compsapi_sold.py` | Fallback Stage B source (below). |
+| `compsapi_sold.py` | Secondary Stage B source, run after Chrome (below). |
 
-### compsapi_sold.py — Stage B fallback (CompsAPI)
+### compsapi_sold.py — Stage B secondary source (CompsAPI)
 
-When Chrome isn't available, `python lib/compsapi_sold.py "<query>"` pulls
-one page (up to 240 rows, newest first, `--days` 1–1095, default 90) from
-[CompsAPI](https://compsapi.com/docs)'s `/v1/sold` REST endpoint and saves a
-normal run JSON (`source: compsapi:sold`). Feed it to `price_stats.py
---best-match`. It is a different vendor from Apify, which stays retired. The
-key comes from `COMPSAPI_API_KEY` or `compsapi.api_key` in the config
-(`get_compsapi_key()`).
+CompsAPI runs after the Chrome search, so PRICE has both sources. `python
+lib/compsapi_sold.py "<query>" --with-chrome <bm.json> --condition used
+--require-tokens <tok>...` pulls one page (up to 240 rows, newest first,
+`--days` 1–1095, default 90) from [CompsAPI](https://compsapi.com/docs)'s
+`/v1/sold` endpoint and merges it into the Chrome best_match run:
+
+- **Dedupe:** a CompsAPI row whose item_id is already in the Chrome run is
+  dropped; every kept row is tagged `comp_source: chrome|compsapi`.
+- **Exact matches only:** both sources go through `price_stats`' own unit,
+  core-token and condition filters before any stats (`exact_match_reduce`).
+  A CompsAPI row needs a condition in the target cohort; one with no
+  condition can't be verified and is dropped. The live test returned parts
+  for a Pfaff 463 with `condition: null`. The merged run records the cohort
+  it was cut to, so `price_stats` doesn't push the condition-less Chrome
+  rows out.
+- **Never blocks PRICE:** a used-up quota, bad or missing key, or network
+  error skips CompsAPI. The merged run keeps the Chrome rows and prints
+  `CompsAPI skipped: … Chrome results stand.`
+
+Without `--with-chrome` it saves a CompsAPI-only run (`source:
+compsapi:sold`) for checks. It is a different vendor from Apify, which stays
+retired. The key comes from `COMPSAPI_API_KEY` or `compsapi.api_key` in the
+config (`get_compsapi_key()`).
 
 - **Quota:** each search first reads the free `/v1/usage` call. A used-up
-  cap or a `429 quota_reached` stops the run with exit 3 and a pointer to
-  the Chrome path. Nothing falls through to another source on its own. A
+  cap or a `429 quota_reached` stops a CompsAPI-only run with exit 3. A
   same-day cache (query+condition+days) means a repeat search spends no
   request (`--fresh` overrides). Free tier: 100 requests a month.
 - **Best Offer:** rows CompsAPI marks `best_offer: true` are flagged

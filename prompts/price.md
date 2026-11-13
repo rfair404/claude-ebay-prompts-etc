@@ -1,5 +1,5 @@
 ---
-version: 1.3.0
+version: 1.4.0
 updated: 2026-11-12
 ---
 
@@ -184,11 +184,20 @@ Escalate only as each stage dries up; never stop to ask.
    5. **ALWAYS give the user both URLs in your reply** — they price with you,
       not after you.
 
-   **Fallback when Chrome isn't available** (cloud or headless session,
-   challenge page): `python lib/compsapi_sold.py "<query>" --save-dir <shoot-dir>`
-   → one CompsAPI run JSON for `price_stats.py --best-match`. Tag
-   `[B — CompsAPI]`. It spends quota (free tier: 100 a month). On a quota or
-   key error it exits non-zero; stop and say so rather than swapping sources.
+   6. **Secondary source, after Chrome:** `python lib/compsapi_sold.py
+      "<query>" --with-chrome <best_match run> --condition <used|new> --unit
+      <unit> --require-tokens <tok>... --save-dir <shoot-dir>` → one merged run
+      (`source: merged:chrome+compsapi`). It drops CompsAPI rows Chrome already
+      has (same item_id) and cuts BOTH sources to exact matches with
+      price_stats' own unit/token/condition filters. A CompsAPI row with no
+      condition is dropped as unverifiable (it returns parts for a whole
+      machine). Each row is tagged `comp_source: chrome|compsapi`. Feed the
+      merged run to `price_stats.py --best-match` with the Chrome `price_high`
+      run. Tag `[B — Browser+CompsAPI]`. It spends one request of quota (free
+      tier: 100 a month); a same-day repeat is cached. A used-up quota or
+      missing key does NOT stop PRICE: the merged run keeps the Chrome rows
+      and prints `CompsAPI skipped: … Chrome results stand.` Quote that line
+      in price.txt.
 
    **Ladder walk = ONE call, not one navigate per rung.** From any loaded
    ebay.com tab, `--js-multi <file.json>` fetches every rung × sort
@@ -313,10 +322,14 @@ draft past the gate.
   `bids_count`, `bo_accepted`, `seller_username`, `seller_feedback_score`/`_pct`;
   top-level `charm_price_share` / `currency_leak_suspected`.
 
-`python lib/compsapi_sold.py` (Stage B fallback):
-- `"<query>" [--days N] [--condition <new|used|...>] [--save-dir <dir>] [--fresh]`
-  → `Saved results: <path>` (same JSON shape; `source: compsapi:sold`).
-  Exit 2 = key/API error, 3 = quota used up. `--usage` reads quota for free.
+`python lib/compsapi_sold.py` (Stage B secondary source):
+- `"<query>" --with-chrome <bm.json> --condition <new|used> [--unit <unit>] [--require-tokens <tok>...] [--days N] [--save-dir <dir>] [--fresh]`
+  → `Exact matches: n (chrome k/n, compsapi k/n, d duplicate of chrome)` +
+  `Saved results: <path>`. Kept rows carry `comp_source`; the drop list is in
+  `dropped`. Quota/key errors skip CompsAPI and exit 0 with the Chrome rows.
+- `"<query>" [--days N] [--condition <...>] [--save-dir <dir>] [--fresh]`
+  → a CompsAPI-only run (`source: compsapi:sold`), for checks. Exit 2 =
+  key/API error, 3 = quota used up. `--usage` reads quota for free.
 
 `python lib/price_stats.py`:
 - `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>] [--competitor-active <competitors.json>]`

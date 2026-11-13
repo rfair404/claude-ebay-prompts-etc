@@ -31,12 +31,12 @@ apify:
   # lens_actor: "borderline/google-lens"
 
 # ---------------------------------------------------------------------------
-# CompsAPI — Stage B FALLBACK sold comps (lib/compsapi_sold.py)
+# CompsAPI — Stage B SECONDARY sold comps (lib/compsapi_sold.py)
 # ---------------------------------------------------------------------------
 compsapi:
   # Optional. PRICE Stage B runs through the logged-in Chrome path
-  # (lib/ebay_sold_browse.py); CompsAPI is the fallback when Chrome isn't
-  # available. Free tier: 100 requests/month; searches pause when the quota
+  # (lib/ebay_sold_browse.py); CompsAPI runs after it as the secondary
+  # source and is skipped (Chrome rows stand) without a key. Free tier: 100 requests/month; searches pause when the quota
   # is used up (no overage). Env COMPSAPI_API_KEY wins over this value.
   # Get a key at: https://app.compsapi.com
   api_key: "COMPSAPI_KEY_REPLACE_ME"
