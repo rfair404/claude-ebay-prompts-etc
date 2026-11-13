@@ -566,12 +566,17 @@ def _whole(v) -> str:
     return sign + (f"${d:,.0f}" if d == d.to_integral_value() else f"${d:,.2f}")
 
 
+NO_ASK = ("EXCLUDED", "RETURNED", "DISPOSED")
+
+
 def _client_money(r: dict) -> tuple[str, str, str]:
     """(ask, sold, credited) as the account file counts them: the ask, the
     sale price on sold rows, and client_share on sold and kept (EXCLUDED)
     rows, where a buyout is the client's share (tools/consign.py sync_row).
     A sale whose share isn't worked out yet credits "" here, shown as
-    "pending" and left out of the total, as the account's ledger leaves it."""
+    "pending" and left out of the total, as the account's ledger leaves it.
+    A row that is no longer for sale (kept, returned, disposed) has no ask
+    (Russell 2026-11-13)."""
     place = _place(r)
     sold = r.get("item_price") or "" if place == "SOLD" else ""
     credited = ""
@@ -579,7 +584,8 @@ def _client_money(r: dict) -> tuple[str, str, str]:
         credited = r.get("client_share") or ""
     elif place == "EXCLUDED":
         credited = r.get("client_share") or r.get("buyout_price") or ""
-    return r.get("ask") or "", sold, credited
+    ask = "" if place in NO_ASK else r.get("ask") or ""
+    return ask, sold, credited
 
 
 def _location(r: dict) -> str:
@@ -627,7 +633,10 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
     for status, (n, *m) in by_status.items():
         L.append(f"{status:<22}{n:>6}{money(m[0]):>13}{money(m[1]):>11}{money(m[2]):>11}".rstrip())
-    L.append(f"{'TOTAL':<22}{len(rows):>6}{_whole(tot[0]):>13}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+    # The total compares like with like (Russell 2026-11-13): an ask over
+    # every item set against the sale price of a few read as asks beating
+    # sales, so only the count and the credit are totalled here.
+    L.append(f"{'TOTAL':<22}{len(rows):>6}{'':>13}{'':>11}{_whole(tot[2]):>11}")
 
     out = []
     head = lambda r: (f"{r['item_id']:<12}{_short(r.get('description') or '', 52):<54}"  # noqa: E731
