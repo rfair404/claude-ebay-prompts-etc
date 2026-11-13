@@ -421,37 +421,51 @@ def test_consign_ledgers_sort_sold_listed_local_drafted_shot_then_the_rest(tmp_p
     assert [r["item_id"] for r in client_rows] == want
 
 
-def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch):
-    # Russell 2026-11-12: one table with ask, sold and credited; "Kept"
+def _section(text: str, title: str) -> str:
+    """The lines of one client-copy section, up to the next blank line."""
+    return text.split(f"\n{title}\n")[1].split("\n\n")[0]
+
+
+def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypatch):
+    # Russell 2026-11-12: overview, SOLD, FOR SALE (with location) and
+    # REVIEW / HELD / REJECTED; ask, sold and credited shown; "Kept"
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
     text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
     assert text.startswith("Client Name: consignment report\n")
-    assert text.count("OVERVIEW") == 1 and text.count("YOUR ITEMS") == 1
-    assert text.index("OVERVIEW") < text.index("YOUR ITEMS")
-    ov = text.split("OVERVIEW")[1].split("YOUR ITEMS")[0]
-    assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nKept +1 +\$5\n", ov)
-    assert re.search(r"\nListed for sale +1 +\$30\n", ov)
-    assert re.search(r"\nTOTAL +7 +\$90 +\$75 +\$35\n", ov)
+    order = ["OVERVIEW", "SOLD", "FOR SALE", "REVIEW / HELD / REJECTED"]
+    assert [text.index(f"\n{t}\n") for t in order] == sorted(text.index(f"\n{t}\n") for t in order)
     for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
                  "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
         assert word not in text, word
-    hdr = next(ln for ln in text.splitlines() if ln.startswith("#"))
-    assert re.search(r"STATUS +ASK +SOLD +CREDITED$", hdr)
-    line = {ln[:8]: ln for ln in text.splitlines() if ln.startswith("K01-C00")}
-    assert re.search(r"Sold +\$75 +\$30$", line["K01-C005"])          # sold, client_share
-    assert re.search(r"Kept +\$5$", line["K01-C006"])                  # buyout is the credit
-    assert re.search(r"At our booth +\$20$", line["K01-C003"])          # ask only
+    ov = _section(text, "OVERVIEW")
+    assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nKept +1 +\$5\n", ov)
+    assert re.search(r"\nTOTAL +7 +\$90 +\$75 +\$35$", ov)
+    sold = _section(text, "SOLD").splitlines()
+    assert re.search(r"ASK +SOLD +CREDITED$", sold[0])
+    assert [ln[:8] for ln in sold[2:]] == ["K01-C005", "TOTAL   "]
+    assert re.search(r"\$75 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$30$", sold[3])
+    sale = _section(text, "FOR SALE").splitlines()
+    assert re.search(r"LOCATION +ASK$", sale[0])
+    assert re.search(r"^K01-C004.*EBAY +\$30$", sale[2])
+    assert re.search(r"^K01-C003.*ANTIQUE MALL +\$20$", sale[3])
+    assert re.search(r"^TOTAL +\$50$", sale[4])
+    rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
+    assert re.search(r"Kept +\$5$", rest["K01-C006"])                   # buyout is the credit
+    assert re.search(r"Being listed +\$40$", rest["K01-C002"])
+    assert rest["K01-C001"].endswith("Photographed")                    # estimate stays out
+    assert "~10" in rest["K01-C007"] and "bin-03" in rest["K01-C007"]
+    # photo rows follow the tables in order
+    assert [r["item_id"] for r in rows] == ["K01-C005", "K01-C004", "K01-C003", "K01-C002",
+                                            "K01-C001", "K01-C007", "K01-C006"]
     pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
     text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
-    assert re.search(r"Sold +\$75 +pending$", text2.split("YOUR ITEMS")[1].splitlines()[3])
+    assert re.search(r"\$75 +pending$", _section(text2, "SOLD").splitlines()[2])
+    assert "\nFOR SALE\nNone.\n" in text2
     assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
-    assert line["K01-C001"].endswith("Photographed")                    # estimate stays out
-    assert "~10" in line["K01-C007"] and "bin-03" in line["K01-C007"]
-    total = next(ln for ln in text.splitlines() if ln.startswith("TOTAL"))
-    assert re.search(r"\$90 +\$75 +\$35$", total)
     page = RL.html_report(text, rows, client=True)
-    assert page.count("<table>") == 2 and "<th class=n>CREDITED</th>" in page
-    assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>YOUR ITEMS</h2>")
+    assert page.count("<table>") == 4 and "<h2>SOLD</h2>" in page
+    sold_html = page.split("<h2>SOLD</h2>")[1].split("<h2>FOR SALE</h2>")[0]
+    assert "Sold saw" in sold_html and "Listed sign" not in sold_html
 
 
 def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):

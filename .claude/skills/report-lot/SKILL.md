@@ -48,9 +48,11 @@ CannonBW-NN` line with `--print`, which prints the PDF). If Chromium fails
 the run says `FAILED pdf: <why>` and the other files still land; report it.
 
 For a consignment, the .txt, .html and .pdf are the client's copy, titled
-"<client>: consignment report": an overview by status (items, ask, sold,
-credited, with a total), then one table of photo, item, quantity, bin,
-plain status, ask, sold price and amount credited, with a totals row. No
+"<client>: consignment report": the lot code and address, an overview by
+status (items, ask, sold, credited, with a total), then SOLD (ask, sold,
+credited), FOR SALE (location: EBAY, ANTIQUE MALL or OTHER, and ask) and
+REVIEW / HELD / REJECTED (everything else, kept items with their buyout as
+credited), each with photos and a totals row. No
 terms, split, estimates, fees, handling or internal notes (Russell,
 2026-11-12). The money account (overview, client money, fees) is written to
 `<lot>-<date>-account.txt` and the .csv, and printed to the terminal. Never
