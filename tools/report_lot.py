@@ -36,8 +36,9 @@ beside it on the summary, for things such as a mixed-source lot.
 A lot whose context.txt says `client:` is a consignment. Its items and money
 come from its client_ledger.csv and the summary is tools/consign.py's
 per-client account, so the two can never disagree. For a consignment the
-.txt/.html/.pdf are the client's copy ("<client>: items in our care": item,
-qty, bin, plain status, no money or internals); the money account goes to
+.txt/.html/.pdf are the client's copy ("<client>: consignment report":
+an overview, then SOLD, FOR SALE and REVIEW / HELD / REJECTED tables; no terms,
+estimates, fees or internals, Russell 2026-11-12); the money account goes to
 stdout, the .csv and <lot>-<date>-account.txt. Both ledgers sort sold,
 listed, available locally, drafted, shot, then the rest (CONSIGN_ORDER).
 
@@ -89,7 +90,7 @@ PRINTER = "CannonBW"
 PDF_TIMEOUT = 60
 THUMB_PX = 240  # stored at 3x the 80px it shows at, so it stays sharp on phones
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
-_LINE_RE = re.compile(r"^\s*(client|part_of|note)\s*:\s*(.*?)\s*$", re.I)
+_LINE_RE = re.compile(r"^\s*(client|part_of|note|address)\s*:\s*(.*?)\s*$", re.I)
 NOT_INVENTORY = {"_trash", "_returned"}
 STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
                 "NOT SHOT", "ENDED"]
@@ -111,7 +112,7 @@ def label(d: Path) -> str:
 
 
 def extra_keys(d: Path) -> dict:
-    """`client:`, `part_of:` and `note:` from a context.txt (first wins)."""
+    """`client:`, `part_of:`, `note:` and `address:` from a context.txt (first wins)."""
     out: dict = {}
     f = d / "context.txt"
     if not f.is_file():
@@ -121,6 +122,16 @@ def extra_keys(d: Path) -> dict:
         if m and m.group(2) and m.group(1).lower() not in out:
             out[m.group(1).lower()] = m.group(2).strip().strip("/")
     return out
+
+
+def lot_heading(lot: Path) -> str:
+    """"Lot K01 · <address>" for the top of every copy (Russell 2026-11-12):
+    the context.txt `client:` code (the lot's label for an estate) and its
+    `address:` line, which lives only in the gitignored context.txt. No
+    address line, no address."""
+    keys = extra_keys(lot)
+    addr = keys.get("address", "")
+    return f"Lot {keys.get('client') or label(lot)}" + (f" \u00b7 {addr}" if addr else "")
 
 
 def _skip(p: Path) -> bool:
@@ -373,7 +384,7 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
     ctx = SR.load_context(lot)
     spends = [(m, SR.load_context(m)["spend"]) for m in keep]
     paid = sum(s for _, s in spends if s is not None)
-    L = [f"LOT ACCOUNT - {label(lot)}   estate   (as of {today.isoformat()})",
+    L = [f"LOT ACCOUNT - {label(lot)}   estate   (as of {today.isoformat()})", lot_heading(lot),
          f"Acquired: {ctx['acquired'] or 'not recorded'}   Paid: ${paid:,.2f}"]
 
     def of(*status):
@@ -517,7 +528,7 @@ CONSIGN_ORDER = ["SOLD", "LISTED", "LOCAL", "DRAFTED", "SHOT", "PREP", "INTAKE",
 CLIENT_STATUS = {"SOLD": "Sold", "LISTED": "Listed for sale", "LOCAL": "At our booth",
                  "DRAFTED": "Being listed", "SHOT": "Photographed", "PREP": "Photographed",
                  "INTAKE": "In inventory", "HOLD": "Set aside for now",
-                 "EXCLUDED": "Kept by The Fair Hand", "RETURNED": "Returned to you",
+                 "EXCLUDED": "Kept", "RETURNED": "Returned to you",
                  "DISPOSED": "Disposed"}
 
 
@@ -544,36 +555,127 @@ def _client_qty(q: str) -> str:
     return "" if re.search(r"C\d{3}|split|\blots?\b|uncounted|\best\b|PRICE", q, re.I) else q
 
 
+def _whole(v) -> str:
+    """$40 for 40.00, $40.50 for 40.50, -$1.03 for -1.03; "" for blank."""
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(str(v).replace("$", "").replace(",", "").strip())
+    except (InvalidOperation, ValueError):
+        return ""
+    sign, d = ("-" if d < 0 else ""), abs(d)
+    return sign + (f"${d:,.0f}" if d == d.to_integral_value() else f"${d:,.2f}")
+
+
+def _client_money(r: dict) -> tuple[str, str, str]:
+    """(ask, sold, credited) as the account file counts them: the ask, the
+    sale price on sold rows, and client_share on sold and kept (EXCLUDED)
+    rows, where a buyout is the client's share (tools/consign.py sync_row).
+    A sale whose share isn't worked out yet credits "" here, shown as
+    "pending" and left out of the total, as the account's ledger leaves it."""
+    place = _place(r)
+    sold = r.get("item_price") or "" if place == "SOLD" else ""
+    credited = ""
+    if place == "SOLD":
+        credited = r.get("client_share") or ""
+    elif place == "EXCLUDED":
+        credited = r.get("client_share") or r.get("buyout_price") or ""
+    return r.get("ask") or "", sold, credited
+
+
+def _location(r: dict) -> str:
+    """Where a for-sale row is offered: EBAY, ANTIQUE MALL (a mall booth,
+    GAM or HTM) or OTHER."""
+    ch = (r.get("channel") or "").strip().lower()
+    return "EBAY" if ch in ("", "ebay") else "ANTIQUE MALL" if ch == "mall" else "OTHER"
+
+
+# The client copy's sections (Russell 2026-11-12): sold, for sale, the rest.
+FOR_SALE = ("LISTED", "LOCAL")
+
+
 def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
-    """The client's copy: their belongings and where each one is. No money,
-    terms, estimates, prices, fees or internal notes (Russell, 2026-10-27 and
-    2026-11-11). Returns the text and one row per ledger line, in table order,
-    for the page's photos."""
+    """The client's copy: an overview by status, then SOLD (ask, sold,
+    credited), FOR SALE (location and ask) and REVIEW / HELD / REJECTED
+    (everything else, kept items with their buyout as credited). Russell
+    2026-11-12 reversed the no-money rule (2026-10-27, 2026-11-11) for these
+    figures only: the terms/split, estimates, fees, handling, internal notes
+    and contact details stay out, so the copy shows what sold and what they
+    get, not how we work it out. Returns the text and one row per item, in
+    the order the section tables list them, for the page's photos."""
+    from decimal import Decimal
     import consign as C
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
     C.migrate(rows, lot, client)
     name = (C.load_registry().get(client) or {}).get("name") or client
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
-    L = [f"{name}: items in our care",
+    L = [f"{name}: consignment report", lot_heading(lot),
          f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
-    hdr = f"{'STATUS':<24}{'ITEMS':>6}"
-    L += ["", "SUMMARY", hdr, "-" * 30]
-    counts: dict[str, int] = {}                  # rows are sorted, so this keeps the order
+    dec = lambda v: C.dec(v) or Decimal(0)  # noqa: E731
+    money = lambda v: _whole(v) if v else ""  # noqa: E731
+
+    # Overview: the sections' figures by status, plus a total
+    tot = [Decimal(0)] * 3
+    by_status: dict[str, list] = {}              # rows are sorted, so this keeps the order
     for r in rows:
-        counts[CLIENT_STATUS[_place(r)]] = counts.get(CLIENT_STATUS[_place(r)], 0) + 1
-    L += [f"{status:<24}{n:>6}" for status, n in counts.items()]
-    L += ["", "YOUR ITEMS"]
-    hdr = f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<22}"
-    L += [hdr, "-" * len(hdr)]
+        st = by_status.setdefault(CLIENT_STATUS[_place(r)], [0] + [Decimal(0)] * 3)
+        st[0] += 1
+        for i, v in enumerate(_client_money(r)):
+            tot[i] += dec(v)
+            st[i + 1] += dec(v)
+    hdr = f"{'STATUS':<22}{'ITEMS':>6}{'ASK':>13}{'SOLD':>11}{'CREDITED':>11}"
+    L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
+    for status, (n, *m) in by_status.items():
+        L.append(f"{status:<22}{n:>6}{money(m[0]):>13}{money(m[1]):>11}{money(m[2]):>11}".rstrip())
+    L.append(f"{'TOTAL':<22}{len(rows):>6}{_whole(tot[0]):>13}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+
     out = []
-    for r in rows:
-        d = _short(r.get("description") or "", 52)
-        L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
-                 f"{CLIENT_STATUS[_place(r)]}".rstrip())
-        out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
-                    "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
-                    "listing_id": r.get("listing_id") or ""})
+    head = lambda r: (f"{r['item_id']:<12}{_short(r.get('description') or '', 52):<54}"  # noqa: E731
+                      f"{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}")
+    lead = f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}"
+
+    def section(title: str, part: list[dict], cols: list[tuple[str, int]], cells) -> None:
+        """One item table: the shared columns, then `cols` (name, width) filled
+        by `cells(r)`; a money column named in the total gets summed."""
+        L.extend(["", title])
+        if not part:
+            L.append("None.")
+            return
+        hdr = lead + "".join(f"{c:>{w}}" if c in ("ASK", "SOLD", "CREDITED") else f"{c:<{w}}"
+                             for c, w in cols)
+        L.extend([hdr, "-" * len(hdr)])
+        sums = {c: Decimal(0) for c, _ in cols if c in ("ASK", "SOLD", "CREDITED")}
+        for r in part:
+            vals = cells(r)
+            L.append((head(r) + "".join(f"{vals[c][1]:>{w}}" if c in sums else f"{vals[c][1]:<{w}}"
+                                         for c, w in cols)).rstrip())
+            for c in sums:
+                sums[c] += dec(vals[c][0])
+            out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
+                        "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
+                        "listing_id": r.get("listing_id") or ""})
+        L.append(f"{'TOTAL':<{len(lead)}}" + "".join(
+            f"{_whole(sums[c]):>{w}}" if c in sums else " " * w for c, w in cols))
+
+    def sold_cells(r):
+        ask, sold, credited = _client_money(r)
+        return {"ASK": (ask, money(ask)), "SOLD": (sold, money(sold)),
+                "CREDITED": (credited, money(credited) or "pending")}  # share not worked out yet
+
+    def sale_cells(r):
+        return {"LOCATION": ("", _location(r)), "ASK": (r.get("ask") or "", money(r.get("ask") or ""))}
+
+    def rest_cells(r):
+        ask, _, credited = _client_money(r)
+        return {"STATUS": ("", CLIENT_STATUS[_place(r)]), "ASK": (ask, money(ask)),
+                "CREDITED": (credited, money(credited))}
+
+    section("SOLD", [r for r in rows if _place(r) == "SOLD"],
+            [("ASK", 12), ("SOLD", 11), ("CREDITED", 11)], sold_cells)
+    section("FOR SALE", [r for r in rows if _place(r) in FOR_SALE],
+            [("LOCATION", 16), ("ASK", 12)], sale_cells)
+    section("REVIEW / HELD / REJECTED", [r for r in rows if _place(r) not in FOR_SALE + ("SOLD",)],
+            [("STATUS", 20), ("ASK", 12), ("CREDITED", 11)], rest_cells)
     return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
 
 
@@ -608,6 +710,7 @@ def consign_account(lot: Path, client: str, today: date) -> tuple[str, list[dict
         return "-"
 
     L = [f"LOT ACCOUNT - {label(lot)}   consignment, client {client} {name}   (as of {today.isoformat()})",
+         lot_heading(lot),
          f"Received: {C.folder_date(lot) or C.default_intake(lot) or 'not recorded'}"]
     L += _overview(C, figs, rows)
     # Held rows go last, one short line each, after the ledger and fees: they
@@ -887,7 +990,7 @@ def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False
     title = html.escape(lines[0])
     # held rows are a plain list after the ledger table, not in it
     items = [r for r in (rows or []) if r.get("line", "item") == "item" and not r.get("hold")]
-    out, pre, i = [], [], 1
+    out, pre, i, cursor = [], [], 1, 0
 
     def flush():
         if any(x.strip() for x in pre):
@@ -903,10 +1006,21 @@ def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False
             while j < len(lines) and lines[j].strip():
                 j += 1
             body = lines[i + 2:j]
-            out.append(_table_html(line, body, items if "ITEM" in line and len(body) == len(items) else None))
+            # a TOTAL line under the items gets an empty row (no photo)
+            n = len(body) - (1 if body and body[-1].startswith("TOTAL") else 0)
+            fit = None
+            if re.search(r"\bITEM\b", line):
+                if client and cursor + n <= len(items):
+                    # the client copy splits its items over several tables, in order
+                    fit, cursor = items[cursor:cursor + n], cursor + n
+                elif n == len(items):
+                    fit = items
+            if fit is not None and n < len(body):
+                fit = fit + [{}]                 # the TOTAL line: no photo
+            out.append(_table_html(line, body, fit))
             i = j
             continue
-        if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):
+        if re.match(r"^(?:[A-Z][A-Z ()/,.\-]{6,}|SOLD$)", line) and not line.startswith(" "):
             flush()
             out.append(f"<h2>{html.escape(line)}</h2>")
         else:
