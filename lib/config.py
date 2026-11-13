@@ -235,6 +235,32 @@ def get_lens_actor() -> str:
     return DEFAULT_LENS_ACTOR
 
 
+def get_compsapi_key() -> str:
+    """CompsAPI key for lib/compsapi_sold.py (Stage B secondary source). Precedence:
+    env var > config file > error. Same contract as get_apify_token().
+
+    Raises:
+        ConfigError if no key is available anywhere.
+    """
+    env = os.environ.get("COMPSAPI_API_KEY")
+    if env:
+        return env
+
+    config = load_config()
+    key = _nested(config, "compsapi", "api_key")
+    if key:
+        return str(key)
+
+    raise ConfigError(
+        f"CompsAPI key not found.\n"
+        f"  Set the COMPSAPI_API_KEY environment variable, OR\n"
+        f"  add this to {config_path()}:\n"
+        f"      compsapi:\n"
+        f"        api_key: \"<your-key>\"\n"
+        f"  (Get a key at https://app.compsapi.com)"
+    )
+
+
 def get_gemini_api_key() -> str:
     """Gemini API key for lib/fine_inspect.py. Precedence: env var > config
     file > error. Same precedence contract as get_apify_token().
@@ -653,6 +679,7 @@ def _cli() -> None:
         for name, getter, note in (
             ("APIFY_API_TOKEN", get_apify_token, "lens_id.py only"),
             ("GEMINI_API_KEY", get_gemini_api_key, "fine_inspect.py only"),
+            ("COMPSAPI_API_KEY", get_compsapi_key, "compsapi_sold.py Stage B secondary source"),
         ):
             try:
                 getter()
