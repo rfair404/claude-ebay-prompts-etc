@@ -1,3 +1,8 @@
+---
+version: 1.0.0
+updated: 2026-11-12
+---
+
 # lib — shared libraries
 
 ## Setup (one time)
@@ -131,6 +136,30 @@ Supporting modules on the same path:
 | `comps_core.py` | The `CompRecord` shape and the shared parsing/normalizing helpers, extracted from `apify_ebay.py` when Stage B moved. |
 | `price_stats.py` | The deterministic half of PRICE — filtering, distribution statistics, tier placement. See [`../docs/price-strategy-v2.md`](../docs/price-strategy-v2.md). |
 | `read_cache.py` | Generic on-disk read cache, keyed query+date. |
+| `compsapi_sold.py` | Fallback Stage B source (below). |
+
+### compsapi_sold.py — Stage B fallback (CompsAPI)
+
+When Chrome isn't available, `python lib/compsapi_sold.py "<query>"` pulls
+one page (up to 240 rows, newest first, `--days` 1–1095, default 90) from
+[CompsAPI](https://compsapi.com/docs)'s `/v1/sold` REST endpoint and saves a
+normal run JSON (`source: compsapi:sold`). Feed it to `price_stats.py
+--best-match`. It is a different vendor from Apify, which stays retired. The
+key comes from `COMPSAPI_API_KEY` or `compsapi.api_key` in the config
+(`get_compsapi_key()`).
+
+- **Quota:** each search first reads the free `/v1/usage` call. A used-up
+  cap or a `429 quota_reached` stops the run with exit 3 and a pointer to
+  the Chrome path. Nothing falls through to another source on its own. A
+  same-day cache (query+condition+days) means a repeat search spends no
+  request (`--fresh` overrides). Free tier: 100 requests a month.
+- **Best Offer:** rows CompsAPI marks `best_offer: true` are flagged
+  `bo_accepted`, so `price_stats` drops them the same way it does for the
+  browser path. CompsAPI says its price is the accepted amount, but that
+  hasn't been checked yet.
+- **Live check:** `--compare-recent 5` runs the queries from the last 5
+  browser runs through CompsAPI (5 requests). It reports item-ID overlap,
+  price agreement and the ask/accepted pairs for Best Offer rows.
 | `comps_csv.py` | The reviewable `comps.csv` every stage writes to (below). |
 
 ---

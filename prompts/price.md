@@ -1,6 +1,6 @@
 ---
-version: 1.2.0
-updated: 2026-10-25
+version: 1.3.0
+updated: 2026-11-12
 ---
 
 # PRICE — v4, Function 2
@@ -184,6 +184,12 @@ Escalate only as each stage dries up; never stop to ask.
    5. **ALWAYS give the user both URLs in your reply** — they price with you,
       not after you.
 
+   **Fallback when Chrome isn't available** (cloud or headless session,
+   challenge page): `python lib/compsapi_sold.py "<query>" --save-dir <shoot-dir>`
+   → one CompsAPI run JSON for `price_stats.py --best-match`. Tag
+   `[B — CompsAPI]`. It spends quota (free tier: 100 a month). On a quota or
+   key error it exits non-zero; stop and say so rather than swapping sources.
+
    **Ladder walk = ONE call, not one navigate per rung.** From any loaded
    ebay.com tab, `--js-multi <file.json>` fetches every rung × sort
    same-origin and extracts each; read the returned per-query summaries
@@ -306,6 +312,11 @@ draft past the gate.
   `title`, `url`, `item_id`, `thumbnail`, `sold_date`, `listing_type`,
   `bids_count`, `bo_accepted`, `seller_username`, `seller_feedback_score`/`_pct`;
   top-level `charm_price_share` / `currency_leak_suspected`.
+
+`python lib/compsapi_sold.py` (Stage B fallback):
+- `"<query>" [--days N] [--condition <new|used|...>] [--save-dir <dir>] [--fresh]`
+  → `Saved results: <path>` (same JSON shape; `source: compsapi:sold`).
+  Exit 2 = key/API error, 3 = quota used up. `--usage` reads quota for free.
 
 `python lib/price_stats.py`:
 - `--best-match <bm.json> [--price-high <ph.json>] --unit <single|pair|set|lot|duplicate> --condition <new|used> [--require-tokens <tok>...] [--price-field <sold|total>] [--competitor-active <competitors.json>]`
