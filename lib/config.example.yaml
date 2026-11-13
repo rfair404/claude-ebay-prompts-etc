@@ -31,6 +31,17 @@ apify:
   # lens_actor: "borderline/google-lens"
 
 # ---------------------------------------------------------------------------
+# CompsAPI — Stage B FALLBACK sold comps (lib/compsapi_sold.py)
+# ---------------------------------------------------------------------------
+compsapi:
+  # Optional. PRICE Stage B runs through the logged-in Chrome path
+  # (lib/ebay_sold_browse.py); CompsAPI is the fallback when Chrome isn't
+  # available. Free tier: 100 requests/month; searches pause when the quota
+  # is used up (no overage). Env COMPSAPI_API_KEY wins over this value.
+  # Get a key at: https://app.compsapi.com
+  api_key: "COMPSAPI_KEY_REPLACE_ME"
+
+# ---------------------------------------------------------------------------
 # Vision — pluggable high-resolution image inspector (lib/fine_inspect.py)
 # ---------------------------------------------------------------------------
 # For reads that are hard to get right from a normal photo pass: fine

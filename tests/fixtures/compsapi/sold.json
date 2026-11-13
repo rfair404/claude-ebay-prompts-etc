@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "query": "stanley steel framing square",
+  "page": 1,
+  "ms": 412,
+  "count": 5,
+  "count_before_filters": 5,
+  "no_results": false,
+  "next_page": false,
+  "days": 90,
+  "size": 240,
+  "cached": false,
+  "cached_age_s": null,
+  "source": "ebay",
+  "filters": {"best_offer": "1"},
+  "note": null,
+  "items": [
+    {"item_id": "226000000001", "title": "Stanley Steel Framing Square 24 x 16 in", "last_sold": "2026-11-02T18:04:00Z", "price": 24.99, "format": "FIXED_PRICE", "url": "https://www.ebay.com/itm/226000000001", "best_offer": false, "shipping_cost": 9.5},
+    {"item_id": "226000000002", "title": "Vintage Stanley No. 100 Rafter Framing Square", "last_sold": "2026-10-28T02:41:00Z", "price": 31.0, "format": "AUCTION", "url": "https://www.ebay.com/itm/226000000002", "best_offer": false, "shipping_cost": 0.0},
+    {"item_id": "226000000003", "title": "Stanley Framing Square Steel Rafter Tables", "last_sold": "2026-10-20T15:12:00Z", "price": 22.0, "format": "FIXED_PRICE", "url": "https://www.ebay.com/itm/226000000003", "best_offer": true, "shipping_cost": 8.0},
+    {"item_id": "226000000004", "title": "Stanley Steel Square 24in Carpenter", "last_sold": "2026-10-11T21:30:00Z", "price": 19.95, "format": "FIXED_PRICE", "url": "https://www.ebay.com/itm/226000000004", "best_offer": null, "shipping_cost": null},
+    {"item_id": "226000000005", "title": "", "last_sold": "2026-10-01T10:00:00Z", "price": 15.0, "format": "FIXED_PRICE", "url": "https://www.ebay.com/itm/226000000005", "best_offer": false, "shipping_cost": 5.0}
+  ]
+}
