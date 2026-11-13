@@ -583,8 +583,9 @@ def _client_money(r: dict) -> tuple[str, str, str]:
 
 
 def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
-    """The client's copy: one table of their belongings, where each one is,
-    and its ask, sale price and the amount credited to them. Russell
+    """The client's copy: an overview by status, then one table of their
+    belongings, where each one is, and its ask, sale price and the amount
+    credited to them. Russell
     2026-11-12 reversed the no-money rule (2026-10-27, 2026-11-11) for these
     figures only: the terms/split, estimates, fees, handling, internal notes
     and contact details stay out, so the copy shows what sold and what they
@@ -598,28 +599,40 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     rows = _consign_sorted(rows)
     received = C.folder_date(lot) or C.default_intake(lot)
     L = [f"{name}: consignment report", lot_heading(lot),
-         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else "."),
-         "", "YOUR ITEMS"]
+         f"The Fair Hand, as of {today.isoformat()}" + (f". Received {received}." if received else ".")]
+    items = ["", "YOUR ITEMS"]
     hdr = (f"{'#':<12}{'ITEM':<54}{'QTY':<20}{'BIN':<10}{'STATUS':<18}"
            f"{'ASK':>12}{'SOLD':>11}{'CREDITED':>11}")
-    L += [hdr, "-" * len(hdr)]
+    items += [hdr, "-" * len(hdr)]
     out = []
     tot = [Decimal(0)] * 3
+    by_status: dict[str, list] = {}              # rows are sorted, so this keeps the order
     for r in rows:
         d = _short(r.get("description") or "", 52)
         money = _client_money(r)
+        st = by_status.setdefault(CLIENT_STATUS[_place(r)], [0] + [Decimal(0)] * 3)
+        st[0] += 1
         for i, v in enumerate(money):
             tot[i] += C.dec(v) or Decimal(0)
+            st[i + 1] += C.dec(v) or Decimal(0)
         ask, sold, credited = (_whole(v) for v in money)
         if _place(r) == "SOLD" and not credited:
             credited = "pending"                 # share not worked out yet: fees still open
-        L.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
+        items.append(f"{r['item_id']:<12}{d:<54}{_client_qty(r.get('qty'))[:18]:<20}{(r.get('bin') or '')[:8]:<10}"
                  f"{CLIENT_STATUS[_place(r)]:<18}{ask:>12}{sold:>11}{credited:>11}".rstrip())
         out.append({"item_id": r["item_id"], "item": _short(r.get("description") or "", 60),
                     "photos": r.get("photos") or "", "folder": r.get("inventory_folder") or "",
                     "listing_id": r.get("listing_id") or ""})
-    L.append(f"{'TOTAL':<12}{'':<54}{'':<20}{'':<10}{'':<18}"
-             f"{_whole(tot[0]):>12}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+    items.append(f"{'TOTAL':<12}{'':<54}{'':<20}{'':<10}{'':<18}"
+                 f"{_whole(tot[0]):>12}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+    # Overview (Russell 2026-11-12): the item table's figures by status
+    hdr = f"{'STATUS':<22}{'ITEMS':>6}{'ASK':>13}{'SOLD':>11}{'CREDITED':>11}"
+    L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
+    money = lambda v: _whole(v) if v else ""  # noqa: E731
+    for status, (n, *m) in by_status.items():
+        L.append(f"{status:<22}{n:>6}{money(m[0]):>13}{money(m[1]):>11}{money(m[2]):>11}".rstrip())
+    L.append(f"{'TOTAL':<22}{len(rows):>6}{_whole(tot[0]):>13}{_whole(tot[1]):>11}{_whole(tot[2]):>11}")
+    L += items
     return re.sub(r"\bRussell\b", "The Fair Hand", "\n".join(L)) + "\n", out
 
 
@@ -952,7 +965,8 @@ def html_body(text: str, rows: Optional[list[dict]] = None, client: bool = False
             body = lines[i + 2:j]
             # a TOTAL line under the items gets an empty row (no photo)
             fit = items + [{}] if body and body[-1].startswith("TOTAL") else items
-            out.append(_table_html(line, body, fit if "ITEM" in line and len(body) == len(fit) else None))
+            item_table = re.search(r"\bITEM\b", line) and len(body) == len(fit)
+            out.append(_table_html(line, body, fit if item_table else None))
             i = j
             continue
         if re.match(r"^[A-Z][A-Z ()/,.\-]{6,}", line) and not line.startswith(" "):

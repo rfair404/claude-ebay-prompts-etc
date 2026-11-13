@@ -426,7 +426,12 @@ def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch
     lot = _consign_lot(tmp_path, monkeypatch, SORT_ROWS)
     text, rows = RL.consign_client(lot, "K01", date(2026, 11, 11))
     assert text.startswith("Client Name: consignment report\n")
-    assert "SUMMARY" not in text and text.count("YOUR ITEMS") == 1
+    assert text.count("OVERVIEW") == 1 and text.count("YOUR ITEMS") == 1
+    assert text.index("OVERVIEW") < text.index("YOUR ITEMS")
+    ov = text.split("OVERVIEW")[1].split("YOUR ITEMS")[0]
+    assert re.search(r"\nSold +1 +\$75 +\$30\n", ov) and re.search(r"\nKept +1 +\$5\n", ov)
+    assert re.search(r"\nListed for sale +1 +\$30\n", ov)
+    assert re.search(r"\nTOTAL +7 +\$90 +\$75 +\$35\n", ov)
     for word in ("split", "Split", "sync", "owed", "fee", "net", "estimate", "PRICE",
                  "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling"):
         assert word not in text, word
@@ -438,14 +443,15 @@ def test_client_copy_is_one_table_with_ask_sold_and_credit(tmp_path, monkeypatch
     assert re.search(r"At our booth +\$20$", line["K01-C003"])          # ask only
     pend = [dict(SORT_ROWS[4], item_id="K01-C009", client_share="", net="")]
     text2, _ = RL.consign_client(_consign_lot(tmp_path, monkeypatch, pend), "K01", date(2026, 11, 11))
-    assert re.search(r"Sold +\$75 +pending$", text2.splitlines()[7])
+    assert re.search(r"Sold +\$75 +pending$", text2.split("YOUR ITEMS")[1].splitlines()[3])
     assert RL._whole("-1.03") == "-$1.03" and RL._whole("1234.50") == "$1,234.50"
     assert line["K01-C001"].endswith("Photographed")                    # estimate stays out
     assert "~10" in line["K01-C007"] and "bin-03" in line["K01-C007"]
     total = next(ln for ln in text.splitlines() if ln.startswith("TOTAL"))
     assert re.search(r"\$90 +\$75 +\$35$", total)
     page = RL.html_report(text, rows, client=True)
-    assert page.count("<table>") == 1 and "<th class=n>CREDITED</th>" in page
+    assert page.count("<table>") == 2 and "<th class=n>CREDITED</th>" in page
+    assert page.index("<h2>OVERVIEW</h2>") < page.index("<h2>YOUR ITEMS</h2>")
 
 
 def test_every_copy_opens_with_the_lot_code_and_address(tmp_path, monkeypatch):
