@@ -591,7 +591,8 @@ def _client_money(r: dict) -> tuple[str, str, str]:
     A sale whose share isn't worked out yet credits "" here, shown as
     "pending" and left out of the total, as the account's ledger leaves it.
     A row that is no longer for sale (kept, returned, disposed) has no ask
-    (Russell 2026-11-13)."""
+    (Russell 2026-11-13). A sold row with no ask counts the sale price as its
+    ask (Russell 2026-11-14), so a local or mall sale never leaves ASK short."""
     place = _place(r)
     sold = r.get("item_price") or "" if place == "SOLD" else ""
     credited = ""
@@ -600,6 +601,8 @@ def _client_money(r: dict) -> tuple[str, str, str]:
     elif place == "EXCLUDED":
         credited = r.get("client_share") or r.get("buyout_price") or ""
     ask = "" if place in NO_ASK else r.get("ask") or ""
+    if place == "SOLD" and not ask:
+        ask = sold
     return ask, sold, credited
 
 
