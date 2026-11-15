@@ -118,12 +118,12 @@ def test_proposed_end_to_end(tmp_path):
     assert row["new_price"] == "80.00" and row["recommended"] == "60.00"
 
 
-# --- 15-day clock -----------------------------------------------------------
+# --- 10-day clock -----------------------------------------------------------
 
-def test_fifteen_day_boundary(tmp_path):
+def test_ten_day_boundary(tmp_path):
     s = _shoot(tmp_path)
-    assert L.evaluate(_listing(start_days=15), _ctx(s))["status"] == L.SKIPPED
-    assert L.evaluate(_listing(start_days=16), _ctx(s))["status"] == L.PROPOSED
+    assert L.evaluate(_listing(start_days=10), _ctx(s))["status"] == L.SKIPPED
+    assert L.evaluate(_listing(start_days=11), _ctx(s))["status"] == L.PROPOSED
 
 
 def test_log_entry_restarts_the_clock(tmp_path):

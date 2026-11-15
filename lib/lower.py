@@ -22,7 +22,7 @@ THE RULES (inventory-manager.md "The house pricing rules"; tested in
 tests/test_lower.py):
 
 * Due: the last price change (latest price_changes.csv row, else the eBay
-  start date, whichever is later) is more than 15 days ago.
+  start date, whichever is later) is more than 10 days ago.
 * Only asks of $36+ are cut. $30-35.99 and $25 or under are left alone.
 * The step: new = max(Recommended + margin, current - (current - Recommended)/3),
   never more than 15% of current, whole dollars. margin = max($2, 5% of
@@ -70,7 +70,7 @@ LOG_FIELDS = ["sku", "item_id", "store", "date", "old_ask", "new_ask",
               "old_floors", "new_floors", "source"]
 HOLD_FIELDS = ["sku", "item_id", "store", "until", "reason"]
 
-DUE_DAYS = 15            # a change more than this many days ago is due again
+DUE_DAYS = 10            # a change more than this many days ago is due again
 PRICE_FRESH_DAYS = 15    # price.txt younger than this is reused
 MAX_REPRICE = 10         # STALE_PRICE re-runs queued per scan
 MIN_ASK = Decimal(36)    # aging cuts only touch $36+ (Russell's rule)
