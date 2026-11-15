@@ -6,6 +6,7 @@ the state of each item, what it is worth and what we owe.
     python -m lib.cli consign import CONSIGN-K01 -             # CSV/TSV on stdin
     python -m lib.cli consign split CONSIGN-K01 K01-C061 --take bin-07/catalog.csv#03 [--retire] [--apply]
     python -m lib.cli consign describe CONSIGN-K01 K01-C127 [--text "..."] [--apply]
+    python -m lib.cli consign folder CONSIGN-K01 K01-C127 inventory/CONSIGN-K01/K01-C127-name [--apply]
     python -m lib.cli consign sync                             # dry run, every ledger
     python -m lib.cli consign sync CONSIGN-K01 --apply
     python -m lib.cli consign template                         # the standard empty ledger
@@ -90,7 +91,7 @@ Lots. Rows with the same lot_id are one listing and share one
 inventory_folder. The lead row (lowest item_id) carries the sale and the
 client share; its lot-mates follow its state with blank money fields.
 
-There is no general `set` command (`describe` sets a description only): edit
+There is no general `set` command (`describe` sets a description, `folder` an inventory_folder, nothing else): edit
 the CSV by hand, and `sync` validates it.
 """
 from __future__ import annotations
@@ -1732,6 +1733,37 @@ def describe_item(d: Path, item_id: str, *, text: str = "", source: str = "",
     return old, new
 
 
+def set_folder(d: Path, item_id: str, folder: str, *, apply: bool = False) -> tuple[str, str]:
+    """Set one row's inventory_folder, and nothing else. The folder must exist
+    and no other active row may already hold it. Written only with `apply`
+    (backup first). Returns (old, new)."""
+    code = intake_client(d)
+    path = d / LEDGER_NAME
+    if not path.exists():
+        raise SystemExit(f"[X] no {LEDGER_NAME} in {d}")
+    rows, unknown = read_ledger(path)
+    if unknown:
+        raise SystemExit(f"[X] {path} has unknown column(s) {', '.join(unknown)}")
+    base = [dict(r) for r in rows]
+    item_id = canonical_id(item_id, code)
+    row = next((r for r in rows if canonical_id(r["item_id"], code) == item_id), None)
+    if row is None:
+        raise SystemExit(f"[X] no row {item_id} in {d.name}/{LEDGER_NAME}")
+    new = norm_folder(folder)
+    if not new or not (REPO / new).is_dir():
+        raise SystemExit(f"[X] no folder {new or folder!r} under {REPO}")
+    clash = next((r["item_id"] for r in rows if r is not row and is_active(r)
+                  and not (r["lot_id"] and r["lot_id"] == row["lot_id"])
+                  and norm_folder(r["inventory_folder"]) == new), None)
+    if clash:
+        raise SystemExit(f"[X] {new} already belongs to {clash}")
+    old = row["inventory_folder"]
+    if apply and new != norm_folder(old):
+        row["inventory_folder"] = new
+        write_ledger(path, rows, base)
+    return old, new
+
+
 # --------------------------------------------------------------------------- #
 # template and regenerate
 # --------------------------------------------------------------------------- #
@@ -2493,6 +2525,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                      help="identify.txt, or its folder (default: the row's "
                           "inventory_folder)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
+    p = sub.add_parser("folder", help="set one row's inventory_folder, nothing else")
+    p.add_argument("intake", help="ledger folder, e.g. CONSIGN-K01")
+    p.add_argument("item", help="the row, e.g. K01-C001")
+    p.add_argument("path", help="the item folder, e.g. inventory/CONSIGN-K01/K01-C001-name")
+    p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
     p = sub.add_parser("sync", help="derive states and fill eBay figures from the ledgers")
     p.add_argument("intake", nargs="?", help="one ledger folder (default: every one)")
     p.add_argument("--apply", action="store_true", help="write the ledger (backup first)")
@@ -2560,6 +2597,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                   f"{LEDGER_NAME} (backup first).")
         else:
             print(f"[OK] {d.name}: {args.item} description set")
+        return 0
+    if args.cmd == "folder":
+        d = intake_dir(args.intake)
+        old, new = set_folder(d, args.item, args.path, apply=args.apply)
+        print(f"  - {old or '(blank)'}\n  + {new}")
+        if norm_folder(old) == new:
+            print(f"[OK] {args.item}: folder already set; nothing written")
+        elif not args.apply:
+            print(f"[DRY RUN] nothing written. Re-run with --apply to write "
+                  f"{LEDGER_NAME} (backup first).")
+        else:
+            print(f"[OK] {d.name}: {args.item} inventory_folder set")
         return 0
     if args.cmd == "template":
         print(f"[OK] wrote {write_template()}")
