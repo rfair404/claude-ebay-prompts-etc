@@ -620,3 +620,10 @@ def test_live_row_with_a_stale_hold_marker_is_for_sale():
     row = {"item_id": "K01-C187", "state": "LISTED", "state_note": "[HOLD] possible value | LIVE"}
     assert RL._place(row) == "LISTED"
     assert RL._place(dict(row, state="PREP")) == "HOLD"
+
+
+def test_location_uses_state_note_for_mall_rows():
+    import report_lot as R
+    assert R._location({"channel": "mall", "state_note": "location: Greensboro Antique Mall - CASE"}) == "Greensboro Antique Mall - CASE"
+    assert R._location({"channel": "mall"}) == "ANTIQUE MALL"
+    assert R._location({"channel": ""}) == "EBAY"

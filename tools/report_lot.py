@@ -618,9 +618,13 @@ def _client_fees(r: dict) -> str:
 
 def _location(r: dict) -> str:
     """Where a for-sale row is offered: EBAY, ANTIQUE MALL (a mall booth,
-    GAM or HTM) or OTHER."""
+    GAM or HTM) or OTHER. A mall row whose state_note says `location: <name>`
+    shows that name instead."""
     ch = (r.get("channel") or "").strip().lower()
-    return "EBAY" if ch in ("", "ebay") else "ANTIQUE MALL" if ch == "mall" else "OTHER"
+    if ch == "mall":
+        m = re.search(r"location:\s*([^;|]+)", r.get("state_note") or "", re.I)
+        return m.group(1).strip() if m else "ANTIQUE MALL"
+    return "EBAY" if ch in ("", "ebay") else "OTHER"
 
 
 # The client copy's sections (Russell 2026-11-12): sold, for sale, the rest.
