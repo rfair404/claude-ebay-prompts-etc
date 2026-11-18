@@ -337,3 +337,42 @@ def test_stage_order_matches_run_md_dependency_chain():
 def test_cli_registers_single_pass():
     from cli import COMMANDS
     assert COMMANDS["single-pass"][0] == "lib.single_pass"
+
+
+# --- lot attribution (lib/lot_check.py) ---------------------------------------
+import lot_check  # noqa: E402
+
+
+def _inv(tmp_path):
+    inv = tmp_path / "inventory"
+    (inv / "ES" / "K01" / "box1" / "item1").mkdir(parents=True)
+    (inv / "ES" / "K01" / "context.txt").write_text("client: K01\n")
+    (inv / "ES" / "M02" / "item9").mkdir(parents=True)
+    (inv / "ES" / "M02" / "context.txt").write_text("kind: event\n")
+    (inv / "other" / "x").mkdir(parents=True)
+    (inv / "ES" / "M02" / "item9" / "context.txt").write_text("part_of: ES/K01\n")
+    return inv
+
+
+def test_lot_resolves_from_folder(tmp_path):
+    inv = _inv(tmp_path)
+    assert lot_check.resolve_lot(inv / "ES/K01/box1/item1", inv) == "ES/K01"
+    assert lot_check.resolve_lot(inv / "ES/M02/item9", inv) == "ES/K01"
+    assert lot_check.resolve_lot(inv / "other/x", inv) is None
+
+
+def test_identify_blocked_without_or_with_wrong_lot(tmp_path):
+    inv = _inv(tmp_path)
+    item = inv / "ES/K01/box1/item1"
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nPhotos processed: 3\n")
+    assert "no `Lot:` line" in lot_check.problems(item, inv)[0]
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nLot: ES/M02\n")
+    assert "belongs to ES/K01" in lot_check.problems(item, inv)[0]
+    lot_check.stamp(item, inv)
+    assert lot_check.problems(item, inv) == []
+
+
+def test_unclaimed_item_blocked_and_scratch_passes(tmp_path):
+    inv = _inv(tmp_path)
+    assert "no context.txt" in lot_check.problems(inv / "other/x", inv)[0]
+    assert lot_check.problems(tmp_path, inv) == []

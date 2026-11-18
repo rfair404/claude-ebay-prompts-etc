@@ -285,6 +285,7 @@ SPECIFIC shot (raking-light macro) and the downstream value impact.
 ## Output format
 
     SHOOT SUMMARY
+    Lot:              <lot the item's folder belongs to>
     Photos processed: <N>
     Shoot mode:       <mode> (<source>)
     Distinct items:   <N>
@@ -293,6 +294,11 @@ SPECIFIC shot (raking-light macro) and the downstream value impact.
       <one line per grouping question, or "none". Records are written as
       single defaults; the question is also appended to NEEDS_REVIEW.md —
       this never blocks (SOFT gate).>
+
+`Lot:` is required and must match the folder: run
+`python -m lib.lot_check <item-dir> --stamp` to write it, `... <item-dir>` to
+verify. A missing or wrong lot blocks the gate (single-pass), so ledgers never
+tag an item to the wrong lot.
 
 Then one block per item, `--- Item <N> ---`, fields in this order:
 
