@@ -115,6 +115,29 @@ def split_by_age(listings: dict, now: datetime, min_age_days: int = MIN_AGE_DAYS
     return sorted(seasoned), sorted(young)
 
 
+def auto_promote_hub() -> str:
+    from auto_promote import SELLER_HUB_STOP
+    return "API can't remove it; by hand: " + SELLER_HUB_STOP
+
+
+def age_days(v: dict, now: datetime):
+    """Days since the listing was created; None when eBay gave no date."""
+    return (now - _ts(v["created"])).days if v.get("created") else None
+
+
+def prune_high(listings: dict, ads: dict, now: datetime, s: dict) -> dict:
+    """{campaign_id: [listing_id]} of live ads whose listing is over the
+    store's high_price and younger than its min age. `ads` is
+    promote.campaigns_and_ads()'s listing_id -> {campaign, ad}."""
+    from auto_promote import high_price_young
+    out: dict[str, list] = {}
+    for lid, hit in ads.items():
+        v = listings.get(lid)
+        if v and high_price_young(s, v["price"], age_days(v, now)):
+            out.setdefault(str(hit["campaign"]["campaignId"]), []).append(lid)
+    return out
+
+
 def campaign_body(name: str = CAMPAIGN_NAME, cap: float = AD_RATE_CAP,
                   start: datetime | None = None) -> dict:
     """Key-based cost-per-sale: no campaignCriterion, so eBay never auto-adds.
@@ -172,6 +195,9 @@ def main() -> int:
                     help="create the campaign if it does not exist (needs --confirm)")
     ap.add_argument("--end", metavar="ID",
                     help="END another campaign (kept for its reports, never deleted)")
+    ap.add_argument("--prune-high", action="store_true",
+                    help="remove the ads of listings over the high-price line "
+                         "(default $500) that are under 60 days old, from every campaign")
     ap.add_argument("--json", help="also write the plan here")
     ap.add_argument("--confirm", action="store_true",
                     help="actually write to eBay. Without it every write is a dry run.")
@@ -190,6 +216,36 @@ def main() -> int:
 
     now = datetime.now(timezone.utc)
     listings = sweep(a.seller, api_get)
+    if a.prune_high:
+        from auto_promote import settings as _ap_settings
+        camps, ads = promote.campaigns_and_ads(creds)
+        names = {str(c["campaignId"]): c.get("campaignName") for c in camps}
+        plan = prune_high(listings, ads, now, _ap_settings(store))
+        for cid_, lids in plan.items():
+            print(f"campaign {cid_} '{names.get(cid_)}': {len(lids)} ad(s) to remove")
+            for lid in lids:
+                v = listings[lid]
+                print(f"  - {lid}  ${v['price']:.2f}  {str(v.get('created'))[:10]}  {v['title'][:50]}")
+            if not a.confirm:
+                continue
+            try:
+                r = api_send("POST", f"/sell/marketing/v1/ad_campaign/{cid_}/bulk_delete_ads_by_listing_id",
+                             {"requests": [{"listingId": l} for l in lids]}) or {}
+            except Exception as e:                                   # noqa: BLE001
+                # Smart campaigns refuse API removal (400); carry on to the rest.
+                print(f"   REFUSED by eBay ({str(e)[-60:]}): {auto_promote_hub()}")
+                continue
+            print(f"   removed {len(lids)} (check any FAILED lines below)")
+            for x in r.get("responses") or []:
+                if int(x.get("statusCode") or 200) >= 300:
+                    print(f"   FAILED {x.get('listingId')}: "
+                          f"{(x.get('errors') or [{}])[0].get('message', '')[:100]}"
+                          f"  ({auto_promote_hub()})")
+        if not plan:
+            print("nothing to remove")
+        elif not a.confirm:
+            print("DRY — add --confirm to remove")
+        return 0
     seasoned, young = split_by_age(listings, now, a.min_age_days, a.min_price)
     print(f"sweep: {len(listings)} live · >=${a.min_price:.0f}: "
           f"{len(seasoned) + len(young)} · seasoned (>={a.min_age_days}d): "
@@ -239,6 +295,14 @@ def main() -> int:
     for lid, why in skip.items():
         print(f"  skip {lid}: not promoted: {why}")
     adds = [l for l in adds if l not in skip]
+    # Over-$500 listings wait for 60 days (lib/auto_promote.high_price_young).
+    from auto_promote import settings as _ap_settings, high_price_young
+    ap_s = _ap_settings(store)
+    for lid in list(adds):
+        why = high_price_young(ap_s, listings[lid]["price"], age_days(listings[lid], now))
+        if why:
+            print(f"  skip {lid}: not promoted: {why}")
+            adds.remove(lid)
     print(f"already in campaign: {len(already)} · to add: {len(adds)}")
     for lid in adds[:10]:
         v = listings[lid]

@@ -284,7 +284,7 @@ def test_k01_goes_into_neither_campaign(k01_lot):
 def test_keyed_cpc_keeps_its_price_band():
     send, calls = _fake(cpc=KEYED)
     msg = AP.promote_new_listing("111", "5995.00", store="default", api_send=send,
-                                 config={})
+                                 config={"store": {"auto_promote": {"high_price": 0}}})
     assert msg.endswith("not in 'All Items $25-5000 CPC keyed': "
                         "$5995.00 is over its $5000.00 ceiling")
     assert len(_adds(calls)) == 1                      # the cost-per-sale ad only
@@ -421,3 +421,31 @@ def test_bulk_adds_skip_a_listing_whose_draft_says_promoted_false(tmp_path, monk
     promote.add_ads("C1", ["880000000090", "880000000091", "880000000092"], True)
     assert sent == [{"requests": [{"listingId": "880000000092"}]}]
     assert "skip 880000000090: not promoted: draft says promoted: false" in capsys.readouterr().out
+
+
+def test_over_500_waits_60_days():
+    s = AP.settings(config={})
+    assert "over $500" in AP.high_price_young(s, 650, 0)
+    assert AP.high_price_young(s, 650, 59)
+    assert AP.high_price_young(s, 650, None)
+    assert AP.high_price_young(s, 650, 60) is None
+    assert AP.high_price_young(s, 500, 0) is None
+
+
+def test_publish_skips_a_new_listing_over_500_and_calls_no_api():
+    calls = []
+    out = AP.promote_new_listing("1", 650, api_send=lambda *a, **k: calls.append(a) or {},
+                                 store="default", config={})
+    assert out.startswith("not promoted") and "$500" in out and not calls
+
+
+def test_prune_high_picks_only_young_ads_over_500():
+    from datetime import datetime, timezone
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import promote_seasoned as PS
+    now = datetime(2026, 11, 17, tzinfo=timezone.utc)
+    L = {"a": {"price": 650, "created": "2026-11-01T00:00:00Z"},
+         "b": {"price": 650, "created": "2026-08-01T00:00:00Z"},
+         "c": {"price": 90, "created": "2026-11-01T00:00:00Z"}}
+    ads = {k: {"campaign": {"campaignId": "9"}, "ad": {}} for k in L}
+    assert PS.prune_high(L, ads, now, AP.settings(config={})) == {"9": ["a"]}
