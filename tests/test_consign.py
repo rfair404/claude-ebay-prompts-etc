@@ -1595,3 +1595,29 @@ def test_write_ledger_local_mode(shop, folder, existing, base, written, logged):
     if logged:
         ok, clean, report = consign._ledgers().verify()
         assert ok and clean, report
+
+
+def test_folder_sets_only_inventory_folder(shop, capsys):
+    d, f = _described_shop(shop)
+    (shop / "inventory" / "tg7" / "new").mkdir()
+    before = consign.read_ledger(d / "client_ledger.csv")[0]
+    argv = ["folder", "CONSIGN-K99", "C128", "inventory/tg7/new"]
+    assert consign.main(argv) == 0                       # dry run
+    assert consign.read_ledger(d / "client_ledger.csv")[0] == before
+    assert not list(d.glob("client_ledger.backup-*.csv"))
+    assert consign.main(argv + ["--apply"]) == 0
+    after = consign.read_ledger(d / "client_ledger.csv")[0]
+    assert after[1]["inventory_folder"] == "inventory/tg7/new"
+    assert {k: v for k, v in after[1].items() if k != "inventory_folder"} == {
+        k: v for k, v in before[1].items() if k != "inventory_folder"}
+    assert after[0] == before[0]
+    assert len(list(d.glob("client_ledger.backup-*.csv"))) == 1
+
+
+@pytest.mark.parametrize("path", ["inventory/tg7/missing", "inventory/tg7/02-croc"])
+def test_folder_refuses_missing_or_taken_folder(shop, path):
+    d, _ = _described_shop(shop)
+    before = consign.read_ledger(d / "client_ledger.csv")[0]
+    with pytest.raises(SystemExit):
+        consign.set_folder(d, "K99-C128", path, apply=True)
+    assert consign.read_ledger(d / "client_ledger.csv")[0] == before
