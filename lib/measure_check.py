@@ -8,7 +8,10 @@ ASK) blocks the IDENTIFY gate until he answers.
     python -m lib.measure_check <shoot-dir>
 
 Item blocks start with `--- Item N ---`. An item is jewelry when its Category
-or Type line names a jewelry word.
+line names a jewelry noun as a whole word. Strong nouns (necklace, bracelet,
+earring...) always count; weak ones that also name household things (ring,
+chain, pin, charm) count only when the Category names nothing non-jewelry
+(pliers, mug, glass, napkin ring...). Named household phrases never count.
 """
 from __future__ import annotations
 
@@ -17,9 +20,29 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-_JEWELRY = re.compile(
-    r"jewel|necklace|chain|pendant|bracelet|bangle|earring|brooch|\bpin\b|\bring\b|"
-    r"charm|cufflink|locket|anklet|choker|tiara|watch fob", re.I)
+_STRONG = re.compile(
+    r"\b(?:jewel(?:ry|lery|s)?|necklaces?|pendants?|bracelets?|bangles?|earrings?|"
+    r"brooch(?:es)?|cuff ?links?|lockets?|anklets?|chokers?|tiaras?|watch fobs?)\b", re.I)
+_WEAK = re.compile(r"\b(?:rings?|chains?|pins?|charms?)\b", re.I)
+# Household phrases that use a jewelry word; never jewelry.
+_NOT_PHRASE = re.compile(
+    r"\b(?:napkin|curtain|shower|key|piston|o|split|drawer|door|teething|onion)[- ]?rings?\b|"
+    r"\bring binders?\b|\bchain ?saws?\b|\b(?:bowling|rolling|clothes|safety|cotter)"
+    r" pins?\b|\bpendant (?:lights?|lamps?|fixtures?)\b", re.I)
+# Non-jewelry nouns; with one present a weak word (ring, chain...) doesn't count.
+_NOT_JEWELRY = re.compile(
+    r"\b(?:pliers?|mugs?|cups?|glass(?:es|ware)?|tumblers?|steins?|bowls?|plates?|"
+    r"tools?|hardware|curtains?|napkins?|keys?|hooks?|dish(?:es)?|trays?|"
+    r"binders?|toys?|games?)\b", re.I)
+
+
+def _is_jewelry(category: str) -> bool:
+    cat = _NOT_PHRASE.sub(" ", category)
+    if _STRONG.search(cat):
+        return True
+    return bool(_WEAK.search(cat)) and not _NOT_JEWELRY.search(cat)
+
+
 _ITEM_SPLIT = re.compile(r"^\s*-{2,}\s*Item\s+(\S+?)\s*-{2,}\s*$", re.I | re.M)
 _FIELD = r"^\s*[-*]?\s*\**{}\**\s*:\s*\**\s*(.*?)\s*$"
 _SIZE_UNIT = r"(?:in(?:ch(?:es)?)?|\"|mm|cm)"
@@ -45,7 +68,7 @@ def problems(shoot: Path) -> list[str]:
     parts = _ITEM_SPLIT.split(f.read_text(encoding="utf-8", errors="replace"))
     out = []
     for num, block in zip(parts[1::2], parts[2::2]):
-        if not _JEWELRY.search(_field(block, "Category") + " " + _field(block, "Type")):
+        if not _is_jewelry(_field(block, "Category")):
             continue
         for label, unit in (("Measured size", _SIZE_UNIT), ("Measured weight", _WT_UNIT)):
             if not _measured(_field(block, label), unit):

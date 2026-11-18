@@ -372,6 +372,19 @@ def test_identify_blocked_without_or_with_wrong_lot(tmp_path):
     assert lot_check.problems(item, inv) == []
 
 
+def test_lot_read_and_stamped_only_in_summary_header(tmp_path):
+    inv = _inv(tmp_path)
+    item = inv / "ES/K01/box1/item1"
+    body = "--- Item 1 ---\nLot: 7 of a 12-piece estate set\n"
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nPhotos processed: 3\n" + body)
+    assert "no `Lot:` line" in lot_check.problems(item, inv)[0]
+    lot_check.stamp(item, inv)
+    text = (item / "identify.txt").read_text()
+    assert text.endswith(body)
+    assert text.startswith("SHOOT SUMMARY\nLot:              ES/K01\n")
+    assert lot_check.problems(item, inv) == []
+
+
 def test_unclaimed_item_blocked_and_scratch_passes(tmp_path):
     inv = _inv(tmp_path)
     assert "no context.txt" in lot_check.problems(inv / "other/x", inv)[0]
@@ -401,3 +414,20 @@ def test_non_jewelry_not_gated_and_wired_into_identify(tmp_path):
     assert measure_check.problems(tmp_path) == []
     _shoot(tmp_path, "ASK", "ASK")
     assert any("jewelry" in a.detail for a in sp.check_identify(tmp_path))
+
+
+def test_jewelry_detector_ignores_household_rings_and_chains(tmp_path):
+    for cat in ("pliers", "chain-nose pliers", "coffee mug", "glass", "ring dish glass",
+                "napkin ring", "napkin rings (set of 6)", "curtain rings", "key ring",
+                "rolling pin", "chain saw", "pendant light", "Tools > Pliers > ring pliers"):
+        assert not measure_check._is_jewelry(cat), cat
+    for cat in ("ring", "sterling ring", "Jewelry & Watches > Rings", "chain", "brooch pin",
+                "glass bead necklace", "charm bracelet", "earrings"):
+        assert measure_check._is_jewelry(cat), cat
+
+
+def test_jewelry_word_outside_category_not_gated(tmp_path):
+    (tmp_path / "identify.txt").write_text(
+        "--- Item 1 ---\n- Category: drinking glass\n- Type: ring-pattern tumbler\n"
+        "- Notes: gold ring around the rim\n")
+    assert measure_check.problems(tmp_path) == []

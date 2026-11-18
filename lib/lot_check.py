@@ -5,7 +5,8 @@ The lot is read from where the item sits under inventory/ (same rules as
 tools/report_lot.py): walking up from the item, the nearest context.txt with
 `part_of: <lot>` names that lot; one with `client:` is a consignment lot of its
 own; plain buckets roll up to the outermost bucket. identify.txt carries a
-`Lot:` line in its SHOOT SUMMARY. A missing line, a line that disagrees with
+`Lot:` line in its SHOOT SUMMARY header (before the first `--- Item` line);
+a `Lot:` further down is item prose and is neither read nor overwritten. A missing line, a line that disagrees with
 the folder, or an item under no context.txt at all blocks IDENTIFY, so a
 ledger row can never inherit a wrong lot.
 
@@ -27,6 +28,13 @@ INVENTORY = ROOT / "inventory"
 
 _KEY = re.compile(r"^\s*(client|part_of)\s*:\s*(.*?)\s*$", re.I)
 _LOT_LINE = re.compile(r"^\s*Lot\s*:\s*(.*?)\s*$", re.I | re.M)
+_FIRST_ITEM = re.compile(r"^\s*-{2,}\s*Item\b", re.I | re.M)
+
+
+def _split_header(text: str) -> tuple[str, str]:
+    """(SHOOT SUMMARY header, rest): the header ends at the first `--- Item`."""
+    m = _FIRST_ITEM.search(text)
+    return (text[:m.start()], text[m.start():]) if m else (text, "")
 
 
 def _keys(ctx: Path) -> dict:
@@ -69,7 +77,8 @@ def recorded_lot(shoot: Path) -> Optional[str]:
     f = Path(shoot) / "identify.txt"
     if not f.is_file():
         return None
-    m = _LOT_LINE.search(f.read_text(encoding="utf-8", errors="replace"))
+    header, _ = _split_header(f.read_text(encoding="utf-8", errors="replace"))
+    m = _LOT_LINE.search(header)
     return m.group(1).strip().strip("/") if m and m.group(1) else None
 
 
@@ -99,15 +108,15 @@ def stamp(shoot: Path, inventory: Optional[Path] = None) -> str:
     if want is None:
         raise SystemExit("no context.txt names this item's lot; add one first.")
     f = Path(shoot) / "identify.txt"
-    text = f.read_text(encoding="utf-8")
+    header, rest = _split_header(f.read_text(encoding="utf-8"))
     line = f"Lot:              {want}"
-    if _LOT_LINE.search(text):
-        text = _LOT_LINE.sub(line, text, count=1)
-    elif "SHOOT SUMMARY" in text:
-        text = text.replace("SHOOT SUMMARY\n", f"SHOOT SUMMARY\n{line}\n", 1)
+    if _LOT_LINE.search(header):
+        header = _LOT_LINE.sub(lambda _m: line, header, count=1)
+    elif "SHOOT SUMMARY\n" in header:
+        header = header.replace("SHOOT SUMMARY\n", f"SHOOT SUMMARY\n{line}\n", 1)
     else:
-        text = f"{line}\n{text}"
-    f.write_text(text, encoding="utf-8")
+        header = f"{line}\n{header}"
+    f.write_text(header + rest, encoding="utf-8")
     return want
 
 
