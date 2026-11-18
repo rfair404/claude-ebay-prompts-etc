@@ -376,3 +376,28 @@ def test_unclaimed_item_blocked_and_scratch_passes(tmp_path):
     inv = _inv(tmp_path)
     assert "no context.txt" in lot_check.problems(inv / "other/x", inv)[0]
     assert lot_check.problems(tmp_path, inv) == []
+
+
+# --- jewelry measurements (lib/measure_check.py) ------------------------------
+import measure_check  # noqa: E402
+
+_J = "--- Item 1 ---\n- Category: necklace\n- Measured size: {s}\n- Measured weight: {w}\n"
+
+
+def _shoot(tmp_path, s, w):
+    (tmp_path / "identify.txt").write_text(_J.format(s=s, w=w))
+    return tmp_path
+
+
+def test_jewelry_needs_real_measurements(tmp_path):
+    assert measure_check.problems(_shoot(tmp_path, "18 in", "12.4 g")) == []
+    for bad_s in ("ASK", "~18 in", "16-18 in", "unknown", ""):
+        assert measure_check.problems(_shoot(tmp_path, bad_s, "12 g"))
+    assert measure_check.problems(_shoot(tmp_path, "18 in", "estimated 12 g"))
+
+
+def test_non_jewelry_not_gated_and_wired_into_identify(tmp_path):
+    (tmp_path / "identify.txt").write_text("--- Item 1 ---\n- Category: chess set\n")
+    assert measure_check.problems(tmp_path) == []
+    _shoot(tmp_path, "ASK", "ASK")
+    assert any("jewelry" in a.detail for a in sp.check_identify(tmp_path))

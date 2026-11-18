@@ -171,7 +171,8 @@ def check_identify(shoot: Path) -> list[Ask]:
     # grouping questions and needs_followup_photo are documented SOFT
     # gates (_shared.md gate contract) and never block single-pass.
     import lot_check  # lot attribution: identify.txt's Lot: must match the folder
-    asks = [Ask("identify", p) for p in lot_check.problems(shoot)]
+    import measure_check  # jewelry size/weight come from Russell, never a guess
+    asks = [Ask("identify", p) for p in lot_check.problems(shoot) + measure_check.problems(shoot)]
     return asks + _pending_ask(shoot, "identify")
 
 

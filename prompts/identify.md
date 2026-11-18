@@ -323,10 +323,19 @@ Then one block per item, `--- Item <N> ---`, fields in this order:
 - **Estimated weight** — item weight (not packed). `~X lb (tier — N–N
   lb)`; tiers: light <5 / medium 5–15 / heavy 15–25 / oversized 25–50 /
   freight 50+ / requires-movers. Range when unsure. Set/pair → total.
-  `unknown — needs full view` if not estimable.
+  `unknown — needs full view` if not estimable. **Shipping tier only**: an
+  estimate never reaches a listing, and jewelry takes the measured fields
+  below instead.
 - **Estimated dimensions** — item size (not packed). Box `~L×W×H in`;
   cylinder `~dia×h in`; furniture `~W×D×H in`; flat `~L×W in`; irregular
-  free-text w/ key measurements. Range when unsure.
+  free-text w/ key measurements. Range when unsure. Shipping tier only, as
+  above.
+- **Measured size / Measured weight** — **jewelry always** (necklace, chain,
+  ring, bracelet, earrings, brooch, pendant, any gemstone or costume piece).
+  Never guess, assume, scale from a photo or copy a comp: ask Russell for
+  the number (`Measured size: 18 in` / `Measured weight: 12.4 g`, one real
+  value + unit) and write it only once he has given it. Until then the
+  lines read `ASK` and the item stops at the gate. A 1" miss is a return.
 - **Ship risk** — `none` or `suggest-pickup`. Set `suggest-pickup` when
   estimated weight **> 25 lb** OR any dimension **> 24 in** on a side, with
   a short reason (`too heavy ~40 lb`). Only a *signal* for DRAFT's

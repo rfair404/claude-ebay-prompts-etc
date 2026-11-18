@@ -347,6 +347,10 @@ thinner listing):
   buyer. **Required whenever we have a measurement.** A missing
   measurement is a NEEDS_REVIEW in-hand question answered at REVIEW
   (GH #170, in-hand voice below): state the number, or leave the fact out.
+  Numbers come from a tape or scale, never from IDENTIFY's `Estimated`
+  lines. **Jewelry:** Size and weight are Russell's `Measured size` /
+  `Measured weight` only; if either is missing, stop and ask him, never
+  fill it in.
 - **Condition** — factual, minimal. Bullets enumerating EVERY defect
   INVESTIGATE flagged (no minimizing), each as `<location>: <defect>`. At
   most one short context line for expected vintage wear; no warm framing,
