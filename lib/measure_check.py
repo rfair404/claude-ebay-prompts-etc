@@ -3,7 +3,8 @@
 A 1" miss on a chain or ring is a return. Every jewelry item in identify.txt
 must carry `Measured size:` and `Measured weight:` lines holding a number and a
 unit that Russell gave; anything else (blank, unknown, `~`, estimate, range,
-ASK) blocks the IDENTIFY gate until he answers.
+ASK) blocks the IDENTIFY gate until he answers. An item that already has a
+draft is past IDENTIFY and isn't re-checked.
 
     python -m lib.measure_check <shoot-dir>
 
@@ -19,6 +20,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional
+
+DRAFTS = ("draft.md", "draft_group.md")  # same as lot_check.DRAFTS
 
 _STRONG = re.compile(
     r"\b(?:jewel(?:ry|lery|s)?|necklaces?|pendants?|bracelets?|bangles?|earrings?|"
@@ -63,7 +66,7 @@ def _measured(val: str, unit: str) -> bool:
 
 def problems(shoot: Path) -> list[str]:
     f = Path(shoot) / "identify.txt"
-    if not f.is_file():
+    if not f.is_file() or any((Path(shoot) / n).is_file() for n in DRAFTS):
         return []
     parts = _ITEM_SPLIT.split(f.read_text(encoding="utf-8", errors="replace"))
     out = []

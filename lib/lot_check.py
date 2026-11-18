@@ -1,8 +1,9 @@
 """IDENTIFY lot-attribution check: every item belongs to exactly one lot, the
 one its folder says, and identify.txt must name it.
 
-The lot is read from where the item sits under inventory/ (same rules as
-tools/report_lot.py): walking up from the item, the nearest context.txt with
+The lot is read from where the item sits under inventory/, with the same
+resolver and parser as the lot report (source_report.bucket_for and
+report_lot.extra_keys): walking up from the item, the nearest context.txt with
 `part_of: <lot>` names that lot; one with `client:` is a consignment lot of its
 own; plain buckets roll up to the outermost bucket. identify.txt carries a
 `Lot:` line in its SHOOT SUMMARY header (before the first `--- Item` line);
@@ -12,8 +13,10 @@ ledger row can never inherit a wrong lot.
 
     python -m lib.lot_check <item-dir>            # verify, exit 1 on a problem
     python -m lib.lot_check <item-dir> --stamp    # write the folder's lot into identify.txt
+    python -m lib.lot_check --stamp-all           # stamp every undrafted item; list unclaimed ones
 
-Shoots outside inventory/ (scratch dirs) have no lot and pass.
+Shoots outside inventory/ (scratch dirs) have no lot and pass, and so does an
+item that already has a draft: IDENTIFY is behind it.
 """
 from __future__ import annotations
 
@@ -25,8 +28,13 @@ from typing import Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "inventory"
+for _p in (str(ROOT / "lib"), str(ROOT / "tools")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+import source_report as SR  # noqa: E402
+from report_lot import extra_keys  # noqa: E402
 
-_KEY = re.compile(r"^\s*(client|part_of)\s*:\s*(.*?)\s*$", re.I)
+DRAFTS = ("draft.md", "draft_group.md")
 _LOT_LINE = re.compile(r"^\s*Lot\s*:\s*(.*?)\s*$", re.I | re.M)
 _FIRST_ITEM = re.compile(r"^\s*-{2,}\s*Item\b", re.I | re.M)
 
@@ -37,19 +45,6 @@ def _split_header(text: str) -> tuple[str, str]:
     return (text[:m.start()], text[m.start():]) if m else (text, "")
 
 
-def _keys(ctx: Path) -> dict:
-    out: dict = {}
-    for line in ctx.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = _KEY.match(line)
-        if m and m.group(2) and m.group(1).lower() not in out:
-            out[m.group(1).lower()] = m.group(2).strip().strip("/")
-    return out
-
-
-def _label(d: Path, inv: Path) -> str:
-    return d.resolve().relative_to(inv.resolve()).as_posix()
-
-
 def resolve_lot(item_dir: Path, inventory: Optional[Path] = None) -> Optional[str]:
     """The lot an item folder belongs to, or None when no context.txt claims it.
     Raises ValueError when the item is not under the inventory root."""
@@ -58,19 +53,21 @@ def resolve_lot(item_dir: Path, inventory: Optional[Path] = None) -> Optional[st
     if cur != inv and inv not in cur.parents:
         raise ValueError(f"{item_dir} is not under {inv}")
     outer: Optional[Path] = None
-    while True:
-        ctx = cur / "context.txt"
-        if ctx.is_file():
-            k = _keys(ctx)
-            if k.get("part_of"):
-                return k["part_of"]
-            if k.get("client"):
-                return _label(cur, inv)
-            outer = cur
-        if cur == inv:
-            break
-        cur = cur.parent
-    return _label(outer, inv) if outer else None
+    b = SR.bucket_for(cur, inv)
+    while b is not None:
+        k = extra_keys(b)
+        if k.get("part_of"):
+            return k["part_of"]
+        if k.get("client"):
+            return SR.bucket_label(b, inv)
+        outer = b
+        b = None if b == inv else SR.bucket_for(b.parent, inv)
+    return SR.bucket_label(outer, inv) if outer else None
+
+
+def drafted(shoot: Path) -> bool:
+    """An item with a draft is past IDENTIFY; its checks no longer gate it."""
+    return any((Path(shoot) / n).is_file() for n in DRAFTS)
 
 
 def recorded_lot(shoot: Path) -> Optional[str]:
@@ -84,7 +81,9 @@ def recorded_lot(shoot: Path) -> Optional[str]:
 
 def problems(shoot: Path, inventory: Optional[Path] = None) -> list[str]:
     """Reasons identify.txt's lot attribution can't be trusted; [] when clean
-    or when the shoot isn't under inventory/."""
+    or when the shoot isn't under inventory/ or already has a draft."""
+    if drafted(shoot):
+        return []
     try:
         want = resolve_lot(shoot, inventory)
     except ValueError:
@@ -120,11 +119,42 @@ def stamp(shoot: Path, inventory: Optional[Path] = None) -> str:
     return want
 
 
+def stamp_all(inventory: Optional[Path] = None) -> tuple[list[Path], list[Path]]:
+    """Stamp every undrafted identify.txt under inventory/ whose Lot: is
+    missing or wrong. Returns (stamped, unclaimed: no context.txt names a lot).
+    Hidden and _-prefixed folders (triage, trash, retired) are skipped."""
+    inv = Path(inventory or INVENTORY).resolve()
+    stamped, unclaimed = [], []
+    for f in sorted(inv.rglob("identify.txt")):
+        d = f.parent
+        if any(p.startswith((".", "_")) for p in d.relative_to(inv).parts) or drafted(d):
+            continue
+        errs = problems(d, inv)
+        if not errs:
+            continue
+        if resolve_lot(d, inv) is None:
+            unclaimed.append(d)
+        else:
+            stamp(d, inv)
+            stamped.append(d)
+    return stamped, unclaimed
+
+
 def main(argv: Optional[list] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("item")
+    ap.add_argument("item", nargs="?")
     ap.add_argument("--stamp", action="store_true")
+    ap.add_argument("--stamp-all", action="store_true",
+                    help="stamp every undrafted item under inventory/")
     a = ap.parse_args(argv)
+    if a.stamp_all:
+        stamped, unclaimed = stamp_all()
+        print(f"stamped {len(stamped)} item(s)")
+        for d in unclaimed:
+            print(f"UNCLAIMED (no context.txt names its lot): {d.relative_to(INVENTORY.resolve())}")
+        return 1 if unclaimed else 0
+    if not a.item:
+        ap.error("an item folder, or --stamp-all")
     item = Path(a.item)
     if not item.is_absolute() and not item.exists():
         item = INVENTORY / item
