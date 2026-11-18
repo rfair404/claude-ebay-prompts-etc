@@ -591,7 +591,8 @@ def _client_money(r: dict) -> tuple[str, str, str]:
     A sale whose share isn't worked out yet credits "" here, shown as
     "pending" and left out of the total, as the account's ledger leaves it.
     A row that is no longer for sale (kept, returned, disposed) has no ask
-    (Russell 2026-11-13)."""
+    (Russell 2026-11-13). A sold row with no ask counts the sale price as its
+    ask (Russell 2026-11-14), so a local or mall sale never leaves ASK short."""
     place = _place(r)
     sold = r.get("item_price") or "" if place == "SOLD" else ""
     credited = ""
@@ -600,6 +601,8 @@ def _client_money(r: dict) -> tuple[str, str, str]:
     elif place == "EXCLUDED":
         credited = r.get("client_share") or r.get("buyout_price") or ""
     ask = "" if place in NO_ASK else r.get("ask") or ""
+    if place == "SOLD" and not ask:
+        ask = sold
     return ask, sold, credited
 
 
@@ -618,9 +621,13 @@ def _client_fees(r: dict) -> str:
 
 def _location(r: dict) -> str:
     """Where a for-sale row is offered: EBAY, ANTIQUE MALL (a mall booth,
-    GAM or HTM) or OTHER."""
+    GAM or HTM) or OTHER. A mall row whose state_note says `location: <name>`
+    shows that name instead."""
     ch = (r.get("channel") or "").strip().lower()
-    return "EBAY" if ch in ("", "ebay") else "ANTIQUE MALL" if ch == "mall" else "OTHER"
+    if ch == "mall":
+        m = re.search(r"location:\s*([^;|]+)", r.get("state_note") or "", re.I)
+        return m.group(1).strip() if m else "ANTIQUE MALL"
+    return "EBAY" if ch in ("", "ebay") else "OTHER"
 
 
 # The client copy's sections (Russell 2026-11-12): sold, for sale, the rest.

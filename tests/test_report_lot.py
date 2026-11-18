@@ -458,12 +458,12 @@ def test_client_copy_has_overview_sold_for_sale_and_the_rest(tmp_path, monkeypat
                  "LOT ACCOUNT", "LISTED", "EXCLUDED", "in C006", "Kept by", "handling", "postage"):
         assert word not in text, word
     ov = _section(text, "OVERVIEW")
-    assert re.search(r"\nSold +1 +\$75 +\$17.50 +\$30\n", ov) and re.search(r"\nPurchased +1 +\$5\n", ov)
+    assert re.search(r"\nSold +1 +\$75 +\$75 +\$17.50 +\$30\n", ov)   # no ask: the sale price (2026-11-14) and re.search(r"\nPurchased +1 +\$5\n", ov)
     assert re.search(r"\nTOTAL +7 +\$35$", ov)
     sold = _section(text, "SOLD").splitlines()
     assert re.search(r"ASK +SOLD +FEES +CREDITED$", sold[0])
     assert [ln[:8] for ln in sold[2:]] == ["K01-C005", "TOTAL   "]
-    assert re.search(r"\$75 +\$17.50 +\$30$", sold[2]) and re.search(r"\$0 +\$75 +\$17.50 +\$30$", sold[3])
+    assert re.search(r"\$75 +\$75 +\$17.50 +\$30$", sold[2]) and re.search(r"\$75 +\$75 +\$17.50 +\$30$", sold[3])
     sale = _section(text, "FOR SALE").splitlines()
     assert re.search(r"LOCATION +ASK$", sale[0])
     assert re.search(r"^K01-C004.*EBAY +\$30$", sale[2])
@@ -501,7 +501,7 @@ def test_client_overview_total_and_closed_rows_show_no_ask(tmp_path, monkeypatch
     assert re.fullmatch(r"TOTAL +9 +\$35", ov["TOTAL"])
     assert re.fullmatch(r"Purchased +1 +\$5", ov["Purchased"])
     assert re.fullmatch(r"Unavailable +2", ov["Unavailable"])    # returned + disposed, no ask
-    assert re.search(r"Sold +1 +\$75 +\$17.50 +\$30$", ov["Sold"])          # per-status rows unchanged
+    assert re.search(r"Sold +1 +\$75 +\$75 +\$17.50 +\$30$", ov["Sold"])          # per-status rows unchanged
     rest = {ln[:8]: ln for ln in _section(text, "REVIEW / HELD / REJECTED").splitlines()}
     assert rest["K01-C008"].endswith("Unavailable") and rest["K01-C010"].endswith("Unavailable")
     assert re.search(r"Purchased +\$5$", rest["K01-C006"]) and "$25" not in rest["K01-C006"]
@@ -638,3 +638,10 @@ def test_client_hides_disposed_row_filed_under_another_lot(tmp_path, monkeypatch
     text, out = RL.consign_client(_consign_lot(tmp_path, monkeypatch, rows), "K01", date(2026, 11, 16))
     assert "K01-C182" not in text and "K01-C179" in text and "K01-C084" in text
     assert {o["item_id"] for o in out} == {"K01-C179", "K01-C084"}
+
+
+def test_location_uses_state_note_for_mall_rows():
+    import report_lot as R
+    assert R._location({"channel": "mall", "state_note": "location: Greensboro Antique Mall - CASE"}) == "Greensboro Antique Mall - CASE"
+    assert R._location({"channel": "mall"}) == "ANTIQUE MALL"
+    assert R._location({"channel": ""}) == "EBAY"

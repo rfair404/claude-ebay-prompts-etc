@@ -1,6 +1,6 @@
 ---
 name: lower
-description: The listing manager inches live listings toward their Recommended price. Finds active listings in both stores whose price has not changed in more than 15 days, re-runs PRICE where the numbers are stale, proposes a modest whole-dollar cut that stays above Recommended, walks Russell through each proposal one yes/no at a time, and applies only the yeses. Use when Russell types /lower, or asks to "lower prices", "take the next markdown step", "what's due for a cut" or "work the aging list".
+description: The listing manager inches live listings toward their Recommended price. Finds active listings in both stores whose price has not changed in more than 10 days, re-runs PRICE where the numbers are stale, proposes a modest whole-dollar cut that stays above Recommended, walks Russell through each proposal one yes/no at a time, and applies only the yeses. Use when Russell types /lower, or asks to "lower prices", "take the next markdown step", "what's due for a cut" or "work the aging list".
 ---
 
 # /lower: the next price step, one listing at a time
@@ -27,7 +27,7 @@ holds come from `reports/lower/holds.csv`.
     python -m lib.cli lower scan
 
 This reads both stores, picks listings whose last price change is more than
-15 days ago, and writes `reports/lower/<date>/queue.csv`, `queue.md` and
+10 days ago, and writes `reports/lower/<date>/queue.csv`, `queue.md` and
 `review.html`. Status per row: PROPOSED, AT_TARGET (at Recommended, Russell's
 call, no cut), STALE_PRICE (needs a fresh PRICE), HELD (with the reason) or
 SKIPPED (not due yet). The last-change date comes from
@@ -76,7 +76,7 @@ moved since the scan). Then, on the yes already given, write live:
     python -m lib.cli lower apply --queue reports/lower/<date>/queue.csv --yes-skus <a,b,c> --confirm
 
 `--confirm` appends each success to `reports/lower/price_changes.csv`, which
-is what starts that listing's next 15 days. Report the count applied, the
+is what starts that listing's next 10 days. Report the count applied, the
 total dropped in list price, and any refusals. Nothing prints; reports reach
 Russell as R2 links.
 
