@@ -53,3 +53,7 @@ uvicorn>=0.38.0                # ASGI server `serve` runs FastAPI under
 # --- Live show: spoken shoot cues (tools/live/director_cue.py) ---
 # Makes the "set"/"done" clips once; only the cue words go to Google TTS.
 gTTS>=2.5.0
+
+# --- Headless comp runner (lib/ebay_sold_browse.py --headless) ---
+# CDP over the SSH tunnel to green's headless Chrome; sync client, no Playwright.
+websockets>=13

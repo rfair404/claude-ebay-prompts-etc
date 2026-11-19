@@ -74,9 +74,12 @@ unsorted page.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import sys
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -380,7 +383,7 @@ def multi_query_plan(query: str, sorts=DUAL_SORTS, *, also=None,
 
 
 def multi_query_js(plan: list[dict], filename: Optional[str] = None, *,
-                   delay_ms: int = MULTI_DELAY_MS) -> str:
+                   delay_ms: int = MULTI_DELAY_MS, return_full: bool = False) -> str:
     """JS that FETCHES several sold-search URLs from the already-loaded eBay tab.
 
     One `javascript_tool` call replaces N navigate+extract round trips: the tab
@@ -398,6 +401,9 @@ def multi_query_js(plan: list[dict], filename: Optional[str] = None, *,
 
     Fetches are sequential with a delay. Nothing here solves a challenge: a
     query whose response is a verification page comes back `challenge:true`.
+
+    `return_full=True` (the headless runner, which has no MCP filter in the
+    way) returns the full rows in the save-file shape plus `summary`.
     """
     safe = (re.sub(r"[^A-Za-z0-9._-]", "_", filename) or "ebay_sold_multi.json"
             ) if filename else None
@@ -408,6 +414,9 @@ def multi_query_js(plan: list[dict], filename: Optional[str] = None, *,
         "setTimeout(()=>{URL.revokeObjectURL(u);a.remove()},2000);\n"
         "return JSON.stringify({ok:true,saved:a.download,queries:out});})()"
     ) if safe else "return JSON.stringify({ok:true,saved:null,queries:out});})()"
+    if return_full:
+        save_js = ("return JSON.stringify({ok:true,saved:null,queries:full,"
+                   "summary:out});})()")
     return (
         "(async()=>{" + _EXTRACT_CORE_JS.strip() + "\n"
         "if(!/(^|\\.)ebay\\.com$/i.test(location.hostname))"
@@ -459,6 +468,73 @@ def pick_multi_rows(data: dict, label: Optional[str] = None) -> tuple:
         raise ValueError(f"--pick {label!r} matched {len(hits)} of: "
                          + ", ".join(q.get("label", "?") for q in queries))
     return hits[0].get("rows", []), hits[0].get("label", label)
+
+
+# ---------------------------------------------------------------------------
+# Headless runner: the same multi_query_js, run over the Chrome DevTools
+# Protocol instead of claude-in-chrome. Chrome runs headless on the LAN box
+# `green` (127.0.0.1:9222 there, logged in to eBay), reached from here through
+# an SSH tunnel. Nothing here launches a browser; no challenge is ever solved.
+# ---------------------------------------------------------------------------
+CDP_DEFAULT = "127.0.0.1:9222"
+CDP_TUNNEL_CMD = "ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 green"
+
+
+class HeadlessError(RuntimeError):
+    """The headless comp run could not produce trustworthy rows."""
+
+
+def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
+                   timeout: float = 120.0) -> dict:
+    """Run multi_query_js(plan) in a loaded ebay.com tab over CDP -> full rows.
+
+    Returns {ok, saved, queries:[{label,query,sort,url,rows,...}], summary},
+    the `--js-multi` save-file shape, so `pick_multi_rows` reads it as is.
+    Raises HeadlessError when the port is closed (names the tunnel), no tab is
+    on ebay.com, or ANY query came back as a verification challenge.
+    """
+    from websockets.sync.client import connect
+
+    endpoint = endpoint or os.environ.get("EBAYBIZ_CDP") or CDP_DEFAULT
+    host, _, port = endpoint.rpartition(":")
+    try:
+        socket.create_connection((host, int(port)), timeout=3).close()
+    except OSError:
+        raise HeadlessError(
+            f"nothing listening on {endpoint} — start the tunnel to green's "
+            f"headless Chrome first:  {CDP_TUNNEL_CMD}")
+    with urllib.request.urlopen(f"http://{endpoint}/json/list", timeout=10) as r:
+        targets = json.loads(r.read().decode("utf-8"))
+    pages = [t for t in targets if t.get("type") == "page"
+             and re.match(r"https://([^/]+\.)?ebay\.com(/|$)", t.get("url", ""))]
+    if not pages:
+        raise HeadlessError(
+            f"no ebay.com tab in the browser at {endpoint}; open one with:  "
+            f"curl -s -X PUT 'http://{endpoint}/json/new?https://www.ebay.com/'")
+    expr = multi_query_js(plan, return_full=True)
+    with connect(pages[0]["webSocketDebuggerUrl"], max_size=None,
+                 open_timeout=10) as ws:
+        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+            "expression": expr, "awaitPromise": True, "returnByValue": True}}))
+        while True:
+            msg = json.loads(ws.recv(timeout=timeout))
+            if msg.get("id") == 1:
+                break
+    if "error" in msg:
+        raise HeadlessError(f"CDP error: {msg['error']}")
+    res = msg.get("result", {})
+    if res.get("exceptionDetails"):
+        raise HeadlessError("page script threw: %s"
+                            % res["exceptionDetails"].get("text", "?"))
+    data = json.loads(res.get("result", {}).get("value") or "{}")
+    if not data.get("ok"):
+        raise HeadlessError(data.get("error") or "extractor returned ok:false")
+    blocked = [q.get("label") for q in data.get("summary", []) if q.get("challenge")]
+    if blocked:
+        raise HeadlessError(
+            "eBay served a verification challenge (%s). Not solved, no fallback "
+            "to the visible browser; comps Stage B is blocked." % ", ".join(blocked))
+    return data
 
 
 def rows_to_comps(rows: list[dict], query: Optional[str] = None) -> list[CompRecord]:
@@ -610,6 +686,14 @@ def _cli() -> None:
                          "the whole query ladder in ONE javascript_tool call instead "
                          "of a navigate+extract per rung. Returns per-query summaries; "
                          "give a FILENAME to also save the full rows for --pick.")
+    ap.add_argument("--headless", action="store_true",
+                    help="Run the --js-multi ladder in green's headless Chrome over "
+                         "CDP (needs: %s). Prints the full-row save file "
+                         "to stdout for --ingest-json - --pick; summaries to "
+                         "stderr." % CDP_TUNNEL_CMD)
+    ap.add_argument("--cdp", metavar="HOST:PORT",
+                    help="With --headless: DevTools endpoint (default $EBAYBIZ_CDP "
+                         "or %s)." % CDP_DEFAULT)
     ap.add_argument("--also", action="append", metavar="QUERY", default=[],
                     help="With --js-multi: an extra formulation to test alongside the "
                          "ladder rungs (repeatable).")
@@ -646,9 +730,9 @@ def _cli() -> None:
         print(download_js(args.js_download))
         return
 
-    if args.js_multi is not None:
+    if args.js_multi is not None or args.headless:
         if not query:
-            ap.error("--js-multi needs the query (the ladder is built from it)")
+            ap.error("--js-multi/--headless need the query (the ladder is built from it)")
         sorts = [x.strip() for x in args.multi_sorts.split(",") if x.strip()]
         bad = [x for x in sorts if x not in SORTS]
         if bad:
@@ -656,6 +740,23 @@ def _cli() -> None:
         full = multi_query_plan(query, sorts, also=args.also,
                                 condition=args.condition, limit=10 ** 6)
         plan, dropped = full[:MULTI_MAX_FETCH], full[MULTI_MAX_FETCH:]
+        if args.headless:
+            try:
+                data = headless_multi(plan, args.cdp)
+            except HeadlessError as e:
+                print("ERROR: %s" % e, file=sys.stderr)
+                sys.exit(2)
+            print(json.dumps(data))
+            for s in data.get("summary", []):
+                print("  %-16s n=%-3s med=%-8s %r" % (
+                    s.get("label"), s.get("n"), s.get("delivered_med"),
+                    s.get("query")) + ("" if s.get("ok") else "  " + str(s.get("error"))),
+                    file=sys.stderr)
+            if dropped:
+                print("  CAPPED at %d — NOT fetched: %s"
+                      % (MULTI_MAX_FETCH, ", ".join(q["label"] for q in dropped)),
+                      file=sys.stderr)
+            return
         print(multi_query_js(plan, args.js_multi or None))
         # Provenance goes to stderr so stdout stays pasteable JS.
         print("\n%d fetch(es), run from any loaded ebay.com tab:" % len(plan),
