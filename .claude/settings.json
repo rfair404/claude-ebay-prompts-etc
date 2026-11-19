@@ -85,7 +85,9 @@
   },
   "sandbox": {
     "excludedCommands": [
-      ".claude/skills/r/tg7_pull.sh:*"
+      ".claude/skills/r/tg7_pull.sh:*",
+      "python -m lib.cli consign:*",
+      "python3 -m lib.cli consign:*"
     ],
     "network": {
       "allowedDomains": [
