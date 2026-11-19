@@ -52,8 +52,8 @@ Status, best first: SOLD (a sales-ledger row), LIVE (published and not ended),
 ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY, NOT SHOT
 (an empty folder: the item is filed, typically with its cost share, but has
 no photos yet). An unsold, not-live item whose draft.md says
-`meta.channel: mall` is AVAILABLE LOCALLY (in the booth). An unsold item
-whose context.txt has a `kept:` line is KEPT: we have it and use it
+`meta.channel: mall` is AVAILABLE LOCALLY (in the booth). An unsold, not-live
+item whose context.txt has a `kept:` line is KEPT: we have it and use it
 internally, and it is never sold (Russell, 2026-11-19). The ledger lists
 them in the overview's order: sold, live, local, queued/draft, photos only,
 not shot, ended, kept. Folders under `_trash/` (or any `_`/`.` folder) are never
@@ -358,7 +358,7 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             status = {4: "LIVE", 3: "ENDED", 2: "QUEUED", 1: "DRAFT"}[lvl]
         if status not in ("SOLD", "LIVE") and _mall(d):
             status = "AVAILABLE LOCALLY"
-        if status != "SOLD" and _kept(d):
+        if status not in ("SOLD", "LIVE") and _kept(d):   # a live listing still shows as LIVE
             status = "KEPT"
         gross = sum(_f(s.get("gross")) or 0.0 for s in sales_here)
         nbp = sum(_f(s.get("net_before_postage")) or 0.0 for s in sales_here)
@@ -452,7 +452,7 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
         kept_s = "pending" if i["actuals_pending"] else _m(i["net_kept"])
         L.append(f"{n:<6}{_short(i['title'], 52):<54}{i['status']:<19}{i['store']:<7}{_m(i['ask']):>10}"
                  f"{_m(i['gross']):>10}{kept_s:>10}  {i['sku']:<10}{i['listing_id']:<14}".rstrip())
-    L += ["", "Note: QUEUED = offer on eBay, not published. AVAILABLE LOCALLY = draft set to sell in the mall booth.",
+    L += ["", "Note: QUEUED = offer on eBay, not published. AVAILABLE LOCALLY = draft set to sell in the mall booth. KEPT = ours, for internal use, not for sale.",
           "Net kept counts a sale once its ad fee and postage are in."]
 
     L += ["", "MEMBERS (folders counted in this lot)"]
