@@ -634,6 +634,21 @@ def _location(r: dict) -> str:
 FOR_SALE = ("LISTED", "LOCAL")
 
 
+def _other_lot(r: dict, lot: Path, client: str) -> bool:
+    """A DISPOSED row whose item folder says `part_of:` some other lot: it was
+    filed under this client by mistake and is not theirs (Russell 2026-11-16,
+    K01-C182 -> ES/1224MOR). Live rows are never hidden, whatever part_of says."""
+    if r.get("state") != "DISPOSED":
+        return False
+    ctx = REPO / (r.get("inventory_folder") or "") / "context.txt"
+    try:
+        m = re.search(r"^part_of:\s*(\S+)", ctx.read_text(errors="replace"), re.M)
+    except OSError:
+        return False
+    own = {lot.name, f"CONSIGN-{client}"}
+    return bool(m) and m.group(1).strip("/").split("/")[-1] not in own
+
+
 def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]]:
     """The client's copy: an overview by status, then SOLD (ask, sold,
     credited), FOR SALE (location and ask) and REVIEW / HELD / REJECTED
@@ -648,7 +663,7 @@ def consign_client(lot: Path, client: str, today: date) -> tuple[str, list[dict]
     rows, _ = C.read_ledger(lot / C.LEDGER_NAME)
     C.migrate(rows, lot, client)
     name = (C.load_registry().get(client) or {}).get("name") or client
-    rows = _consign_sorted(rows)
+    rows = _consign_sorted([r for r in rows if not _other_lot(r, lot, client)])
     received = C.folder_date(lot) or C.default_intake(lot)
     L = ["The Fair Hand", f"{name} \u00b7 {lot_heading(lot)}",
          (f"Received {received} \u00b7 " if received else "") + f"Modified {today.isoformat()}"]

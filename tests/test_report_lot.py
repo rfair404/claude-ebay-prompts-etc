@@ -622,6 +622,24 @@ def test_live_row_with_a_stale_hold_marker_is_for_sale():
     assert RL._place(dict(row, state="PREP")) == "HOLD"
 
 
+def test_client_hides_disposed_row_filed_under_another_lot(tmp_path, monkeypatch):
+    # Russell 2026-11-16: K01-C182 belongs to ES/1224MOR; only a DISPOSED row whose
+    # folder says part_of: <other lot> is hidden. Live rows keep showing.
+    monkeypatch.setattr(RL, "REPO", tmp_path)
+    for name, part in (("a", "ES/1224MOR"), ("b", "CONSIGN-K01"), ("c", "ES/MON1020-M")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "context.txt").write_text(f"part_of: {part}\n")
+    rows = [
+        {"item_id": "K01-C182", "description": "Grease kit", "state": "DISPOSED", "inventory_folder": "a"},
+        {"item_id": "K01-C179", "description": "Own broken jar", "state": "DISPOSED", "inventory_folder": "b"},
+        {"item_id": "K01-C084", "description": "Live lamp", "state": "LISTED", "ask": "20.00",
+         "inventory_folder": "c"},
+    ]
+    text, out = RL.consign_client(_consign_lot(tmp_path, monkeypatch, rows), "K01", date(2026, 11, 16))
+    assert "K01-C182" not in text and "K01-C179" in text and "K01-C084" in text
+    assert {o["item_id"] for o in out} == {"K01-C179", "K01-C084"}
+
+
 def test_location_uses_state_note_for_mall_rows():
     import report_lot as R
     assert R._location({"channel": "mall", "state_note": "location: Greensboro Antique Mall - CASE"}) == "Greensboro Antique Mall - CASE"
