@@ -11,9 +11,7 @@ import threading
 from pathlib import Path
 
 import pytest
-
-pytest.importorskip("websockets", minversion="13.0")  # not in CI's pip line yet
-from websockets.sync.server import serve  # noqa: E402
+from websockets.sync.server import serve
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))

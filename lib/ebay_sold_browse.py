@@ -74,9 +74,12 @@ unsorted page.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import sys
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -490,9 +493,6 @@ def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
     Raises HeadlessError when the port is closed (names the tunnel), no tab is
     on ebay.com, or ANY query came back as a verification challenge.
     """
-    import os
-    import socket
-    import urllib.request
     from websockets.sync.client import connect
 
     endpoint = endpoint or os.environ.get("EBAYBIZ_CDP") or CDP_DEFAULT
