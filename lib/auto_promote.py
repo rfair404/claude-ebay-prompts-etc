@@ -43,6 +43,12 @@ WHAT IT WILL AND WON'T DO
   `excluded_listings()` applies it to the bulk adds too (tools/promote.py,
   tools/promote_seasoned.py), matching the draft by listing id or SKU.
 
+* A listing priced over `high_price` ($500) gets no ad until it has been live
+  `high_price_min_age_days` (60) days (Russell 2026-11-17: the ad fee on big
+  items isn't worth it unless they've sat). A new listing is 0 days old, so
+  publish skips it; `tools/promote_seasoned.py` adds it once it is 60 days
+  old, and `--prune-high` removes the ads that are there too early.
+
 CONFIG (per store, #156)
 
     store:                       # the default store
@@ -83,7 +89,8 @@ REPO = Path(__file__).resolve().parent.parent
 # per-client decision. Replacing the list in config replaces this default.
 DEFAULTS = {"enabled": True, "campaign": "Revenue Seasoned 15d", "min_price": 25.0,
             "exclude_consignment": ["K01"],
-            "cpc_campaign": "All Items $25-5000 CPC keyed", "cpc_max_price": 5000.0}
+            "cpc_campaign": "All Items $25-5000 CPC keyed", "cpc_max_price": 5000.0,
+            "high_price": 500.0, "high_price_min_age_days": 60}
 
 API = "/sell/marketing/v1"
 
@@ -203,6 +210,19 @@ def opted_out_drafts(inventory: Optional[Path] = None) -> set[str]:
     return out
 
 
+def high_price_young(s: dict, price, age_days) -> Optional[str]:
+    """Reason string when `price` is over the store's `high_price` and the
+    listing is younger than `high_price_min_age_days`; else None. An unknown
+    age counts as young (same rule as promote_seasoned.split_by_age)."""
+    p, hi = _price(price), _price(s.get("high_price"))
+    if p is None or not hi or p <= hi:
+        return None
+    need = int(s.get("high_price_min_age_days") or 0)
+    if age_days is not None and age_days >= need:
+        return None
+    return f"${p:.2f} is over ${hi:.0f} and not yet {need} days listed"
+
+
 def _price(v) -> Optional[float]:
     try:
         return float(v)
@@ -306,6 +326,9 @@ def promote_new_listing(listing_id: str, price, creds=None, *,
         p = _price(price)
         if p is not None and p < s["min_price"]:
             return f"not promoted: ${p:.2f} is under the ${s['min_price']:.2f} floor"
+        why = high_price_young(s, p, 0)
+        if why:
+            return f"not promoted: {why}"
     except Exception as e:                                           # noqa: BLE001
         return f"not promoted: {str(e)[:160]}"
     out = _add_cps(listing_id, s, api_send, creds)
