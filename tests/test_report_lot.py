@@ -660,3 +660,15 @@ def test_kept_item_is_its_own_status_and_never_sold(estate, monkeypatch):
     assert {i["status"] for i in items if "buckle" in i["title"].lower()} == {"KEPT"}
     text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 19))
     assert re.search(r"Kept \(internal use\) +1 ", text) and "Available locally" not in text
+
+
+def test_kept_does_not_hide_a_live_listing(estate, monkeypatch):
+    # a kept item that is still live on eBay stays LIVE until the listing is ended
+    (estate / "candlesticks" / "context.txt").write_text("kept: Russell 2026-11-19\n", encoding="utf-8")
+    listings = [{"sku": "s2", "path": "inventory/ES/BUY1/candlesticks/draft.md", "price": "127",
+                 "published_at": "2026-10-23", "listing_id": "206", "title": "Candlesticks"}]
+    monkeypatch.setattr(RL, "_all_listings", lambda: listings)
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    assert [i["status"] for i in items if "candlestick" in i["title"].lower()] == ["LIVE"]
