@@ -1,6 +1,6 @@
 ---
-version: 1.4.0
-updated: 2026-11-12
+version: 1.5.0
+updated: 2026-11-19
 ---
 
 # PRICE — v4, Function 2
@@ -170,9 +170,22 @@ Escalate only as each stage dries up; never stop to ask.
    > **APIFY IS DISABLED** (`apify.enabled: false`; raises
    > `ApifyDisabledError`). Do not re-enable it; use the browser.
    > The anonymous in-app browser gets a CAPTCHA — never solve it. Use
-   > **claude-in-chrome** (the user's logged-in Chrome).
+   > **green's logged-in headless Chrome** (`--headless`, below). Do not use
+   > the claude-in-chrome extension: it pulls focus on Russell's desktop.
 
-   Procedure:
+   **Default path (headless, no MCP browser needed):**
+   `python lib/ebay_sold_browse.py "<query>" --ladder --headless > multi.json`
+   runs every rung and both sorts through the tunnel on 127.0.0.1:9222, then
+   `python lib/ebay_sold_browse.py "<query>" --ingest-json multi.json --pick <label>`
+   takes the cohort. If it exits non-zero with `ERROR: ...` (closed port, no
+   ebay.com tab): run `systemctl --user restart green-chrome-tunnel`, wait
+   about 5 seconds, retry once (run the `curl` command the runner prints if
+   the tab is missing). Still unreachable, or a challenge, HTTP 403 or
+   sign-in page: stop Stage B, never solve it or change user agents, and
+   record `B — UNAVAILABLE: green Chrome blocked`. The manual
+   claude-in-chrome steps below are only for a session with no tunnel.
+
+   Procedure (manual fallback):
    1. `python lib/ebay_sold_browse.py "<query>" --urls [--ladder]` → the two
       sold-search URLs (`best_match` + `price_high`, delivered-basis ceiling).
    2. Navigate claude-in-chrome to each URL.
@@ -217,7 +230,7 @@ Escalate only as each stage dries up; never stop to ask.
    (fake-id placeholder cards, reversed `derosnopS` sponsored tag, welded
    spans — see [reference/price-notes.md](reference/price-notes.md)).
 
-   No Chrome MCP ⇒ record `B — UNAVAILABLE: no logged-in browser`, fall through
+   No headless runner and no Chrome MCP ⇒ record `B — UNAVAILABLE: no logged-in browser`, fall through
    to Stage A only. Never silently skip B; never re-enable Apify. **An item
    whose B line is not `RAN`/`THIN` is NOT READY**: the tiers are recorded
    for context, but the sold-pull gate (below) refuses the draft at
