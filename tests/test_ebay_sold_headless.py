@@ -32,6 +32,11 @@ def _value(ok=True, challenge=False, error=None):
                        "queries": full, "summary": summ})
 
 
+def _failed(**q):
+    summ = [dict({"label": PLAN[0]["label"], "ok": False}, **q)]
+    return json.dumps({"ok": True, "saved": None, "queries": [], "summary": summ})
+
+
 def _fake_cdp(url, value, seen):
     def process_request(conn, request):
         if request.path.startswith("/json"):
@@ -44,6 +49,9 @@ def _fake_cdp(url, value, seen):
     def handler(ws):
         msg = json.loads(ws.recv())
         seen.append(msg)
+        if value == "SILENT":
+            ws.recv()  # hold the socket open, never answer
+            return
         ws.send(json.dumps({"id": 99, "method": "Runtime.consoleAPICalled"}))
         ws.send(json.dumps({"id": msg["id"], "result": {
             "result": {"type": "string", "value": value}}}))
@@ -67,7 +75,11 @@ CASES = [
     ("challenge",  "https://www.ebay.com/",     _value(challenge=True),   "challenge"),
     ("not-ok",     "https://www.ebay.com/",     _value(ok=False, error="boom"), "boom"),
     ("no-ebay-tab", "https://example.com/",     _value(),                 "no ebay.com tab"),
-    ("no-tunnel",  None,                        None,                     "ssh -N -L"),
+    ("no-tunnel",  None,                        None,                     "systemctl --user restart green-chrome-tunnel"),
+    ("http-403",   "https://www.ebay.com/",     _failed(error="HTTP 403"), "HTTP 403"),
+    ("sign-in",    "https://www.ebay.com/",     _failed(signin=True, error="x"), "sign-in"),
+    ("all-failed", "https://www.ebay.com/",     _failed(error="HTTP 500"), "every query failed"),
+    ("no-answer",  "https://www.ebay.com/",     "SILENT",                 "no answer"),
 ]
 
 
@@ -91,7 +103,29 @@ def test_headless_multi(case, url, value, expect):
             assert "summary:out" in params["expression"]
         else:
             with pytest.raises(esb.HeadlessError, match=expect):
-                esb.headless_multi(PLAN, endpoint, timeout=5)
+                esb.headless_multi(PLAN, endpoint, timeout=1)
     finally:
         if server:
             server.shutdown()
+
+
+def test_headless_port_open_but_no_devtools():
+    """Tunnel up, green's Chrome down: ssh accepts then drops the connection."""
+    lsn = socket.socket()
+    lsn.bind(("127.0.0.1", 0))
+    lsn.listen()
+
+    def drop():
+        while True:
+            try:
+                c, _ = lsn.accept()
+            except OSError:
+                return
+            c.close()
+
+    threading.Thread(target=drop, daemon=True).start()
+    try:
+        with pytest.raises(esb.HeadlessError, match="not answering"):
+            esb.headless_multi(PLAN, f"127.0.0.1:{lsn.getsockname()[1]}", timeout=1)
+    finally:
+        lsn.close()

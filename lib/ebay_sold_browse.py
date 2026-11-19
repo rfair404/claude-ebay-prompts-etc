@@ -429,6 +429,8 @@ def multi_query_js(plan: list[dict], filename: Optional[str] = None, *,
         "for(let i=0;i<Q.length;i++){const q=Q[i];let r;\n"
         f" if(i) await new Promise(r=>setTimeout(r,{int(delay_ms)}));\n"
         " try{const res=await fetch(q.url,{credentials:'include'});\n"
+        "  if(/signin\\.ebay\\./i.test(res.url||'')){out.push({label:q.label,query:q.query,"
+        "sort:q.sort,ok:false,signin:true,error:'eBay sign-in page'});continue}\n"
         "  if(!res.ok){out.push({label:q.label,query:q.query,sort:q.sort,ok:false,"
         "error:'HTTP '+res.status});continue}\n"
         "  r=__ebayExtract(new DOMParser().parseFromString(await res.text(),'text/html'));\n"
@@ -477,7 +479,8 @@ def pick_multi_rows(data: dict, label: Optional[str] = None) -> tuple:
 # an SSH tunnel. Nothing here launches a browser; no challenge is ever solved.
 # ---------------------------------------------------------------------------
 CDP_DEFAULT = "127.0.0.1:9222"
-CDP_TUNNEL_CMD = "ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 green"
+CDP_TUNNEL_CMD = ("systemctl --user restart green-chrome-tunnel "
+                  "(or: ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 green)")
 
 
 class HeadlessError(RuntimeError):
@@ -493,6 +496,7 @@ def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
     Raises HeadlessError when the port is closed (names the tunnel), no tab is
     on ebay.com, or ANY query came back as a verification challenge.
     """
+    from websockets.exceptions import WebSocketException
     from websockets.sync.client import connect
 
     endpoint = endpoint or os.environ.get("EBAYBIZ_CDP") or CDP_DEFAULT
@@ -503,8 +507,13 @@ def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
         raise HeadlessError(
             f"nothing listening on {endpoint} — start the tunnel to green's "
             f"headless Chrome first:  {CDP_TUNNEL_CMD}")
-    with urllib.request.urlopen(f"http://{endpoint}/json/list", timeout=10) as r:
-        targets = json.loads(r.read().decode("utf-8"))
+    down = (f"{endpoint} is open but green's Chrome is not answering (tunnel up, "
+            f"browser down or hung) — restart the tunnel/browser:  {CDP_TUNNEL_CMD}")
+    try:
+        with urllib.request.urlopen(f"http://{endpoint}/json/list", timeout=10) as r:
+            targets = json.loads(r.read().decode("utf-8"))
+    except (OSError, ValueError) as e:  # URLError, reset, timeout, not JSON
+        raise HeadlessError(f"{down}  ({e})")
     pages = [t for t in targets if t.get("type") == "page"
              and re.match(r"https://([^/]+\.)?ebay\.com(/|$)", t.get("url", ""))]
     if not pages:
@@ -512,14 +521,20 @@ def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
             f"no ebay.com tab in the browser at {endpoint}; open one with:  "
             f"curl -s -X PUT 'http://{endpoint}/json/new?https://www.ebay.com/'")
     expr = multi_query_js(plan, return_full=True)
-    with connect(pages[0]["webSocketDebuggerUrl"], max_size=None,
-                 open_timeout=10) as ws:
-        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
-            "expression": expr, "awaitPromise": True, "returnByValue": True}}))
-        while True:
-            msg = json.loads(ws.recv(timeout=timeout))
-            if msg.get("id") == 1:
-                break
+    try:
+        with connect(pages[0]["webSocketDebuggerUrl"], max_size=None,
+                     open_timeout=10) as ws:
+            ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {
+                "expression": expr, "awaitPromise": True, "returnByValue": True}}))
+            while True:
+                msg = json.loads(ws.recv(timeout=timeout))
+                if msg.get("id") == 1:
+                    break
+    except TimeoutError:
+        raise HeadlessError(f"no answer from the ebay.com tab within {timeout:.0f}s; "
+                            f"comps Stage B is blocked")
+    except (OSError, ValueError, WebSocketException) as e:
+        raise HeadlessError(f"{down}  ({e})")
     if "error" in msg:
         raise HeadlessError(f"CDP error: {msg['error']}")
     res = msg.get("result", {})
@@ -529,11 +544,22 @@ def headless_multi(plan: list[dict], endpoint: Optional[str] = None, *,
     data = json.loads(res.get("result", {}).get("value") or "{}")
     if not data.get("ok"):
         raise HeadlessError(data.get("error") or "extractor returned ok:false")
-    blocked = [q.get("label") for q in data.get("summary", []) if q.get("challenge")]
+    summary = data.get("summary", [])
+    blocked = [q.get("label") for q in summary if q.get("challenge")
+               or q.get("error") == "HTTP 403"]
     if blocked:
         raise HeadlessError(
-            "eBay served a verification challenge (%s). Not solved, no fallback "
-            "to the visible browser; comps Stage B is blocked." % ", ".join(blocked))
+            "eBay served a verification challenge or HTTP 403 (%s). Not solved, no "
+            "fallback to the visible browser; comps Stage B is blocked."
+            % ", ".join(blocked))
+    signin = [q.get("label") for q in summary if q.get("signin")]
+    if signin:
+        raise HeadlessError(
+            "eBay sent green's Chrome to the sign-in page (%s); it needs signing in "
+            "again. Comps Stage B is blocked." % ", ".join(signin))
+    if summary and not any(q.get("ok") for q in summary):
+        raise HeadlessError("every query failed (%s); comps Stage B is blocked."
+                            % "; ".join(sorted({str(q.get("error")) for q in summary})))
     return data
 
 
