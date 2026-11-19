@@ -75,7 +75,7 @@ CASES = [
     ("challenge",  "https://www.ebay.com/",     _value(challenge=True),   "challenge"),
     ("not-ok",     "https://www.ebay.com/",     _value(ok=False, error="boom"), "boom"),
     ("no-ebay-tab", "https://example.com/",     _value(),                 "no ebay.com tab"),
-    ("no-tunnel",  None,                        None,                     "ssh -N -L"),
+    ("no-tunnel",  None,                        None,                     "systemctl --user restart green-chrome-tunnel"),
     ("http-403",   "https://www.ebay.com/",     _failed(error="HTTP 403"), "HTTP 403"),
     ("sign-in",    "https://www.ebay.com/",     _failed(signin=True, error="x"), "sign-in"),
     ("all-failed", "https://www.ebay.com/",     _failed(error="HTTP 500"), "every query failed"),

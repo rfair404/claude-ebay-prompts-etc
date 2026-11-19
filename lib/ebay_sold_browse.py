@@ -479,7 +479,8 @@ def pick_multi_rows(data: dict, label: Optional[str] = None) -> tuple:
 # an SSH tunnel. Nothing here launches a browser; no challenge is ever solved.
 # ---------------------------------------------------------------------------
 CDP_DEFAULT = "127.0.0.1:9222"
-CDP_TUNNEL_CMD = "ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 green"
+CDP_TUNNEL_CMD = ("systemctl --user restart green-chrome-tunnel "
+                  "(or: ssh -N -L 127.0.0.1:9222:127.0.0.1:9222 green)")
 
 
 class HeadlessError(RuntimeError):
