@@ -86,6 +86,11 @@ false`, since the reply is its list) with this brief:
 
       python -m lib.cli consign import CONSIGN-K01 inventory/CONSIGN-K01/<bin>/catalog.csv --client K01
 
+  Run it as a plain Bash call. `.claude/settings.json` lists `python -m
+  lib.cli consign` under `sandbox.excludedCommands`, so it always runs
+  outside the sandbox and can take the ledger lock in `reports/ledger_chain/`.
+  Don't run it sandboxed first, and don't put a sandbox note on Russell's card.
+
   A row that is an object the client's ledgers already hold is attached to
   that row instead of added, and a look-alike is added and flagged in
   `inventory/CONSIGN-K01/dupe_queue.csv`; the inventory manager settles
