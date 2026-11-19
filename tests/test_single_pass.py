@@ -409,6 +409,14 @@ def test_jewelry_needs_real_measurements(tmp_path):
     assert measure_check.problems(_shoot(tmp_path, "18 in", "estimated 12 g"))
 
 
+def test_ring_size_counts_as_measured_size(tmp_path):
+    for ok in ("size 7", "US size 7 1/2", "Size 6.5"):
+        assert measure_check.problems(_shoot(tmp_path, ok, "3.1 g")) == [], ok
+    # A bare number has no unit or "size" word, so it still needs asking.
+    for bad in ("7", "size ~7", "size 6-7"):
+        assert measure_check.problems(_shoot(tmp_path, bad, "3.1 g")), bad
+
+
 def test_non_jewelry_not_gated_and_wired_into_identify(tmp_path):
     (tmp_path / "identify.txt").write_text("--- Item 1 ---\n- Category: chess set\n")
     assert measure_check.problems(tmp_path) == []

@@ -49,6 +49,7 @@ def _is_jewelry(category: str) -> bool:
 _ITEM_SPLIT = re.compile(r"^\s*-{2,}\s*Item\s+(\S+?)\s*-{2,}\s*$", re.I | re.M)
 _FIELD = r"^\s*[-*]?\s*\**{}\**\s*:\s*\**\s*(.*?)\s*$"
 _SIZE_UNIT = r"(?:in(?:ch(?:es)?)?|\"|mm|cm)"
+_RING_SIZE = re.compile(r"(?:US\s*)?size\s*\d+(?:\.\d+)?(?:\s*1/2)?", re.I)
 _WT_UNIT = r"(?:g|gr|gram|grams|dwt|oz|ozt|lb|lbs)"
 _NUM = r"\d+(?:\.\d+)?(?:\s*/\s*\d+)?"
 _BAD = re.compile(r"[~≈]|estimat|approx|unknown|\bask\b|tbd|\?|\bn/?a\b|\bor\b|\d\s*[–-]\s*\d", re.I)
@@ -60,7 +61,11 @@ def _field(block: str, name: str) -> str:
 
 
 def _measured(val: str, unit: str) -> bool:
-    return bool(val) and not _BAD.search(val) and bool(
+    if not val or _BAD.search(val):
+        return False
+    if unit == _SIZE_UNIT and _RING_SIZE.search(val):  # ring: "size 7", "US size 7 1/2"
+        return True
+    return bool(
         re.search(rf"{_NUM}\s*(?:x|×)?\s*{unit}\b|{_NUM}\s*{unit}(?![a-z])", val, re.I))
 
 
