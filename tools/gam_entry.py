@@ -132,7 +132,7 @@ SAVE_JS = ("(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.tex
            f"{json.dumps(SAVE_LABEL)});if(!b)return JSON.stringify({{ok:false}});b.click();"
            "return JSON.stringify({ok:true});})()")
 STATE_JS = ("JSON.stringify({url:location.href,errors:[...document.querySelectorAll("
-            "'[class*=error i],[role=alert],.Mui-error')].map(e=>e.textContent.trim()).filter(Boolean).slice(0,4)})")
+            "'[class*=error i],[role=alert],.Mui-error')].map(e=>e.textContent.trim()).filter(t=>t&&!/^success/i.test(t)).slice(0,4)})")
 LIST_JS = ("(()=>{const t=document.body.innerText;const m=t.match(/(\\d+)-(\\d+) of (\\d+)/);"
            "return JSON.stringify({total:m?+m[3]:0});})()")
 
