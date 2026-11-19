@@ -173,6 +173,14 @@ purely local.
 **Absent chain = today's behavior.** No `context.txt` anywhere in the
 chain changes nothing.
 
+## Sizes and weights are never guessed
+
+Russell's rule (2026-11-17). No stage guesses, assumes, scales from a photo or
+copies from a comp a size or weight that goes on a listing. Estimates exist
+only to pick a shipping tier and are labelled as such. **Jewelry always**
+needs Russell's measured size and weight (a 1" error is a return): ask, wait,
+record. `lib/measure_check.py` enforces it at the IDENTIFY gate.
+
 ## Unit type and quantity
 
 Every item record carries `unit_type` + `quantity`.

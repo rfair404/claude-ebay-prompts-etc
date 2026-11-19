@@ -337,3 +337,105 @@ def test_stage_order_matches_run_md_dependency_chain():
 def test_cli_registers_single_pass():
     from cli import COMMANDS
     assert COMMANDS["single-pass"][0] == "lib.single_pass"
+
+
+# --- lot attribution (lib/lot_check.py) ---------------------------------------
+import lot_check  # noqa: E402
+
+
+def _inv(tmp_path):
+    inv = tmp_path / "inventory"
+    (inv / "ES" / "K01" / "box1" / "item1").mkdir(parents=True)
+    (inv / "ES" / "K01" / "context.txt").write_text("client: K01\n")
+    (inv / "ES" / "M02" / "item9").mkdir(parents=True)
+    (inv / "ES" / "M02" / "context.txt").write_text("kind: event\n")
+    (inv / "other" / "x").mkdir(parents=True)
+    (inv / "ES" / "M02" / "item9" / "context.txt").write_text("part_of: ES/K01\n")
+    return inv
+
+
+def test_lot_resolves_from_folder(tmp_path):
+    inv = _inv(tmp_path)
+    assert lot_check.resolve_lot(inv / "ES/K01/box1/item1", inv) == "ES/K01"
+    assert lot_check.resolve_lot(inv / "ES/M02/item9", inv) == "ES/K01"
+    assert lot_check.resolve_lot(inv / "other/x", inv) is None
+
+
+def test_identify_blocked_without_or_with_wrong_lot(tmp_path):
+    inv = _inv(tmp_path)
+    item = inv / "ES/K01/box1/item1"
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nPhotos processed: 3\n")
+    assert "no `Lot:` line" in lot_check.problems(item, inv)[0]
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nLot: ES/M02\n")
+    assert "belongs to ES/K01" in lot_check.problems(item, inv)[0]
+    lot_check.stamp(item, inv)
+    assert lot_check.problems(item, inv) == []
+
+
+def test_lot_read_and_stamped_only_in_summary_header(tmp_path):
+    inv = _inv(tmp_path)
+    item = inv / "ES/K01/box1/item1"
+    body = "--- Item 1 ---\nLot: 7 of a 12-piece estate set\n"
+    (item / "identify.txt").write_text("SHOOT SUMMARY\nPhotos processed: 3\n" + body)
+    assert "no `Lot:` line" in lot_check.problems(item, inv)[0]
+    lot_check.stamp(item, inv)
+    text = (item / "identify.txt").read_text()
+    assert text.endswith(body)
+    assert text.startswith("SHOOT SUMMARY\nLot:              ES/K01\n")
+    assert lot_check.problems(item, inv) == []
+
+
+def test_unclaimed_item_blocked_and_scratch_passes(tmp_path):
+    inv = _inv(tmp_path)
+    assert "no context.txt" in lot_check.problems(inv / "other/x", inv)[0]
+    assert lot_check.problems(tmp_path, inv) == []
+
+
+# --- jewelry measurements (lib/measure_check.py) ------------------------------
+import measure_check  # noqa: E402
+
+_J = "--- Item 1 ---\n- Category: necklace\n- Measured size: {s}\n- Measured weight: {w}\n"
+
+
+def _shoot(tmp_path, s, w):
+    (tmp_path / "identify.txt").write_text(_J.format(s=s, w=w))
+    return tmp_path
+
+
+def test_jewelry_needs_real_measurements(tmp_path):
+    assert measure_check.problems(_shoot(tmp_path, "18 in", "12.4 g")) == []
+    for bad_s in ("ASK", "~18 in", "16-18 in", "unknown", ""):
+        assert measure_check.problems(_shoot(tmp_path, bad_s, "12 g"))
+    assert measure_check.problems(_shoot(tmp_path, "18 in", "estimated 12 g"))
+
+
+def test_ring_size_counts_as_measured_size(tmp_path):
+    for ok in ("size 7", "US size 7 1/2", "Size 6.5"):
+        assert measure_check.problems(_shoot(tmp_path, ok, "3.1 g")) == [], ok
+    # A bare number has no unit or "size" word, so it still needs asking.
+    for bad in ("7", "size ~7", "size 6-7"):
+        assert measure_check.problems(_shoot(tmp_path, bad, "3.1 g")), bad
+
+
+def test_non_jewelry_not_gated_and_wired_into_identify(tmp_path):
+    (tmp_path / "identify.txt").write_text("--- Item 1 ---\n- Category: chess set\n")
+    assert measure_check.problems(tmp_path) == []
+    _shoot(tmp_path, "ASK", "ASK")
+    assert any("jewelry" in a.detail for a in sp.check_identify(tmp_path))
+
+
+def test_jewelry_detector_ignores_household_rings_and_chains(tmp_path):
+    for cat in ("pliers", "chain-nose pliers", "coffee mug", "glass", "ring dish glass",
+                "napkin ring", "napkin rings (set of 6)", "curtain rings", "key ring",
+                "rolling pin", "chain saw", "pendant light", "Tools > Pliers > ring pliers"):
+        assert not measure_check._is_jewelry(cat), cat
+    for cat in ("ring", "sterling ring", "Jewelry & Watches > Rings", "chain", "brooch pin",
+                "glass bead necklace", "charm bracelet", "earrings"):
+        assert measure_check._is_jewelry(cat), cat
+
+
+def test_jewelry_word_outside_category_not_gated(tmp_path):
+    (tmp_path / "identify.txt").write_text(
+        "--- Item 1 ---\n- Category: drinking glass\n- Type: ring-pattern tumbler\n"
+        "- Notes: gold ring around the rim\n")
+    assert measure_check.problems(tmp_path) == []
