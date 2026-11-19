@@ -52,9 +52,11 @@ Status, best first: SOLD (a sales-ledger row), LIVE (published and not ended),
 ENDED, QUEUED (an offer on eBay, not published), DRAFT, PHOTOS ONLY, NOT SHOT
 (an empty folder: the item is filed, typically with its cost share, but has
 no photos yet). An unsold, not-live item whose draft.md says
-`meta.channel: mall` is AVAILABLE LOCALLY (in the booth). The ledger lists
+`meta.channel: mall` is AVAILABLE LOCALLY (in the booth). An unsold item
+whose context.txt has a `kept:` line is KEPT: we have it and use it
+internally, and it is never sold (Russell, 2026-11-19). The ledger lists
 them in the overview's order: sold, live, local, queued/draft, photos only,
-not shot, ended. Folders under `_trash/` (or any `_`/`.` folder) are never
+not shot, ended, kept. Folders under `_trash/` (or any `_`/`.` folder) are never
 members.
 Net kept per sale = net_before_postage - ad_fee - actual_postage, counted only
 once both actuals are in (the accountant's 2026-10-22 ruling); until then the
@@ -95,7 +97,7 @@ PHOTO_EXT = {".jpg", ".jpeg", ".png", ".nef", ".orf", ".heic"}
 _LINE_RE = re.compile(r"^\s*(client|part_of|note|address)\s*:\s*(.*?)\s*$", re.I)
 NOT_INVENTORY = {"_trash", "_returned"}
 STATUS_ORDER = ["SOLD", "LIVE", "AVAILABLE LOCALLY", "QUEUED", "DRAFT", "PHOTOS ONLY",
-                "NOT SHOT", "ENDED"]
+                "NOT SHOT", "ENDED", "KEPT"]
 
 
 # --------------------------------------------------------------------------- #
@@ -252,6 +254,15 @@ def _mall(d: Path) -> bool:
         return False
 
 
+def _kept(d: Path) -> bool:
+    """The item's context.txt has a `kept:` line: ours, for internal use, never sold."""
+    try:
+        return any(re.match(r"\s*kept\s*:", ln, re.I)
+                   for ln in (d / "context.txt").read_text(encoding="utf-8").splitlines())
+    except OSError:
+        return False
+
+
 def _title_from(d: Path) -> str:
     return re.sub(r"^\d+[-_]", "", d.name).replace("-", " ").replace("_", " ")
 
@@ -347,6 +358,8 @@ def estate_items(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]]) 
             status = {4: "LIVE", 3: "ENDED", 2: "QUEUED", 1: "DRAFT"}[lvl]
         if status not in ("SOLD", "LIVE") and _mall(d):
             status = "AVAILABLE LOCALLY"
+        if status != "SOLD" and _kept(d):
+            status = "KEPT"
         gross = sum(_f(s.get("gross")) or 0.0 for s in sales_here)
         nbp = sum(_f(s.get("net_before_postage")) or 0.0 for s in sales_here)
         actuals = all((s.get("ad_fee") or "").strip() and (s.get("actual_postage") or "").strip()
@@ -413,7 +426,8 @@ def estate_text(lot: Path, keep: list[Path], left_out: list[tuple[Path, str]],
               ("Queued/draft", of("QUEUED", "DRAFT"), ask(of("QUEUED", "DRAFT")), "-", "-"),
               ("Photos only", of("PHOTOS ONLY"), "-", "-", "-"),
               ("Not shot", of("NOT SHOT"), "-", "-", "-"),
-              ("Ended", of("ENDED"), "-", "-", "-")]
+              ("Ended", of("ENDED"), "-", "-", "-"),
+              ("Kept (internal use)", of("KEPT"), "-", "-", "-")]
     hdr = f"{'GROUP':<22}{'ITEMS':>6}{'LIST PRICE':>12}{'GROSS':>10}{'NET KEPT':>10}"
     L += ["", "OVERVIEW", hdr, "-" * len(hdr)]
     for name, g, a, gr, k in groups:

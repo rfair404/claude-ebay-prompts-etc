@@ -645,3 +645,18 @@ def test_location_uses_state_note_for_mall_rows():
     assert R._location({"channel": "mall", "state_note": "location: Greensboro Antique Mall - CASE"}) == "Greensboro Antique Mall - CASE"
     assert R._location({"channel": "mall"}) == "ANTIQUE MALL"
     assert R._location({"channel": ""}) == "EBAY"
+
+
+def test_kept_item_is_its_own_status_and_never_sold(estate, monkeypatch):
+    # `kept:` in an item's context.txt = ours, for internal use, not for sale
+    # (Russell, 2026-11-19). It beats the booth channel; a real sale still wins.
+    (estate / "buckle" / "draft.md").write_text(
+        "---\ntitle: Brass buckle\nmeta:\n  channel: mall\n---\nbody\n", encoding="utf-8")
+    (estate / "buckle" / "context.txt").write_text("kept: Russell 2026-11-19\n", encoding="utf-8")
+    monkeypatch.setattr(RL, "_all_listings", lambda: [])
+    monkeypatch.setattr(RL, "_all_sales", lambda: [])
+    keep, left_out = RL.members(estate)
+    items = RL.estate_items(estate, keep, left_out)
+    assert {i["status"] for i in items if "buckle" in i["title"].lower()} == {"KEPT"}
+    text = RL.estate_text(estate, keep, left_out, items, date(2026, 11, 19))
+    assert re.search(r"Kept \(internal use\) +1 ", text) and "Available locally" not in text
