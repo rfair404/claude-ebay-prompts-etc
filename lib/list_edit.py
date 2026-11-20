@@ -90,8 +90,8 @@ import re
 import sys
 import time
 import urllib.parse
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
@@ -634,12 +634,16 @@ def _ebay_extra(field: str, store: str = DEFAULT_STORE) -> Optional[str]:
 # Pre-flight validation (NO credentials needed)
 # ---------------------------------------------------------------------------
 
-def validate_draft_for_sync(draft_path: Path) -> list[str]:
+def validate_draft_for_sync(draft_path: Path, price_gate: bool = True) -> list[str]:
     """Return a list of issues that would block a sync. Empty list = ready.
 
     Runs entirely offline. Catches the problems the user can fix in the
     local file before any eBay call — including the V1 empty-description
     failure mode.
+
+    price_gate=False skips the sold-pull gate (lib/price_gate.py). Only
+    convert_to_auction passes it: it relists an item that was already live,
+    whose ids it has just cleared, so the gate would read it as never-priced.
     """
     issues: list[str] = []
     try:
@@ -782,7 +786,15 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 
     photos = resolve_photo_paths(draft)
     if not photos:
-        issues.append("photos: none listed")
+        # A draft rebuilt from eBay (tools/draft_rebuild.py) has no local
+        # files; its photos are the eBay-hosted URLs in meta.ebay_image_urls.
+        hosted, foreign = ebay_hosted_image_urls(draft)
+        if foreign:
+            issues.append("meta.ebay_image_urls: not eBay-hosted: " + ", ".join(foreign[:3]))
+        elif not hosted:
+            issues.append("photos: none listed")
+        elif len(hosted) > _MAX_PHOTOS:
+            issues.append(f"meta.ebay_image_urls: {len(hosted)} photos, eBay allows {_MAX_PHOTOS}")
     for ph in photos:
         if not ph.exists():
             issues.append(f"photo missing on disk: {ph.name}")
@@ -803,7 +815,8 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
 
     # A price set without a sold pull (asks or judgment only) does not go
     # live — see lib/price_gate.py. Not-yet-live drafts only.
-    issues += sold_pull_issues(draft)
+    if price_gate:
+        issues += sold_pull_issues(draft)
 
     return issues
 
@@ -852,6 +865,46 @@ def upload_photos_to_eps(photo_paths: list[Path],
         data = Path(ph).read_bytes()
         urls.append(upload_site_hosted_picture(data, picture_name=Path(ph).stem, creds=creds))
     return urls
+
+
+_MAX_PHOTOS = 24
+_EBAY_IMAGE_HOST = "ebayimg.com"
+
+
+def _is_ebay_hosted(url: str) -> bool:
+    """True for an https URL on eBay's picture host (i.ebayimg.com, EPS)."""
+    u = urllib.parse.urlparse(str(url or "").strip())
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and (host == _EBAY_IMAGE_HOST
+                                    or host.endswith("." + _EBAY_IMAGE_HOST))
+
+
+def ebay_hosted_image_urls(draft: Draft) -> tuple[list[str], list[str]]:
+    """(eBay-hosted, other) URLs from meta.ebay_image_urls, in order.
+
+    A draft rebuilt from a live listing (tools/draft_rebuild.py) has no local
+    photo files: its photos are the listing's own eBay-hosted pictures, hero
+    first. Those already passed PREP when they first went up, so they are
+    reused as they are rather than re-uploaded. Only eBay's own picture host
+    counts; any other URL is returned in `other` and blocks the sync."""
+    raw = draft.get("meta.ebay_image_urls") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    urls = [str(u).strip() for u in raw if str(u or "").strip()]
+    return ([u for u in urls if _is_ebay_hosted(u)],
+            [u for u in urls if not _is_ebay_hosted(u)])
+
+
+def listing_image_urls(draft: Draft, creds: Optional[EbayCredentials] = None) -> list[str]:
+    """The imageUrls for this draft's inventory item, hero first.
+
+    Local photos (`photos:`) are uploaded to EPS through the PREP gate. A
+    draft with no local photos reuses its eBay-hosted meta.ebay_image_urls
+    (validate_draft_for_sync has already refused anything else)."""
+    paths = resolve_photo_paths(draft)
+    if paths:
+        return upload_photos_to_eps(paths, creds=creds)
+    return ebay_hosted_image_urls(draft)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -2107,7 +2160,9 @@ def build_review_card(draft_path: Path,
 
 def create_or_update_listing(draft_path: Path,
                              creds: Optional[EbayCredentials] = None,
-                             strict_ledger: bool = False) -> SyncResult:
+                             strict_ledger: bool = False,
+                             price_gate: bool = True,
+                             image_urls: Optional[list[str]] = None) -> SyncResult:
     """Sync a draft.md into eBay as an UNPUBLISHED (draft) offer.
 
     CREATE flow when frontmatter has no ebay_offer_id; EDIT flow otherwise.
@@ -2115,6 +2170,7 @@ def create_or_update_listing(draft_path: Path,
     The SYNCED ledger row is written to `creds.store`'s own file (GH #158).
     strict_ledger=True raises LedgerWriteError when that row can't be written
     (--sync, and --list so nothing goes live untracked); otherwise it only warns.
+    price_gate / image_urls: convert_to_auction only (see there).
     """
     draft_path = _resolve_draft_path(draft_path)
     _refuse_off_ebay(draft_path)
@@ -2125,7 +2181,7 @@ def create_or_update_listing(draft_path: Path,
     norm = normalize_draft_identity(draft_path)   # self-heal legacy url-style sku / orphaned ids before anything hits eBay
     if norm["changed"]:
         print(f"  [normalize] {norm['note']}")
-    issues = validate_draft_for_sync(draft_path)
+    issues = validate_draft_for_sync(draft_path, price_gate=price_gate)
     if issues:
         raise ValueError("draft is not sync-ready:\n  - " + "\n  - ".join(issues))
 
@@ -2162,8 +2218,9 @@ def create_or_update_listing(draft_path: Path,
     for _m in ship_msgs + _insurance_notes(draft):
         print(f"  [preflight] {_m}")
 
-    # 1) photos -> EPS
-    image_urls = upload_photos_to_eps(resolve_photo_paths(draft), creds=creds)
+    # 1) photos -> EPS (or the draft's own eBay-hosted URLs; see listing_image_urls)
+    if image_urls is None:
+        image_urls = listing_image_urls(draft, creds=creds)
 
     # 2) InventoryItem (create-or-replace; PUT is idempotent on the SKU)
     item_body = _build_inventory_item(draft, image_urls)
@@ -2652,8 +2709,10 @@ class PublishResult:
 
 
 def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
-                  confirm: bool = False) -> PublishResult:
+                  confirm: bool = False, price_gate: bool = True) -> PublishResult:
     """Publish a previously-synced offer to a LIVE eBay listing.
+
+    price_gate=False skips the sold-pull gate; convert_to_auction only.
 
     Guarded: requires an ebay_offer_id (from --sync) AND confirm=True. With
     confirm=False it is a DRY RUN — it fetches the offer and reports what
@@ -2692,7 +2751,7 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
 
     # --publish skips validate_draft_for_sync, so the sold-pull gate runs here
     # too: the offer may have been synced before the price was checked.
-    gate = sold_pull_issues(draft)
+    gate = sold_pull_issues(draft) if price_gate else []
     _len_issue = measure_check.length_issue(draft)
     if _len_issue:
         gate = list(gate or []) + [_len_issue]
@@ -2837,6 +2896,285 @@ def end_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
                 draft_path=draft_path)
     return EndResult(dry_run=False, offer_id=offer_id, title=title,
                      status_before=status, ended=True, listing_id=listing_id or None)
+
+
+# ---------------------------------------------------------------------------
+# CONVERT — a live fixed-price listing becomes an auction on the same SKU
+# ---------------------------------------------------------------------------
+#
+# eBay will not change an offer's format in place: a PUT of auctionStartPrice
+# onto a FIXED_PRICE offer is refused (errorId 25758). The only route is
+# end -> delete the offer -> create a new AUCTION offer -> publish. The listing
+# is off eBay between the first and last step, so everything that could stop
+# the new offer is checked BEFORE the live listing is ended, and a re-run picks
+# up from whatever step a failure left it at.
+
+_AUCTION_DURATIONS = ("DAYS_1", "DAYS_3", "DAYS_5", "DAYS_7", "DAYS_10")
+
+
+@dataclass
+class ConvertResult:
+    dry_run: bool
+    sku: str
+    title: str
+    start_price: str
+    duration: str
+    steps: list[str] = field(default_factory=list)      # planned (dry run) or done
+    notes: list[str] = field(default_factory=list)
+    old_offer_id: Optional[str] = None
+    old_listing_id: Optional[str] = None
+    offer_id: Optional[str] = None
+    listing_id: Optional[str] = None
+    listing_url: Optional[str] = None
+    verify_issues: list[str] = field(default_factory=list)
+    promotion: Optional[str] = None
+
+
+def _offers_for_sku(sku: str, creds: EbayCredentials) -> list[dict]:
+    try:
+        d = api_send("GET", f"/sell/inventory/v1/offer?sku={urllib.parse.quote(sku)}",
+                     creds=creds)
+    except EbayAPIError as e:
+        if e.status == 404:
+            return []
+        raise
+    return list(d.get("offers") or [])
+
+
+def _consignment_of(sku: str, listing_id: str, folder: Path) -> Optional[str]:
+    """'consignment <client> (<intake>)' when the item is consigned, else None.
+    Fails closed: no consignment ledgers to read reads as consigned."""
+    from auto_promote import _consign, _inventory_folder
+    c = _consign()
+    if not c.INVENTORY.is_dir():
+        return f"consignment ledgers not found ({c.INVENTORY}); can't rule it out"
+    hit = c.find_item(sku=sku, listing_id=listing_id, folder=_inventory_folder(folder))
+    return f"consignment {hit[0]} ({hit[1]})" if hit else None
+
+
+def _verify_auction(offer_id: str, draft: Draft, sku: str, listing_id: str,
+                    creds: EbayCredentials) -> list[str]:
+    """Read the new offer back from eBay; [] when it is the auction asked for."""
+    issues: list[str] = []
+    try:
+        o = api_send("GET", f"/sell/inventory/v1/offer/{offer_id}", creds=creds)
+    except EbayAPIError as e:
+        return [f"could not read offer {offer_id} back from eBay: {e}"]
+    want_price = _to_decimal_str(draft.get("price"))
+    want_dur = str(draft.get("listing_duration") or "").upper()
+    got_price = ((o.get("pricingSummary") or {}).get("auctionStartPrice") or {}).get("value")
+    lst = o.get("listing") or {}
+    checks = (("status", str(o.get("status") or ""), "PUBLISHED"),
+              ("format", str(o.get("format") or ""), "AUCTION"),
+              ("listingDuration", str(o.get("listingDuration") or ""), want_dur),
+              ("listingId", str(lst.get("listingId") or ""), listing_id))
+    for name, got, want in checks:
+        if got != want:
+            issues.append(f"{name}: eBay says {got or '(none)'}, expected {want}")
+    if not _same_number(got_price, want_price):
+        issues.append(f"auctionStartPrice: eBay says {got_price}, expected {want_price}")
+    if (o.get("listingPolicies") or {}).get("bestOfferTerms"):
+        issues.append("bestOfferTerms present on the auction offer")
+    others = [x for x in _offers_for_sku(sku, creds) if str(x.get("offerId")) != str(offer_id)]
+    if others:
+        issues.append("SKU still has other offers: "
+                      + ", ".join(f"{x.get('offerId')} {x.get('format')} {x.get('status')}"
+                                  for x in others))
+    return issues
+
+
+def convert_to_auction(draft_path: Path, creds: Optional[EbayCredentials] = None,
+                       confirm: bool = False,
+                       allow_consignment: bool = False) -> ConvertResult:
+    """Turn a live FIXED_PRICE listing into an AUCTION on the same SKU.
+
+    The draft must already say format AUCTION, a listing_duration and the
+    start bid in `price`. Without confirm this is a TRUE dry run: only GETs,
+    no eBay write, no draft or ledger write. With confirm, in order:
+      1. withdraw the live fixed-price offer (ends the listing; ledger ENDED)
+      2. delete that offer; meta.ebay_offer_id/ebay_listing_id are cleared
+      3. create the AUCTION offer on the same SKU (the --sync path)
+      4. publish it (the --publish path, auto-promote included)
+      5. read the new offer back from eBay and check it
+    Every check that could stop steps 3-4 runs before step 1. A re-run after a
+    failure resumes: a withdrawn or deleted old offer is not touched again, and
+    an already-live auction is only verified.
+
+    Refuses a consigned item unless allow_consignment: a consignor's item
+    changing format is the client's business too.
+    """
+    draft_path = _resolve_draft_path(draft_path)
+    _refuse_off_ebay(draft_path)
+    creds = creds or load_credentials()
+    if not creds.has_user:
+        raise EbayAuthError("Convert needs user-context OAuth. Run `python list_edit.py --setup-check`.")
+    draft = parse_draft(draft_path)
+
+    # --- the draft must already describe the auction ----------------------
+    problems: list[str] = []
+    fmt = str(draft.get("format") or "").upper()
+    if fmt != "AUCTION":
+        problems.append(f"format: {fmt or '(unset)'} — set format: AUCTION first")
+    duration = str(draft.get("listing_duration") or "").upper()
+    if duration not in _AUCTION_DURATIONS:
+        problems.append(f"listing_duration: {duration or '(unset)'} — one of "
+                        + ", ".join(_AUCTION_DURATIONS))
+    start = _to_decimal_str(draft.get("price"))
+    sku = str(draft.get("meta.ebay_inventory_sku") or "").strip()
+    if not _CANONICAL_SKU_RE.match(sku):
+        problems.append(f"meta.ebay_inventory_sku: {sku or '(unset)'} — need the live "
+                        f"listing's canonical SKU (run --repair-meta)")
+    problems += validate_draft_for_sync(draft_path, price_gate=False)
+    title = str(draft.get("title") or "")
+    if problems:
+        raise ValueError("refusing to convert:\n  - " + "\n  - ".join(problems))
+    _refuse_voided(sku, creds.store)
+
+    res = ConvertResult(dry_run=not confirm, sku=sku, title=title,
+                        start_price=start or "", duration=duration)
+
+    # --- what eBay has for this SKU right now -----------------------------
+    offers = _offers_for_sku(sku, creds)
+    auctions = [o for o in offers if str(o.get("format") or "").upper() == "AUCTION"]
+    olds = [o for o in offers if str(o.get("format") or "").upper() != "AUCTION"]
+    if len(olds) > 1 or len(auctions) > 1:
+        raise ValueError(f"SKU {sku} has {len(offers)} offers on eBay; convert handles one. "
+                         f"Check with --offers.")
+    old = olds[0] if olds else None
+    auction = auctions[0] if auctions else None
+    meta_listing = str(draft.get("meta.ebay_listing_id") or "").strip()
+    converted_from = str(draft.get("meta.converted_from_listing_id") or "").strip()
+
+    if old is not None:
+        res.old_offer_id = str(old.get("offerId") or "")
+        lst = old.get("listing") or {}
+        res.old_listing_id = str(lst.get("listingId") or "") or None
+        if str(old.get("status") or "").upper() == "PUBLISHED":
+            lstatus = str(lst.get("listingStatus") or "").upper()
+            if lstatus and lstatus != "ACTIVE":
+                raise ValueError(f"listing {res.old_listing_id} is {lstatus}, not ACTIVE "
+                                 f"(it may have sold). Nothing converted.")
+            if int(lst.get("soldQuantity") or 0) > 0 or old.get("availableQuantity") == 0:
+                raise ValueError(f"listing {res.old_listing_id} has sold. Nothing converted.")
+            if meta_listing and res.old_listing_id and meta_listing != res.old_listing_id:
+                raise ValueError(f"draft says listing {meta_listing} but eBay has "
+                                 f"{res.old_listing_id} on SKU {sku}; run --repair-meta first.")
+        elif not converted_from:
+            raise ValueError(f"offer {res.old_offer_id} is {old.get('status')}, not live, and "
+                             f"this draft was never converted — nothing live to convert.")
+    elif auction is None and not converted_from:
+        raise ValueError(f"SKU {sku} has no offer on eBay and the draft was never converted "
+                         f"— nothing live to convert. A new listing goes through --list.")
+
+    consigned = _consignment_of(sku, meta_listing or res.old_listing_id or converted_from,
+                                draft_path.parent)
+    if consigned:
+        if not allow_consignment:
+            raise ValueError(f"{consigned}: refusing to convert without --allow-consignment.")
+        res.notes.append(f"{consigned}: converting under --allow-consignment")
+
+    if auction is not None and str(auction.get("status") or "").upper() == "PUBLISHED":
+        res.offer_id = str(auction.get("offerId") or "")
+        res.listing_id = str((auction.get("listing") or {}).get("listingId") or "") or None
+        res.notes.append("already an auction on eBay; verified only")
+        res.verify_issues = _verify_auction(res.offer_id, draft, sku, res.listing_id or "", creds)
+        if res.listing_id:
+            res.listing_url = f"https://www.ebay.com/itm/{res.listing_id}"
+        return res
+
+    # --- everything that could stop the new offer, checked before ending --
+    policies, location_key = _resolve_policies_and_location(creds)
+    category_id = _resolve_category_id(draft, creds)
+    blocker = _payment_policy_blocker(draft, policies)
+    if blocker:
+        raise ValueError(f"refusing to convert: {blocker}")
+    allowed, _req = get_allowed_condition_ids(category_id, creds=creds)
+    if allowed:
+        _enum, reason = _remap_condition_for_category(str(draft.get("condition") or ""), allowed)
+        if reason:
+            res.notes.append(f"condition will be remapped at sync: {reason}")
+    else:
+        nc = _conditionless_category_check(draft, category_id, creds)
+        if nc and nc[1]:
+            raise ValueError(f"refusing to convert: {nc[0]}")
+    _fid, ship_msgs = _resolve_shipping_policy(draft, policies, creds, strict=True)
+    res.notes += ship_msgs
+    _build_offer(draft, sku, category_id, location_key, {**policies, "fulfillment": _fid})
+
+    # Photos, hero first. Local files go through the PREP gate; otherwise the
+    # live inventory item's own eBay-hosted pictures are kept as they are.
+    image_urls: Optional[list[str]] = None
+    paths = resolve_photo_paths(draft)
+    if paths:
+        _assert_photos_cleared(paths)
+        photo_note = f"{len(paths)} local photo(s) uploaded to EPS"
+    else:
+        try:
+            item = api_send("GET", f"/sell/inventory/v1/inventory_item/{sku}", creds=creds)
+            live_urls = list((item.get("product") or {}).get("imageUrls") or [])
+        except EbayAPIError:
+            live_urls = []
+        meta_urls = ebay_hosted_image_urls(draft)[0]
+        if live_urls and all(_is_ebay_hosted(u) for u in live_urls):
+            image_urls = live_urls
+            photo_note = f"{len(live_urls)} eBay-hosted photo(s) kept from the live item"
+            if meta_urls and meta_urls != live_urls:
+                res.notes.append("meta.ebay_image_urls differs from the live item; "
+                                 "the live item's photos are used")
+        else:
+            image_urls = meta_urls
+            photo_note = f"{len(meta_urls)} eBay-hosted photo(s) from meta.ebay_image_urls"
+    res.notes.append(f"photos: {photo_note}")
+    ends = datetime.now(timezone.utc) + timedelta(days=int(duration.split("_")[1]))
+    res.notes.append(f"ends about {ends.strftime('%Y-%m-%d %H:%M')} UTC if published now")
+
+    # --- the plan ---------------------------------------------------------
+    old_status = str((old or {}).get("status") or "").upper()
+    plan: list[tuple[str, str]] = []
+    if old is not None and old_status == "PUBLISHED":
+        plan.append(("withdraw", f"end live fixed-price listing {res.old_listing_id} "
+                                 f"(offer {res.old_offer_id})"))
+    if old is not None:
+        plan.append(("delete", f"delete fixed-price offer {res.old_offer_id}; "
+                               f"clear meta.ebay_offer_id/ebay_listing_id"))
+    plan.append(("create", f"{'update' if auction else 'create'} AUCTION offer on SKU {sku}: "
+                           f"start ${start}, {duration}, Best Offer off"))
+    plan.append(("publish", "publish the auction; read it back from eBay"))
+    res.steps = [s for _k, s in plan]
+    if not confirm:
+        return res
+
+    # --- act --------------------------------------------------------------
+    done: list[str] = []
+    for kind, label in plan:
+        if kind == "withdraw":
+            update_meta(draft_path, {"converted_from_listing_id": res.old_listing_id or ""})
+            api_send("POST", f"/sell/inventory/v1/offer/{res.old_offer_id}/withdraw", {},
+                     creds=creds)
+            _record_end(sku, "ENDED", store=creds.store, offer_id=res.old_offer_id or "",
+                        listing_ids=[res.old_listing_id or ""], title=title,
+                        draft_path=draft_path)
+        elif kind == "delete":
+            if res.old_listing_id and not converted_from:
+                update_meta(draft_path, {"converted_from_listing_id": res.old_listing_id})
+            api_send("DELETE", f"/sell/inventory/v1/offer/{res.old_offer_id}", creds=creds)
+            update_meta(draft_path, {"ebay_offer_id": "", "ebay_listing_id": ""})
+        elif kind == "create":
+            sres = create_or_update_listing(draft_path, creds=creds, strict_ledger=True,
+                                            price_gate=False, image_urls=image_urls)
+            res.offer_id = sres.offer_id
+        elif kind == "publish":
+            pres = publish_offer(draft_path, creds=creds, confirm=True, price_gate=False)
+            res.listing_id = pres.listing_id
+            res.listing_url = pres.listing_url
+            res.promotion = pres.promotion
+            if pres.ledger_error:
+                res.verify_issues.append(pres.ledger_error)
+        done.append(label)
+    res.steps = done
+    res.verify_issues += _verify_auction(res.offer_id or "", parse_draft(draft_path), sku,
+                                         res.listing_id or "", creds)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -3115,13 +3453,15 @@ def _cli() -> None:
     ap.add_argument("--allow-not-sellable", action="store_true",
                     help="update even if the SKU's offer is not live (DANGEROUS: writing to a sold item can relist it)")
     ap.add_argument("--fields", metavar="LIST", help="Comma-separated field groups for --update (e.g. description,price). Groups: description,title,price,condition,aspects,photos,shipping,quantity,bestoffer,policies. Use 'policies' after changing shipping.international — it re-points the live offer at the right fulfillment policy.")
+    ap.add_argument("--convert-to-auction", metavar="TARGET", dest="convert_target", help="Turn a LIVE fixed-price listing into an auction on the same SKU: end it, delete the old offer, create + publish an AUCTION offer from the draft (format AUCTION, listing_duration, start bid in price), then read it back. eBay refuses the format change in place (25758). TRUE dry run (GETs only) unless --confirm.")
+    ap.add_argument("--allow-consignment", action="store_true", help="Let --convert-to-auction act on a consigned item (refused by default).")
     ap.add_argument("--end", metavar="TARGET", help="End (withdraw) a live listing from a draft. DRY RUN unless --confirm is also given.")
     ap.add_argument("--offers", action="store_true", help="Query ALL offers on the account (sku, offerId, status, listingId, price).")
     ap.add_argument("--withdraw-offer", metavar="OFFER_ID", help="Withdraw (end) a live offer by ID — keeps the offer. DRY RUN unless --confirm.")
     ap.add_argument("--delete-offer", metavar="OFFER_ID", help="Delete an offer by ID (permanent; ends listing if live; keeps SKU). DRY RUN unless --confirm.")
     ap.add_argument("--delete-item", metavar="SKU", help="Delete an inventory item (SKU) AND all its offers (permanent). DRY RUN unless --confirm.")
     ap.add_argument("--void", metavar="SKU", help="Mark a superseded DRAFTED ledger row (no eBay offer/listing id in the ledger or on eBay) VOIDED, so --record/--review/--sync/--list refuse any draft.md still carrying the SKU. Writes nothing to eBay. DRY RUN unless --confirm.")
-    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--end/--withdraw-offer/--delete-offer/--delete-item/--void to actually act (otherwise dry runs).")
+    ap.add_argument("--confirm", action="store_true", help="Required with --publish/--list/--convert-to-auction/--end/--withdraw-offer/--delete-offer/--delete-item/--void to actually act (otherwise dry runs).")
     ap.add_argument("--setup-check", action="store_true", help="Verify creds and list account policy IDs.")
     ap.add_argument("--create-store-policies", action="store_true",
                     help="Create this store's three business policies FROM its storefront profile (storefronts.<name>.returns/.shipping) and print the IDs. Idempotent by name.")
@@ -3134,7 +3474,7 @@ def _cli() -> None:
         # Off-eBay drafts are refused before credentials load, so the refusal
         # is the same line on every machine. The functions check again.
         write_target = (args.review or args.sync or args.publish
-                        or args.list_target or args.update)
+                        or args.list_target or args.update or args.convert_target)
         if write_target:
             _refuse_off_ebay(_resolve_draft_path(write_target))
         if args.validate:
@@ -3347,6 +3687,31 @@ def _cli() -> None:
                 print(f"[OK] updated {', '.join(changed)} on {args.update} (other fields preserved).")
             else:
                 print(f"[i] nothing changed on {args.update}.")
+            return
+        if args.convert_target:
+            cv_creds = load_credentials(store=_resolve_store(args.convert_target, args.store))
+            res = convert_to_auction(Path(args.convert_target), creds=cv_creds,
+                                     confirm=args.confirm,
+                                     allow_consignment=args.allow_consignment)
+            head = "[DRY RUN] Nothing sent. This WOULD:" if res.dry_run else "[DONE]"
+            print(f"{head}  {res.sku}  {res.title}")
+            for i, s in enumerate(res.steps, 1):
+                print(f"  {i}. {s}")
+            for n in res.notes:
+                print(f"  - {n}")
+            if res.listing_url:
+                print(f"  auction: {res.listing_url}")
+            if res.promotion:
+                print(f"  Promoted Listings: {res.promotion}")
+            if res.dry_run:
+                print("\n  To actually convert: re-run with --confirm")
+            if res.verify_issues:
+                print("[FAIL] read-back from eBay does not match:", file=sys.stderr)
+                for v in res.verify_issues:
+                    print(f"  - {v}", file=sys.stderr)
+                sys.exit(1)
+            elif not res.dry_run:
+                print("  read-back: eBay has the auction as drafted.")
             return
         if args.end:
             end_creds = load_credentials(store=_resolve_store(args.end, args.store))
