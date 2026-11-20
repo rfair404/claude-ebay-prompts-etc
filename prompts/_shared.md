@@ -181,6 +181,11 @@ only to pick a shipping tier and are labelled as such. **Jewelry always**
 needs Russell's measured size and weight (a 1" error is a return): ask, wait,
 record. `lib/measure_check.py` enforces it at the IDENTIFY gate.
 
+**Necklaces, bracelets, anklets, chokers and chains always state their length**
+on the listing (title, a length item specific and a description line); preflight,
+`--sync` and `--publish` refuse a draft without one (Russell, 2026-11-20). Only
+Russell waives it, with `measurement_override: <reason>` in the draft frontmatter.
+
 ## Unit type and quantity
 
 Every item record carries `unit_type` + `quantity`.

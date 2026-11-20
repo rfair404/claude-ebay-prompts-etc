@@ -99,6 +99,7 @@ from typing import Optional
 from config import ConfigError, config_path, load_config, get_storefront
 from stores import paths as store_paths, resolve_store_name
 import stores as _stores
+import measure_check  # jewelry length must be on the listing
 import ledger_store  # the one write path for the listings ledger (#380)
 from gdrive_mirror import ledger_changed
 from draft_io import (Draft, ebay_block_reason, iter_drafts, parse_draft, resolve_photo_paths,
@@ -655,6 +656,10 @@ def validate_draft_for_sync(draft_path: Path) -> list[str]:
         issues.append("title: required, empty")
     elif len(title) > 80:
         issues.append(f"title: {len(title)}/80 — exceeds 80 chars")
+
+    _len_issue = measure_check.length_issue(draft)
+    if _len_issue:
+        issues.append(_len_issue)
 
     price = _to_decimal_str(draft.get("price"))
     if price is None:
@@ -1813,6 +1818,9 @@ def preflight_listing(draft_path: Path, creds: Optional[EbayCredentials] = None,
         msgs.append(_pay_block)
     # Insurance: retired, no-op — see _insurance_notes
     msgs.extend(_insurance_notes(draft))
+    _len_issue = measure_check.length_issue(draft)
+    if _len_issue:
+        msgs.append(_len_issue)
     return msgs
 
 
@@ -2685,6 +2693,9 @@ def publish_offer(draft_path: Path, creds: Optional[EbayCredentials] = None,
     # --publish skips validate_draft_for_sync, so the sold-pull gate runs here
     # too: the offer may have been synced before the price was checked.
     gate = sold_pull_issues(draft)
+    _len_issue = measure_check.length_issue(draft)
+    if _len_issue:
+        gate = list(gate or []) + [_len_issue]
     if gate:
         raise ValueError("refusing to publish:\n  - " + "\n  - ".join(gate))
 
