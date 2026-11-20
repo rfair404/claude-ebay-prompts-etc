@@ -439,3 +439,34 @@ def test_jewelry_word_outside_category_not_gated(tmp_path):
         "--- Item 1 ---\n- Category: drinking glass\n- Type: ring-pattern tumbler\n"
         "- Notes: gold ring around the rim\n")
     assert measure_check.problems(tmp_path) == []
+
+
+# --- listing must state jewelry length (measure_check.length_issue) ----------
+from draft_io import Draft  # noqa: E402
+
+
+def _d(title, specs=None, body="", **fm):
+    return Draft(path=Path("draft.md"), frontmatter={"title": title,
+                 "item_specifics": specs or {}, **fm}, body=body)
+
+
+def test_length_required_on_necklace_and_bracelet():
+    for t in ("Sterling Silver Necklace Pendant", "Vintage Gold Tone Bracelet", "Gold Curb Chain"):
+        assert measure_check.length_issue(_d(t)), t
+
+
+def test_length_present_passes():
+    assert measure_check.length_issue(_d('Sterling Necklace 18" Chain')) is None
+    assert measure_check.length_issue(_d("Gold Bracelet", {"bracelet_length": "7.5 in"})) is None
+    assert measure_check.length_issue(
+        _d("Silver Necklace", body="Measures 20 inches long.\nWeight 12 g.")) is None
+
+
+def test_weight_or_unrelated_number_is_not_a_length():
+    assert measure_check.length_issue(_d("Silver Necklace", body="Weight 12 g, 2 in pendant, 925."))
+
+
+def test_override_and_non_jewelry():
+    assert measure_check.length_issue(_d("Gold Bracelet", measurement_override="Russell waived")) is None
+    assert measure_check.length_issue(_d("Oregon Chain Saw Chain 20 inch bar replacement")) is None
+    assert measure_check.length_issue(_d("Hallmark Ornament")) is None

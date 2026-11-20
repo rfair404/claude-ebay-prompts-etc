@@ -85,6 +85,58 @@ def problems(shoot: Path) -> list[str]:
     return out
 
 
+# --- the listing itself must state the length (necklaces, bracelets...) -------
+# Russell (2026-11-20): buyers keep asking "how long?" when a listing never says.
+# A necklace/bracelet/anklet/choker/chain listing is blocked at preflight and
+# sync until a length is in the title, a length/size item specific, or a
+# description line about length. Override with `measurement_override: <reason>`
+# in the draft frontmatter (Russell's word only).
+_LENGTH_NOUN = re.compile(
+    r"\b(?:necklaces?|bracelets?|bangles?|anklets?|chokers?|lariats?|chains?)\b", re.I)
+_CHAIN_JEWELRY = re.compile(
+    r"\b(?:gold|silver|sterling|\d{1,2}k|14k|10k|18k|925|platinum|rope|curb|cable|box|snake|"
+    r"figaro|herringbone|pendant|necklace|jewel(?:ry)?|vintage|costume)\b", re.I)
+_LEN_VALUE = re.compile(
+    r"\d+(?:\.\d+)?(?:\s*/\s*\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?\s*"
+    r"(?:in(?:ch(?:es)?)?\b|\"|”|mm\b|cm\b)", re.I)
+_LEN_LINE = re.compile(r"length|long\b|circumference|wrist|drop|inch", re.I)
+
+
+def needs_length(draft) -> bool:
+    """True when the listing is a necklace/bracelet-type piece."""
+    specs = draft.frontmatter.get("item_specifics") or {}
+    text = " ".join([str(draft.get("title") or ""), str(draft.get("category_path") or ""),
+                     str(specs.get("type") or "") if isinstance(specs, dict) else ""])
+    text = _NOT_PHRASE.sub(" ", text)
+    hits = {m.group(0).lower().rstrip("s") for m in _LENGTH_NOUN.finditer(text)}
+    if hits - {"chain"}:
+        return True
+    # A bare "chain" is jewelry only with a jewelry word beside it (not chain saw, bike chain).
+    return bool(hits) and not _NOT_JEWELRY.search(text) and bool(_CHAIN_JEWELRY.search(text))
+
+
+def length_issue(draft) -> Optional[str]:
+    """A blocking message when a necklace/bracelet listing states no length."""
+    if str(draft.get("measurement_override") or "").strip():
+        return None
+    if not needs_length(draft):
+        return None
+    if _LEN_VALUE.search(str(draft.get("title") or "")):
+        return None
+    specs = draft.frontmatter.get("item_specifics") or {}
+    if isinstance(specs, dict):
+        for k, v in specs.items():
+            if re.search(r"length|size", str(k), re.I) and _LEN_VALUE.search(str(v or "")):
+                return None
+    for line in str(draft.body or "").splitlines():
+        if _LEN_LINE.search(line) and _LEN_VALUE.search(line):
+            return None
+    return ("length: BLOCKER — necklace/bracelet listing states no length. Put the measured "
+            "length in the title, an item specific (`necklace_length`/`bracelet_length`) and "
+            "the description (ask Russell for the number; never estimate). Russell can waive "
+            "it with `measurement_override: <reason>` in the draft.")
+
+
 def main(argv: Optional[list] = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     errs = problems(Path(argv[0])) if argv else ["usage: measure_check <shoot-dir>"]
