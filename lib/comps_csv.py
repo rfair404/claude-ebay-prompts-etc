@@ -107,12 +107,22 @@ def append_comp(shoot_dir: Union[str, Path], *, stage: str, query: str,
 
 def from_apify_json(shoot_dir: Union[str, Path], json_path: Union[str, Path],
                     item: str = "") -> str:
-    """Fold a saved Apify run JSON (apify_ebay.save_run_json) into the CSV as
-    stage B rows — so one comps.csv holds all three stages."""
+    """Fold a saved run JSON (save_run_json: browser, CompsAPI or merged) into
+    the CSV as stage B rows — so one comps.csv holds all three stages. The
+    note names each row's source (`comp_source`, else the run's `source`)."""
     data = json.loads(Path(json_path).read_text(encoding="utf-8"))
     query = "; ".join(data.get("queries") or [])
+    run_src = data.get("source") or data.get("actor") or "apify run"
     rows = []
     for c in data.get("comps", []):
+        src = c.get("comp_source") or run_src
+        if not c.get("bo_accepted"):
+            bo_note = ""
+        elif src.startswith("compsapi"):
+            # CompsAPI reports a price for BO rows but nobody has seen the page
+            bo_note = "; vendor-claimed accepted price, unverified"
+        else:
+            bo_note = "; price is the ASK, accepted offer was lower"
         rows.append({
             "captured_at": _now(), "item": str(item), "stage": "B",
             "query": query, "price": c.get("sold_price", ""),
@@ -121,9 +131,7 @@ def from_apify_json(shoot_dir: Union[str, Path], json_path: Union[str, Path],
             "listing_type": (BO_ACCEPTED if c.get("bo_accepted")
                              else c.get("listing_type", "") or ""),
             "url": c.get("url", ""),
-            "note": f"apify run {data.get('run_id','')}"
-                    + ("; price is the ASK, accepted offer was lower"
-                       if c.get("bo_accepted") else ""),
+            "note": f"{src} {data.get('run_id','')}".strip() + bo_note,
         })
     return append_rows(shoot_dir, rows)
 

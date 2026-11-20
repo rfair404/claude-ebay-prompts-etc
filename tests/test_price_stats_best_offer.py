@@ -13,8 +13,11 @@ save_browse_run -> price_from_runs, and the text fallback parser.
 Run:  pytest tests/test_price_stats_best_offer.py
 """
 import csv
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -112,3 +115,32 @@ def test_comps_csv_marks_bo_rows(tmp_path):
     assert bo["listing_type"] == comps_csv.BO_ACCEPTED
     assert "ASK" in bo["note"]
     assert by_url[TRUE_SALES[0]["url"]]["listing_type"] == "Buy It Now"
+
+
+@pytest.mark.parametrize("run_source, comp_source, bo, note_start, note_has", [
+    ("browser:ebay-sold(best_match)", None, True, "browser:ebay-sold", "ASK"),
+    ("compsapi:sold", None, True, "compsapi:sold", "vendor-claimed accepted price, unverified"),
+    ("compsapi:sold", None, False, "compsapi:sold", None),
+    ("merged:chrome+compsapi", "chrome", True, "chrome", "ASK"),
+    ("merged:chrome+compsapi", "compsapi", True, "compsapi", "vendor-claimed accepted price, unverified"),
+    ("merged:chrome+compsapi", "compsapi", False, "compsapi", None),
+])
+def test_comps_csv_note_names_source(tmp_path, run_source, comp_source, bo,
+                                     note_start, note_has):
+    comp = {"title": "Western Electric Candlestick", "url": "https://x/1",
+            "sold_price": 80.0, "bo_accepted": bo, "listing_type": "Buy It Now"}
+    if comp_source:
+        comp["comp_source"] = comp_source
+    path = tmp_path / "run.json"
+    path.write_text(json.dumps({"run_id": "r1", "source": run_source,
+                                "queries": [QUERY], "comps": [comp]}),
+                    encoding="utf-8")
+    comps_csv.from_apify_json(tmp_path, path, item="1")
+    row = next(csv.DictReader((tmp_path / "comps.csv").open(encoding="utf-8")))
+    assert row["note"].startswith(note_start)
+    assert "apify" not in row["note"]
+    if note_has:
+        assert note_has in row["note"]
+    else:
+        assert ";" not in row["note"]
+    assert (row["listing_type"] == comps_csv.BO_ACCEPTED) is bo
