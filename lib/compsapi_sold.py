@@ -312,6 +312,7 @@ def exact_match_reduce(chrome_rows: list[dict], api_rows: list[dict], *,
     comps = [c for _, c in pairs]
     price_stats.filter_unit(comps, unit)
     price_stats.filter_tokens(comps, require_tokens)
+    price_stats.filter_plated(comps, require_tokens)
 
     n_chrome = len(chrome_rows)
     price_stats.filter_condition(comps[:n_chrome], condition)

@@ -507,6 +507,47 @@ def filter_tokens(comps: list["Comp"], require_tokens: list[str]) -> FilterLog:
     return log
 
 
+PLATED_RE = re.compile(
+    r"\b(?:gold|silver)[\s-]*(?:plate[d]?|filled|fill|overlay|wash(?:ed)?|tone[d]?)\b"
+    r"|\brolled[\s-]*gold\b|\bvermeil\b|\belectro[\s-]*plate[d]?\b"
+    r"|\b(?:\d{1,2}\s*k(?:t|arat)?\s*)?(?:gp|gf|rgp|hge|hgp|egp)\b",
+    re.I,
+)
+PLATED_TOKENS = ("plate", "filled", "vermeil", "rolled", "overlay", "gold tone", "gold-tone")
+# Solid precious metal named in the item's own required tokens: 14k, 18kt,
+# 10 karat, sterling, 925, 999, platinum, "solid gold".
+SOLID_METAL_RE = re.compile(
+    r"\b\d{1,2}\s*k(?:t|arat)?\b|\bsterling\b|\b(?:925|999|750|585|417)\b"
+    r"|\bplatinum\b|\bsolid\s+(?:gold|silver)\b",
+    re.I,
+)
+
+
+def filter_plated(comps: list["Comp"], require_tokens: list[str]) -> FilterLog:
+    """Drop gold/silver-plated, filled, vermeil, rolled-gold and gold-tone comps.
+
+    Plated metal is not solid metal, so its price never goes into the
+    distribution, the ceiling or the tiers (Russell 2026-11-20, after $51
+    "14KGP" and $82 "14K Gold Filled" rows came back for a solid-14K chain
+    query). Bare "rhodium plated" is not matched: that is solid white gold.
+    Runs only when the item's own required tokens name solid metal (14k,
+    sterling, 925 ...), so gold-tone costume jewelry (Trifari, Monet),
+    Silvertone guitars and Gold Tone banjos keep their comps. Also skipped
+    when those tokens name a plated/filled finish: the item itself is plated.
+    """
+    log = FilterLog("plated_not_solid")
+    toks = " ".join(t.lower() for t in (require_tokens or []))
+    if not SOLID_METAL_RE.search(toks) or any(w in toks for w in PLATED_TOKENS):
+        return log
+    for c in comps:
+        if c.dropped:
+            continue
+        m = PLATED_RE.search(c.title or "")
+        if m:
+            log.add(c, f"plated/filled/gold-tone metal ('{m.group(0).strip()}'), not solid")
+    return log
+
+
 def filter_condition(comps: list["Comp"], target: Optional[str],
                      pool_used_when_thin: bool = True) -> tuple[FilterLog, str]:
     """Keep comps in the item's condition cohort. Returns (log, cohort_used).
@@ -974,6 +1015,7 @@ def price_from_runs(
     logs: list[FilterLog] = []
     logs.append(filter_unit(all_for_filter, unit_type))
     logs.append(filter_tokens(all_for_filter, require_tokens or []))
+    logs.append(filter_plated(all_for_filter, require_tokens or []))
     cond_log, cohort_used = filter_condition(all_for_filter, condition, pool_used_when_thin)
     logs.append(cond_log)
     logs.append(filter_exclusions(all_for_filter))
@@ -1032,6 +1074,7 @@ def price_from_runs(
     # Apply the same unit/token/condition gate to the ceiling candidates.
     filter_unit(ph_pool, unit_type)
     filter_tokens(ph_pool, require_tokens or [])
+    filter_plated(ph_pool, require_tokens or [])
     filter_condition(ph_pool, condition, pool_used_when_thin)
     filter_exclusions(ph_pool)
     ph_kept = [c for c in ph_pool if not c.dropped]
