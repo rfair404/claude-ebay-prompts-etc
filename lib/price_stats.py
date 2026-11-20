@@ -507,6 +507,39 @@ def filter_tokens(comps: list["Comp"], require_tokens: list[str]) -> FilterLog:
     return log
 
 
+PLATED_RE = re.compile(
+    r"\b(?:gold|silver)[\s-]*(?:plate[d]?|filled|fill|overlay|wash(?:ed)?|tone[d]?)\b"
+    r"|\brolled[\s-]*gold\b|\bvermeil\b|\belectro[\s-]*plate[d]?\b"
+    r"|\b(?:\d{1,2}\s*k(?:t|arat)?\s*)?(?:gp|gf|rgp|hge|hgp|egp)\b",
+    re.I,
+)
+PLATED_TOKENS = ("plate", "filled", "vermeil", "rolled", "overlay", "gold tone", "gold-tone")
+
+
+def filter_plated(comps: list["Comp"], require_tokens: list[str],
+                  allow_plated: bool = False) -> FilterLog:
+    """Drop gold/silver-plated, filled, vermeil, rolled-gold and gold-tone comps.
+
+    Plated metal is not solid metal, so its price never goes into the
+    distribution, the ceiling or the tiers (Russell 2026-11-20, after $51
+    "14KGP" and $82 "14K Gold Filled" rows came back for a solid-14K chain
+    query). Bare "rhodium plated" is not matched: that is solid white gold.
+    Skipped only when the item's own core tokens name a plated/filled
+    finish or `allow_plated=True` (CLI --allow-plated): the item itself is plated.
+    """
+    log = FilterLog("plated_not_solid")
+    toks = " ".join(t.lower() for t in (require_tokens or []))
+    if allow_plated or any(w in toks for w in PLATED_TOKENS):
+        return log
+    for c in comps:
+        if c.dropped:
+            continue
+        m = PLATED_RE.search(c.title or "")
+        if m:
+            log.add(c, f"plated/filled/gold-tone metal ('{m.group(0).strip()}'), not solid")
+    return log
+
+
 def filter_condition(comps: list["Comp"], target: Optional[str],
                      pool_used_when_thin: bool = True) -> tuple[FilterLog, str]:
     """Keep comps in the item's condition cohort. Returns (log, cohort_used).
@@ -912,6 +945,7 @@ def price_from_runs(
     condition: Optional[str] = None,
     price_field: str = "sold",
     pool_used_when_thin: bool = True,
+    allow_plated: bool = False,
     competitor_active_json: Optional[Union[str, Path]] = None,
     competitor_listings: Optional[list[dict]] = None,
     competitor_min_sellers: int = COMPETITOR_MIN_SELLERS,
@@ -974,6 +1008,7 @@ def price_from_runs(
     logs: list[FilterLog] = []
     logs.append(filter_unit(all_for_filter, unit_type))
     logs.append(filter_tokens(all_for_filter, require_tokens or []))
+    logs.append(filter_plated(all_for_filter, require_tokens or [], allow_plated))
     cond_log, cohort_used = filter_condition(all_for_filter, condition, pool_used_when_thin)
     logs.append(cond_log)
     logs.append(filter_exclusions(all_for_filter))
@@ -1032,6 +1067,7 @@ def price_from_runs(
     # Apply the same unit/token/condition gate to the ceiling candidates.
     filter_unit(ph_pool, unit_type)
     filter_tokens(ph_pool, require_tokens or [])
+    filter_plated(ph_pool, require_tokens or [], allow_plated)
     filter_condition(ph_pool, condition, pool_used_when_thin)
     filter_exclusions(ph_pool)
     ph_kept = [c for c in ph_pool if not c.dropped]
@@ -1171,6 +1207,9 @@ def _cli() -> None:
                     help="Price the stats run on: item sold price (default) or sold+shipping")
     ap.add_argument("--no-pool-used", action="store_true",
                     help="Do NOT pool Used grades when the strict cohort is thin")
+    ap.add_argument("--allow-plated", action="store_true",
+                    help="The item itself is plated/filled: keep plated comps. "
+                         "Default drops them (plated is never priced as solid).")
     ap.add_argument("--competitor-active",
                     help="Saved active-listings JSON from the top competing sellers in the "
                          "matched category (lib/ebay_browse.py top-sellers) — GH #82: learn "
@@ -1191,6 +1230,7 @@ def _cli() -> None:
             condition=args.condition,
             price_field=args.price_field,
             pool_used_when_thin=not args.no_pool_used,
+            allow_plated=args.allow_plated,
         )
     except (ValueError, OSError, json.JSONDecodeError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
