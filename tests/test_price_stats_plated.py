@@ -34,7 +34,7 @@ def test_plated_rows_dropped_from_stats(tmp_path):
     p = tmp_path / "run.json"
     p.write_text(json.dumps({"run_id": "t", "source": "t", "comps": rows}))
     rep = ps.price_from_runs(best_match_json=str(p), unit_type="single",
-                             condition="used", require_tokens=["herringbone"])
+                             condition="used", require_tokens=["14k", "herringbone"])
     log = json.dumps(rep, default=str)
     assert "plated_not_solid" in log
     for bad in ("14KGP", "Gold Filled", "vermeil"):
@@ -47,5 +47,21 @@ def test_plated_item_keeps_plated_comps():
                 total_price=82, url="u")
     ps.filter_plated([c], ["gold filled"])
     assert not c.dropped
-    ps.filter_plated([c], ["necklace"])
+    ps.filter_plated([c], ["14k", "necklace"])
     assert c.dropped
+
+
+def test_filter_skipped_unless_item_is_solid_metal():
+    titles = ["Trifari Gold Tone Necklace", "Monet Gold-Tone Chain Bracelet",
+              "Silvertone 1448 Electric Guitar", "Silvertone Tube Radio",
+              "Gold Tone CC-100 Banjo"]
+    for tokens in (["trifari"], ["monet"], ["silvertone"], ["gold tone", "banjo"], []):
+        comps = [ps.Comp(title=t, price=50, sold_price=50, total_price=50, url="u")
+                 for t in titles]
+        ps.filter_plated(comps, tokens)
+        assert not any(c.dropped for c in comps), tokens
+    for tokens in (["sterling"], ["925"], ["18kt"], ["10 karat"], ["solid gold"]):
+        c = ps.Comp(title="Gold Plated Chain", price=5, sold_price=5,
+                    total_price=5, url="u")
+        ps.filter_plated([c], tokens)
+        assert c.dropped, tokens

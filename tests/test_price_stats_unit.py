@@ -37,7 +37,6 @@ def _report(unit):
     return price_stats.price_from_runs(
         best_match_json=BM, price_high_json=PH,
         unit_type=unit, condition="used", price_field="total",
-        allow_plated=True,  # this shoot prices a gold-filled item
     )
 
 
